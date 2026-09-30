@@ -2629,11 +2629,9 @@ export function createChatSurface(
     if (!goal) return nothing;
     const { workedMs, paused: stopped } = goalWorked(messages, goal);
     const paused = goal.status === "paused" || (goal.status === "active" && stopped);
-    const floorRunning = goal.status === "complete" && goal.floorMs !== undefined && workedMs < goal.floorMs;
-    if (goal.status !== "active" && !paused && !floorRunning) return nothing;
+    if (goal.status !== "active" && !paused) return nothing;
     let title = "Goal";
     if (paused) title = "Goal paused";
-    else if (floorRunning) title = "Goal met · using the floor";
     else if (agent.state.isStreaming) title = "Pursuing goal";
     return html`
       <section class="goal-strip ${paused ? "paused" : ""}" aria-live="polite" title=${goal.objective}>

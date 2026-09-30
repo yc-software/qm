@@ -2024,8 +2024,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
               meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
               const meteredGoal = entry.ref.goal;
-              if (meteredGoal && (meteredGoal.status === "active" || meteredGoal.status === "complete"))
-                meterGoalCall(meteredGoal, usage);
+              if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
               callStats.push({
                 ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
                 durationMs: curStart !== undefined ? end - curStart : null,

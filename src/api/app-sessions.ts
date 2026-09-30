@@ -15,7 +15,7 @@ import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../ses
 import { createTranscriptSource } from "../harness/tape-projection.ts";
 import { appendCoverageImport } from "../harness/replay.ts";
 import { swallowAs } from "../util/errors.ts";
-import { goalActiveMs, latestGoalRecord } from "../harness/goal.ts";
+import { latestGoalRecord } from "../harness/goal.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
@@ -452,10 +452,7 @@ export function createSessionMethods(
         const goal = latestGoalRecord(await deps.sessions.getEntries(s.id, { sinceSeq: since }));
         if (!goal) continue;
         const runningSince = (await deps.runs.latestForThread(s.threadRef))?.startedAt ?? undefined;
-        const floorMs = goal.floor?.minMs;
-        const floorRunning =
-          goal.status === "complete" && floorMs !== undefined && goalActiveMs(goal, runningSince, now) < floorMs;
-        if (goal.status === "active" || floorRunning)
+        if (goal.status === "active")
           goals.set(s.id, {
             objective: goal.objective,
             activeMs: goal.activeMs ?? 0,

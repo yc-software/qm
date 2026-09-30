@@ -2,7 +2,6 @@ export interface GoalStripState {
   objective: string;
   status: "active" | "paused" | "complete";
   floor?: string;
-  floorMs?: number;
   createdAt: number;
 }
 
@@ -30,13 +29,11 @@ function snapshotFrom(payload: unknown): GoalStripState | null | undefined {
   const status = goal.status;
   if (status !== "active" && status !== "paused" && status !== "complete") return undefined;
   const floor = goalFloorLabel(goal.floor ?? null);
-  const minMs = goal.floor?.minMs;
   const createdAt = typeof goal.createdAt === "number" ? goal.createdAt : Date.now();
   return {
     objective: goal.objective,
     status,
     ...(floor ? { floor } : {}),
-    ...(typeof minMs === "number" && minMs > 0 ? { floorMs: minMs } : {}),
     createdAt,
   };
 }

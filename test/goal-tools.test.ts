@@ -61,23 +61,33 @@ test("get reports the record or its absence", async () => {
   assert.match(textOf((await get.execute("g1", {})) as never), /"objective": "obj"/);
 });
 
-test("update complete: an unmet floor no longer blocks completion, it just warns", async () => {
+test("update complete: refused before the verifier while the floor is unmet; the goal stays active", async () => {
   const { ref, create, update } = toolbox();
+  let verifierCalls = 0;
+  ref.verifyGoal = async () => {
+    verifierCalls++;
+    return { complete: true, reasons: "proven" };
+  };
   await create.execute("c1", { objective: "work a while", floor: { minTurns: 2 } });
   const early = await update.execute("u1", { status: "complete", note: "did it" });
-  assert.match(textOf(early as never), /the goal is complete/);
-  assert.match(textOf(early as never), /floor is not met yet/);
-  assert.equal(ref.goal?.status, "complete");
-  assert.equal(ref.goal?.completionNote, "did it");
+  assert.match(textOf(early as never), /floor is not met yet.*stays active/);
+  assert.equal(verifierCalls, 0, "the verifier never runs below the floor");
+  assert.equal(ref.goal?.status, "active");
+  assert.equal(ref.goal?.completionNote, undefined);
 });
 
-test("update complete: no floor warning once the floor is met", async () => {
+test("update complete: at the floor the request goes to the verifier", async () => {
   const { ref, create, update } = toolbox();
+  let verifierCalls = 0;
+  ref.verifyGoal = async () => {
+    verifierCalls++;
+    return { complete: true, reasons: "proven" };
+  };
   await create.execute("c1", { objective: "work a while", floor: { minTurns: 2 } });
-  ref.goalMeter!.turns = 5;
+  ref.goalMeter!.turns = 2;
   const done = await update.execute("u2", { status: "complete", note: "did it" });
+  assert.equal(verifierCalls, 1);
   assert.match(textOf(done as never), /the goal is complete/);
-  assert.equal(/floor is not met/.test(textOf(done as never)), false);
   assert.equal(ref.goal?.status, "complete");
 });
 
@@ -204,6 +214,7 @@ test("goal mutation receipts are durable before returning and rehydrate without 
     entries.push(structuredClone(entry));
   };
   await create.execute("c1", { objective: "keep working", floor: { minMs: 1000 } });
+  ref.goal!.activeMs = 1000;
   assert.equal(rehydrateOpenGoal(entries)?.status, "active");
   await update.execute("u1", { status: "paused" });
   assert.equal(rehydrateOpenGoal(entries)?.status, "active");

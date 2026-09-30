@@ -3986,6 +3986,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
+      if (goal.floor) {
+        const { grindState } = await import("./grind.ts");
+        const state = grindState(goal.floor, goalFloorMeter(goal, ref.goalMeter ?? createGrindMeter()));
+        if (!state.met)
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "floor_unmet", goal },
+            text(
+              `The work floor is not met yet (${state.text}); the goal stays active and cannot be completed before then. Keep working: verify the result more deeply, harden it, or go further on the objective.`,
+            ),
+            true,
+          );
+      }
       const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal))].join("\n");
       const verdict = ref.verifyGoal
         ? await ref.verifyGoal(goal.objective, evidence).catch((e: unknown) => ({
@@ -4004,25 +4017,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       delete goal.verifierFeedback;
-      let floorNote = "";
-      if (goal.floor) {
-        const meter = ref.goalMeter;
-        if (meter) {
-          const { grindState } = await import("./grind.ts");
-          const state = grindState(goal.floor, goalFloorMeter(goal, meter));
-          if (!state.met)
-            floorNote = ` The work floor is not met yet (${state.text}); expect keep-going prompts until it is — spend them on adjacent, genuinely useful work.`;
-        }
-      }
       goal.status = "complete";
       goal.updatedAt = Date.now();
       goal.completionNote = p.note;
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "update", goal },
-        text(
-          `The verifier accepted completion; the goal is complete. Report the outcome (and evidence) to the user.${floorNote}`,
-        ),
+        text(`The verifier accepted completion; the goal is complete. Report the outcome (and evidence) to the user.`),
       );
     },
   });
@@ -4155,14 +4156,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const request = params as RuntimeRequest;
       await recordCall(callId, { tool: "runtime", ...request });
-      if (
-        request.action !== "get" &&
-        ref.goal &&
-        (ref.goal.status === "active" ||
-          ref.goal.status === "paused" ||
-          (ref.goal.floor &&
-            !grindState(ref.goal.floor, goalFloorMeter(ref.goal, ref.goalMeter ?? createGrindMeter())).met))
-      ) {
+      if (request.action !== "get" && ref.goal && (ref.goal.status === "active" || ref.goal.status === "paused")) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "runtime", error: "goal_in_progress" },

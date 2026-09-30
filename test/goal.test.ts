@@ -160,35 +160,8 @@ test("enforceGoal sends exactly one wind-down prompt when the token cap is spent
   assert.equal(goal.status, "active", "a spent cap never fakes completion");
 });
 
-test("enforceGoal keeps nudging after early completion until the work floor is met", async () => {
-  const goal = createGoalRecord({ objective: "grind", floor: { minTurns: 3 } });
-  goal.status = "complete";
-  const meter = createGrindMeter();
-  const notes: string[] = [];
-  const result = await enforceGoal({
-    goal,
-    meter,
-    outcome: "ok",
-    ok: "ok",
-    blocked: () => false,
-    beforePrompt: (note) => {
-      notes.push(note);
-    },
-    prompt: async () => {
-      meter.turns++;
-      return "ok";
-    },
-  });
-  assert.equal(notes.length, 3, "nudged until the floor was met");
-  assert.match(notes[0]!, /work floor.*not met/);
-  assert.match(notes[0]!, /adjacent, genuinely useful work/);
-  assert.equal(result, "ok");
-  assert.equal(goal.status, "complete", "nudges never reopen a completed goal");
-});
-
 test("enforceGoal never waives a floor for idle rounds: an idle agent keeps being prompted", async () => {
   const goal = createGoalRecord({ objective: "grind", floor: { minTurns: 99 } });
-  goal.status = "complete";
   let prompts = 0;
   await enforceGoal({
     goal,
@@ -278,12 +251,12 @@ test("rehydrateOpenGoal revives only open goals — a completed goal must not re
   assert.equal(rehydrateOpenGoal([{ type: "user", payload: {} }]), null);
 });
 
-test("goalFloorUnmet applies to active and completed goals and counts only active time", () => {
+test("goalFloorUnmet applies only to active goals and counts only active time", () => {
   const meter = createGrindMeter(Date.now() - 3_600_000);
   const young = createGoalRecord({ objective: "work", floor: { minMs: 60_000 } });
   assert.equal(goalFloorUnmet(young, meter), true, "an old turn meter cannot pre-satisfy a fresh goal's time floor");
   young.status = "complete";
-  assert.equal(goalFloorUnmet(young, meter), true);
+  assert.equal(goalFloorUnmet(young, meter), false, "a completed goal has already cleared its floor");
   young.status = "paused";
   assert.equal(goalFloorUnmet(young, meter), false);
   const old = createGoalRecord({ objective: "work", floor: { minMs: 60_000 }, now: Date.now() - 3_600_000 });
@@ -308,9 +281,8 @@ test("createGoalRecord keeps a multi-day time floor as given", () => {
   assert.equal(goal.floor?.minMs, 48 * 3_600_000);
 });
 
-test("enforceGoal enforces the token cap even while a completed goal grinds its floor", async () => {
+test("enforceGoal enforces the token cap even while the floor is unmet", async () => {
   const goal = createGoalRecord({ objective: "grind", floor: { minTurns: 99 }, capTokens: 100 });
-  goal.status = "complete";
   goal.tokensUsed = 150;
   const notes: string[] = [];
   await enforceGoal({
