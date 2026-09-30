@@ -75,6 +75,26 @@ export function sessionLink(origin: string, base: string, sessionId: string, seq
   return `${origin}${deepLinkPath(base, "chats", sessionId)}${suffix}`;
 }
 
+/** The session a same-app link points at (`/s/<id>`, optionally `?seq=N`), or null for anything else. */
+export function sessionLinkTarget(
+  href: string,
+  origin: string,
+  base: string,
+): { session: string; seq: number | null } | null {
+  let url: URL;
+  try {
+    url = new URL(href, origin);
+  } catch {
+    return null;
+  }
+  const b = base.replace(/\/$/, "");
+  if (url.origin !== origin || (b && url.pathname !== b && !url.pathname.startsWith(`${b}/`))) return null;
+  const linked = parseDeepLink(b, url.pathname, url.search);
+  if (linked.view !== "chats" || !linked.session) return null;
+  const seq = url.searchParams.get("seq");
+  return { session: linked.session, seq: seq !== null && /^(0|[1-9]\d*)$/.test(seq) ? Number(seq) : null };
+}
+
 /** True for an unmodified left click — the case an in-app link should handle itself (SPA nav). Modified clicks (cmd/ctrl/shift/alt, middle-click) fall through to the browser so "open in new tab" works. */
 export function isPlainLeftClick(e: MouseEvent): boolean {
   return !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0);
