@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(new URL("../src/inbox.ts", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("inbox sync states use the same labeled action button", () => {
   assert.match(source, /function syncActionTpl/);
@@ -31,4 +32,8 @@ test("a pending inbox migration lives in the sync line instead of a banner", () 
   assert.match(source, /inboxState\.migrationPending \? MIGRATION_STATUS : "Sync not set up"/);
   assert.match(source, /\$\{inboxState\.migrationPending \? tip\(MIGRATION_HINT\) : nothing\}/);
   assert.match(source, /\?disabled=\$\{inboxState\.syncBusy \|\| inboxState\.migrationPending\}/);
+  assert.match(
+    css,
+    /\.inbox-surface\.compact \.inbox-sync-line > \.inbox-sync-status:not\(\[role="status"\]\) \{\s*display: none;/,
+  );
 });

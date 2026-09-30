@@ -1632,18 +1632,6 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
       </button>
     </div>
     <div class="inbox-view-actions">
-      ${
-        hasMore
-          ? html`<button
-              class="inbox-load-more"
-              type="button"
-              ?disabled=${inboxState.loading}
-              @click=${() => void refreshInbox({ more: true, viewId: surface.viewId })}
-            >
-              Load more
-            </button>`
-          : nothing
-      }
       <button
         class="icon-btn subtle compact inbox-add-loop"
         type="button"
@@ -1716,7 +1704,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
               ${icon(surface.showHandled ? ChevronDown : ChevronRight, 13)}
               <span>Handled (${handledItems.length})</span>
             </button>
-            ${surface.showHandled ? html`<div class="inbox-list handled">${handledItems.map((i) => itemRowTpl(surface, i))}</div>` : nothing}${surface.showHandled && feedWindows.get(`handled:${surface.viewId}`)?.nextCursor ? html`<button class="btn" ?disabled=${inboxState.loading} @click=${() => void refreshInbox({ more: true, viewId: `handled:${surface.viewId}` })}>Load more handled</button>` : nothing}
+            ${surface.showHandled ? html`<div class="inbox-list handled">${handledItems.map((i) => itemRowTpl(surface, i))}</div>` : nothing}${surface.showHandled && feedWindows.get(`handled:${surface.viewId}`)?.nextCursor ? html`<button class="inbox-load-more" type="button" ?disabled=${inboxState.loading} @click=${() => void refreshInbox({ more: true, viewId: `handled:${surface.viewId}` })}>Load more handled</button>` : nothing}
           `
         : nothing
     }
@@ -1727,26 +1715,42 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
         ${chips} ${surface.pane ? html`<span class="inbox-toolbar-spacer"></span>${syncLineTpl(surface)}` : nothing}
       </div>
       ${
-        showEmailFilter
+        showEmailFilter || hasMore
           ? html`
               <div class="inbox-filter-bar">
-                <label class="inbox-filter">
-                  <span>Emails</span>
-                  ${fieldSelect({
-                    className: "inbox-filter-control",
-                    ariaLabel: "Email filter",
-                    ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
-                    value: inboxState.filter,
-                    disabled: inboxState.filterBusy || inboxState.loading,
-                    onChange: (value) => void selectInboxFilter(value as InboxFilter),
-                    options: INBOX_FILTERS.map(
-                      (filter) =>
-                        html`<option value=${filter.id} ?selected=${filter.id === inboxState.filter}>
-                          ${filter.label}
-                        </option>`,
-                    ),
-                  })}
-                </label>
+                ${
+                  showEmailFilter
+                    ? html`<label class="inbox-filter">
+                        <span>Emails</span>
+                        ${fieldSelect({
+                          className: "inbox-filter-control",
+                          ariaLabel: "Email filter",
+                          ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
+                          value: inboxState.filter,
+                          disabled: inboxState.filterBusy || inboxState.loading,
+                          onChange: (value) => void selectInboxFilter(value as InboxFilter),
+                          options: INBOX_FILTERS.map(
+                            (filter) =>
+                              html`<option value=${filter.id} ?selected=${filter.id === inboxState.filter}>
+                                ${filter.label}
+                              </option>`,
+                          ),
+                        })}
+                      </label>`
+                    : nothing
+                }
+                ${
+                  hasMore
+                    ? html`<button
+                        class="inbox-load-more"
+                        type="button"
+                        ?disabled=${inboxState.loading}
+                        @click=${() => void refreshInbox({ more: true, viewId: surface.viewId })}
+                      >
+                        Load more
+                      </button>`
+                    : nothing
+                }
               </div>
             `
           : nothing

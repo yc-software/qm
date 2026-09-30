@@ -9618,16 +9618,22 @@ h3.ambient-field-label {
   border-bottom: 1px solid var(--border);
 }
 .inbox-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 0 10px 18px;
 }
+.inbox-filter-bar:not(:has(.inbox-filter)) {
+  padding-bottom: 0;
+}
 .inbox-load-more {
+  margin-left: auto;
   padding: 4px 2px;
   border: 0;
   background: none;
   color: var(--muted-foreground);
   font: inherit;
   font-size: var(--font-12-5);
-  white-space: nowrap;
   cursor: pointer;
 }
 .inbox-load-more:hover:not(:disabled) {
@@ -10657,7 +10663,7 @@ h3.ambient-field-label {
 .inbox-surface.compact .inbox-item-detail {
   padding: 2px 10px 12px;
 }
-.inbox-surface.compact .inbox-sync-line > .inbox-sync-status {
+.inbox-surface.compact .inbox-sync-line > .inbox-sync-status:not([role="status"]) {
   display: none;
 }
 .inbox-surface[data-density="min"] .inbox-item-sub,
