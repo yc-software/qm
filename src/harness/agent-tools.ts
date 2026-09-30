@@ -3741,7 +3741,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "finish_silently",
     label: "finish_silently",
     description:
-      "End this turn without replying. Use on surface turns when choosing not to reply at all, and on " +
+      "Ends this turn silently. Use on surface turns when choosing not to reply at all, and on " +
       "scheduled background fires with nothing worth reporting. After posting a reply, just stop; " +
       "this is not needed. Keeps the audit log and any messages already posted. " +
       "On a direct human turn without surface tools this does nothing — just answer.",
