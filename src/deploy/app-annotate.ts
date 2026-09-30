@@ -60,7 +60,7 @@ export const ANNOTATE_MARKUP = `<div id="ann" aria-hidden="true"><div class="hl"
     <div class="row"><button type="button" id="ann-cancel">Cancel</button><button type="submit" class="save">Save</button></div></form>
   <div id="ann-toast" role="status"></div>`;
 
-// Browser code, spliced into the shell's IIFE. Relies on: app, setOpen, chat, portalOrigin.
+// Browser code, spliced into the shell's IIFE. Relies on: app, slug, setOpen, chat, chatLoaded, portalOrigin.
 export const ANNOTATE_JS = String.raw`
   const ann = {
     root: document.getElementById("ann"), bar: document.getElementById("ann-bar"), hl: document.getElementById("ann-hl"),
@@ -349,8 +349,11 @@ export const ANNOTATE_JS = String.raw`
     closeNote();
     const shot = await screenshot();
     const files = shot ? [new File([shot], "annotated-" + slug + ".png", { type: "image/png" })] : [];
+    const text = feedbackText(!!shot);
+    const loading = chatLoaded ? null : new Promise((resolve) => chat.addEventListener("load", resolve, { once: true }));
     setOpen(true);
-    const ok = await deliver({ type: "qm:annotations", id: Date.now() + "-" + Math.random().toString(36).slice(2), text: feedbackText(!!shot), files });
+    if (loading) await loading;
+    const ok = await deliver({ type: "qm:annotations", id: Date.now() + "-" + Math.random().toString(36).slice(2), text, files });
     if (ok) { ann.items = []; setAnnotating(false); toast(shot ? "Added to chat with screenshot" : "Added to chat (no screenshot)"); }
     else { toast("Chat didn't respond. Your notes are still here."); }
     redraw();
