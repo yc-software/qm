@@ -683,50 +683,101 @@ function usesOutputReview(item: InboxItem): boolean {
   );
 }
 
+const ARTIFACT_KINDS: Record<string, string> = {
+  open_draft_pr: "Draft pull request",
+  open_pr: "Pull request",
+  send: "Message",
+  reply: "Message",
+  send_email: "Email",
+  send_slack: "Slack message",
+};
+
+function subjectTpl(item: InboxItem): TemplateResult {
+  const members = groupOf(item);
+  const expanded = expandedSubjects.has(item.id);
+  const shown = expanded ? members : members.slice(0, 5);
+  return html`<section
+    class="inbox-subject"
+    aria-label=${members.length > 1 ? `${members.length} similar items` : "Item"}
+  >
+    ${members.length > 1 ? html`<div class="inbox-subject-label">${members.length} similar</div>` : nothing}
+    <ul>
+      ${shown.map(
+        (member) =>
+          html`<li>
+            <span class="inbox-subject-key">${member.source === "generic" ? member.sourceKey : member.from}</span>
+            <span class="inbox-subject-text">${member.snippet || member.title}</span>
+            <span class="inbox-subject-at" title=${fmtClock(member.receivedAt)}>${relTime(member.receivedAt)}</span>
+            ${member.externalUrl ? html`<a class="inbox-external-link" href=${member.externalUrl} target="_blank" rel="noopener noreferrer" aria-label="Open source">${icon(ArrowUpRight, 12)}</a>` : nothing}
+          </li>`,
+      )}
+    </ul>
+    ${
+      members.length > shown.length || expanded
+        ? html`<button
+            class="inbox-subject-more"
+            type="button"
+            @click=${() => {
+              if (expanded) expandedSubjects.delete(item.id);
+              else expandedSubjects.add(item.id);
+              drawAll();
+            }}
+          >
+            ${expanded ? "Show fewer" : `Show all ${members.length}`}
+          </button>`
+        : nothing
+    }
+  </section>`;
+}
+
+function artifactTpl(item: InboxItem, output: ReviewOutput, members: number): TemplateResult {
+  const link = output.externalRef && /^https?:\/\//i.test(output.externalRef) ? output.externalRef : undefined;
+  return html`<section class="inbox-artifact">
+    <div class="inbox-artifact-head">
+      <span>${ARTIFACT_KINDS[output.shipAction] ?? "Response"}</span>
+      ${link ? html`<a class="inbox-external-link" href=${link} target="_blank" rel="noopener noreferrer">View ${icon(ArrowUpRight, 12)}</a>` : nothing}
+    </div>
+    <h2>${output.title}</h2>
+    ${output.summary ? html`<div class="inbox-artifact-body">${output.summary}</div>` : nothing}
+    ${output.decisionNote ? html`<p class="inbox-review-note">Requested changes: ${output.decisionNote}</p>` : nothing}
+    ${
+      output.state === "ready"
+        ? html`<div class="inbox-artifact-actions">
+            <input
+              aria-label="Requested changes"
+              placeholder="What should change?"
+              .value=${chatDrafts.get(output.id) ?? ""}
+              @input=${(event: Event) => chatDrafts.set(output.id, (event.target as HTMLInputElement).value)}
+            />
+            <button
+              class="btn"
+              ?disabled=${acting.has(item.id)}
+              @click=${() => void decideReview(item, output, "return", chatDrafts.get(output.id) ?? "")}
+            >
+              Request changes
+            </button>
+            <button
+              class="btn primary"
+              ?disabled=${acting.has(item.id)}
+              ${members > 1 ? tip(`Resolves all ${members}`) : nothing}
+              @click=${() => void decideReview(item, output, "ship", "")}
+            >
+              ${reviewActionLabel(output.shipAction)}
+            </button>
+          </div>`
+        : html`<p class="inbox-artifact-state" role="status">${reviewStateLabel(output.state)}</p>`
+    }
+  </section>`;
+}
+
 function reviewTpl(item: InboxItem): TemplateResult {
   if (!item.detailLoaded) return html`<div class="empty compact">Loading review…</div>`;
   const outputs = item.outputs ?? [];
+  const members = groupOf(item).length;
   return html`<div class="inbox-generic-review">
-    <div class="inbox-draft-head"><span>${inboxViewName(item.loopId)}</span><span>${item.reviewState}</span></div>
-    <p>${item.snippet}</p>
+    ${subjectTpl(item)}
     ${!outputs.length && item.proposalData ? html`<pre class="inbox-proposal-data">${JSON.stringify(item.proposalData, null, 2)}</pre>` : nothing}
-    ${outputs.map(
-      (output) =>
-        html`<section class="loop-output">
-          <h2>${output.title}</h2>
-          <p>${output.summary ?? ""}</p>
-          ${output.decisionNote ? html`<p class="inbox-review-note">Requested changes: ${output.decisionNote}</p>` : nothing}
-          <span class="loop-output-action">Effect: ${output.shipAction.replaceAll("_", " ")}</span>
-          ${output.externalRef && /^https?:\/\//i.test(output.externalRef) ? html`<a href=${output.externalRef} target="_blank" rel="noopener noreferrer">Open artifact</a>` : nothing}
-          ${
-            output.state === "ready"
-              ? html`<div class="loop-output-decide">
-                  <input
-                    aria-label="Requested changes"
-                    placeholder="What should change?"
-                    .value=${chatDrafts.get(output.id) ?? ""}
-                    @input=${(event: Event) => chatDrafts.set(output.id, (event.target as HTMLInputElement).value)}
-                  />
-                  <button
-                    class="btn"
-                    ?disabled=${acting.has(item.id)}
-                    @click=${() => void decideReview(item, output, "return", chatDrafts.get(output.id) ?? "")}
-                  >
-                    Request changes
-                  </button>
-                  <button
-                    class="btn primary"
-                    ?disabled=${acting.has(item.id)}
-                    @click=${() => void decideReview(item, output, "ship", "")}
-                  >
-                    ${reviewActionLabel(output.shipAction)}
-                  </button>
-                </div>`
-              : html`<p role="status">${reviewStateLabel(output.state)}</p>`
-          }
-        </section>`,
-    )}
-    ${chatTpl(item)}
+    ${outputs.map((output) => artifactTpl(item, output, members))} ${chatTpl(item)}
   </div>`;
 }
 
@@ -1446,9 +1497,9 @@ function dismissItemTpl(item: InboxItem): TemplateResult | typeof nothing {
     class="inbox-dismiss"
     type="button"
     ?disabled=${chatting.has(item.id) || acting.has(item.id)}
-    @click=${() => void setItemStatus(item, "dismissed")}
+    @click=${() => void (groupOf(item).length > 1 ? archiveGroup(item) : setItemStatus(item, "dismissed"))}
   >
-    Dismiss
+    ${groupOf(item).length > 1 ? `Archive all ${groupOf(item).length}` : "Dismiss"}
   </button>`;
 }
 
@@ -1524,7 +1575,14 @@ function triageControlsTpl(item: InboxItem): TemplateResult | typeof nothing {
   </span>`;
 }
 
-const expandedGroups = new Set<string>();
+const expandedSubjects = new Set<string>();
+
+function groupOf(item: InboxItem): InboxItem[] {
+  if (!item.groupId || !loopTriage(item).consolidate) return [item];
+  const members = inboxState.items.filter((other) => other.groupId === item.groupId && other.status === "open");
+  const head = members.find((member) => member.id === item.groupId);
+  return head ? [head, ...members.filter((member) => member !== head)] : [item];
+}
 
 async function archiveGroup(head: InboxItem): Promise<void> {
   if (acting.has(head.id)) return;
@@ -1558,60 +1616,18 @@ function groupedRowsTpl(surface: InboxSurface, items: InboxItem[]): TemplateResu
     }
     if (drawn.has(item.groupId!)) continue;
     drawn.add(item.groupId!);
-    rows.push(groupRowTpl(surface, item.groupId!, group));
+    rows.push(
+      itemRowTpl(
+        surface,
+        group.find((member) => member.id === item.groupId)!,
+        group.length,
+      ),
+    );
   }
   return rows;
 }
 
-function groupRowTpl(surface: InboxSurface, groupId: string, group: InboxItem[]): TemplateResult {
-  const head = group.find((item) => item.id === groupId)!;
-  const open = expandedGroups.has(groupId);
-  const gmail = head.source === "gmail";
-  const heading = gmail ? head.from || head.title : (head.slack?.channelLabel ?? head.title);
-  const sub = gmail ? head.title : head.from || inboxViewName(head.loopId);
-  return html`<div class="inbox-group ${open ? "expanded" : ""} src-${head.source}">
-    <div class="inbox-item-summary">
-      <button
-        class="inbox-item-row"
-        type="button"
-        aria-expanded=${String(open)}
-        @click=${() => {
-          if (open) expandedGroups.delete(groupId);
-          else expandedGroups.add(groupId);
-          drawAll();
-        }}
-      >
-        <span class="inbox-item-glyph">${sourceGlyph(head)}</span>
-        <span class="inbox-item-main">
-          <span class="inbox-item-top">
-            <span class="inbox-group-count">${group.length} similar ·</span>
-            <span class="inbox-item-heading">${heading}</span>
-            <span class="inbox-item-sub">${sub}</span>
-          </span>
-          <span class="inbox-item-snippet">${slackTextTpl(head, head.snippet, { links: false })}</span>
-        </span>
-        <span class="inbox-item-side">
-          ${priorityMarkTpl(head)}
-          <span class="inbox-item-time" title=${fmtClock(head.receivedAt)}>${relTime(head.receivedAt)}</span>
-          ${icon(open ? ChevronDown : ChevronRight, 13)}
-        </span>
-      </button>
-      <button
-        class="session-menu-btn inbox-item-dismiss"
-        type="button"
-        aria-label=${`Archive ${group.length} similar`}
-        ${tip(`Archive all ${group.length}`)}
-        ?disabled=${acting.has(head.id)}
-        @click=${() => void archiveGroup(head)}
-      >
-        ${icon(Archive, 13.5)}
-      </button>
-    </div>
-    ${open ? html`<div class="inbox-list inbox-group-list">${group.map((item) => itemRowTpl(surface, item))}</div>` : nothing}
-  </div>`;
-}
-
-function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
+function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): TemplateResult {
   const inlineDetail = surface.pane;
   const open = surface.selectedId === item.id;
   const expanded = inlineDetail && open;
@@ -1642,6 +1658,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
           <span class="inbox-item-glyph">${sourceGlyph(item)}</span>
           <span class="inbox-item-main">
             <span class="inbox-item-top">
+              ${groupSize > 1 ? html`<span class="inbox-group-count">${groupSize} similar ·</span>` : nothing}
               <span class="inbox-item-heading">${heading}</span>
               <span class="inbox-item-sub">${sub}</span>
             </span>
@@ -1658,10 +1675,10 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
             ? html`<button
                 class="session-menu-btn inbox-item-dismiss"
                 type="button"
-                aria-label=${`Archive ${item.title || heading}`}
-                ${tip("Archive")}
+                aria-label=${groupSize > 1 ? `Archive ${groupSize} similar` : `Archive ${item.title || heading}`}
+                ${tip(groupSize > 1 ? `Archive all ${groupSize}` : "Archive")}
                 ?disabled=${acting.has(item.id)}
-                @click=${() => void setItemStatus(item, "dismissed")}
+                @click=${() => void (groupSize > 1 ? archiveGroup(item) : setItemStatus(item, "dismissed"))}
               >
                 ${icon(Archive, 13.5)}
               </button>`
@@ -1675,7 +1692,8 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
                 usesOutputReview(item)
                   ? html`${triageControlsTpl(item) === nothing ? nothing : html`<div class="inbox-item-detail-actions">${triageControlsTpl(item)}</div>`}${reviewTpl(item)}`
                   : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${triageControlsTpl(item)}${dismissItemTpl(item)}</div>`}
-                    ${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`
+                    ${groupOf(item).length > 1 ? subjectTpl(item) : nothing} ${contextTpl(item)}
+                    ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`
               }
             </div>`
           : nothing
@@ -2030,12 +2048,16 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
 function itemPageTpl(item: InboxItem): TemplateResult {
   const handled = item.status !== "open";
   const gmail = item.source === "gmail";
-  const heading = gmail ? item.from || item.title : (item.slack?.channelLabel ?? item.title);
+  let heading = item.slack?.channelLabel ?? item.title;
+  if (gmail) heading = item.from || item.title;
+  else if (item.source === "generic") heading = inboxViewName(item.loopId);
   const sub = gmail ? item.title : "";
+  const grouped = groupOf(item).length > 1 ? subjectTpl(item) : nothing;
   let detail: TemplateResult;
   if (!item.detailLoaded) detail = html`<div class="empty compact">Loading message…</div>`;
   else if (usesOutputReview(item)) detail = reviewTpl(item);
-  else detail = html`${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : nothing}`;
+  else
+    detail = html`${grouped} ${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : nothing}`;
   return html`
     <div class="pane-head inbox-item-head src-${item.source}">
       <div class="inbox-item-head-copy">
