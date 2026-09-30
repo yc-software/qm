@@ -7,7 +7,6 @@ export interface MemoryContextSnapshot {
 
 interface MemoryContext {
   kind: "memory_context";
-  fingerprint: string;
   snapshot: MemoryContextSnapshot;
   throughSeq: number;
 }
@@ -17,7 +16,6 @@ export function memoryContextPayload(entry: SessionEntry): MemoryContext | null 
   if (entry.type === "user") value = (entry.payload as { memoryContext?: unknown } | null)?.memoryContext;
   const p = value as Partial<MemoryContext> | null;
   return p?.kind === "memory_context" &&
-    typeof p.fingerprint === "string" &&
     Number.isSafeInteger(p.throughSeq) &&
     p.throughSeq! >= -1 &&
     typeof p.snapshot?.audience === "string"
@@ -25,7 +23,7 @@ export function memoryContextPayload(entry: SessionEntry): MemoryContext | null 
     : null;
 }
 
-export function memoryContextFingerprint(value: unknown): string {
+function memoryContextFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
@@ -56,5 +54,5 @@ export function nextMemoryContext(
   const payload = previous && memoryContextPayload(previous);
   let throughSeq = -1;
   if (payload) throughSeq = payload.snapshot.audience === snapshot.audience ? payload.throughSeq : latestSeq;
-  return { kind: "memory_context", fingerprint: memoryContextFingerprint(snapshot), snapshot, throughSeq };
+  return { kind: "memory_context", snapshot, throughSeq };
 }

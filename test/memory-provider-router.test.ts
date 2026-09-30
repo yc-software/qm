@@ -141,3 +141,12 @@ test("cross-origin capture only reaches providers that preserve structured prove
   });
   assert.equal(calls.length, 2);
 });
+
+test("routers do not advertise record mutation for an opaque managing provider", () => {
+  const calls: string[] = [];
+  const memory = createRoutedMemoryService({
+    providers: { opaque: provider("opaque", calls) },
+    routes: [{ provider: "opaque", scopes: ["personal"] }],
+  });
+  assert.equal(memory.replaceRecordsIfRevision, undefined);
+});

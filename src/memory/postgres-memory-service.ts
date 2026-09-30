@@ -1,13 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  legacyMemoryRecords,
-  updateMemoryRecords,
-  restoreMemoryRecords,
-  type MemoryRecords,
-  type MemoryCaptureMetadata,
-} from "./records.ts";
+import { parseMemoryRecords, renderMemoryRecords, restoreMemoryRecords, type MemoryRecords } from "./records.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { foldCapture, normalizeReplace, queryBullets, recallBody, type MemoryService } from "./memory-service.ts";
+import { captureRecords, queryBullets, recallBody, replaceRecords, type MemoryService } from "./memory-service.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS memory_revisions(
@@ -32,118 +26,54 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
     },
   ]);
 
-  function recordsFor(scopeId: string, body: string, records: unknown): MemoryRecords {
-    if (records == null) return legacyMemoryRecords(scopeId, body);
-    const snapshot = records as MemoryRecords;
-    if (snapshot.version !== 1 || !Array.isArray(snapshot.records))
-      throw new Error("Unsupported memory records version");
-    return snapshot;
+  type Row = { body?: unknown; seq?: unknown; at?: unknown; records?: unknown } | undefined;
+
+  function recordsFor(scopeId: string, row: Row): MemoryRecords {
+    return parseMemoryRecords(scopeId, String(row?.body ?? ""), row?.records ?? undefined);
+  }
+
+  function bodyFor(scopeId: string, row: Row): string {
+    return row?.records == null ? String(row?.body ?? "") : renderMemoryRecords(recordsFor(scopeId, row));
+  }
+
+  const HEAD = "SELECT body, seq, at, records FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1";
+
+  async function headRow(scopeId: string): Promise<Row> {
+    return (await q(HEAD, [scopeId]))[0];
   }
 
   async function currentBody(scopeId: string): Promise<string> {
-    const rows = await q("SELECT body FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1", [scopeId]);
-    return (rows[0]?.body as string | undefined) ?? "";
+    return bodyFor(scopeId, await headRow(scopeId));
   }
 
-  async function currentHead(
-    scopeId: string,
-  ): Promise<{ body: string; seq: number; at?: number; records: MemoryRecords }> {
-    const rows = await q(
-      "SELECT body, seq, at, records FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1",
-      [scopeId],
-    );
-    return rows[0]
-      ? {
-          body: String(rows[0].body ?? ""),
-          seq: Number(rows[0].seq),
-          at: Number(rows[0].at),
-          records: recordsFor(scopeId, String(rows[0].body ?? ""), rows[0].records),
-        }
-      : { body: "", seq: 0, records: legacyMemoryRecords(scopeId, "") };
-  }
-
-  async function conditionalReplace(
-    scopeId: string,
-    content: string,
-    expectedSeq: number,
-    author: string | undefined,
-    op: string,
-    restoreFrom?: { seq: number; records: MemoryRecords },
-  ): Promise<boolean> {
-    const client = await (await pool()).connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [scopeId]);
-      const head = await client.query(
-        "SELECT body, seq, records FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1",
-        [scopeId],
-      );
-      const seq = Number(head.rows[0]?.seq ?? 0);
-      if (seq !== expectedSeq) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-      const next = normalizeReplace(content);
-      const current = recordsFor(scopeId, String(head.rows[0]?.body ?? ""), head.rows[0]?.records);
-      let records: MemoryRecords;
-      if (restoreFrom) {
-        const intervening = await client.query(
-          "SELECT body, records FROM memory_revisions WHERE scope_id = $1 AND seq > $2 AND seq <= $3 ORDER BY seq",
-          [scopeId, restoreFrom.seq, seq],
-        );
-        records = restoreMemoryRecords(
-          {
-            version: 1,
-            records: intervening.rows.flatMap(
-              (row) => recordsFor(scopeId, String(row.body ?? ""), row.records).records,
-            ),
-          },
-          restoreFrom.records,
-        );
-      } else records = updateMemoryRecords(scopeId, current, next);
-      if (next !== String(head.rows[0]?.body ?? "") || !isDeepStrictEqual(records, current)) {
-        await client.query(
-          "INSERT INTO memory_revisions (scope_id, seq, op, body, author, at, records) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-          [scopeId, seq + 1, op, next, author ?? null, Date.now(), JSON.stringify(records)],
-        );
-      }
-      await client.query("COMMIT");
-      return true;
-    } catch (e) {
-      await client.query("ROLLBACK");
-      throw e;
-    } finally {
-      client.release();
-    }
-  }
-
-  async function append(
+  async function mutate(
     scopeId: string,
     op: string,
     at: number,
     author: string | undefined,
-    derive: (existing: string) => { body: string } | null,
-    capture?: MemoryCaptureMetadata,
-    capturedBody?: string,
-  ): Promise<void> {
-    await withPgTransaction(await pool(), async (client) => {
+    expectedSeq: number | undefined,
+    derive: (
+      current: MemoryRecords,
+      seq: number,
+      client: { query: (sql: string, params: unknown[]) => Promise<{ rows: Row[] }> },
+    ) => Promise<MemoryRecords | null>,
+  ): Promise<boolean> {
+    return withPgTransaction(await pool(), async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [scopeId]);
-      const head = await client.query(
-        "SELECT body, seq, records FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1",
-        [scopeId],
-      );
-      const existing = (head.rows[0]?.body as string | undefined) ?? "";
-      const next = derive(existing);
-      if (!next) return;
-      const current = recordsFor(scopeId, existing, head.rows[0]?.records);
-      const records = updateMemoryRecords(scopeId, current, next.body, capture, capturedBody);
-      if (next.body !== existing || !isDeepStrictEqual(records, current)) {
-        const seq = Number(head.rows[0]?.seq ?? 0) + 1;
+      const row = (await client.query(HEAD, [scopeId])).rows[0] as Row;
+      const seq = Number(row?.seq ?? 0);
+      if (expectedSeq !== undefined && seq !== expectedSeq) return false;
+      const current = recordsFor(scopeId, row);
+      const records = await derive(current, seq, client);
+      if (!records || (!row && !records.records.length)) return true;
+      const body = renderMemoryRecords(records);
+      if (body !== bodyFor(scopeId, row) || !isDeepStrictEqual(records, current)) {
         await client.query(
           "INSERT INTO memory_revisions (scope_id, seq, op, body, author, at, records) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-          [scopeId, seq, op, next.body, author ?? null, at, JSON.stringify(records)],
+          [scopeId, seq + 1, op, body, author ?? null, at, JSON.stringify(records)],
         );
       }
+      return true;
     });
   }
 
@@ -153,21 +83,12 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
     },
 
     async capture(scopeId, facts, at, author, context) {
-      const trustedProvenance = author?.startsWith("cc:") === true;
       let added = 0;
-      await append(
-        scopeId,
-        "capture",
-        at,
-        author,
-        (existing) => {
-          const folded = foldCapture(existing, facts, at, trustedProvenance);
-          added = folded.added;
-          return { body: folded.added ? `${folded.body}\n` : existing };
-        },
-        context ?? {},
-        foldCapture("", facts, at, trustedProvenance).body,
-      );
+      await mutate(scopeId, "capture", at, author, undefined, async (current) => {
+        const next = captureRecords(scopeId, current, facts, at, author, context);
+        added = next.added;
+        return next.records;
+      });
       return added;
     },
 
@@ -180,23 +101,32 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
     },
 
     async replace(scopeId, content, author) {
-      const next = normalizeReplace(content);
-      await append(scopeId, "replace", Date.now(), author, () => ({ body: next }));
+      await mutate(scopeId, "replace", Date.now(), author, undefined, async (current) =>
+        replaceRecords(scopeId, current, content),
+      );
     },
 
     async readHead(scopeId) {
-      const head = await currentHead(scopeId);
+      const row = await headRow(scopeId);
       return {
-        content: head.body,
-        revision: String(head.seq),
-        records: head.records,
-        ...(head.at !== undefined ? { updatedAt: head.at } : {}),
+        content: bodyFor(scopeId, row),
+        revision: String(Number(row?.seq ?? 0)),
+        records: recordsFor(scopeId, row),
+        ...(row ? { updatedAt: Number(row.at) } : {}),
       };
     },
 
     async replaceIfRevision(scopeId, content, revision, author) {
       if (!/^\d+$/.test(revision)) return false;
-      return conditionalReplace(scopeId, content, Number(revision), author, "replace");
+      return mutate(scopeId, "replace", Date.now(), author, Number(revision), async (current) =>
+        replaceRecords(scopeId, current, content),
+      );
+    },
+
+    async replaceRecordsIfRevision(scopeId, records, revision, author) {
+      if (!/^\d+$/.test(revision)) return false;
+      const next = parseMemoryRecords(scopeId, "", records);
+      return mutate(scopeId, "consolidate", Date.now(), author, Number(revision), async () => next);
     },
 
     async history(scopeId, limit = 30) {
@@ -206,9 +136,9 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
       );
       return rows.map((row) => ({
         revision: String(row.seq),
-        content: String(row.body ?? ""),
+        content: bodyFor(scopeId, row),
         operation: String(row.op),
-        records: recordsFor(scopeId, String(row.body ?? ""), row.records),
+        records: recordsFor(scopeId, row),
         ...(row.author ? { author: String(row.author) } : {}),
         at: Number(row.at),
       }));
@@ -216,14 +146,21 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
 
     async restore(scopeId, revision, expectedRevision, author) {
       if (!/^\d+$/.test(revision) || !/^\d+$/.test(expectedRevision)) return false;
-      const rows = await q("SELECT body, records FROM memory_revisions WHERE scope_id = $1 AND seq = $2", [
-        scopeId,
-        Number(revision),
-      ]);
-      if (!rows[0]) return false;
-      return conditionalReplace(scopeId, String(rows[0].body ?? ""), Number(expectedRevision), author, "restore", {
-        seq: Number(revision),
-        records: recordsFor(scopeId, String(rows[0].body ?? ""), rows[0].records),
+      const from = Number(revision);
+      const target = (
+        await q("SELECT body, records FROM memory_revisions WHERE scope_id = $1 AND seq = $2", [scopeId, from])
+      )[0];
+      if (!target) return false;
+      const restored = recordsFor(scopeId, target);
+      return mutate(scopeId, "restore", Date.now(), author, Number(expectedRevision), async (_current, seq, client) => {
+        const intervening = await client.query(
+          "SELECT body, records FROM memory_revisions WHERE scope_id = $1 AND seq > $2 AND seq <= $3 ORDER BY seq",
+          [scopeId, from, seq],
+        );
+        return restoreMemoryRecords(
+          { version: 1, records: intervening.rows.flatMap((row) => recordsFor(scopeId, row).records) },
+          restored,
+        );
       });
     },
 

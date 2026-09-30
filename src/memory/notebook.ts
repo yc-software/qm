@@ -36,6 +36,10 @@ export function capTail(text: string, maxChars: number): string {
   return text.length > maxChars ? text.slice(text.length - maxChars) : text;
 }
 
+export function isMemoryBookkeeping(text: string): boolean {
+  return /^<!-- (?:consolidated: \d{4}-\d\d-\d\d|captures-since-promote: \d+) -->$/.test(text.trim());
+}
+
 export function memoryBlocks(body: string): string[] {
   const result: string[] = [];
   let pending: string[] = [];
@@ -45,6 +49,10 @@ export function memoryBlocks(body: string): string[] {
     pending = [];
   };
   for (const line of body.split("\n")) {
+    if (isMemoryBookkeeping(line)) {
+      flush();
+      continue;
+    }
     if (!line.trim() || /^(?:[-*] |#{1,6} )/.test(line)) flush();
     if (line.trim()) pending.push(line);
   }

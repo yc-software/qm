@@ -32,48 +32,6 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   currentScopeMembers?: CurrentScopeMembers;
 };
 
-interface MemoryReaderInput {
-  memory: MemoryService;
-  scopes: readonly ScopeId[];
-  actorId: string;
-  onRead?: (scope: ScopeId) => void;
-  disclosure?: MemoryDisclosure;
-}
-
-export function contextMemory({ memory: raw, scopes, actorId, onRead, disclosure }: MemoryReaderInput) {
-  const memory = disclosedMemory(
-    raw,
-    disclosure ?? {
-      actor: { id: actorId, type: "internal" },
-      targetScope: `personal:${actorId}`,
-      nativeScopes: scopes.filter((scope) => scope === `personal:${actorId}` || scope.startsWith("org:")),
-      audience: [{ id: actorId, type: "internal" }],
-      open: false,
-    },
-  );
-  return {
-    async recall(): Promise<string> {
-      const sections: string[] = [];
-      for (const scope of scopes) {
-        const body = (await memory.read(scope)).trim();
-        onRead?.(scope);
-        if (body) sections.push(`### ${scope}\n${body}`);
-      }
-      return sections.join("\n\n");
-    },
-    async search(query: string, limit = 20): Promise<string[] | null> {
-      if (!scopes.length) return null;
-      const hits: string[] = [];
-      for (const scope of scopes) {
-        const facts = await memory.query(scope, query, limit, { actorId });
-        onRead?.(scope);
-        hits.push(...facts.map((fact) => (scopes.length > 1 ? `[${scope}] ${fact}` : fact)));
-      }
-      return hits.slice(0, limit);
-    },
-  };
-}
-
 // A turn-local view, never a reusable capability or a cross-turn cache.
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
@@ -121,13 +79,6 @@ export async function resolveTurnContext(input: ContextInput) {
     currentScopeMembers: input.currentScopeMembers,
   };
   const memory = disclosedMemory(input.memory, disclosure);
-  const memories = contextMemory({
-    memory: input.memory,
-    disclosure,
-    scopes: read,
-    actorId: input.actor.id,
-    onRead: (scope) => recordRead(scope, "memory"),
-  });
   const handles = [
     ...resolution.grantedHandles,
     ...(await carriedFileHandles(sharingSources, input.workspace, input.files)),
@@ -151,7 +102,6 @@ export async function resolveTurnContext(input: ContextInput) {
     baseRecallScopes,
     memoryAccess,
     memory,
-    recall: memories.recall,
     memorySnapshot: async (auditReads = true) => {
       const heads = await Promise.all(
         read.map(async (scope) => ({
@@ -176,7 +126,17 @@ export async function resolveTurnContext(input: ContextInput) {
         }),
       };
     },
-    searchMemory: memories.search,
+    searchMemory: async (query: string, limit = 20): Promise<string[] | null> => {
+      if (!read.length) return null;
+      const hits = await Promise.all(
+        read.map(async (scope) => {
+          const facts = await memory.query(scope, query, limit, { actorId: input.actor.id });
+          recordRead(scope, "memory");
+          return facts.map((fact) => (read.length > 1 ? `[${scope}] ${fact}` : fact));
+        }),
+      );
+      return hits.flat().slice(0, limit);
+    },
     listFiles: () => handles,
     listSkills: async () => (await input.skills?.visibleFor(skillScopes, grantedSkills)) ?? [],
     readFile: (path: string) =>

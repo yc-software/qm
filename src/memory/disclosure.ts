@@ -3,7 +3,7 @@ import { parseScopeId, personalScope } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { CurrentScopeMembers, IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
-import { legacyMemoryRecords, restoreMemoryRecords, type MemoryRecords } from "./records.ts";
+import { legacyMemoryRecords, parseMemoryRecords, restoreMemoryRecords, type MemoryRecords } from "./records.ts";
 import { memoryBlocks } from "./notebook.ts";
 import { queryBullets, recallBody, type MemoryService } from "./memory-service.ts";
 
@@ -21,27 +21,16 @@ export interface MemoryDisclosure {
 }
 
 function validRecords(content: string, snapshot: MemoryRecords): boolean {
-  if (snapshot?.version !== 1 || !Array.isArray(snapshot.records)) return false;
-  const blocks = memoryBlocks(content);
-  return (
-    blocks.length === snapshot.records.length &&
-    snapshot.records.every(
-      (record, index) =>
-        record &&
-        typeof record.id === "string" &&
-        record.text === blocks[index] &&
-        ["ordinary", "unknown", "sensitive", "restricted"].includes(record.sensitivity) &&
-        typeof record.sourceUnknown === "boolean" &&
-        Array.isArray(record.sources) &&
-        record.sources.every(
-          (source) =>
-            source &&
-            typeof source.scopeId === "string" &&
-            !!parseScopeId(source.scopeId).kind &&
-            (source.sessionId === undefined || typeof source.sessionId === "string"),
-        ),
-    )
-  );
+  try {
+    parseMemoryRecords("legacy", content, snapshot);
+    const blocks = memoryBlocks(content);
+    return (
+      blocks.length === snapshot.records.length &&
+      snapshot.records.every((record, index) => record.text === blocks[index])
+    );
+  } catch {
+    return false;
+  }
 }
 
 function memoryDisclosurePolicy(input: MemoryDisclosure) {
@@ -132,7 +121,7 @@ export class MemoryDisclosureDenied extends Error {
 export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure): MemoryService {
   if (memory.withDisclosure) {
     const view = memory.withDisclosure(access);
-    return { ...view, capture: (...args) => memory.capture(...args) };
+    return { ...view, replaceRecordsIfRevision: undefined, capture: (...args) => memory.capture(...args) };
   }
   async function filtered<T extends { content: string; records?: MemoryRecords }>(scope: ScopeId, head: T): Promise<T> {
     const snapshot = head.records ?? legacyMemoryRecords(scope, head.content);
@@ -182,6 +171,7 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
         await memory.replace(scope, content, author);
       }
     },
+    replaceRecordsIfRevision: undefined,
     async replaceIfRevision(scope, content, revision, author) {
       const current = await editable(scope);
       if (current.revision !== revision) return false;

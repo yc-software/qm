@@ -179,7 +179,10 @@ test("automatic CC preserves trusted sources and sensitivity, opaque stores do n
   const record = snapshots.get(scope)!.records.find((record) => record.text.includes("Confidential"))!;
   assert.equal(record.sensitivity, "sensitive");
   assert.deepEqual(record.sources, [{ scopeId: "group:private", sessionId: "s1" }]);
-  assert.equal(await ccCaptureToPersonal(base, "group:private", "bob", ["Not copied"], Date.now()), 0);
+  assert.equal(
+    await ccCaptureToPersonal({ ...base, readHead: undefined }, "group:private", "bob", ["Not copied"], Date.now()),
+    0,
+  );
   assert.equal(await base.read("personal:bob"), "");
 });
 

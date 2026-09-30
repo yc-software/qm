@@ -135,6 +135,15 @@ export function createRoutedMemoryService(opts: {
       return manager.replaceIfRevision(scopeId, content, revision, author);
     },
 
+    ...(opts.routes
+      .filter((route) => route.manage !== false)
+      .every((route) => providerFor(route).replaceRecordsIfRevision)
+      ? {
+          replaceRecordsIfRevision: async (scopeId, records, revision, author) =>
+            (await managerFor(scopeId)?.replaceRecordsIfRevision?.(scopeId, records, revision, author)) ?? false,
+        }
+      : {}),
+
     async history(scopeId, limit): Promise<MemoryRevision[]> {
       return (await managerFor(scopeId)?.history?.(scopeId, limit)) ?? [];
     },

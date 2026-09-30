@@ -98,9 +98,9 @@ test("restore cannot downgrade restrictions introduced after the old revision", 
 test("duplicate text blocks retain distinct record IDs and unchanged snapshots are stable", () => {
   const old = legacyMemoryRecords(scope, "- repeated\n- repeated");
   const next = updateMemoryRecords(scope, old, "- repeated\n- repeated");
-  assert.deepEqual(next, old);
+  assert.deepEqual(next.records, old.records);
   assert.notEqual(next.records[0]!.id, next.records[1]!.id);
-  assert.deepEqual(updateMemoryRecords(scope, old, ""), { version: 1, records: [] });
+  assert.deepEqual(updateMemoryRecords(scope, old, "").records, []);
 });
 
 test("rewrite contraction cannot discard stronger duplicate or reworded-away provenance", () => {
@@ -122,4 +122,17 @@ test("rewrite contraction cannot discard stronger duplicate or reworded-away pro
     assert.equal(merged.records[0]!.sensitivity, "restricted");
     assert.ok(merged.records[0]!.sources.some((source) => source.scopeId === "group:private"));
   }
+});
+
+test("legacy consolidation bookkeeping imports as metadata, not a remembered fact", () => {
+  const snapshot = legacyMemoryRecords(scope, "# Memory\n\n- old\n\n<!-- consolidated: 2026-06-10 -->\n- fresh");
+  assert.equal(snapshot.capturesSinceConsolidation, 1);
+  assert.equal(snapshot.records.length, 3);
+  assert.ok(snapshot.records.every((record) => !record.text.includes("consolidated:")));
+});
+
+test("legacy scratch marker becomes a durable counter without tainting facts", () => {
+  const snapshot = legacyMemoryRecords(scope, "# Memory\n\n- fact\n\n<!-- captures-since-promote: 2 -->");
+  assert.equal(snapshot.pendingScratchCaptures, 2);
+  assert.equal(snapshot.records.length, 2);
 });

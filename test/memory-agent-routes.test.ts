@@ -174,6 +174,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   });
 
   it('scope:"org" writes the org notebook when the token carries orgWrite (admin turn)', async () => {
+    await built.memory.replace(ORG, "");
     const cap = await capFor("A1", { write: scopeId("personal", "A1"), orgWrite: ORG, read: [ORG] });
     const res = await post(
       "/v1/memory/facts",

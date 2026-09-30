@@ -373,3 +373,54 @@ test(
     assert.ok(rewritten.sources.some((source) => source.scopeId === "group:private"));
   },
 );
+
+test("pg memory: structured records are authoritative; body is only a legacy fallback", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const p = new pg.Pool({ connectionString: URL });
+  const mem = createPostgresMemoryService(URL!);
+  const sid = scopeId("personal", "U-authority");
+  try {
+    await mem.read(sid);
+    await p.query(
+      "INSERT INTO memory_revisions (scope_id, seq, op, body, author, at, records) VALUES ($1, 1, 'replace', $2, NULL, $3, NULL)",
+      [sid, "legacy  prose kept verbatim\n", at],
+    );
+    assert.equal(await mem.read(sid), "legacy  prose kept verbatim\n");
+    await p.query("UPDATE memory_revisions SET body = $2, records = $3 WHERE scope_id = $1", [
+      sid,
+      "stale projection\n",
+      JSON.stringify({
+        version: 1,
+        records: [{ id: "r1", text: "- canonical fact", sensitivity: "ordinary", sources: [], sourceUnknown: false }],
+      }),
+    ]);
+    assert.equal(await mem.read(sid), "- canonical fact\n");
+    assert.deepEqual(await mem.query(sid, "stale"), []);
+    await p.query("UPDATE memory_revisions SET records = $2 WHERE scope_id = $1", [sid, '{"version":9,"records":[]}']);
+    await assert.rejects(mem.read(sid), /Invalid memory records/);
+  } finally {
+    await p.end();
+  }
+});
+
+test("pg memory: replaceRecordsIfRevision is CAS-guarded and writes a derived body", { skip }, async () => {
+  const mem = createPostgresMemoryService(URL!);
+  const sid = scopeId("personal", "U-records-cas");
+  await mem.capture(sid, ["Alpha fact", "Beta fact"], at, undefined, { mode: "explicit" });
+  const head = await mem.readHead!(sid);
+  const next = { ...head.records!, records: head.records!.records.filter((r) => r.text.includes("Beta")) };
+  assert.equal(await mem.replaceRecordsIfRevision!(sid, next, head.revision, "system:consolidate"), true);
+  assert.equal(await mem.replaceRecordsIfRevision!(sid, next, head.revision), false);
+  assert.equal(await mem.read(sid), "- (2026-05-31) Beta fact\n");
+  const rows = await revisions(sid);
+  assert.equal(rows.at(-1)!.op, "consolidate");
+  assert.equal(rows.at(-1)!.body, "- (2026-05-31) Beta fact\n");
+  await assert.rejects(
+    mem.replaceRecordsIfRevision!(
+      sid,
+      { version: 1, records: [{ id: "" }] } as never,
+      (await mem.readHead!(sid)).revision,
+    ),
+    /Invalid memory records/,
+  );
+});
