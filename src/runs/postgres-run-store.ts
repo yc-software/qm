@@ -135,7 +135,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `DO $$
       BEGIN
         IF to_regclass('tool_calls') IS NOT NULL THEN
-          ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;
+          IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                         WHERE attrelid = 'tool_calls'::regclass AND attname = 'attempt' AND NOT attisdropped) THEN
+            ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;
+          END IF;
           IF EXISTS (
             SELECT 1 FROM pg_constraint c
             WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
