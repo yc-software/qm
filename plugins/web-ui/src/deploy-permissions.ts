@@ -96,7 +96,6 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     publicAccess = response.public;
     grantees = response.grantees;
   };
-  // One menu, three levels. Public is the link bit; the org level is the ordinary org-wide grant.
   const changeGeneral = async (next: GeneralAccess) => {
     if (busy || next === generalAccess() || (next === "public" && !externalSharing)) return;
     closeFormMenus();
@@ -318,7 +317,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
               >${owner.startsWith("personal:") ? friendlyPrincipal(owner.slice(9)) : scopeChip(owner)}</span
             ><span class="permission-owner">Owner</span>
           </div>
-          ${grantees.filter((grant) => !isOrgGrant(grant)).map((grant) => html`<div class="permission-row"><span class="project-member-avatar" aria-hidden="true">${initials(grant.scope.replace("personal:", ""))}</span><span class="permission-person-label">${names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
+          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row"><span class="project-member-avatar" aria-hidden="true">${initials(isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", ""))}</span><span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
         <div class="permission-section-label permission-general-label">General access</div>
         <div class="project-member-list">

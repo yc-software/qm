@@ -368,7 +368,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
   }
 });
 
-test("org-wide app access admits only signed-in org members, with external sharing off", async () => {
+test("org-wide app access admits only signed-in org members", async () => {
   const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
   upstream.listen(0);
   const acl = createAclStore();

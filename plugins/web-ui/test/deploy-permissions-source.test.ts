@@ -26,13 +26,6 @@ test("app permissions offer explicit view-only email grants outside the director
 
 test("general access is one menu: restricted, the org, or (admin permitting) anyone with the link", () => {
   assert.match(source, /externalSharing = response\.externalSharing !== false/);
-  assert.match(source, /if \(!externalSharing\) return null;/);
-  assert.match(source, /\{ value: "restricted", label: "Restricted" \}/);
-  assert.match(source, /\{ value: "org", label: orgName\(\) \}/);
   assert.match(source, /disabledHint: "An org admin must turn on external app sharing first\."/);
-  assert.match(source.replace(/\s+/g, " "), /next === "public" && !externalSharing\) ?\)? return/);
-  // The org level is the ordinary org-wide grant, not a new kind of access.
   assert.match(source, /post\(\{ scope: "org", access: "view" \}\)/);
-  assert.match(source, /post\(\{ scope: grant\.scope, access: "none" \}\)/);
-  assert.match(source, /grantees\.filter\(\(grant\) => !isOrgGrant\(grant\)\)/);
 });

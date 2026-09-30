@@ -271,7 +271,6 @@ export interface MenuSelectOption {
   value: string | null;
   label: string;
   glyph?: IconNode;
-  /** Shown but not selectable; the hint says why. */
   disabledHint?: string;
 }
 
