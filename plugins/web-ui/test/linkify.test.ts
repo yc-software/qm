@@ -99,8 +99,11 @@ test("the collapsed peek is linkified and lives outside the toggle button", () =
   assert.match(chat, /class="pinned-strip-toggle"/);
 });
 
-test("pin links stop propagation so a click follows the link instead of toggling", () => {
-  assert.match(chat, /@click=\$\{\(e: Event\) => e\.stopPropagation\(\)\}/);
+test("clicking a pin link follows the link instead of toggling the strip", () => {
+  assert.match(
+    chat,
+    /function togglePins\(e: Event\): void \{\s*if \(\(e\.target as Element \| null\)\?\.closest\("a"\)\) return;/,
+  );
 });
 
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
