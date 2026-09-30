@@ -3,6 +3,7 @@ import { renderDesign } from "./design-source.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { spendWindow } from "../ui/spend.ts";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
@@ -21,6 +22,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
     "location",
     "scope",
     "orgId",
+    "governanceUI",
     `${grab("decodePathSegment")};
      ${grab("stateToUrl")};
      ${grab("urlToState")};
@@ -51,6 +53,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
     { pathname, search },
     "channel:LAST-VIEWED",
     "acme",
+    { spend: { spendWindow } },
   ) as {
     stateToUrl: (st: Record<string, unknown>) => string;
     urlToState: () => {
@@ -62,6 +65,8 @@ function routerAt(pathname: string, search = "", base = "/admin") {
       cron: string | null;
       turn: string | null;
       range: string | null;
+      from: string | null;
+      to: string | null;
       page: number;
       cursor: string | null;
     };
@@ -109,6 +114,33 @@ test("the spend window round-trips through the URL so Back restores the prior ra
   assert.equal(st.range, "90d");
   assert.equal(router.stateToUrl(st), "/admin/spend?range=90d");
   assert.equal(routerAt("/admin/spend").urlToState().range, null);
+});
+
+test("a custom spend window round-trips through the URL and replaces the preset range", () => {
+  const { stateToUrl } = routerAt("/admin/spend");
+  assert.equal(
+    stateToUrl({ view: "spend", scope: "org:acme", range: "7d", from: "2026-09-01", to: "2026-10-01" }),
+    "/admin/spend?from=2026-09-01&to=2026-10-01",
+  );
+  assert.equal(
+    stateToUrl({ view: "spend", scope: "org:acme", range: "7d", from: null, to: null }),
+    "/admin/spend?range=7d",
+  );
+  assert.equal(
+    stateToUrl({ view: "spend", scope: "org:acme", range: "7d", from: "2026-02-30", to: "2026-03-02" }),
+    "/admin/spend?range=7d",
+    "an impossible custom window never displaces the preset",
+  );
+  assert.equal(
+    stateToUrl({ view: "metrics", scope: "org:acme", from: "2026-09-01", to: "2026-10-01" }),
+    "/admin/metrics?scope=org%3Aacme",
+  );
+  const router = routerAt("/admin/spend", "?from=2026-09-01&to=2026-10-01");
+  const st = router.urlToState();
+  assert.equal(st.from, "2026-09-01");
+  assert.equal(st.to, "2026-10-01");
+  assert.equal(router.stateToUrl(st), "/admin/spend?from=2026-09-01&to=2026-10-01");
+  assert.equal(routerAt("/admin/spend", "?range=7d").urlToState().from, null);
 });
 
 test("non-history views keep their query-param scope", () => {
