@@ -1623,6 +1623,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
       let controlClaims: CapabilityClaims | undefined;
+      const sandboxTokenTtlMs = deps.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
+      const sandboxTokenExpiry = sandboxTokenTtlMs === 0 ? 0 : Date.now() + sandboxTokenTtlMs;
       const scopeAttestation = {
         ...(external ? { externalSlack: true as const } : {}),
         actorId: actor.id,
@@ -1663,7 +1665,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true))
             ? { ownerConnections: true }
             : {}),
-          exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+          exp: sandboxTokenExpiry,
           ...(turnTimezone ? { timezone: turnTimezone } : {}),
           ...(destination ? { destination } : {}),
           ...(delivery.candidates.length > 0 ? { destinations: delivery.candidates } : {}),
@@ -1709,7 +1711,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           {
             ...scopeAttestation,
             aud: OAUTH_CONSENT_AUD,
-            exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+            exp: sandboxTokenExpiry,
           },
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
@@ -1769,7 +1771,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...scopeAttestation,
             aud: EGRESS_PROXY_AUD,
             egress: egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? "", securityPolicy.denyPrivateNetworks),
-            exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+            exp: sandboxTokenExpiry,
           },
           egressSecret,
           deps.capabilityTokenCompression,
@@ -1823,7 +1825,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     }
                   : {}),
                 credentials: brokerSlugs,
-                exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+                exp: sandboxTokenExpiry,
               },
               (deps.capabilitySecret ?? deps.signingSecret)!,
               deps.capabilityTokenCompression,

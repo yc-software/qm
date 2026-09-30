@@ -143,6 +143,7 @@ export interface OrchestratorDeps {
   securityScreenTimeoutMs?: number;
   securityScreener?: SecurityScreener;
   backgroundJobTtlMs?: number;
+  sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   harness: Harness;
   signingSecret?: string;

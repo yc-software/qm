@@ -324,6 +324,7 @@ export interface AgentToolsOptions {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
+  sandboxCapabilityTtlMs?: number;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
@@ -351,6 +352,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
+    sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,
   };
 }
 
@@ -406,7 +408,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000) / 1000);
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
-  const capabilityTtlHours = Math.round(SANDBOX_CAPABILITY_TTL_MS / 3_600_000);
+  const capabilityTtlMs = opts?.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
+  const capabilityTtlHours = capabilityTtlMs / 3_600_000;
+  const capabilityExpiry =
+    capabilityTtlMs === 0
+      ? "Two limits: this deployment does not expire those turn tokens, but authorization checks still apply (publish checkpoints to durable Files and retain the file ID for the later turn or cron)"
+      : `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
   const log = async (type: EntryType, payload: unknown, sourceScopeId?: ScopeId | null): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
     const scopeLabel = classifyScopeLabel({
@@ -1708,7 +1715,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
       `that finishes within ${execCeilingSec}s, just use \`execute\`. Available on the default sandbox or an authorized explicit sandbox_id; ` +
       "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
-      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
+      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. ${capabilityExpiry}, and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
       "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +
       "`glab auth login`, `gcloud auth login`, and anything that prints a verification URL/code then " +
       "blocks waiting on a human) belong here, NOT in `execute`. Run them with action=start, read the " +

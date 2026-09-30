@@ -1381,3 +1381,29 @@ test("credential prompt blocks are byte-identical across inventory and policy or
   assert.equal(second.status, "ok");
   assert.equal(second.reply, first.reply);
 });
+
+test("broker accepts no-expiry sandbox tokens but still enforces credential disablement", async () => {
+  let calls = 0;
+  const srv = startBroker(async () => {
+    calls++;
+    return { status: 200, contentType: "text/plain", text: async () => "ok" };
+  });
+  try {
+    const credential = { slug: "probe", name: "Probe", secret: "synthetic", host: "api.example.com" };
+    await srv.built.serviceCreds.setServiceCredential("org:default-org", credential);
+    const token = (exp: number) =>
+      mintCapabilityToken(
+        { actorId: "U1", scopeId: "personal:U1", aud: CREDENTIAL_BROKER_AUD, credentials: ["probe"], exp },
+        SECRET,
+      );
+    const request = { credential: "probe", method: "GET", url: "https://api.example.com/probe" };
+    assert.equal((await broker(srv.base, await token(Date.now() - 1), request)).status, 401);
+    const unlimited = await token(0);
+    assert.equal((await broker(srv.base, unlimited, request)).status, 200);
+    await srv.built.serviceCreds.setServiceCredential("org:default-org", { ...credential, enabled: false });
+    assert.equal((await broker(srv.base, unlimited, request)).status, 404);
+    assert.equal(calls, 1);
+  } finally {
+    await srv.close();
+  }
+});

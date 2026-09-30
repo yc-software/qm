@@ -983,3 +983,10 @@ test("screening across postures is explicit and requires an enabled backend", ()
   assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "true" }), /requires an enabled/);
   assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "typo" }), /SECURITY_SCREEN_ALL_POSTURES/);
 });
+
+test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
+  assert.equal(loadConfig({}).sandboxCapabilityTtlMs, 48 * 3_600_000);
+  assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "168" }).sandboxCapabilityTtlMs, 168 * 3_600_000);
+  assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "none" }).sandboxCapabilityTtlMs, 0);
+  assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
+});
