@@ -154,6 +154,7 @@ for (const mode of ["socket", "http"] as const)
       let eventDone: (() => void) | undefined;
       let attempts = 0;
       let admitted = 0;
+      let externalRefusals = 0;
       let acks = 0;
       const retries: Array<number | undefined> = [];
       const processEvent = async (event: ReceiverEvent) => {
@@ -166,7 +167,11 @@ for (const mode of ["socket", "http"] as const)
           async () => {
             if (++attempts === 1 && afterCap) await blocked;
             const membership = await observe();
-            assert.ok(membership.publishMembers);
+            if (!membership.publishMembers) {
+              externalRefusals++;
+              gate.persisted();
+              return;
+            }
             admitted++;
             gate.persisted();
           },
@@ -235,6 +240,7 @@ for (const mode of ["socket", "http"] as const)
       release();
       await completed;
       assert.equal(admitted, 0);
+      assert.equal(externalRefusals, 0);
       assert.equal(deduper.seen("message-key"), false);
       deduper.forget("message-key");
       options.failWrite = false;
