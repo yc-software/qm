@@ -36,7 +36,7 @@ import {
   planCompaction,
 } from "../src/harness/context-compaction.ts";
 import { countTokens } from "../src/util/tokens.ts";
-import type { Harness, HarnessCompactInput } from "../src/harness/harness.ts";
+import type { Harness, HarnessCompactInput, HarnessTurnInput, RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -45,6 +45,7 @@ import { scopeId, type Conversation, type Principal, type SessionEntry } from ".
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
 const msgTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `msg ${i}`);
+const msgs = (n: number) => msgTexts(n).map((text) => ({ payload: { text } }));
 const KEEP_RECENT_TOKEN_FRACTION = 0.6;
 const budgetBetweenSoftAndHard = (historyTokens: number): number =>
   Math.round(historyTokens / ((COMPACT_SOFT_FRACTION + COMPACT_HARD_FRACTION) / 2));
@@ -211,10 +212,7 @@ test("overflow over the injected token budget summarizes: compactHistory runs ov
   const { harness, compactCalls, resetCalls } = spyHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
-  const sid = await seed(
-    sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(6));
 
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
@@ -245,10 +243,7 @@ test("the background pass labels the lease it takes, so a turn it locks out can 
     return acquire(sessionId, holder);
   };
 
-  const sid = await seed(
-    sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(6));
   assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
 
   const deadline = Date.now() + 3_000;
@@ -289,10 +284,7 @@ test("a prior summary that still fits is reused, not regenerated", async () => {
   const { orch, sessions } = buildOrchestrator(harness, 1_000_000);
 
   const sid = await seed(sessions, [
-    { payload: { text: "old 0" } },
-    { payload: { text: "old 1" } },
-    { payload: { text: "old 2" } },
-    { payload: { text: "old 3" } },
+    ...Array.from({ length: 4 }, (_, i) => ({ payload: { text: `old ${i}` } })),
     { type: "system", payload: createContextSummaryPayload(3, "prior summary"), scopeLabel: PERSONAL },
     { payload: { text: "new 5" } },
   ]);
@@ -316,10 +308,7 @@ test("with no harness summarizer, overflow falls back to a plain slice — no su
   assert.equal(harness.models.compactHistory, undefined, "fixture: summarizer is absent");
   const { orch, sessions } = buildOrchestrator(harness, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
 
-  const sid = await seed(
-    sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(6));
 
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
@@ -341,10 +330,7 @@ test("a tool_call at the summarize/keep boundary whose result is KEPT is not sum
   );
 
   const sid = await seed(sessions, [
-    { payload: { text: "msg 0" } },
-    { payload: { text: "msg 1" } },
-    { payload: { text: "msg 2" } },
-    { payload: { text: "msg 3" } },
+    ...msgs(4),
     { type: "tool_call", payload: callPayload },
     { type: "tool_result", payload: resultPayload },
   ]);
@@ -392,11 +378,7 @@ test("a summary uses the session scope regardless of the source entry scopes", a
   const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("team 4", "recent 5"));
 
   const sid = await seed(sessions, [
-    { payload: { text: "team 0" }, scopeLabel: TEAM },
-    { payload: { text: "team 1" }, scopeLabel: TEAM },
-    { payload: { text: "team 2" }, scopeLabel: TEAM },
-    { payload: { text: "team 3" }, scopeLabel: TEAM },
-    { payload: { text: "team 4" }, scopeLabel: TEAM },
+    ...Array.from({ length: 5 }, (_, i) => ({ payload: { text: `team ${i}` }, scopeLabel: TEAM })),
     { payload: { text: "recent 5" } },
   ]);
 
@@ -459,15 +441,7 @@ test("planCompaction summarizes ONLY the evicted (oldest overflow) chunk, not th
 
 test("planCompaction chains a prior summary into the batch instead of accumulating summaries", () => {
   const history: SessionEntry[] = [
-    {
-      sessionId: "s",
-      seq: 0,
-      parentSeq: null,
-      type: "system",
-      payload: createContextSummaryPayload(-1, "prior"),
-      scopeLabel: PERSONAL,
-      createdAt: 0,
-    },
+    mkEntry({ seq: 0, type: "system", payload: createContextSummaryPayload(-1, "prior") }),
     ...Array.from({ length: 6 }, (_, i) => mkEntry({ seq: i + 1 })),
   ];
   const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(-3))), 0.6)!;
@@ -479,15 +453,7 @@ test("planCompaction chains a prior summary into the batch instead of accumulati
 
 test("planCompaction returns null when nothing needs to move (a still-fitting prior summary is reused)", () => {
   const history: SessionEntry[] = [
-    {
-      sessionId: "s",
-      seq: 0,
-      parentSeq: null,
-      type: "system",
-      payload: createContextSummaryPayload(2, "prior"),
-      scopeLabel: PERSONAL,
-      createdAt: 0,
-    },
+    mkEntry({ seq: 0, type: "system", payload: createContextSummaryPayload(2, "prior") }),
     mkEntry({ seq: 3 }),
     mkEntry({ seq: 4 }),
   ];
@@ -500,24 +466,8 @@ test("planCompaction never splits a tool_call from its kept tool_result (no fabr
   const history: SessionEntry[] = [
     mkEntry({ seq: 0 }),
     mkEntry({ seq: 1 }),
-    {
-      sessionId: "s",
-      seq: 2,
-      parentSeq: 1,
-      type: "tool_call",
-      payload: { tool: "execute", callId: "c1" },
-      scopeLabel: PERSONAL,
-      createdAt: 2,
-    },
-    {
-      sessionId: "s",
-      seq: 3,
-      parentSeq: 2,
-      type: "tool_result",
-      payload: { tool: "execute", callId: "c1", result: "ok" },
-      scopeLabel: PERSONAL,
-      createdAt: 3,
-    },
+    mkEntry({ seq: 2, type: "tool_call", payload: { tool: "execute", callId: "c1" } }),
+    mkEntry({ seq: 3, type: "tool_result", payload: { tool: "execute", callId: "c1", result: "ok" } }),
     mkEntry({ seq: 4 }),
     mkEntry({ seq: 5 }),
   ];
@@ -533,17 +483,30 @@ test("planCompaction never splits a tool_call from its kept tool_result (no fabr
   );
 });
 
-for (const [kind, mkTurn] of [
-  ["spine", spineTurn],
-  ["DM", turn],
-] as const) {
-  test(`a ${kind} turn between soft and hard does NOT block on compaction; the background pass sheds it`, async () => {
+for (const { name, mkTurn, thinking } of [
+  {
+    name: "a spine turn between soft and hard does NOT block on compaction; the background pass sheds it",
+    mkTurn: spineTurn,
+    thinking: false,
+  },
+  {
+    name: "a DM turn between soft and hard does NOT block on compaction; the background pass sheds it",
+    mkTurn: turn,
+    thinking: false,
+  },
+  {
+    name: "background compaction excludes thinking entries from the summary batch (Bugbot: history filter)",
+    mkTurn: spineTurn,
+    thinking: true,
+  },
+]) {
+  test(name, async () => {
     const { harness, compactCalls } = spyHarness();
     const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-    const sid = await seed(
-      sessions,
-      msgTexts(8).map((text) => ({ payload: { text } })),
-    );
+    const sid = await seed(sessions, [
+      ...msgs(8),
+      ...(thinking ? [{ type: "thinking" as const, payload: { thinking: "signature-less reasoning" } }] : []),
+    ]);
 
     const res = await orch.handleTurn(mkTurn("!histcount"));
     assert.equal(res.status, "ok");
@@ -552,6 +515,10 @@ for (const [kind, mkTurn] of [
     const summaries = await waitForSummary(sessions, sid);
     assert.equal(summaries.length, 1, "the background pass compacts off the hot path");
     assert.equal(compactCalls.length, 1, "exactly one (background) compaction, none inline");
+    assert.ok(
+      compactCalls[0]!.history.every((e) => e.type !== "thinking"),
+      "the summarizer batch must not include the durable thinking entry",
+    );
   });
 }
 
@@ -562,10 +529,7 @@ test("a model-overridden session's background pass sizes against the override's 
   harness.models.contextTokenBudget = (_scopeLabel?: string, model?: string) =>
     model === OVERRIDE ? overrideBudget : 1_000_000;
   const { orch, sessions } = buildOrchestrator(harness);
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(8));
 
   const res = await orch.handleTurn({ ...turn("!histcount"), model: OVERRIDE });
   assert.equal(res.status, "ok");
@@ -583,10 +547,7 @@ test("a model-overridden session's background pass sizes against the override's 
 test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {
   const { harness, compactCalls } = spyHarness();
   const { orch, sessions } = buildOrchestrator(harness, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));
-  await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+  await seed(sessions, msgs(8));
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
   assert.equal(res.status, "ok");
@@ -597,10 +558,7 @@ test("a rapid follow-up that outran the background pass AND is over the HARD lim
 test("a session UNDER the soft threshold triggers no compaction at all (background pass is a no-op)", async () => {
   const { harness, compactCalls } = spyHarness();
   const { orch, sessions } = buildOrchestrator(harness, 1_000_000);
-  await seed(
-    sessions,
-    Array.from({ length: 3 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
-  );
+  await seed(sessions, msgs(3));
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
   assert.equal(res.reply, "history:3", "under soft ⇒ the turn runs on raw history, no inline compaction");
@@ -616,10 +574,7 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
   };
   const keptAfterFirstTurn = ["msg 4", "msg 5", "msg 6", "msg 7", "!histcount", "history:8"];
   const { orch, sessions } = buildOrchestrator(harness, budgetWhoseKeepWindowFits(tokensOf(...keptAfterFirstTurn)));
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(8));
 
   await orch.handleTurn(turn("!histcount"));
   assert.equal((await waitForSummary(sessions, sid)).length, 1, "the background pass ran after the first DM turn");
@@ -646,25 +601,6 @@ test("forModelContext strips thinking/text/soul (never laundered into a durable 
   );
 });
 
-test("background compaction excludes thinking entries from the summary batch (Bugbot: history filter)", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(sessions, [
-    ...msgTexts(8).map((text) => ({ payload: { text } })),
-    { type: "thinking" as const, payload: { thinking: "signature-less reasoning" } },
-  ]);
-
-  const res = await orch.handleTurn(spineTurn("!histcount"));
-  assert.equal(res.status, "ok");
-  const summaries = await waitForSummary(sessions, sid);
-  assert.equal(summaries.length, 1, "a background compaction ran");
-  assert.equal(compactCalls.length, 1);
-  assert.ok(
-    compactCalls[0]!.history.every((e) => e.type !== "thinking"),
-    "the summarizer batch must not include the durable thinking entry",
-  );
-});
-
 test("a session parked over soft with a too-large prior summary re-summarizes (Bugbot: reuse-parked)", async () => {
   const { harness, compactCalls } = spyHarness();
   const { orch, sessions } = buildOrchestrator(
@@ -673,7 +609,7 @@ test("a session parked over soft with a too-large prior summary re-summarizes (B
   );
   await seed(sessions, [
     { type: "system" as const, payload: createContextSummaryPayload(-1, "prior recap"), scopeLabel: PERSONAL },
-    ...msgTexts(8).map((text) => ({ payload: { text } })),
+    ...msgs(8),
   ]);
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -707,10 +643,7 @@ test("a runaway summarizer output does not commit a compaction checkpoint", asyn
   const { harness } = spyHarness();
   harness.models.compactHistory = async () => "I'll scan for new signed replies… ".repeat(2_000);
   const { orch, sessions, errors } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
-  const sid = await seed(
-    sessions,
-    msgTexts(12).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(12));
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
   assert.equal(res.status, "ok");
@@ -764,15 +697,7 @@ const stackedLog = (): Array<Partial<SessionEntry>> => [
 ];
 
 test("forModelContext applies the latest-summary boundary: one summary, nothing it covers, older summaries dropped", () => {
-  const entries = stackedLog().map((e, seq) => ({
-    sessionId: "s",
-    seq,
-    parentSeq: null,
-    type: e.type ?? "user",
-    payload: e.payload!,
-    scopeLabel: PERSONAL,
-    createdAt: seq,
-  })) as SessionEntry[];
+  const entries = stackedLog().map((e, seq) => mkEntry({ seq, type: e.type ?? "user", payload: e.payload! }));
   const view = forModelContext(entries);
   assertSummaryBoundary(view, "forModelContext");
   assert.deepEqual(
@@ -804,62 +729,51 @@ test("hiding a tainted latest summary does not expose the raw entries it covers"
   );
 });
 
-test("under-HARD turn: the harness sees the boundary-filtered context, not stacked summaries over raw history", async () => {
-  const base = spyHarness();
-  const { wrapped, seen } = captureHarness(base.harness);
-  const { orch, sessions } = buildOrchestrator(wrapped, 1_000_000);
-  await seed(sessions, stackedLog());
+for (const { name, withSummarizer, budget, reply, keepsSummary } of [
+  {
+    name: "under-HARD turn: the harness sees the boundary-filtered context, not stacked summaries over raw history",
+    withSummarizer: true,
+    budget: 1_000_000,
+    reply: "history:3",
+    keepsSummary: false,
+  },
+  {
+    name: "over-HARD turn with a summarizer: the rebuilt context honors the boundary",
+    withSummarizer: true,
+    budget: Math.floor(tokensOf("recap B", "new 0", "new 1") * COMPACT_HARD_FRACTION),
+    reply: undefined,
+    keepsSummary: false,
+  },
+  {
+    name: "over-HARD turn with NO summarizer (boundRecent fallback): the boundary still holds and the summary survives the slice",
+    withSummarizer: false,
+    budget: budgetKeepingOnlyNewest("recap B", "new 1"),
+    reply: undefined,
+    keepsSummary: true,
+  },
+]) {
+  test(name, async () => {
+    const { wrapped, seen } = captureHarness(spyHarness({ withSummarizer }).harness);
+    const { orch, sessions } = buildOrchestrator(wrapped, budget);
+    await seed(sessions, stackedLog());
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(seen.length, 1);
-  assertSummaryBoundary(seen[0]!, "under-hard");
-  assert.equal(res.reply, "history:3", "summary B + the 2 uncovered entries only");
-});
-
-test("over-HARD turn with a summarizer: the rebuilt context honors the boundary", async () => {
-  const base = spyHarness();
-  const { wrapped, seen } = captureHarness(base.harness);
-  const { orch, sessions } = buildOrchestrator(
-    wrapped,
-    Math.floor(tokensOf("recap B", "new 0", "new 1") * COMPACT_HARD_FRACTION),
-  );
-  await seed(sessions, stackedLog());
-
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(seen.length, 1);
-  assertSummaryBoundary(seen[0]!, "over-hard");
-});
-
-test("over-HARD turn with NO summarizer (boundRecent fallback): the boundary still holds and the summary survives the slice", async () => {
-  const base = spyHarness({ withSummarizer: false });
-  const { wrapped, seen } = captureHarness(base.harness);
-  const { orch, sessions } = buildOrchestrator(wrapped, budgetKeepingOnlyNewest("recap B", "new 1"));
-  await seed(sessions, stackedLog());
-
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(seen.length, 1);
-  assertSummaryBoundary(seen[0]!, "boundRecent fallback");
-  assert.ok(
-    seen[0]!.some((e) => contextSummaryPayload(e)),
-    "the bounding slice must keep the latest summary",
-  );
-});
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
+    assert.equal(seen.length, 1);
+    assertSummaryBoundary(seen[0]!, name);
+    if (reply) assert.equal(res.reply, reply, "summary B + the 2 uncovered entries only");
+    if (keepsSummary)
+      assert.ok(
+        seen[0]!.some((e) => contextSummaryPayload(e)),
+        "the bounding slice must keep the latest summary",
+      );
+  });
+}
 
 test("the context window start never regresses as the log grows", () => {
   const entries: SessionEntry[] = [];
   const add = (type: SessionEntry["type"], payload: object) => {
-    entries.push({
-      sessionId: "s",
-      seq: entries.length,
-      parentSeq: null,
-      type,
-      payload,
-      scopeLabel: PERSONAL,
-      createdAt: entries.length,
-    } as SessionEntry);
+    entries.push(mkEntry({ seq: entries.length, type, payload }));
   };
   let prevStart = -1;
   const startOf = (view: SessionEntry[]): number => {
@@ -899,25 +813,6 @@ async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_
   }
 }
 
-test("the background pass leaves the session writable while it summarizes — a follow-up turn is never locked out", async () => {
-  const { harness, compactCalls, open } = gatedHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
-
-  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
-
-  const { lease } = await sessions.acquireLease(sid, "turn");
-  assert.ok(lease, "background compaction must not hold the write-lock across its model call");
-  await sessions.releaseLease(lease!);
-
-  open();
-  assert.equal((await waitForSummary(sessions, sid)).length, 1, "and the summary still lands afterwards");
-});
-
 test("the background pass summarizes first and requests its lease only after the summarizer returns", async () => {
   const { harness, compactCalls, open } = gatedHarness();
   const events: string[] = [];
@@ -934,10 +829,7 @@ test("the background pass summarizes first and requests its lease only after the
     if (holder === "compaction") events.push("acquire:compaction");
     return acquire(sessionId, holder);
   };
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(8));
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
   await untilTrue("the background summarizer to be in flight", () => events.includes("summarize:start"));
@@ -962,10 +854,7 @@ test("the background pass summarizes first and requests its lease only after the
 test("the background pass waits out a turn that holds the lock rather than throwing its summary away", async () => {
   const { harness, compactCalls, resetCalls, open } = gatedHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(8));
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
   await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
@@ -1022,10 +911,7 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
 test("a summary that landed while the pass was summarizing makes it drop its own — never two overlapping folds", async () => {
   const { harness, compactCalls, resetCalls, open } = gatedHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+  const sid = await seed(sessions, msgs(8));
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
   await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
@@ -1049,58 +935,70 @@ test("a summary that landed while the pass was summarizing makes it drop its own
 
 test("the token estimate counts the environment note persisted on a user entry", () => {
   const environment = `<environment>\n${"## What you remember\nlikes terse replies. ".repeat(40)}\n</environment>`;
-  const bare = {
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: "user",
-    payload: { text: "hi" },
-    scopeLabel: "org:o",
-    createdAt: 1,
-  } as SessionEntry;
-  const withEnv = { ...bare, seq: 2, payload: { text: "hi", environment } } as SessionEntry;
+  const bare = mkEntry({ seq: 1, payload: { text: "hi" } });
+  const withEnv = mkEntry({ seq: 2, payload: { text: "hi", environment } });
   const delta = estimateHistoryTokens([withEnv]) - estimateHistoryTokens([bare]);
   assert.ok(delta >= countTokens(environment) * 0.9, `environment tokens must be counted (delta ${delta})`);
 });
 
-test("runtime handoff continues once with saved results under the original run and remaining deadline", async () => {
+function mockWith(turns: Partial<Harness["turns"]>, models: Partial<Harness["models"]> = {}): Harness {
   const base = createMockHarness();
-  const seen: import("../src/harness/harness.ts").HarnessTurnInput[] = [];
+  return { ...base, turns: { ...base.turns, ...turns }, models: { ...base.models, ...models } };
+}
+
+function routedOrchestrator(
+  adapter: Harness,
+  fallback: RuntimeChoice,
+  swarm?: Awaited<ReturnType<typeof swarmFixture>>,
+) {
+  const router = createHarnessRouter(new Map([["pi", adapter]]), createMockHarness(), (input) =>
+    resolveRuntimeChoiceDurable(
+      built.config,
+      "org:default-org",
+      input.scopeLabel,
+      fallback,
+      input.runtime,
+      undefined,
+      input.runtimePurpose,
+    ),
+  );
+  const built = buildOrchestrator(router, undefined, undefined, swarm);
+  built.config.setApprovedHarnesses(["pi"]);
+  return built;
+}
+
+async function emitRuntimeHandoff(input: HarnessTurnInput, runtimeHandoff: object): Promise<void> {
+  await input.emit({
+    type: "tool_result",
+    payload: { tool: "runtime", runId: input.runId, actorId: actor.id, runtimeHandoff },
+    scopeLabel: input.scopeLabel,
+  });
+}
+
+test("runtime handoff continues once with saved results under the original run and remaining deadline", async () => {
+  const seen: HarnessTurnInput[] = [];
   let resets = 0;
   const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
-  const harness: Harness = {
-    ...base,
-    turns: {
-      ...base.turns,
-      resetSession: async () => {
-        resets++;
-      },
-      runTurn: async (input) => {
-        seen.push(input);
-        if (seen.length === 1) {
-          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-          await input.emit({
-            type: "tool_result",
-            payload: {
-              tool: "runtime",
-              runId: input.runId,
-              actorId: actor.id,
-              runtimeHandoff: { choice, lifetime: "task" },
-            },
-            scopeLabel: input.scopeLabel,
-          });
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
-        }
-        assert.deepEqual(input.runtime, choice);
-        assert.equal(input.runId, "runtime-run");
-        assert.ok(input.history.some((e) => e.type === "tool_result"));
-        assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
-        await input.emit({ type: "assistant", payload: { text: "continued" }, scopeLabel: input.scopeLabel });
-        return { reply: "continued", modelCalls: 1 };
-      },
+  const harness = mockWith({
+    resetSession: async () => {
+      resets++;
     },
-  };
+    runTurn: async (input) => {
+      seen.push(input);
+      if (seen.length === 1) {
+        await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+        await emitRuntimeHandoff(input, { choice, lifetime: "task" });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
+      }
+      assert.deepEqual(input.runtime, choice);
+      assert.equal(input.runId, "runtime-run");
+      assert.ok(input.history.some((e) => e.type === "tool_result"));
+      assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
+      await input.emit({ type: "assistant", payload: { text: "continued" }, scopeLabel: input.scopeLabel });
+      return { reply: "continued", modelCalls: 1 };
+    },
+  });
   const { orch, sessions } = buildOrchestrator(harness, undefined, 60000);
   await orch.handleTurn({ ...turn("switch then finish"), runId: "runtime-run", surfaceTools: false });
   assert.equal(seen.length, 2);
@@ -1114,59 +1012,40 @@ test("runtime handoff continues once with saved results under the original run a
 });
 
 test("runtime handoff cannot restart a stopped task", async () => {
-  const base = createMockHarness();
   let calls = 0;
-  const harness: Harness = {
-    ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async () => {
-        calls++;
-        return {
-          reply: "",
-          stopped: true,
-          runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" },
-        };
-      },
+  const harness = mockWith({
+    runTurn: async () => {
+      calls++;
+      return {
+        reply: "",
+        stopped: true,
+        runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" },
+      };
     },
-  };
+  });
   const { orch } = buildOrchestrator(harness);
   await orch.handleTurn({ ...turn("switch"), surfaceTools: false });
   assert.equal(calls, 1);
 });
 
 test("a retry restores a committed runtime decision after reset crashes, without replaying the selection", async () => {
-  const base = createMockHarness();
   const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra" };
   let calls = 0;
-  const harness: Harness = {
-    ...base,
-    turns: {
-      ...base.turns,
-      resetSession: async () => {
-        throw new Error("worker died during reset");
-      },
-      runTurn: async (input) => {
-        calls++;
-        if (calls === 1) {
-          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-          await input.emit({
-            type: "tool_result",
-            payload: {
-              tool: "runtime",
-              runId: input.runId,
-              actorId: actor.id,
-              runtimeHandoff: { choice, lifetime: "task" },
-            },
-            scopeLabel: input.scopeLabel,
-          });
-          return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
-        }
-        assert.deepEqual(input.runtime, choice);
-        return { reply: "resumed" };
-      },
+  const harness = mockWith({
+    resetSession: async () => {
+      throw new Error("worker died during reset");
     },
-  };
+    runTurn: async (input) => {
+      calls++;
+      if (calls === 1) {
+        await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+        await emitRuntimeHandoff(input, { choice, lifetime: "task" });
+        return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
+      }
+      assert.deepEqual(input.runtime, choice);
+      return { reply: "resumed" };
+    },
+  });
   const { orch } = buildOrchestrator(harness);
   const input = { ...turn("switch and finish"), runId: "retry-runtime", surfaceTools: false };
   await assert.rejects(() => orch.handleTurn(input), /worker died/);
@@ -1175,33 +1054,24 @@ test("a retry restores a committed runtime decision after reset crashes, without
 });
 
 test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {
-  const base = createMockHarness();
   const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
   const outcomes: { surface: string; ok: boolean }[] = [];
   let resumed = 0;
-  const harness: Harness = {
-    ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (input) => {
-        if (input.runtime?.modelId === "gpt-6-astra") {
-          resumed++;
-          return { reply: "handled" };
-        }
-        const result = await input.runtimeControl!(active, { action: "set", model: "Astra" });
-        outcomes.push({ surface: input.input, ok: result.ok });
-        if (result.ok && result.handoff) {
-          await input.emit({
-            type: "tool_result",
-            scopeLabel: input.scopeLabel,
-            payload: { tool: "runtime", runId: input.runId, actorId: actor.id, runtimeHandoff: result.handoff },
-          });
-          return { reply: "", runtimeHandoff: result.handoff };
-        }
-        return { reply: "denied" };
-      },
+  const harness = mockWith({
+    runTurn: async (input) => {
+      if (input.runtime?.modelId === "gpt-6-astra") {
+        resumed++;
+        return { reply: "handled" };
+      }
+      const result = await input.runtimeControl!(active, { action: "set", model: "Astra" });
+      outcomes.push({ surface: input.input, ok: result.ok });
+      if (result.ok && result.handoff) {
+        await emitRuntimeHandoff(input, result.handoff);
+        return { reply: "", runtimeHandoff: result.handoff };
+      }
+      return { reply: "denied" };
     },
-  };
+  });
   const { orch } = buildOrchestrator(harness);
   for (const surface of ["cron", "webhook"]) {
     await orch.handleTurn({
@@ -1234,37 +1104,20 @@ test("only a cron automation receives task-runtime authority and each fire start
 });
 
 test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {
-  const base = createMockHarness();
   const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
   const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
-  const seen: import("../src/harness/harness.ts").RuntimeChoice[] = [];
-  const adapter: Harness = {
-    ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (input) => {
-        seen.push(input.runtime as typeof category);
-        const state = await input.runtimeControl!(input.runtime as typeof category, { action: "get" });
-        assert.ok(state.ok);
-        assert.deepEqual(state.effective, category);
-        if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
-        return { reply: "done" };
-      },
+  const seen: RuntimeChoice[] = [];
+  const adapter = mockWith({
+    runTurn: async (input) => {
+      seen.push(input.runtime as typeof category);
+      const state = await input.runtimeControl!(input.runtime as typeof category, { action: "get" });
+      assert.ok(state.ok);
+      assert.deepEqual(state.effective, category);
+      if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
+      return { reply: "done" };
     },
-  };
-  const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
-    resolveRuntimeChoiceDurable(
-      built.config,
-      "org:default-org",
-      input.scopeLabel,
-      category,
-      input.runtime,
-      undefined,
-      input.runtimePurpose,
-    ),
-  );
-  const built = buildOrchestrator(router);
-  built.config.setApprovedHarnesses(["pi"]);
+  });
+  const built = routedOrchestrator(adapter, category);
   await built.config.setRuntimeSelectionLatest(PERSONAL, {
     harnessId: "pi",
     modelId: "claude-sonnet-5",
@@ -1285,32 +1138,15 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
 });
 
 test("human child continuations respect non-fast category defaults", async () => {
-  const base = createMockHarness();
   const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   const seen: unknown[] = [];
-  const adapter: Harness = {
-    ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (input) => {
-        seen.push(input.runtime);
-        return { reply: "done" };
-      },
+  const adapter = mockWith({
+    runTurn: async (input) => {
+      seen.push(input.runtime);
+      return { reply: "done" };
     },
-  };
-  const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
-    resolveRuntimeChoiceDurable(
-      built.config,
-      "org:default-org",
-      input.scopeLabel,
-      category,
-      input.runtime,
-      undefined,
-      input.runtimePurpose,
-    ),
-  );
-  const built = buildOrchestrator(router);
-  built.config.setApprovedHarnesses(["pi"]);
+  });
+  const built = routedOrchestrator(adapter, category);
   built.config.setInteractiveFastMode(true);
   await built.config.flushScope("org:default-org");
   await built.config.setPurposeRuntime("subagent", category);
@@ -1347,32 +1183,15 @@ test("verified swarm workers use category defaults instead of copied parent choi
     assert.equal(worker.kind, "agent");
     if (worker.kind !== "agent") throw new Error("expected worker");
     const run = (await f.runs.get(worker.claims.runId!))!;
-    const base = createMockHarness();
     const seen: unknown[] = [];
-    const adapter: Harness = {
-      ...base,
-      turns: {
-        ...base.turns,
-        runTurn: async (input) => {
-          seen.push(input.runtime);
-          if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
-          return { reply: "done" };
-        },
+    const adapter = mockWith({
+      runTurn: async (input) => {
+        seen.push(input.runtime);
+        if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
+        return { reply: "done" };
       },
-    };
-    const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
-      resolveRuntimeChoiceDurable(
-        built.config,
-        "org:default-org",
-        input.scopeLabel,
-        inherited,
-        input.runtime,
-        undefined,
-        input.runtimePurpose,
-      ),
-    );
-    const built = buildOrchestrator(router, undefined, undefined, f);
-    built.config.setApprovedHarnesses(["pi"]);
+    });
+    const built = routedOrchestrator(adapter, inherited, f);
     await built.config.flushScope("org:default-org");
     if (configured) await built.config.setPurposeRuntime("subagent", category);
     const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
@@ -1384,21 +1203,11 @@ test("verified swarm workers use category defaults instead of copied parent choi
 
 for (const explicit of [false, true]) {
   test(`${explicit ? "explicit" : "automatic"} recent recovery continues the request once and stays reduced next turn`, async () => {
-    const base = createMockHarness();
-    const seen: Parameters<Harness["turns"]["runTurn"]>[0][] = [];
+    const seen: HarnessTurnInput[] = [];
     let summaries = 0;
     let effects = 0;
-    const harness: Harness = {
-      ...base,
-      models: {
-        ...base.models,
-        compactHistory: async () => {
-          summaries++;
-          throw new Error("summary refused");
-        },
-      },
-      turns: {
-        ...base.turns,
+    const harness = mockWith(
+      {
         runTurn: async (input) => {
           seen.push(input);
           if (explicit && seen.length === 1) {
@@ -1441,7 +1250,13 @@ for (const explicit of [false, true]) {
           return { reply: "finished" };
         },
       },
-    };
+      {
+        compactHistory: async () => {
+          summaries++;
+          throw new Error("summary refused");
+        },
+      },
+    );
     const { orch, sessions } = buildOrchestrator(harness, 1000, undefined, undefined, "serve");
     const sid = await seed(
       sessions,
@@ -1462,18 +1277,9 @@ for (const explicit of [false, true]) {
 }
 
 test("retry recovery supplies an excluded request without rerunning its completed action", async () => {
-  const base = createMockHarness();
   let mainCalls = 0;
-  const harness: Harness = {
-    ...base,
-    models: {
-      ...base.models,
-      compactHistory: async () => {
-        throw new Error("summary refused");
-      },
-    },
-    turns: {
-      ...base.turns,
+  const harness = mockWith(
+    {
       runTurn: async (input) => {
         mainCalls++;
         assert.match(input.input, /Current request.*\nfinish the stored request/);
@@ -1483,7 +1289,12 @@ test("retry recovery supplies an excluded request without rerunning its complete
         return { reply: "resumed" };
       },
     },
-  };
+    {
+      compactHistory: async () => {
+        throw new Error("summary refused");
+      },
+    },
+  );
   const { orch, sessions } = buildOrchestrator(harness, 500);
   await seed(sessions, [
     { payload: { text: "finish the stored request" } },

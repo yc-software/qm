@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import {
   chmodSync,
@@ -26,9 +26,9 @@ import {
   codexTurnInputText,
   createCodexHarness,
   prepareCodexHome,
+  type CodexHarnessOptions,
 } from "../src/harness/codex-harness.ts";
-import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
-import { harnessToolContext } from "../src/harness/harness-shared.ts";
+import type { Harness, HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
@@ -60,6 +60,64 @@ function oauthAccessToken(accountId: string, marker = "access"): string {
   return oauthIdToken(accountId, marker);
 }
 
+const orgScope = { kind: "org", id: "test" } as unknown as ScopeId;
+
+function executable(path: string, source: string): string {
+  writeFileSync(path, source);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function turnInput(id: string, extra: Partial<HarnessTurnInput> = {}, entries?: SessionEntry[]): HarnessTurnInput {
+  return {
+    session: { id } as Session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: orgScope,
+    orgScopeId: orgScope,
+    emit: async (entry) => {
+      const saved = { ...entry, sessionId: id, seq: (entries?.length ?? 0) + 1, createdAt: Date.now() } as SessionEntry;
+      entries?.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+    ...extra,
+  };
+}
+
+function codexHarness(t: TestContext, dir: string, options: CodexHarnessOptions): Harness {
+  const harness = createCodexHarness(options);
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return harness;
+}
+
+function writeOAuthAuth(path: string, name: string) {
+  const auth = {
+    auth_mode: "chatgpt",
+    tokens: {
+      access_token: `${name}-access`,
+      refresh_token: `${name}-refresh`,
+      account_id: `${name}-account`,
+      id_token: oauthIdToken(`${name}-account`),
+    },
+  };
+  writeFileSync(path, JSON.stringify(auth), { mode: 0o600 });
+  return auth;
+}
+
+async function waitForFile(path: string, timeoutMs = 4_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${path}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test("Codex replay keeps paired tool ids within the provider's 64-character limit", () => {
   const longId = "tool-call-".repeat(9);
   const normalized = codexReplayCallId(longId);
@@ -69,9 +127,8 @@ test("Codex replay keeps paired tool ids within the provider's 64-character limi
 });
 
 function fakeCodexBinary(dir: string, commentary = false, coordinator = false): string {
-  const path = join(dir, "fake-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "fake-codex"),
     `#!/usr/bin/env node
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin });
@@ -119,14 +176,11 @@ rl.on("line", (line) => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function terminatingCodexBinary(dir: string): string {
-  const path = join(dir, "terminating-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "terminating-codex"),
     `#!/usr/bin/env node
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin });
@@ -156,14 +210,11 @@ rl.on("line", (line) => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function concurrentCodexBinary(dir: string): string {
-  const path = join(dir, "concurrent-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "concurrent-codex"),
     `#!/usr/bin/env node
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin });
@@ -185,28 +236,22 @@ rl.on("line", (line) => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function nonresponsiveCodexBinary(dir: string): string {
-  const path = join(dir, "nonresponsive-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "nonresponsive-codex"),
     `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
 process.stdin.resume();
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function startupCancellationCodexBinary(dir: string): string {
-  const path = join(dir, "startup-cancellation-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "startup-cancellation-codex"),
     `#!${process.execPath}
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
@@ -217,14 +262,11 @@ process.on("SIGTERM", () => {
 process.stdin.resume();
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function pendingThreadStartCodexBinary(dir: string): string {
-  const path = join(dir, "pending-thread-start-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "pending-thread-start-codex"),
     `#!${process.execPath}
 const fs = require("node:fs");
 const readline = require("node:readline");
@@ -242,14 +284,11 @@ process.on("SIGTERM", () => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function pendingTurnStartCodexBinary(dir: string): string {
-  const path = join(dir, "pending-turn-start-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "pending-turn-start-codex"),
     `#!${process.execPath}
 const fs = require("node:fs");
 const readline = require("node:readline");
@@ -268,15 +307,12 @@ process.on("SIGTERM", () => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function refreshThenNonresponsiveCodexBinary(dir: string): string {
-  const path = join(dir, "refresh-then-nonresponsive-codex");
   const accessToken = oauthAccessToken("startup-account", "startup-after");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "refresh-then-nonresponsive-codex"),
     `#!${process.execPath}
 const fs = require("node:fs");
 const path = require("node:path");
@@ -287,92 +323,21 @@ fs.writeFileSync(authPath, JSON.stringify(auth));
 process.stdin.resume();
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
-function malformedCodexBinary(dir: string): string {
-  const path = join(dir, "malformed-codex");
-  writeFileSync(
-    path,
+function lineCodexBinary(dir: string, line: string): string {
+  return executable(
+    join(dir, "line-codex"),
     `#!${process.execPath}
-process.stdout.write('{"access_token":"oauth-secret-123456789"\\n');
+process.stdout.write(${JSON.stringify(`${line}\n`)});
 process.stdin.resume();
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
-}
-
-function incompleteResponseCodexBinary(dir: string): string {
-  const path = join(dir, "incomplete-response-codex");
-  writeFileSync(
-    path,
-    `#!${process.execPath}
-process.stdout.write('{"id":1}\\n');
-process.stdin.resume();
-`,
-  );
-  chmodSync(path, 0o755);
-  return path;
-}
-
-function arrayMessageCodexBinary(dir: string): string {
-  const path = join(dir, "array-message-codex");
-  writeFileSync(
-    path,
-    `#!${process.execPath}
-process.stdout.write('[]\\n');
-process.stdin.resume();
-`,
-  );
-  chmodSync(path, 0o755);
-  return path;
-}
-
-function invalidJsonRpcBinary(dir: string): string {
-  const path = join(dir, "invalid-json-rpc-codex");
-  writeFileSync(
-    path,
-    `#!${process.execPath}
-process.stdout.write('{"id":true,"result":{}}\\n');
-process.stdin.resume();
-`,
-  );
-  chmodSync(path, 0o755);
-  return path;
-}
-
-function noIdResponseCodexBinary(dir: string): string {
-  const path = join(dir, "no-id-response-codex");
-  writeFileSync(
-    path,
-    `#!${process.execPath}
-process.stdout.write('{"result":{}}\\n');
-process.stdin.resume();
-`,
-  );
-  chmodSync(path, 0o755);
-  return path;
-}
-
-function unknownResponseCodexBinary(dir: string): string {
-  const path = join(dir, "unknown-response-codex");
-  writeFileSync(
-    path,
-    `#!${process.execPath}
-process.stdout.write('{"id":999,"result":{}}\\n');
-process.stdin.resume();
-`,
-  );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function malformedTurnCompletedCodexBinary(dir: string): string {
-  const path = join(dir, "malformed-turn-completed-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "malformed-turn-completed-codex"),
     `#!${process.execPath}
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin });
@@ -389,16 +354,13 @@ rl.on("line", line => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function oauthTurnBinary(dir: string, token: string, delayMs: number): string {
-  const path = join(dir, `oauth-${token}`);
   const events = join(dir, "oauth-events");
   const accessToken = oauthAccessToken("shared-account", token);
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, `oauth-${token}`),
     `#!${process.execPath}
 const fs = require("node:fs");
 const path = require("node:path");
@@ -423,14 +385,11 @@ rl.on("line", (line) => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function accountEchoCodexBinary(dir: string, name: string, delayMs = 1): string {
-  const path = join(dir, `account-echo-${name}`);
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, `account-echo-${name}`),
     `#!${process.execPath}
 const fs = require("node:fs");
 const path = require("node:path");
@@ -453,14 +412,11 @@ rl.on("line", (line) => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function exitingCodexBinary(dir: string): string {
-  const path = join(dir, "exiting-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "exiting-codex"),
     `#!${process.execPath}
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin });
@@ -477,45 +433,25 @@ rl.on("line", (line) => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
-
-test("Codex forwards tool-result screening into its native tool bridge", () => {
-  const screenToolResult: NonNullable<HarnessTurnInput["screenToolResult"]> = async () => ({ outcome: "allow" });
-  const ref = harnessToolContext({ screenToolResult, history: [] } as unknown as HarnessTurnInput);
-  assert.equal(ref.screenToolResult, screenToolResult);
-});
 
 test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));
   const tasks = createMemoryTaskStore();
-  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir), tasks });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
+  const harness = codexHarness(t, dir, { binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir), tasks });
   const entries: SessionEntry[] = [];
   const deltas: string[] = [];
   const modelCalls: number[] = [];
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const session = { id: "session-1" } as Session;
-  const result = await harness.turns.runTurn({
-    session,
-    input: "hi",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) => {
-      const saved = { ...entry, sessionId: session.id, seq: entries.length + 1, createdAt: Date.now() } as SessionEntry;
-      entries.push(saved);
-      return saved;
-    },
-    recordModelCall: ({ inputTokens }) => modelCalls.push(inputTokens),
-    onDelta: (delta) => deltas.push(delta),
-  });
+  const result = await harness.turns.runTurn(
+    turnInput(
+      "session-1",
+      {
+        recordModelCall: ({ inputTokens }) => modelCalls.push(inputTokens),
+        onDelta: (delta) => deltas.push(delta),
+      },
+      entries,
+    ),
+  );
 
   assert.equal(result.reply, "hello");
   assert.deepEqual(deltas, ["hello"]);
@@ -699,19 +635,7 @@ test("Codex materializes ChatGPT OAuth auth as ephemeral child material without 
     rmSync(defaultJail, { recursive: true, force: true });
   });
   mkdirSync(join(defaultSource, ".codex"), { recursive: true });
-  writeFileSync(
-    join(defaultSource, ".codex", "auth.json"),
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "default-access",
-        refresh_token: "default-refresh",
-        account_id: "default-account",
-        id_token: oauthIdToken("default-account"),
-      },
-    }),
-  );
-  chmodSync(join(defaultSource, ".codex", "auth.json"), 0o600);
+  writeOAuthAuth(join(defaultSource, ".codex", "auth.json"), "default");
   const defaultEnv = { HOME: defaultSource, OPENAI_API_KEY: "ambient-default-api-key" };
   assert.equal(codexChildEnv(defaultEnv, defaultJail).OPENAI_API_KEY, undefined);
   assert.equal(existsSync(join(prepareCodexHome(defaultEnv, defaultJail), "auth.json")), true);
@@ -773,28 +697,8 @@ test("Codex ignores OAuth auth files that are readable by other users", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-oauth-mode-test-"));
   const authFile = join(dir, "auth.json");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "mode-access",
-        refresh_token: "mode-refresh",
-        account_id: "mode-account",
-        id_token: oauthIdToken("mode-account"),
-      },
-    }),
-    { mode: 0o600 },
-  );
-  assert.deepEqual(readCodexOAuthAuthFile(authFile), {
-    auth_mode: "chatgpt",
-    tokens: {
-      access_token: "mode-access",
-      refresh_token: "mode-refresh",
-      account_id: "mode-account",
-      id_token: oauthIdToken("mode-account"),
-    },
-  });
+  const written = writeOAuthAuth(authFile, "mode");
+  assert.deepEqual(readCodexOAuthAuthFile(authFile), written);
   chmodSync(authFile, 0o644);
   assert.equal(readCodexOAuthAuthFile(authFile), null);
 });
@@ -814,133 +718,50 @@ test("Codex rejects OAuth auth files without a trusted account claim", (t) => {
   assert.equal(readCodexOAuthAuthFile(authFile), null);
 });
 
-test("Codex diagnostics redact malformed app-server output at the protocol boundary", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-malformed-test-"));
-  const server = new CodexAppServer({
-    binaryPath: malformedCodexBinary(dir),
-    cwd: dir,
-    env: { PATH: process.env.PATH },
-    onNotification: () => {},
-    onRequest: async () => ({}),
-  });
-  t.after(async () => {
-    await server.close().catch(() => undefined);
-    rmSync(dir, { recursive: true, force: true });
-  });
-  await assert.rejects(server.initialize(), (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    assert.equal(message.includes("oauth-secret-123456789"), false);
-    assert.equal(message.includes("[redacted]"), true);
-    return true;
-  });
-});
+const redactsSecret = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  assert.equal(message.includes("oauth-secret-123456789"), false);
+  assert.equal(message.includes("[redacted]"), true);
+  return true;
+};
 
-test("Codex rejects incomplete JSON-RPC responses", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-incomplete-response-test-"));
-  const server = new CodexAppServer({
-    binaryPath: incompleteResponseCodexBinary(dir),
-    cwd: dir,
-    env: { PATH: process.env.PATH },
-    onNotification: () => {},
-    onRequest: async () => ({}),
+for (const [name, line, expected] of [
+  [
+    "Codex diagnostics redact malformed app-server output at the protocol boundary",
+    '{"access_token":"oauth-secret-123456789"',
+    redactsSecret,
+  ],
+  ["Codex rejects incomplete JSON-RPC responses", '{"id":1}', /invalid JSON/],
+  ["Codex rejects response messages without ids", '{"result":{}}', /invalid JSON/],
+  ["Codex rejects JSON arrays at the JSON-RPC boundary", "[]", /invalid JSON/],
+  ["Codex rejects malformed JSON-RPC field types", '{"id":true,"result":{}}', /invalid JSON/],
+  ["Codex rejects unknown JSON-RPC response ids", '{"id":999,"result":{}}', /unknown response id/],
+] as const) {
+  test(name, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-json-rpc-test-"));
+    const server = new CodexAppServer({
+      binaryPath: lineCodexBinary(dir, line),
+      cwd: dir,
+      env: { PATH: process.env.PATH },
+      onNotification: () => {},
+      onRequest: async () => ({}),
+    });
+    t.after(async () => {
+      await server.close().catch(() => undefined);
+      rmSync(dir, { recursive: true, force: true });
+    });
+    await assert.rejects(server.initialize(), expected);
   });
-  t.after(async () => {
-    await server.close().catch(() => undefined);
-    rmSync(dir, { recursive: true, force: true });
-  });
-  await assert.rejects(server.initialize(), /invalid JSON/);
-});
-
-test("Codex rejects response messages without ids", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-no-id-response-test-"));
-  const server = new CodexAppServer({
-    binaryPath: noIdResponseCodexBinary(dir),
-    cwd: dir,
-    env: { PATH: process.env.PATH },
-    onNotification: () => {},
-    onRequest: async () => ({}),
-  });
-  t.after(async () => {
-    await server.close().catch(() => undefined);
-    rmSync(dir, { recursive: true, force: true });
-  });
-  await assert.rejects(server.initialize(), /invalid JSON/);
-});
-
-test("Codex rejects JSON arrays at the JSON-RPC boundary", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-array-message-test-"));
-  const server = new CodexAppServer({
-    binaryPath: arrayMessageCodexBinary(dir),
-    cwd: dir,
-    env: { PATH: process.env.PATH },
-    onNotification: () => {},
-    onRequest: async () => ({}),
-  });
-  t.after(async () => {
-    await server.close().catch(() => undefined);
-    rmSync(dir, { recursive: true, force: true });
-  });
-  await assert.rejects(server.initialize(), /invalid JSON/);
-});
-
-test("Codex rejects malformed JSON-RPC field types", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-invalid-json-rpc-test-"));
-  const server = new CodexAppServer({
-    binaryPath: invalidJsonRpcBinary(dir),
-    cwd: dir,
-    env: { PATH: process.env.PATH },
-    onNotification: () => {},
-    onRequest: async () => ({}),
-  });
-  t.after(async () => {
-    await server.close().catch(() => undefined);
-    rmSync(dir, { recursive: true, force: true });
-  });
-  await assert.rejects(server.initialize(), /invalid JSON/);
-});
-
-test("Codex rejects unknown JSON-RPC response ids", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-unknown-response-test-"));
-  const server = new CodexAppServer({
-    binaryPath: unknownResponseCodexBinary(dir),
-    cwd: dir,
-    env: { PATH: process.env.PATH },
-    onNotification: () => {},
-    onRequest: async () => ({}),
-  });
-  t.after(async () => {
-    await server.close().catch(() => undefined);
-    rmSync(dir, { recursive: true, force: true });
-  });
-  await assert.rejects(server.initialize(), /unknown response id/);
-});
+}
 
 test("Codex rejects malformed turn completion payloads", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-malformed-turn-test-"));
-  const harness = createCodexHarness({
+  const harness = codexHarness(t, dir, {
     binaryPath: malformedTurnCompletedCodexBinary(dir),
     env: testHarnessEnv(dir),
     turnWallClockMs: 2_000,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  await assert.rejects(
-    harness.turns.runTurn({
-      session: { id: "malformed-turn" } as Session,
-      input: "hi",
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      emit: async (entry) => ({ ...entry, sessionId: "malformed-turn", seq: 1, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
-    }),
-    /invalid turn\/completed payload/,
-  );
+  await assert.rejects(harness.turns.runTurn(turnInput("malformed-turn")), /invalid turn\/completed payload/);
 });
 
 test("Codex children cannot use parent surface, control, or terminal tools", () => {
@@ -954,39 +775,19 @@ test("Codex children cannot use parent surface, control, or terminal tools", () 
 for (const surfaceTools of [false, true]) {
   test(`Codex interrupts the provider after finish_silently (surface=${surfaceTools})`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "qm-codex-stop-test-"));
-    const harness = createCodexHarness({
+    const harness = codexHarness(t, dir, {
       binaryPath: terminatingCodexBinary(dir),
       env: testHarnessEnv(dir),
       turnWallClockMs: 2_000,
     });
-    t.after(async () => {
-      await harness.turns.close?.();
-      rmSync(dir, { recursive: true, force: true });
-    });
     const entries: SessionEntry[] = [];
-    const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-    const result = await harness.turns.runTurn({
-      session: { id: "terminal-tool" } as Session,
-      input: "poll",
-      systemPrompt: "finish silently",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      pollFire: !surfaceTools,
-      surfaceTools,
-      emit: async (entry) => {
-        const saved = {
-          ...entry,
-          sessionId: "terminal-tool",
-          seq: entries.length + 1,
-          createdAt: Date.now(),
-        } as SessionEntry;
-        entries.push(saved);
-        return saved;
-      },
-      recordModelCall: () => {},
-    });
+    const result = await harness.turns.runTurn(
+      turnInput(
+        "terminal-tool",
+        { input: "poll", systemPrompt: "finish silently", pollFire: !surfaceTools, surfaceTools },
+        entries,
+      ),
+    );
 
     assert.equal(result.silent, true);
     assert.notEqual(result.reply, "BAD");
@@ -999,18 +800,7 @@ for (const surfaceTools of [false, true]) {
 
 test("Codex spawn failure does not hang run or cleanup", async () => {
   const harness = createCodexHarness({ binaryPath: "/definitely/missing/qm-codex" });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const turn = harness.turns.runTurn({
-    session: { id: "missing-binary" } as Session,
-    input: "hi",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) => ({ ...entry, sessionId: "missing-binary", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-  });
+  const turn = harness.turns.runTurn(turnInput("missing-binary"));
   await assert.rejects(
     Promise.race([turn, new Promise((_, reject) => setTimeout(() => reject(new Error("run hung")), 2_000))]),
     /ENOENT|spawn/,
@@ -1023,157 +813,84 @@ test("Codex spawn failure does not hang run or cleanup", async () => {
 
 test("Codex discards a nonresponsive startup so a later turn can retry", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-startup-test-"));
-  const harness = createCodexHarness({
+  const harness = codexHarness(t, dir, {
     binaryPath: nonresponsiveCodexBinary(dir),
     env: testHarnessEnv(dir),
     appServerStartTimeoutMs: 1_000,
     turnWallClockMs: 6_000,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const turn = (id: string) =>
-    harness.turns.runTurn({
-      session: { id } as Session,
-      input: "hi",
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      emit: async (entry) => ({ ...entry, sessionId: id, seq: 1, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
-    });
-
-  await assert.rejects(turn("first"), /initialization timed out/);
-  await assert.rejects(turn("second"), /initialization timed out/);
+  await assert.rejects(harness.turns.runTurn(turnInput("first")), /initialization timed out/);
+  await assert.rejects(harness.turns.runTurn(turnInput("second")), /initialization timed out/);
   assert.equal(readFileSync(join(dir, "starts"), "utf8"), "start\nstart\n");
 });
 
 test("Codex preserves OAuth auth before discarding a failed startup", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-startup-oauth-test-"));
   const authFile = join(dir, "auth.json");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "startup-access-before",
-        refresh_token: "startup-refresh-before",
-        account_id: "startup-account",
-        id_token: oauthIdToken("startup-account"),
-      },
-    }),
-  );
-  chmodSync(authFile, 0o600);
-  const harness = createCodexHarness({
+  writeOAuthAuth(authFile, "startup");
+  const harness = codexHarness(t, dir, {
     binaryPath: refreshThenNonresponsiveCodexBinary(dir),
     env: { CODEX_AUTH_FILE: authFile },
     appServerStartTimeoutMs: 1_000,
     turnWallClockMs: 3_000,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  await assert.rejects(
-    harness.turns.runTurn({
-      session: { id: "startup-oauth" } as Session,
-      input: "hi",
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      emit: async (entry) => ({ ...entry, sessionId: "startup-oauth", seq: 1, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
-    }),
-    (error: unknown) => /timed out|exited|closed/i.test(error instanceof Error ? error.message : String(error)),
+  await assert.rejects(harness.turns.runTurn(turnInput("startup-oauth")), (error: unknown) =>
+    /timed out|exited|closed/i.test(error instanceof Error ? error.message : String(error)),
   );
   const persisted = JSON.parse(readFileSync(authFile, "utf8")) as Record<string, unknown>;
-  assert.equal((persisted.tokens as Record<string, unknown>).access_token, "startup-access-before");
+  assert.equal((persisted.tokens as Record<string, unknown>).access_token, "startup-access");
 });
 
-test("cancelling an OAuth startup after spawn closes the provider", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-cancel-startup-child-test-"));
-  const authFile = join(dir, "auth.json");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "cancel-child-access",
-        refresh_token: "cancel-child-refresh",
-        account_id: "cancel-child-account",
-        id_token: oauthIdToken("cancel-child-account"),
-      },
-    }),
-    { mode: 0o600 },
-  );
-  const harness = createCodexHarness({
-    binaryPath: startupCancellationCodexBinary(dir),
-    env: { CODEX_AUTH_FILE: authFile },
-    appServerStartTimeoutMs: 1_000,
-    turnWallClockMs: 3_000,
+for (const { name, binary, marker, oauth } of [
+  {
+    name: "cancelling an OAuth startup after spawn closes the provider",
+    binary: startupCancellationCodexBinary,
+    marker: "starts",
+    oauth: true,
+  },
+  {
+    name: "cancelling a pending Codex thread/start is not relabeled as a startup timeout",
+    binary: pendingThreadStartCodexBinary,
+    marker: "thread-started",
+    oauth: false,
+  },
+  {
+    name: "cancelling a pending Codex turn/start stops and closes the runtime",
+    binary: pendingTurnStartCodexBinary,
+    marker: "turn-started",
+    oauth: false,
+  },
+]) {
+  test(name, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-cancel-test-"));
+    const authFile = join(dir, "auth.json");
+    if (oauth) writeOAuthAuth(authFile, "cancel-child");
+    const harness = codexHarness(t, dir, {
+      binaryPath: binary(dir),
+      env: oauth ? { CODEX_AUTH_FILE: authFile } : testHarnessEnv(dir),
+      ...(oauth ? { appServerStartTimeoutMs: 1_000 } : {}),
+      turnWallClockMs: 3_000,
+    });
+    const cancel = new AbortController();
+    const turn = harness.turns.runTurn(turnInput(`cancel-${marker}`, { cancel: cancel.signal }));
+    await waitForFile(join(dir, marker));
+    cancel.abort();
+    assert.deepEqual(await turn, { reply: "", stopped: true });
+    await waitForFile(join(dir, "closed"));
+    assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const cancel = new AbortController();
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const turn = harness.turns.runTurn({
-    session: { id: "cancel-startup-child" } as Session,
-    input: "hi",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    cancel: cancel.signal,
-    emit: async (entry) =>
-      ({ ...entry, sessionId: "cancel-startup-child", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-  });
-  for (let attempt = 0; attempt < 50 && !existsSync(join(dir, "starts")); attempt += 1)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(existsSync(join(dir, "starts")), true);
-  cancel.abort();
-  assert.deepEqual(await turn, { reply: "", stopped: true });
-  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
-});
+}
 
 test("Codex classifies a thread/start deadline as a non-retryable timeout", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-thread-start-timeout-test-"));
-  const harness = createCodexHarness({
+  const harness = codexHarness(t, dir, {
     binaryPath: pendingThreadStartCodexBinary(dir),
     env: testHarnessEnv(dir),
     appServerStartTimeoutMs: 500,
     turnWallClockMs: 0,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
   await assert.rejects(
-    harness.turns.runTurn({
-      session: { id: "thread-start-timeout" } as Session,
-      input: "hi",
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      emit: async (entry) =>
-        ({ ...entry, sessionId: "thread-start-timeout", seq: 1, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
-    }),
+    harness.turns.runTurn(turnInput("thread-start-timeout")),
     (error: unknown) =>
       error instanceof NonRetryableTurnError &&
       /thread\/start request timed out/.test(error.message) &&
@@ -1181,178 +898,46 @@ test("Codex classifies a thread/start deadline as a non-retryable timeout", asyn
   );
 });
 
-test("cancelling a pending Codex thread/start is not relabeled as a startup timeout", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-cancel-thread-start-test-"));
-  const harness = createCodexHarness({
-    binaryPath: pendingThreadStartCodexBinary(dir),
-    env: testHarnessEnv(dir),
-    turnWallClockMs: 3_000,
-  });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const cancel = new AbortController();
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const turn = harness.turns.runTurn({
-    session: { id: "cancel-thread-start" } as Session,
-    input: "hi",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    cancel: cancel.signal,
-    emit: async (entry) =>
-      ({ ...entry, sessionId: "cancel-thread-start", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-  });
-  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "thread-started")); attempt += 1)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(existsSync(join(dir, "thread-started")), true);
-  cancel.abort();
-  assert.deepEqual(await turn, { reply: "", stopped: true });
-  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
-});
-
-test("cancelling a pending Codex turn/start stops and closes the runtime", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-cancel-turn-start-test-"));
-  const harness = createCodexHarness({
-    binaryPath: pendingTurnStartCodexBinary(dir),
-    env: testHarnessEnv(dir),
-    turnWallClockMs: 3_000,
-  });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const cancel = new AbortController();
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const turn = harness.turns.runTurn({
-    session: { id: "cancel-turn-start" } as Session,
-    input: "hi",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    cancel: cancel.signal,
-    emit: async (entry) =>
-      ({ ...entry, sessionId: "cancel-turn-start", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-  });
-  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "turn-started")); attempt += 1)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(existsSync(join(dir, "turn-started")), true);
-  cancel.abort();
-  assert.deepEqual(await turn, { reply: "", stopped: true });
-  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
-});
-
 test("per-user Codex turns run on their own app-server with derived auth, never the shared jail", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-per-user-test-"));
   const orgAuthFile = join(dir, "auth.json");
-  writeFileSync(
-    orgAuthFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "org-access",
-        refresh_token: "org-refresh",
-        account_id: "org-account",
-        id_token: oauthIdToken("org-account"),
-      },
-    }),
-    { mode: 0o600 },
-  );
+  writeOAuthAuth(orgAuthFile, "org");
   const orgAuthBefore = readFileSync(orgAuthFile, "utf8");
-  const harness = createCodexHarness({
+  const harness = codexHarness(t, dir, {
     binaryPath: accountEchoCodexBinary(dir, "per-user"),
     env: { CODEX_AUTH_FILE: orgAuthFile },
     turnWallClockMs: 5_000,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
   const run = (id: string, accountId?: string) =>
-    harness.turns.runTurn({
-      session: { id } as Session,
-      input: id,
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      ...(accountId
-        ? {
-            codexAuth: {
-              accessToken: `${accountId}-access`,
-              idToken: oauthIdToken(accountId),
-              accountId,
-            },
-          }
-        : {}),
-      emit: async (entry) => ({ ...entry, sessionId: id, seq: 1, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
-    });
-  // Two different users' turns and an org turn, all concurrent.
+    harness.turns.runTurn(
+      turnInput(id, {
+        input: id,
+        ...(accountId
+          ? { codexAuth: { accessToken: `${accountId}-access`, idToken: oauthIdToken(accountId), accountId } }
+          : {}),
+      }),
+    );
   const [alice, bob, org] = await Promise.all([
     run("alice-turn", "acct-alice"),
     run("bob-turn", "acct-bob"),
     run("org-turn"),
   ]);
-  // Each per-user turn saw its OWN account, and no jail ever held a refresh token.
   assert.equal(alice.reply, "acct-alice:false");
   assert.equal(bob.reply, "acct-bob:false");
   assert.equal(org.reply, "org-account:false");
-  // The org credential on disk was never touched by per-user turns.
   assert.equal(readFileSync(orgAuthFile, "utf8"), orgAuthBefore);
 });
 
 test("Codex fails closed when OAuth auth is removed after startup", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-oauth-delete-test-"));
   const authFile = join(dir, "auth.json");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "delete-access",
-        refresh_token: "delete-refresh",
-        account_id: "delete-account",
-        id_token: oauthIdToken("delete-account"),
-      },
-    }),
-    { mode: 0o600 },
-  );
-  const harness = createCodexHarness({
+  writeOAuthAuth(authFile, "delete");
+  const harness = codexHarness(t, dir, {
     binaryPath: oauthTurnBinary(dir, "delete", 1),
     env: { CODEX_AUTH_FILE: authFile },
     turnWallClockMs: 3_000,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const run = (id: string) =>
-    harness.turns.runTurn({
-      session: { id } as Session,
-      input: id,
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      emit: async (entry) => ({ ...entry, sessionId: id, seq: 1, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
-    });
+  const run = (id: string) => harness.turns.runTurn(turnInput(id, { input: id }));
   assert.equal((await run("before-delete")).reply, "delete");
   rmSync(authFile);
   await assert.rejects(run("after-delete"), /OAuth auth is unavailable/);
@@ -1360,67 +945,31 @@ test("Codex fails closed when OAuth auth is removed after startup", async (t) =>
 
 test("Codex app-server exits reject turns without unhandled rejections", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-exit-test-"));
-  const harness = createCodexHarness({
+  const unhandled: unknown[] = [];
+  const onUnhandled = (error: unknown) => unhandled.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  t.after(() => process.off("unhandledRejection", onUnhandled));
+  const harness = codexHarness(t, dir, {
     binaryPath: exitingCodexBinary(dir),
     env: testHarnessEnv(dir),
     turnWallClockMs: 3_000,
   });
-  const unhandled: unknown[] = [];
-  const onUnhandled = (error: unknown) => unhandled.push(error);
-  process.on("unhandledRejection", onUnhandled);
-  t.after(async () => {
-    process.off("unhandledRejection", onUnhandled);
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  await assert.rejects(
-    harness.turns.runTurn({
-      session: { id: "exit-turn" } as Session,
-      input: "hi",
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      emit: async (entry) => ({ ...entry, sessionId: "exit-turn", seq: 1, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
-    }),
-    /exited \(17\)/,
-  );
+  await assert.rejects(harness.turns.runTurn(turnInput("exit-turn")), /exited \(17\)/);
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.deepEqual(unhandled, []);
 });
 
 test("cancelling one Codex setup does not kill another active turn", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-concurrent-test-"));
-  const harness = createCodexHarness({
+  const harness = codexHarness(t, dir, {
     binaryPath: concurrentCodexBinary(dir),
     env: testHarnessEnv(dir),
     turnWallClockMs: 2_000,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const makeTurn = (id: string, cancel?: AbortSignal): HarnessTurnInput => ({
-    session: { id } as Session,
-    input: id,
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    ...(cancel ? { cancel } : {}),
-    emit: async (entry) => ({ ...entry, sessionId: id, seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-  });
-
-  const first = harness.turns.runTurn(makeTurn("first"));
+  const first = harness.turns.runTurn(turnInput("first", { input: "first" }));
   await new Promise((resolve) => setTimeout(resolve, 50));
   const controller = new AbortController();
-  const second = harness.turns.runTurn(makeTurn("second", controller.signal));
+  const second = harness.turns.runTurn(turnInput("second", { input: "second", cancel: controller.signal }));
   setTimeout(() => controller.abort(), 50);
 
   assert.deepEqual(await second, { reply: "", stopped: true });
@@ -1497,9 +1046,8 @@ test("Codex reads cumulative usage totals off the app-server's token notificatio
 });
 
 function failingProviderCodexBinary(dir: string, mode: "turnFailed" | "startRejected"): string {
-  const path = join(dir, `failing-codex-${mode}`);
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, `failing-codex-${mode}`),
     `#!/usr/bin/env node
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin });
@@ -1521,44 +1069,26 @@ rl.on("line", (line) => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 for (const mode of ["turnFailed", "startRejected"] as const) {
   test(`Codex parks the run on a provider auth/quota failure (${mode}) instead of burning retries`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "qm-codex-fail-test-"));
-    const harness = createCodexHarness({
+    const harness = codexHarness(t, dir, {
       binaryPath: failingProviderCodexBinary(dir, mode),
       env: testHarnessEnv(dir),
       turnWallClockMs: 5_000,
     });
-    t.after(async () => {
-      await harness.turns.close?.();
-      rmSync(dir, { recursive: true, force: true });
-    });
-    const scope = { kind: "org", id: "test" } as unknown as ScopeId;
     await assert.rejects(
-      harness.turns.runTurn({
-        session: { id: "fail-session" } as Session,
-        input: "hi",
-        systemPrompt: "be concise",
-        history: [],
-        tools: {} as HarnessTurnInput["tools"],
-        scopeLabel: scope,
-        orgScopeId: scope,
-        emit: async (entry) => ({ ...entry, sessionId: "fail-session", seq: 1, createdAt: Date.now() }) as SessionEntry,
-        recordModelCall: () => {},
-      }),
+      harness.turns.runTurn(turnInput("fail-session")),
       (error: unknown) => error instanceof NonRetryableTurnError,
     );
   });
 }
 
 function stopReportsFailedCodexBinary(dir: string, stream = false, final = true): string {
-  const path = join(dir, "stop-failed-codex");
-  writeFileSync(
-    path,
+  return executable(
+    join(dir, "stop-failed-codex"),
     `#!/usr/bin/env node
 const readline = require("node:readline");
 const { writeFileSync } = require("node:fs");
@@ -1593,42 +1123,19 @@ rl.on("line", (line) => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 test("a user stop whose interrupted turn reports status=failed is a clean stop, and the stop stays pending", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-stop-failed-test-"));
   const signals = createMemoryRunSignalStore();
-  const harness = createCodexHarness({
+  const harness = codexHarness(t, dir, {
     binaryPath: stopReportsFailedCodexBinary(dir),
     env: process.env,
     turnWallClockMs: 5_000,
     signals,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const running = harness.turns.runTurn({
-    session: { id: "stop-failed-session" } as Session,
-    input: "hi",
-    runId: "run-stop-failed",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) =>
-      ({ ...entry, sessionId: "stop-failed-session", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-  });
-  const deadline = Date.now() + 4_000;
-  while (!existsSync(join(dir, "started"))) {
-    if (Date.now() > deadline) throw new Error("mock codex never started its turn");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  const running = harness.turns.runTurn(turnInput("stop-failed-session", { runId: "run-stop-failed" }));
+  await waitForFile(join(dir, "started"));
   await signals.send("run-stop-failed", { kind: "abort" });
   const result = await running;
   assert.equal(result.stopped, true, "an interrupted turn the provider calls failed is still a user stop");
@@ -1643,22 +1150,15 @@ test("a user stop whose interrupted turn reports status=failed is a clean stop, 
 test("Codex records one llm row per turn carrying real timings and usage, even when the turn fails", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-telemetry-test-"));
   const records: HarnessLlmRequestRecord[] = [];
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
   const runWith = async (binaryPath: string, id: string) => {
     const harness = createCodexHarness({ binaryPath, env: testHarnessEnv(dir), turnWallClockMs: 5_000 });
     t.after(async () => await harness.turns.close?.());
-    return await harness.turns.runTurn({
-      session: { id } as Session,
-      input: "hi",
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      emit: async (entry) => ({ ...entry, sessionId: id, seq: 4, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
-      recordLlmRequest: (rec) => void records.push(rec),
-    });
+    return await harness.turns.runTurn(
+      turnInput(id, {
+        emit: async (entry) => ({ ...entry, sessionId: id, seq: 4, createdAt: Date.now() }) as SessionEntry,
+        recordLlmRequest: (rec) => void records.push(rec),
+      }),
+    );
   };
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -1679,33 +1179,21 @@ test("Codex records one llm row per turn carrying real timings and usage, even w
 
 test("Codex waits for the bounded durable llm record before completing a turn", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-telemetry-order-test-"));
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const harness = createCodexHarness({
+  const harness = codexHarness(t, dir, {
     binaryPath: fakeCodexBinary(dir),
     env: testHarnessEnv(dir),
     turnWallClockMs: 5_000,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
   let recorded = false;
   const startedAt = Date.now();
-  const result = await harness.turns.runTurn({
-    session: { id: "telemetry-order" } as Session,
-    input: "hi",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) => ({ ...entry, sessionId: "telemetry-order", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-    recordLlmRequest: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      recorded = true;
-    },
-  });
+  const result = await harness.turns.runTurn(
+    turnInput("telemetry-order", {
+      recordLlmRequest: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        recorded = true;
+      },
+    }),
+  );
   assert.equal(result.reply, "hello");
   assert.equal(recorded, true);
   assert.ok(Date.now() - startedAt >= 45);
@@ -1713,47 +1201,21 @@ test("Codex waits for the bounded durable llm record before completing a turn", 
 
 test("Codex aborts a durable llm record that exceeds its bound", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-telemetry-timeout-test-"));
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const harness = createCodexHarness({
+  const harness = codexHarness(t, dir, {
     binaryPath: fakeCodexBinary(dir),
     env: testHarnessEnv(dir),
     turnWallClockMs: 12_000,
   });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
   let aborted = false;
-  const result = await harness.turns.runTurn({
-    session: { id: "telemetry-timeout" } as Session,
-    input: "hi",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) =>
-      ({ ...entry, sessionId: "telemetry-timeout", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-    recordLlmRequest: async (_record, signal) => {
-      if (!signal) throw new Error("missing record cancellation signal");
-      await new Promise<void>((resolve) => {
-        if (signal.aborted) {
-          aborted = true;
-          resolve();
-          return;
-        }
-        signal.addEventListener(
-          "abort",
-          () => {
-            aborted = true;
-            resolve();
-          },
-          { once: true },
-        );
-      });
-    },
-  });
+  const result = await harness.turns.runTurn(
+    turnInput("telemetry-timeout", {
+      recordLlmRequest: async (_record, signal) => {
+        if (!signal) throw new Error("missing record cancellation signal");
+        if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+        aborted = true;
+      },
+    }),
+  );
   assert.equal(result.reply, "hello");
   assert.equal(aborted, true);
 });
@@ -1851,41 +1313,28 @@ test(
 
 test("Codex persists repeated public commentary in order with distinct streaming blocks", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-commentary-"));
-  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir, true), env: testHarnessEnv(dir) });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
+  const harness = codexHarness(t, dir, { binaryPath: fakeCodexBinary(dir, true), env: testHarnessEnv(dir) });
   const entries: SessionEntry[] = [];
   const streamed: string[] = [];
   const scope = "personal:test" as ScopeId;
-  const result = await harness.turns.runTurn({
-    session: { id: "commentary" } as Session,
-    input: "check",
-    systemPrompt: "be concise",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) => {
-      const saved = {
-        ...entry,
-        sessionId: "commentary",
-        seq: entries.length + 1,
-        createdAt: Date.now(),
-      } as SessionEntry;
-      entries.push(saved);
-      return saved;
-    },
-    recordModelCall: () => {},
-    onDelta: (delta) => {
-      streamed.push(delta);
-    },
-    onTextBlockStart: async (phase) => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      streamed.push(`block:${phase}`);
-    },
-  });
+  const result = await harness.turns.runTurn(
+    turnInput(
+      "commentary",
+      {
+        input: "check",
+        scopeLabel: scope,
+        orgScopeId: scope,
+        onDelta: (delta) => {
+          streamed.push(delta);
+        },
+        onTextBlockStart: async (phase) => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          streamed.push(`block:${phase}`);
+        },
+      },
+      entries,
+    ),
+  );
   assert.equal(result.reply, "hello");
   assert.deepEqual(
     entries.filter((entry) => entry.type === "text").map((entry) => entry.payload),
@@ -1909,47 +1358,34 @@ for (const final of [true, false]) {
     test(`Codex saves only pre-stop ${final ? "final" : "commentary"} text via ${mechanism}`, async (t) => {
       const dir = mkdtempSync(join(tmpdir(), "qm-codex-partial-stop-"));
       const signals = createMemoryRunSignalStore();
-      const harness = createCodexHarness({
+      const harness = codexHarness(t, dir, {
         binaryPath: stopReportsFailedCodexBinary(dir, true, final),
         env: testHarnessEnv(dir),
         signals,
         turnWallClockMs: 5_000,
-      });
-      t.after(async () => {
-        await harness.turns.close?.();
-        rmSync(dir, { recursive: true, force: true });
       });
       const cancel = new AbortController();
       const received = Promise.withResolvers<void>();
       const entries: SessionEntry[] = [];
       const deltas: string[] = [];
       const scope = "personal:test" as ScopeId;
-      const running = harness.turns.runTurn({
-        session: { id: "partial-stop" } as Session,
-        runId: "partial-stop-run",
-        input: "check",
-        systemPrompt: "be concise",
-        history: [],
-        tools: {} as HarnessTurnInput["tools"],
-        scopeLabel: scope,
-        orgScopeId: scope,
-        cancel: cancel.signal,
-        emit: async (entry) => {
-          const saved = {
-            ...entry,
-            sessionId: "partial-stop",
-            seq: entries.length + 1,
-            createdAt: Date.now(),
-          } as SessionEntry;
-          entries.push(saved);
-          return saved;
-        },
-        recordModelCall: () => {},
-        onDelta: (text) => {
-          deltas.push(text);
-          if (text === (final ? "Partial answer" : "Checking.")) received.resolve();
-        },
-      });
+      const running = harness.turns.runTurn(
+        turnInput(
+          "partial-stop",
+          {
+            runId: "partial-stop-run",
+            input: "check",
+            scopeLabel: scope,
+            orgScopeId: scope,
+            cancel: cancel.signal,
+            onDelta: (text) => {
+              deltas.push(text);
+              if (text === (final ? "Partial answer" : "Checking.")) received.resolve();
+            },
+          },
+          entries,
+        ),
+      );
       await received.promise;
       if (mechanism === "cancel") cancel.abort();
       else {
@@ -1995,61 +1431,48 @@ test("Codex steers extracted documents into the active turn without copying cont
   );
   writeFileSync(binary, source);
   const signals = createMemoryRunSignalStore();
-  const harness = createCodexHarness({ binaryPath: binary, env: process.env, turnWallClockMs: 10_000, signals });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
+  const harness = codexHarness(t, dir, { binaryPath: binary, env: process.env, turnWallClockMs: 10_000, signals });
   const tape: unknown[] = [];
   const entries: SessionEntry[] = [];
   const scope = "personal:tester" as ScopeId;
-  const running = harness.turns.runTurn({
-    session: { id: "steer-document-session" } as Session,
-    input: "wait for a document",
-    runId: "steer-document-run",
-    systemPrompt: "QA",
-    history: [],
-    documents: [
-      { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
-    ],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) => {
-      const saved = {
-        ...entry,
-        sessionId: "steer-document-session",
-        seq: entries.length,
-        createdAt: Date.now(),
-      } as SessionEntry;
-      entries.push(saved);
-      return saved;
-    },
-    recordModelCall: () => {},
-    tape: async (row) => {
-      tape.push(row);
-    },
-    prepareSteer: async (text) => ({
-      text,
-      documents: [
-        {
-          name: "private.txt",
-          mimeType: "text/plain",
-          dataBase64: Buffer.from("STEER-PRIVATE-492" + "Z".repeat(30_000) + "OUTSIDE-BUDGET-492").toString("base64"),
+  const running = harness.turns.runTurn(
+    turnInput(
+      "steer-document-session",
+      {
+        input: "wait for a document",
+        runId: "steer-document-run",
+        systemPrompt: "QA",
+        documents: [
+          {
+            name: "initial.txt",
+            mimeType: "text/plain",
+            dataBase64: Buffer.from("A".repeat(80_000)).toString("base64"),
+          },
+        ],
+        scopeLabel: scope,
+        orgScopeId: scope,
+        tape: async (row) => {
+          tape.push(row);
         },
-      ],
-    }),
-  });
-  const deadline = Date.now() + 5_000;
-  while (!existsSync(join(dir, "started"))) {
-    if (Date.now() > deadline) throw new Error("mock Codex did not start");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+        prepareSteer: async (text) => ({
+          text,
+          documents: [
+            {
+              name: "private.txt",
+              mimeType: "text/plain",
+              dataBase64: Buffer.from("STEER-PRIVATE-492" + "Z".repeat(30_000) + "OUTSIDE-BUDGET-492").toString(
+                "base64",
+              ),
+            },
+          ],
+        }),
+      },
+      entries,
+    ),
+  );
+  await waitForFile(join(dir, "started"), 5_000);
   await signals.send("steer-document-run", { kind: "steer", text: "read the document", ts: "doc.1" });
-  while (!existsSync(capture)) {
-    if (Date.now() > deadline) throw new Error("mock Codex did not receive steer");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  await waitForFile(capture, 5_000);
   assert.equal(entries.filter((entry) => entry.type === "user").length, 1, "turn/steer acceptance is not intake");
   await running;
   assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
@@ -2062,33 +1485,22 @@ test("Codex steers extracted documents into the active turn without copying cont
 
 test("Codex coordinators expose neither command tools nor native subagents", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-coordinator-"));
-  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir, false, true), env: testHarnessEnv(dir) });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  let seq = 0;
+  const harness = codexHarness(t, dir, { binaryPath: fakeCodexBinary(dir, false, true), env: testHarnessEnv(dir) });
   const scope = "personal:U1" as ScopeId;
-  const result = await harness.turns.runTurn({
-    session: { id: "coordinator" } as Session,
-    input: "hello",
-    systemPrompt: "coordinate",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    delegateWork: true,
-    recordModelCall: () => {},
-    emit: async (entry) => ({ ...entry, sessionId: "coordinator", seq: ++seq, createdAt: Date.now() }) as SessionEntry,
-  });
+  const result = await harness.turns.runTurn(
+    turnInput(
+      "coordinator",
+      { input: "hello", systemPrompt: "coordinate", scopeLabel: scope, orgScopeId: scope, delegateWork: true },
+      [],
+    ),
+  );
   assert.equal(result.reply, "hello");
 });
 
 test("Codex denies a child apps move request before executing the shared tool", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-child-resource-"));
-  const binary = join(dir, "codex-test");
-  writeFileSync(
-    binary,
+  const binary = executable(
+    join(dir, "codex-test"),
     `#!${process.execPath}
 const readline = require('node:readline');
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
@@ -2108,30 +1520,23 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 });
 `,
   );
-  chmodSync(binary, 0o755);
   let shared = false;
-  const harness = createCodexHarness({ binaryPath: binary, env: testHarnessEnv(dir), turnWallClockMs: 10000 });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
+  const harness = codexHarness(t, dir, { binaryPath: binary, env: testHarnessEnv(dir), turnWallClockMs: 10000 });
   const scope = "personal:test" as ScopeId;
-  const result = await harness.turns.runTurn({
-    session: { id: "child-resource" } as Session,
-    input: "delegate",
-    systemPrompt: "test",
-    history: [],
-    tools: {
-      async shareArtifact() {
-        shared = true;
-        throw new Error("must not execute");
-      },
-    } as unknown as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) => ({ ...entry, sessionId: "child-resource", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-  });
+  const result = await harness.turns.runTurn(
+    turnInput("child-resource", {
+      input: "delegate",
+      systemPrompt: "test",
+      tools: {
+        async shareArtifact() {
+          shared = true;
+          throw new Error("must not execute");
+        },
+      } as unknown as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+    }),
+  );
   assert.equal(result.reply, "denied");
   assert.equal(shared, false);
 });
