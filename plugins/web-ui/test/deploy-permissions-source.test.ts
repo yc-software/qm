@@ -22,3 +22,10 @@ test("app permissions offer explicit view-only email grants outside the director
   assert.match(source.replace(/\s+/g, " "), /This does not add them to your organization/);
   assert.match(source, /Access granted, but no invitation email was sent/);
 });
+
+test("app permissions hide public links and outside emails when external sharing is off", () => {
+  assert.match(source, /externalSharing = response\.externalSharing !== false/);
+  assert.match(source, /if \(!externalSharing\) return null;/);
+  assert.match(source, /\.\.\.\(externalSharing \? \[\{ value: "public", label: "Anyone with the link" \}\] : \[\]\)/);
+  assert.match(source, /Sharing outside your organization is turned off by an admin/);
+});

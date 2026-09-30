@@ -133,6 +133,11 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       }
     }
   };
+  const generalAccessNote = (): string => {
+    if (publicAccess) return "No sign-in required";
+    if (externalSharing) return "Only people with access can open";
+    return "Sharing outside your organization is turned off by an admin";
+  };
   const emailCandidate = (): string | null => {
     const email = query.trim().toLowerCase();
     if (!externalSharing) return null;
@@ -298,15 +303,8 @@ export async function openDeploymentPermissions(id: string, title: string, owner
           <div class="permission-row">
             <span class="project-member-avatar" aria-hidden="true">${icon(publicAccess ? Globe : Lock, 16)}</span>
             <span class="permission-person-label"
-              >${publicAccess ? "Anyone with the link" : "Restricted"}<small
-                >${
-                  publicAccess
-                    ? "No sign-in required"
-                    : externalSharing
-                      ? "Only people with access can open"
-                      : "Sharing outside your organization is turned off by an admin"
-                }</small
-              ></span
+              >${publicAccess ? "Anyone with the link" : "Restricted"}<small>${generalAccessNote()}</small></span
+            >
             <fieldset class="permission-control" ?disabled=${busy}>
               ${menuSelect({
                 value: publicAccess ? "public" : "restricted",
