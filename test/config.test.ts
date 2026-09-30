@@ -157,16 +157,16 @@ test("harness security posture defaults to auto and validates named modes", () =
   }
 });
 
-test("retired security screen variables fail loudly instead of changing behavior", () => {
-  for (const [name, value] of [
-    ["SECURITY_SCREEN_BACKEND", "proxy"],
-    ["SECURITY_SCREEN_ALL_POSTURES", "true"],
-    ["SECURITY_SCREEN_PROXY_ROLLOUT", "shadow"],
-  ] as const) {
-    assert.throws(
-      () => loadConfig({ [name]: value }),
-      new RegExp(`${name} is retired.*SECURITY_SCREEN=off\\|observe\\|enforce`),
-    );
+test("retired security screen variables fail loudly unless they only said off", () => {
+  assert.equal(loadConfig({ SECURITY_SCREEN_BACKEND: "off" }).securityScreen, "off");
+  for (const env of [
+    { SECURITY_SCREEN_BACKEND: "proxy" },
+    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN: "observe" },
+    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN_ALL_POSTURES: "false" },
+    { SECURITY_SCREEN_ALL_POSTURES: "true" },
+    { SECURITY_SCREEN_PROXY_ROLLOUT: "shadow" },
+  ]) {
+    assert.throws(() => loadConfig(env), /retired.*SECURITY_SCREEN=off\|observe\|enforce/);
   }
 });
 

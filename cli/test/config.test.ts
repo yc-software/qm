@@ -1447,6 +1447,9 @@ test("screening defaults off and the model classifier needs no proxy settings", 
       ({ path }) => assert.throws(() => loadConfigAt(path), /requires securityScreen classifier proxy/),
     );
   }
+  withConfig({ securityScreen: { backend: "off" } }, ({ path }) =>
+    assert.deepEqual(securityScreenEnv(loadConfigAt(path).config), { SECURITY_SCREEN: "off" }),
+  );
   for (const retired of [
     { backend: "model" },
     { mode: "enforce", allPostures: true },

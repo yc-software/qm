@@ -331,21 +331,17 @@ test("the security screen proxy accepts concurrent classifications and rejects o
   await Promise.all([first, second, third]);
 });
 
-test("observed screening returns immediately, queues bounded work, and records overflow distinctly", async () => {
+test("observed screening returns immediately and audits each verdict once it settles", async () => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let inFlight = 0;
-  let peak = 0;
   const events: AuditEvent[] = [];
   const classify = createSecurityClassifier({
     securityScreener: {
       provider: "example-screen",
       async classify() {
-        peak = Math.max(peak, ++inFlight);
         await pending;
-        inFlight--;
         return { verdict: { decision: "strict", reason: "example-screen:injection" }, score: 0.9, threshold: 0.5 };
       },
     },
@@ -353,7 +349,7 @@ test("observed screening returns immediately, queues bounded work, and records o
     auditLog: { record: (event: AuditEvent) => events.push(event) },
   } as unknown as OrchestratorDeps);
   const verdicts = await Promise.all(
-    Array.from({ length: 70 }, (_, i) =>
+    Array.from({ length: 20 }, (_, i) =>
       classify(JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]), "U1", "personal:U1", undefined, {
         mode: "observe",
         sessionId: "s1",
@@ -362,15 +358,12 @@ test("observed screening returns immediately, queues bounded work, and records o
     ),
   );
   assert.ok(verdicts.every((verdict) => verdict?.decision === "auto" && !verdict.unscreened));
-  assert.deepEqual(
-    events.map((event) => event.status),
-    ["skipped_capacity", "skipped_capacity"],
-  );
+  assert.equal(events.length, 0);
   release();
   const deadline = Date.now() + 2_000;
-  while (events.length < 70 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
-  assert.equal(peak, 4);
-  assert.equal(events.filter((event) => event.status === "would_block").length, 68);
+  while (events.length < 20 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.ok(events.every((event) => event.status === "would_block"));
+  assert.equal(events.length, 20);
   const detail = JSON.parse(events.at(-1)!.detail!) as Record<string, unknown>;
   assert.equal(detail.sessionId, "s1");
   assert.equal(detail.runId, "r1");

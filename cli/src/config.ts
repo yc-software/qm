@@ -432,6 +432,10 @@ const isPlainObject = (x: unknown): x is Record<string, unknown> =>
 function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfig | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new CliError(`${path}: "securityScreen" must be an object`);
+  if (Object.keys(raw).length === 1 && raw.backend === "off") {
+    warn(`${path}: securityScreen.backend "off" is retired and read as mode "off" — use { "mode": "off" }`);
+    return { mode: "off", classifier: "model" };
+  }
   const retired = ["backend", "allPostures", "rollout"].filter((key) => key in raw);
   if (retired.length) {
     throw new CliError(

@@ -16,8 +16,6 @@ import type { OrchestratorDeps } from "./types.ts";
 
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
-const MAX_OBSERVED_SCREENS = 4;
-const MAX_QUEUED_OBSERVATIONS = 64;
 const MAX_AUDITED_SOURCES = 20;
 
 const unscreenedVerdict = (): SecurityScreenVerdict => ({
@@ -26,7 +24,7 @@ const unscreenedVerdict = (): SecurityScreenVerdict => ({
   reason: UNSCREENED_REASON,
 });
 
-type ScreenStatus = "allow" | "block" | "would_block" | "skipped_capacity" | "error";
+type ScreenStatus = "allow" | "block" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
 
 interface SecurityScreenContext {
@@ -64,19 +62,6 @@ function screenSources(payload: string): string[] {
 }
 
 export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
-  let observing = 0;
-  const queued: Array<() => Promise<unknown>> = [];
-  const drain = (): void => {
-    while (observing < MAX_OBSERVED_SCREENS && queued.length) {
-      observing += 1;
-      void queued.shift()!()
-        .catch(swallowAs("orchestrator: observed security screen", undefined))
-        .finally(() => {
-          observing -= 1;
-          drain();
-        });
-    }
-  };
   return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context) {
     const screener = deps.securityScreener;
     const model = deps.harness.models.screenSecurity;
@@ -181,15 +166,9 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
     };
 
     if (observe) {
-      try {
-        if (queued.length >= MAX_QUEUED_OBSERVATIONS) audit("skipped_capacity", context.requestId ?? randomUUID(), 0);
-        else {
-          queued.push(async () => settle(await attempt(), 1));
-          drain();
-        }
-      } catch (error) {
-        swallowAs("orchestrator: observed security screen", undefined)(error);
-      }
+      void attempt()
+        .then((result) => settle(result, 1))
+        .catch(swallowAs("orchestrator: observed security screen", undefined));
       return { decision: "auto" };
     }
 
