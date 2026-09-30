@@ -108,6 +108,27 @@ describe("agent conversations self-API", async () => {
     assert.equal((await post(`/v1/conversations/${mineId}`, { status: null })).status, 401);
   });
 
+  it("refuses conversation status from Slack turns while other updates still apply", async () => {
+    const slack = await mintCapabilityToken(
+      {
+        actorId: "U1",
+        scopeId: scopeId("personal", "U1"),
+        aud: CONTROL_PLANE_AUD,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        liveActor: true,
+        surface: "slack",
+      },
+      SECRET,
+    );
+    const before = (await built.app.getSessionForViewer(mineId, "U1"))?.session.status ?? null;
+    const refused = await post(`/v1/conversations/${mineId}`, { status: { emoji: "👍", text: "Cleared" } }, slack);
+    assert.equal(refused.status, 403);
+    assert.deepEqual((await built.app.getSessionForViewer(mineId, "U1"))?.session.status ?? null, before);
+    const renamed = await post(`/v1/conversations/${mineId}`, { title: "Launch plan" }, slack);
+    assert.equal(renamed.status, 200);
+    assert.equal(((await renamed.json()) as { conversation: { title: string } }).conversation.title, "Launch plan");
+  });
+
   it("spawns a fresh conversation with only the seed text", async () => {
     const token = await capFor("U1");
     const res = await post(

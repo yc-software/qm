@@ -508,6 +508,12 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
   }
   if ("status" in b) {
+    if (capability.surface === "slack") {
+      return sendJson(res, 403, {
+        error: "forbidden",
+        message: "conversation status is a web UI feature and is not available on Slack turns",
+      });
+    }
     if (!isSessionStatus(b.status)) {
       return sendJson(res, 400, {
         error: "bad_request",

@@ -70,6 +70,7 @@ export interface CapabilityClaims {
   triggered?: boolean;
   grants?: string[];
   threadRef?: string;
+  surface?: string;
   exp: number;
 }
 

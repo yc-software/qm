@@ -1124,6 +1124,7 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   assert.equal(res.status, "ok");
   const claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.timezone, "America/New_York");
+  assert.equal(claims!.surface, "test");
 
   const prompt = await app.turn(
     dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:tz-prompt" }, timezone: "America/New_York" }),

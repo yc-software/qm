@@ -1688,6 +1688,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           runAttempt: input.attempt,
           runLeaseToken: input.runLeaseToken,
           threadRef: conversation.threadRef,
+          ...(input.surface ? { surface: input.surface } : {}),
         };
         connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
           controlClaims,
