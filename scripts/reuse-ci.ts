@@ -18,20 +18,9 @@ export const CI_JOBS = [
 const success = (item: any) => item?.status === "completed" && item.conclusion === "success";
 const sha = (value: unknown) => assert.match(String(value), /^[a-f0-9]{40}$/);
 const workflow = ".github/workflows/cicd.yml";
+const codeql = "dynamic/github-code-scanning/codeql";
 
 type Api = (path: string) => Promise<any>;
-
-export function reusePathsAllowed(files: { filename: string; previous_filename?: string }[]) {
-  return (
-    files.length > 0 &&
-    files.length < 100 &&
-    files.every((file) =>
-      [file.filename, file.previous_filename]
-        .filter(Boolean)
-        .every((path) => /^plugins\/web-ui\/(src\/|public\/|test\/|index\.html$|shared\.html$)/.test(path!)),
-    )
-  );
-}
 
 export function readReceipt(log: string) {
   const receipts = [...log.matchAll(/^\S+ QM_CI_TREE=(\{[^\r\n]+\})\r?$/gm)];
@@ -68,9 +57,10 @@ export async function reusableCi(
   )
     return;
   sha(pull.head.sha);
-  if (!reusePathsAllowed(await api(`pulls/${pull.number}/files?per_page=100`))) return;
-  const [before, after] = await Promise.all([base, release].map((ref) => api(`contents/${workflow}?ref=${ref}`)));
-  if (before.type !== "file" || before.sha !== after.sha) return;
+  for (const path of [workflow, "scripts/reuse-ci.ts"]) {
+    const [before, after] = await Promise.all([base, release].map((ref) => api(`contents/${path}?ref=${ref}`)));
+    if (before.type !== "file" || before.sha !== after.sha) return;
+  }
   const page = await api(`actions/workflows/cicd.yml/runs?event=pull_request&head_sha=${pull.head.sha}&per_page=100`);
   if (page.total_count > 100) return;
   const run = page.workflow_runs
@@ -122,9 +112,30 @@ export async function reusableCi(
     tested.parents[1].sha !== pull.head.sha
   )
     return;
+  const scans = await api(`actions/runs?event=dynamic&head_sha=${pull.head.sha}&per_page=100`);
+  if (scans.total_count > 100) return;
+  const scan = scans.workflow_runs
+    .filter((scan: any) => scan.path === codeql && scan.head_branch === `refs/pull/${pull.number}/head`)
+    .sort((a: any, b: any) => b.run_number - a.run_number || b.run_attempt - a.run_attempt)[0];
+  if (
+    !scan ||
+    !success(scan) ||
+    scan.head_sha !== pull.head.sha ||
+    scan.repository?.full_name !== repository ||
+    !Number.isSafeInteger(scan.id) ||
+    !Number.isSafeInteger(scan.run_attempt)
+  )
+    return;
   const fresh = await api(`actions/runs/${run.id}`);
   if (!success(fresh) || fresh.run_attempt !== run.run_attempt || fresh.head_sha !== run.head_sha) return;
-  return { runId: run.id, attempt: run.run_attempt, tree: tested.commit.tree.sha, testedSha: tested.sha };
+  return {
+    sha: release,
+    tree: tested.commit.tree.sha,
+    pr: pull.number,
+    testedSha: tested.sha,
+    ci: { runId: run.id, attempt: run.run_attempt },
+    codeql: { runId: scan.id, attempt: scan.run_attempt },
+  };
 }
 
 async function main() {
@@ -171,12 +182,13 @@ async function main() {
   } catch (error) {
     console.log(`No reusable CI proof: ${error instanceof Error ? error.message : String(error)}`);
   }
+  if (proof) console.log(`QM_CI_REUSE=${JSON.stringify(proof)}`);
   appendFileSync(GITHUB_OUTPUT, `reusable=${Boolean(proof)}\n`);
   if (GITHUB_STEP_SUMMARY)
     appendFileSync(
       GITHUB_STEP_SUMMARY,
       proof
-        ? `Reusing full CI from https://github.com/${GITHUB_REPOSITORY}/actions/runs/${proof.runId}/attempts/${proof.attempt} for identical tree ${proof.tree}.\n`
+        ? `Reusing full CI from https://github.com/${GITHUB_REPOSITORY}/actions/runs/${proof.ci.runId}/attempts/${proof.ci.attempt} for identical tree ${proof.tree}.\n`
         : "No exact trusted PR tree proof; running full CI.\n",
     );
 }

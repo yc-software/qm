@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CI_JOBS, readReceipt, reusableCi, reusePathsAllowed } from "../scripts/reuse-ci.ts";
+import { CI_JOBS, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
 
 const repository = "example/qm";
 const release = "a".repeat(40),
@@ -35,6 +35,16 @@ function fixture() {
     event: "pull_request",
     created_at: new Date(now - 3600_000).toISOString(),
   };
+  const scan = {
+    ...success,
+    id: 30,
+    run_attempt: 1,
+    run_number: 5,
+    head_sha: head,
+    head_branch: "refs/pull/7/head",
+    path: "dynamic/github-code-scanning/codeql",
+    repository: { full_name: repository },
+  };
   const jobs = [...CI_JOBS, "Certify tested tree"].map((name, index) => ({
     ...success,
     id: index + 100,
@@ -51,9 +61,11 @@ function fixture() {
     [`commits/${release}`]: { sha: release, parents: [{ sha: base }], commit: { tree: { sha: tree } } },
     [`commits/${release}/pulls?per_page=100`]: [pull],
     [`pulls/${pull.number}`]: pull,
-    [`pulls/${pull.number}/files?per_page=100`]: [{ filename: "plugins/web-ui/src/composer.ts" }],
     [`contents/.github/workflows/cicd.yml?ref=${base}`]: { type: "file", sha: "f".repeat(40) },
     [`contents/.github/workflows/cicd.yml?ref=${release}`]: { type: "file", sha: "f".repeat(40) },
+    [`contents/scripts/reuse-ci.ts?ref=${base}`]: { type: "file", sha: "9".repeat(40) },
+    [`contents/scripts/reuse-ci.ts?ref=${release}`]: { type: "file", sha: "9".repeat(40) },
+    [`actions/runs?event=dynamic&head_sha=${head}&per_page=100`]: { total_count: 1, workflow_runs: [scan] },
     [`actions/workflows/cicd.yml/runs?event=pull_request&head_sha=${head}&per_page=100`]: {
       total_count: 1,
       workflow_runs: [run],
@@ -66,6 +78,7 @@ function fixture() {
     data,
     pull,
     run,
+    scan,
     jobs,
     receipt,
     async resolve() {
@@ -87,7 +100,14 @@ function fixture() {
 }
 
 test("reuses the full tested merge tree, not the PR head SHA or an artifact name", async () => {
-  assert.deepEqual(await fixture().resolve(), { runId: 10, attempt: 2, tree, testedSha: tested });
+  assert.deepEqual(await fixture().resolve(), {
+    sha: release,
+    tree,
+    pr: 7,
+    testedSha: tested,
+    ci: { runId: 10, attempt: 2 },
+    codeql: { runId: 30, attempt: 1 },
+  });
 });
 
 test("changed bases, trees, workflow, producer identity, attempts and missing gates cannot reuse", async () => {
@@ -115,6 +135,35 @@ test("changed bases, trees, workflow, producer identity, attempts and missing ga
     },
     (f: any) => {
       f.data[`contents/.github/workflows/cicd.yml?ref=${release}`].sha = base;
+    },
+    (f: any) => {
+      f.data[`contents/scripts/reuse-ci.ts?ref=${release}`].sha = base;
+    },
+    (f: any) => {
+      f.scan.conclusion = "failure";
+    },
+    (f: any) => {
+      f.scan.head_branch = "refs/pull/8/head";
+    },
+    (f: any) => {
+      f.scan.path = ".github/workflows/fake.yml";
+    },
+    (f: any) => {
+      f.scan.head_sha = release;
+    },
+    (f: any) => {
+      f.scan.repository.full_name = "fork/qm";
+    },
+    (f: any) => {
+      f.data[`actions/runs?event=dynamic&head_sha=${head}&per_page=100`].total_count = 101;
+    },
+    (f: any) => {
+      f.data[`actions/runs?event=dynamic&head_sha=${head}&per_page=100`].workflow_runs.push({
+        ...f.scan,
+        id: 31,
+        run_number: 6,
+        conclusion: "failure",
+      });
     },
     (f: any) => {
       f.run.conclusion = "failure";
@@ -231,37 +280,6 @@ test("receipt parser rejects missing, multiple and malformed job output", () => 
   const line = `timestamp QM_CI_TREE=${JSON.stringify(f.receipt)}\n`;
   assert.deepEqual(readReceipt(line), f.receipt);
   assert.throws(() => readReceipt(line + line));
-});
-
-test("only web-client changes qualify; server, shared dependencies and safety lanes stay full", () => {
-  assert.ok(
-    reusePathsAllowed(
-      ["src/chat.ts", "test/chat.test.ts", "public/icon.svg", "index.html", "shared.html"].map((path) => ({
-        filename: `plugins/web-ui/${path}`,
-      })),
-    ),
-  );
-  for (const filename of [
-    "src/persistence/store.ts",
-    "src/sandbox/e2b.ts",
-    "src/auth/tokens.ts",
-    "src/credentials/broker.ts",
-    "cli/src/aws.ts",
-    "deploy/aws/main.tf",
-    "package-lock.json",
-    ".node-version",
-    ".github/workflows/cicd.yml",
-    "plugins/chassis/src/auth.ts",
-    "plugins/auth/src/index.ts",
-    "plugins/web-ui/server/index.ts",
-    "plugins/web-ui/package-lock.json",
-    "scripts/test.ts",
-    "unknown/file.ts",
-  ])
-    assert.equal(reusePathsAllowed([{ filename }]), false, filename);
-  assert.equal(reusePathsAllowed([{ filename: "plugins/web-ui/src/a.ts", previous_filename: "src/auth.ts" }]), false);
-  assert.equal(reusePathsAllowed([]), false);
-  assert.equal(reusePathsAllowed(Array.from({ length: 100 }, () => ({ filename: "plugins/web-ui/src/a.ts" }))), false);
 });
 
 const workflow = readFileSync(new URL("../.github/workflows/cicd.yml", import.meta.url), "utf8");
