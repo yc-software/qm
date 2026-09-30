@@ -965,6 +965,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             shell_tool: false,
             unified_exec: false,
             shell_snapshot: false,
+            goals: false,
             apps: false,
             plugins: false,
             browser_use: false,

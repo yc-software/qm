@@ -1,6 +1,5 @@
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
-import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 
 const EXIT_APP_EXITED = 98;
 const READY_EXEC_GRACE_SEC = 30;
@@ -33,14 +32,4 @@ export async function waitAppReady(
       ? `the version's entrypoint exited without binding port ${opts.appPort}`
       : `app never listened on port ${opts.appPort} within ${opts.windowSec}s`;
   throw new Error(why + (log ? `; last output from the entrypoint:\n${log}` : "; the entrypoint produced no output"));
-}
-
-export async function writeTree(
-  write: (absPath: string, data: Uint8Array) => Promise<void>,
-  root: string,
-  dir: string,
-): Promise<void> {
-  for (const f of await readTree(dir, { tolerateMissing: true })) {
-    await write(posixJoin(root, normalizeRelPath(f.path)), bytes(f.data));
-  }
 }

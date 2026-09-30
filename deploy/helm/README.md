@@ -85,14 +85,19 @@ ingress:
   clusterIssuer: letsencrypt-prod
 services:
   core:
-    persistence:
-      enabled: true
-      storageClass: null
-      size: 10Gi
+    replicas: 2
+    env:
+      SESSION_STORE: postgres
+      SNAPSHOT_STORE: s3
+      TRANSFER_STORE: s3
+      S3_BUCKET: qm-example-data
+      S3_REGION: us-west-2
 ```
 
-Confirm that storage class exists in your cluster. After supplying runtime config
-and `images.yaml`, render and inspect before applying:
+This fragment expects `DATABASE_URL`, a remote `SANDBOX_BACKEND` and S3 credentials
+in `qm-runtime`; see
+[Core data and rollout behavior](#core-data-and-rollout-behavior). After supplying
+runtime config and `images.yaml`, render and inspect before applying:
 
 ```bash
 helm lint deploy/helm -f images.yaml -f cluster.yaml
@@ -106,17 +111,45 @@ sign-in, real turns, sandbox provider and backup/restore in your target cluster.
 
 ## Core data and rollout behavior
 
-Persistence is **opt-in**. Without it, core's local files (including uploaded
-artifacts) are lost when its pod is replaced, even with Postgres configured.
-`services.core.persistence.enabled=true` mounts a ReadWriteOnce PVC at `/data`,
-sets `DATA_DIR=/data` and uses group 1000 for the Node image's volume permissions.
-Storage drivers must support `fsGroup`, or an existing volume must already be
-writable by UID/GID 1000.
+Core keeps durable state in two places: Postgres (`DATABASE_URL`) and an object
+store for file bytes. Choose one of two layouts.
+
+**Shared storage (recommended, supports multiple replicas).** Set `DATABASE_URL`
+with `SESSION_STORE=postgres`, `SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3`, `S3_BUCKET`
+and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `SANDBOX_BACKEND`,
+and leave `services.core.persistence` disabled. Sessions and runs then live in
+Postgres, and uploaded artifacts, session shares, published-app source archives and
+sandbox file transfers go to the bucket, so replicas share that state and pods can
+be replaced with rolling updates. Without `SESSION_STORE=postgres`, sessions and
+runs stay in process memory even when `DATABASE_URL` is set; an explicit
+`RUN_STORE=memory` also keeps runs there. S3
+credentials come from the standard AWS chain, such as a pod IAM role bound through
+`serviceAccount.create=true` with `serviceAccount.annotations`, or
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the runtime Secret. Any S3-compatible
+store works outside AWS: set `AWS_ENDPOINT_URL_S3` to its endpoint (for example
+Cloudflare R2, Tigris or Google Cloud Storage with HMAC keys) and `S3_REGION` to
+what it expects, such as `auto` for R2. `/data` is then
+pod-local, and a few things still live only on the replica that created them:
+agent workspace files outside `artifacts/` (including files shared from there) and
+pending ChatGPT device logins. The chart sets no session affinity, so these can be
+unavailable from another replica and are lost on pod replacement. Switching an
+existing volume-backed install to S3 does not migrate bytes already under `/data`;
+copy `/data/docstore/` to the bucket under `S3_PREFIX` and `/data/session-shares/`
+under `<S3_PREFIX>session-shares/` first, or existing uploads and shares become
+unreadable.
+
+**Local volume (single replica).** Without an object store, core writes file bytes
+under `/data`, and they are lost when the pod is replaced even with Postgres
+configured. `services.core.persistence.enabled=true` mounts a ReadWriteOnce PVC at
+`/data`, sets `DATA_DIR=/data` and uses group 1000 for the Node image's volume
+permissions. Storage drivers must support `fsGroup`, or an existing volume must
+already be writable by UID/GID 1000.
 
 Persistent core supports zero or one replica, with `Recreate` deployment strategy
 so upgrades do not mount the same data concurrently. Expect downtime on upgrades;
-shared-storage multi-replica operation is not supported. `replicas: 0` scales down
-without discarding the claim.
+shared-storage multi-replica operation over a volume is not supported. Use the
+object-store layout for high availability. `replicas: 0` scales down without
+discarding the claim.
 
 The chart-created `<fullname>-core-data` claim has `helm.sh/resource-policy: keep`;
 it is retained on uninstall or when persistence is removed. It is not a backup.

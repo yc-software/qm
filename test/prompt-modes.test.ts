@@ -234,7 +234,7 @@ test("Mode 2 (spine channel): autonomous-worklog frame, org policy once, no temp
   const prompt = await sysprompt(orch, spineChannelTurn(""));
 
   assertNoTemplateTokens(prompt, "Mode 2 (spine channel)");
-  assert.match(prompt, /call `finish_silently` to end the turn/);
+  assert.match(prompt, /Once you.ve posted, just stop/);
   assert.doesNotMatch(prompt, /stay_silent|Nothing to add|end with a short log line/);
 
   assert.doesNotMatch(prompt, /no one ever reads this transcript|private worklog/);

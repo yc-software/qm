@@ -293,20 +293,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, model`;
 
-  const recountRecentSessions = `UPDATE sessions s
-        SET messages = c.messages, turns = c.turns, last_activity = c.last_activity
-       FROM (SELECT r.id,
-                    (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = r.id)::int AS messages,
-                    (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = r.id AND ${userTurn("t")})::int AS turns,
-                    GREATEST(COALESCE(r.last_activity, 0), r.created_at, COALESCE((SELECT MAX(t.created_at) FROM session_entries t WHERE t.session_id = r.id), 0)) AS last_activity
-               FROM sessions r
-              WHERE r.messages IS NULL
-                 OR ${lastActivityExpr("r")} > (EXTRACT(EPOCH FROM now()) * 1000)::bigint - 172800000) c
-      WHERE s.id = c.id
-        AND (s.messages IS DISTINCT FROM c.messages
-          OR s.turns IS DISTINCT FROM c.turns
-          OR s.last_activity IS DISTINCT FROM c.last_activity)`;
-
   const { pool, q } = createPgPool(
     connectionString,
     [
@@ -773,7 +759,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         END $entry_search_text_parallel$`,
         ],
       },
-      { id: "sessions/maintenance/recount-recent", statements: [recountRecentSessions] },
     ],
   );
 
@@ -1131,7 +1116,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async getContextWindow(sessionId) {
-      const [meta, summary] = await Promise.all([
+      const [meta, summary, memoryContext] = await Promise.all([
         q(
           `SELECT count(*)::int AS total,
                   bool_or((payload::jsonb -> 'securityTainted') = 'true'::jsonb) AS taint
@@ -1148,6 +1133,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
             ORDER BY seq DESC LIMIT 1`,
           [sessionId],
         ),
+        q(
+          "SELECT * FROM session_entries WHERE session_id = $1 AND ((type = 'system' AND payload::jsonb ->> 'kind' = 'memory_context') OR (type = 'user' AND payload::jsonb -> 'memoryContext' ->> 'kind' = 'memory_context')) ORDER BY seq DESC LIMIT 1",
+          [sessionId],
+        ),
       ]);
       const through = summary[0]?.through;
       const sinceSeq = typeof through === "number" ? through + 1 : 0;
@@ -1156,7 +1145,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         sinceSeq,
       ]);
       return {
-        entries: rows.map(rowToEntry),
+        entries: [
+          ...(memoryContext[0] && Number(memoryContext[0].seq) < sinceSeq ? [rowToEntry(memoryContext[0])] : []),
+          ...rows.map(rowToEntry),
+        ],
         totalEntries: Number(meta[0]?.total ?? 0),
         hasSecurityTaint: meta[0]?.taint === true,
       };

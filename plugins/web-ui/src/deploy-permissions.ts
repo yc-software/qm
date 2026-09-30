@@ -21,6 +21,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   document.body.append(dialog);
   let grantees: Grant[] = [];
   let publicAccess = false;
+  let externalSharing = true;
   let matches: DirectoryMatch[] = [];
   let query = "";
   let access = "view";
@@ -132,8 +133,14 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       }
     }
   };
+  const generalAccessNote = (): string => {
+    if (publicAccess) return "No sign-in required";
+    if (externalSharing) return "Only people with access can open";
+    return "Sharing outside your organization is turned off by an admin";
+  };
   const emailCandidate = (): string | null => {
     const email = query.trim().toLowerCase();
+    if (!externalSharing) return null;
     if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
     if (
       owner.toLowerCase() === `personal:${email}` ||
@@ -296,16 +303,15 @@ export async function openDeploymentPermissions(id: string, title: string, owner
           <div class="permission-row">
             <span class="project-member-avatar" aria-hidden="true">${icon(publicAccess ? Globe : Lock, 16)}</span>
             <span class="permission-person-label"
-              >${publicAccess ? "Anyone with the link" : "Restricted"}<small
-                >${publicAccess ? "No sign-in required" : "Only people with access can open"}</small
-              ></span
+              >${publicAccess ? "Anyone with the link" : "Restricted"}<small>${generalAccessNote()}</small></span
+            >
             <fieldset class="permission-control" ?disabled=${busy}>
               ${menuSelect({
                 value: publicAccess ? "public" : "restricted",
                 ariaLabel: "General access",
                 options: [
                   { value: "restricted", label: "Restricted" },
-                  { value: "public", label: "Anyone with the link" },
+                  ...(externalSharing ? [{ value: "public", label: "Anyone with the link" }] : []),
                 ],
                 onSelect: (next) => {
                   if (next) void changePublic(next);
@@ -328,8 +334,9 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   draw();
   dialog.showModal();
   try {
-    const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint);
+    const response = await api<{ public: boolean; externalSharing?: boolean; grantees: Grant[] }>(endpoint);
     publicAccess = response.public;
+    externalSharing = response.externalSharing !== false;
     grantees = response.grantees;
     loaded = true;
   } catch (e) {

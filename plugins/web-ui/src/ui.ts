@@ -45,6 +45,12 @@ export function waveLoader(
   </span>`;
 }
 
+export function sheenLabel(label: string, active: boolean): TemplateResult {
+  return html`<span class="sheen-label ${active ? "thinking-sheen" : ""}" data-sheen=${active ? label : ""}
+    >${label}</span
+  >`;
+}
+
 export function workingWave(): TemplateResult {
   return waveLoader({
     width: 13.6,

@@ -121,6 +121,20 @@ test("the inbox reads a paginated combined feed and retains original item refere
   assert.match(inbox, /loadDeepLink/);
 });
 
+test("load more is a text button at the end of the filter row, not a full-width bar above the list", () => {
+  assert.match(inbox, /const hasMore = !!feedWindows\.get\(surface\.viewId\)\?\.nextCursor;/);
+  assert.match(inbox, /showEmailFilter \|\| hasMore\s*\? html`\s*<div class="inbox-filter-bar">/);
+  assert.match(
+    inbox,
+    /class="inbox-load-more"[\s\S]*?refreshInbox\(\{ more: true, viewId: surface\.viewId \}\)[\s\S]*?Load more/,
+  );
+  assert.doesNotMatch(inbox, /<button class="btn"[^\n]*>Load more/);
+  assert.match(inbox, /<button class="inbox-load-more" type="button"[^\n]*handled:[^\n]*>Load more handled<\/button>/);
+  assert.match(css, /\.inbox-filter-bar \{\s*display: flex;/);
+  assert.match(css, /\.inbox-load-more \{\s*margin-left: auto;/);
+  assert.match(css, /\.inbox-filter-bar:not\(:has\(\.inbox-filter\)\) \{\s*padding-bottom: 0;/);
+});
+
 test("localhost can overlay private inbox seed data without checking it into source", () => {
   assert.match(inbox, /fetch\("\/inbox-seed\.local\.json", \{ cache: "no-store" \}\)/);
   assert.match(

@@ -18,9 +18,12 @@ import {
 import { modelSupportsFastMode } from "./pi-models";
 import {
   LOADOUT_CAP,
+  ULTRAFAST_MODEL_ID,
+  ULTRAFAST_BASE_MODEL_ID,
+  ultrafastChoice,
   effortLevelsForHarness,
   compatibleHarnessOptions,
-  loadoutModelId,
+  presetModelId,
   modelLoadoutOptions,
   type LoadoutEntry,
 } from "./composer-loadout";
@@ -65,7 +68,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     add: addLoadoutEntry,
     selectEffort,
     selectHarness,
-    toggleFastMode,
+    toggleFastMode: applyFastMode,
     effectiveFastMode,
     changeDefault: changeScopeRuntime,
   } = bindings;
@@ -74,6 +77,15 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
   let loadoutSectionHovered = false;
   let loadoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+
+  function focusSpeedControl(label: string): void {
+    requestAnimationFrame(() => bindings.host()?.querySelector<HTMLElement>(`button[aria-label="${label}"]`)?.focus());
+  }
+
+  function toggleFastMode(target: T): void {
+    applyFastMode(target);
+    focusSpeedControl("Fast");
+  }
 
   function removeLoadoutEntry(value: string, selected: ModelOption): void {
     if (value === activeLoadoutEntry(selected).value) return;
@@ -87,6 +99,14 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       const rows = bindings.host()?.querySelectorAll<HTMLButtonElement>(".loadout-pick");
       rows?.[Math.max(0, Math.min(index, next.length - 1))]?.focus();
     });
+  }
+
+  function modelLabel(option: ModelOption): string {
+    return option.model.id === ULTRAFAST_MODEL_ID
+      ? (getModelOptions(scopeKey()).find(
+          (candidate) => candidate.harnessId === option.harnessId && candidate.model.id === ULTRAFAST_BASE_MODEL_ID,
+        )?.label ?? "Astra")
+      : option.label;
   }
 
   function modelGlyph(option: ModelOption): TemplateResult {
@@ -130,12 +150,13 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         ${modelGlyph(option)}
         <span class="loadout-model-copy">
           <span class="loadout-title">
-            <span class="loadout-name">${option.label}</span>
+            <span class="loadout-name">${modelLabel(option)}</span>
             ${isDefault ? html`<span class="loadout-default">my default</span>` : nothing}
           </span>
           <span class="loadout-details">
             <span class="loadout-harness">${option.harnessLabel}</span>
             <span>${effortText(settings.effort)}</span>
+            ${option.model.id === ULTRAFAST_MODEL_ID ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 10)} Ultrafast</span>` : nothing}
             ${settings.fast ? html`<span class="loadout-bolt" aria-label="Fast">${icon(Zap, 10)}</span>` : nothing}
           </span>
         </span>
@@ -147,7 +168,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
               data-default=${isDefault ? "true" : "false"}
               type="button"
               role="menuitem"
-              aria-label=${`Make ${option.label} default`}
+              aria-label=${`Make ${modelLabel(option)} default`}
               ${tip("Make default")}
               @click=${async (event: MouseEvent) => {
                 const row = (event.currentTarget as HTMLElement).closest(".loadout-row");
@@ -175,7 +196,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
           ? html`<button
               class="loadout-remove"
               type="button"
-              aria-label=${`Remove ${option.label} from presets`}
+              aria-label=${`Remove ${modelLabel(option)} from presets`}
               ${tip("Remove from presets")}
               @click=${() => removeLoadoutEntry(entry.value, selected)}
             >
@@ -252,8 +273,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const query = composerState.menuQuery.trim().toLocaleLowerCase();
     const catalog = modelLoadoutOptions(getModelOptions(scopeKey()), entries, selected.harnessId).filter(
       (option) =>
-        !entries.some((entry) => loadoutModelId(entry.value) === option.model.id) &&
-        (!query || `${option.harnessLabel} ${option.label}`.toLocaleLowerCase().includes(query)),
+        !entries.some((entry) => presetModelId(entry.value) === presetModelId(option.value)) &&
+        (!query || `${option.harnessLabel} ${modelLabel(option)}`.toLocaleLowerCase().includes(query)),
     );
     return html`<div
       class="loadout-submenu"
@@ -274,7 +295,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       </button>
       ${
         effort
-          ? effortLevelsForHarness(selected.harnessId, selected.model, composerState.effortLevel).map(
+          ? effortLevelsForHarness(selected.harnessId, selected.model).map(
               (level) =>
                 html` <button
                   class="loadout-effort"
@@ -351,14 +372,17 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                     class="menu-option"
                     type="button"
                     role="menuitem"
-                    aria-label=${`Add ${option.label} to presets`}
+                    aria-label=${`Add ${modelLabel(option)} to presets`}
                     @click=${() => {
                       dismissSelection();
                       addLoadoutEntry(option, agent);
                     }}
                   >
                     ${modelGlyph(option)}<span class="menu-option-copy"
-                      ><span>${option.label}</span><span class="loadout-meta">${option.harnessLabel}</span></span
+                      ><span>${modelLabel(option)}</span
+                      ><span class="loadout-meta"
+                        >${option.harnessLabel}${option.model.id === ULTRAFAST_MODEL_ID ? " · Ultrafast · 6× cost" : ""}</span
+                      ></span
                     ><span class="loadout-add-label" aria-hidden="true">Add</span>
                   </button>`,
               )}
@@ -413,10 +437,20 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     if (!selected) return html`<span class="context-model-status">No models available</span>`;
     const open = composerState.openMenu === "loadout";
     const entries = seededLoadout(selected);
-    const modelSupportsFast = modelSupportsFastMode(scopeKey(), selected.model.id);
-    const fastAvailable = !!choice && harnessSupportsFastMode(selected.harnessId) && modelSupportsFast;
+    const ultrafastOn = selected.model.id === ULTRAFAST_MODEL_ID;
+    const ultrafastTarget = ultrafastChoice(getModelOptions(scopeKey()), selected);
+    const modelSupportsFast = modelSupportsFastMode(
+      scopeKey(),
+      ultrafastOn ? ULTRAFAST_BASE_MODEL_ID : selected.model.id,
+    );
+    const fastAvailable =
+      !!choice &&
+      (!ultrafastOn || !!ultrafastTarget) &&
+      harnessSupportsFastMode(selected.harnessId) &&
+      modelSupportsFast;
     const fastUnsupportedReason = modelSupportsFast ? "Not supported by this harness" : "Not supported by this model";
     const fastOn = fastAvailable && effectiveFastMode();
+    const speedLabel = (ultrafastOn && ", Ultrafast") || (fastOn && ", Fast") || "";
     return html`<div
       class="menu-control loadout-control"
       data-align="left"
@@ -435,10 +469,10 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }}
     >
       <button
-        class="menu-button loadout-button"
+        class="menu-button loadout-button ${ultrafastOn ? "ultrafast-active" : ""}"
         data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
-        aria-label=${choice ? `Model: ${choice.label}, ${effortLabel(composerState.effortLevel)} effort${fastOn ? ", Fast" : ""}` : "Choose model"}
+        aria-label=${choice ? `Model: ${modelLabel(choice)}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}` : "Choose model"}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
         aria-controls=${loadoutMenuId}
@@ -466,8 +500,9 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
           placeLoadout();
         }}
       >
-        <span class="menu-label">${choice?.label ?? "Choose model"}</span>
+        <span class="menu-label">${choice ? modelLabel(choice) : "Choose model"}</span>
         ${choice ? html`<span class="menu-suffix">${effortText(composerState.effortLevel)}</span>` : nothing}
+        ${ultrafastOn ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 12)} Ultrafast</span>` : nothing}
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
       </button>
       ${
@@ -584,7 +619,36 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                               <span class="loadout-knob"></span>
                             </span>
                           </span>
-                        </button>`
+                        </button>
+                        ${
+                          ultrafastTarget || ultrafastOn
+                            ? html`<button
+                                class="loadout-setting loadout-ultrafast"
+                                type="button"
+                                role="menuitemcheckbox"
+                                aria-label="Ultrafast"
+                                ?disabled=${!ultrafastTarget}
+                                aria-description="Six times standard token cost. Turning on Ultrafast turns off Fast."
+                                aria-checked=${ultrafastOn ? "true" : "false"}
+                                @click=${() => {
+                                  if (!ultrafastTarget) return;
+                                  applyLoadout(
+                                    { ...activeLoadoutEntry(selected), value: ultrafastTarget.value, fast: false },
+                                    agent,
+                                  );
+                                  focusSpeedControl("Ultrafast");
+                                }}
+                              >
+                                <span class="loadout-setting-label">${icon(Zap, 14)} Ultrafast</span>
+                                <span class="loadout-setting-value">
+                                  <span class="loadout-shortcut">6× cost</span>
+                                  <span class="loadout-toggle ${ultrafastOn ? "on" : ""}" aria-hidden="true"
+                                    ><span class="loadout-knob"></span
+                                  ></span>
+                                </span>
+                              </button>`
+                            : nothing
+                        }`
                     : nothing
                 }
               </div>

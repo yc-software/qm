@@ -84,6 +84,7 @@ rl.on("line", (line) => {
     if (msg.params.sandbox !== "read-only" || msg.params.approvalPolicy !== "never" || !Array.isArray(msg.params.dynamicTools) ||
         !Array.isArray(msg.params.environments) || msg.params.environments.length !== 0 ||
         msg.params.config?.features?.shell_tool !== false || msg.params.config?.features?.unified_exec !== false ||
+        msg.params.config?.features?.goals !== false ||
         process.env.CORE_SIGNING_SECRET || process.env.DATABASE_URL || process.env.HOME !== msg.params.cwd ||
         !process.env.CODEX_HOME?.startsWith(msg.params.cwd)) {
       return send({ id: msg.id, error: { code: -1, message: "unsafe or missing adapter settings" } });
@@ -1814,6 +1815,7 @@ test(
             shell_tool: false,
             unified_exec: false,
             shell_snapshot: false,
+            goals: false,
             apps: false,
             plugins: false,
             browser_use: false,

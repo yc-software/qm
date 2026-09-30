@@ -5,7 +5,8 @@ export function renderGatewayContext(surface: string | undefined, ctx?: GatewayC
   const location = ctx?.location?.trim();
   const details = Object.entries(ctx?.details ?? {})
     .map(([k, v]) => [k.trim(), String(v).trim()] as const)
-    .filter(([k, v]) => k && v);
+    .filter(([k, v]) => k && v)
+    .sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
   const instructions = ctx?.instructions?.trim();
   if (!gateway && !location && details.length === 0 && !instructions) return "";
 
@@ -19,7 +20,7 @@ export function renderGatewayContext(surface: string | undefined, ctx?: GatewayC
   }
   if (gateway.toLowerCase() === "web") {
     lines.push(
-      'This web UI cannot receive future external notifications. For scheduled notifications, reminders, digests, or reports, create the cron with a real platform destination: use `recipient` for a Slack DM to the requesting user when you can resolve them as a teammate, `channel` for a named Slack channel, or ask the user where it should post. Do not put "deliver to Slack" only inside `action`.',
+      "A cron, reminder, or watch you create here with no explicit destination posts back into this web conversation, and the person sees it here. Leave the destination unset by default; use `recipient`, `channel`, or `destinationKey` only when the person asks for delivery somewhere else.",
     );
   }
   if (instructions) lines.push(instructions);

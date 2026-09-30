@@ -28,12 +28,13 @@ test("gateway only (no surface-provided context) still names the gateway", () =>
   assert.doesNotMatch(out, /Identifiers for this conversation/);
 });
 
-test("web gateway warns scheduled notifications need an external destination", () => {
+test("web gateway keeps scheduled deliveries in the web conversation by default", () => {
   const out = renderGatewayContext("web");
   assert.match(out, /over web\./);
-  assert.match(out, /web UI cannot receive future external notifications/);
-  assert.match(out, /use `recipient` for a Slack DM/);
-  assert.match(out, /Do not put "deliver to Slack" only inside `action`/);
+  assert.match(out, /no explicit destination posts back into this web conversation/);
+  assert.match(out, /Leave the destination unset by default/);
+  assert.doesNotMatch(out, /cannot receive future external notifications/);
+  assert.doesNotMatch(out, /use `recipient` for a Slack DM/);
 });
 
 test("surface-supplied instructions are appended verbatim (and alone are enough to render)", () => {
@@ -100,9 +101,8 @@ test("web prompt tells cron creators to use a real notification destination", as
     text: "!sysprompt",
   });
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /web UI cannot receive future external notifications/);
-  assert.match(res.reply ?? "", /recipient.*Slack DM/s);
-  assert.match(res.reply ?? "", /Do not put "deliver to Slack" only inside `action`/);
+  assert.match(res.reply ?? "", /posts back into this web conversation/);
+  assert.doesNotMatch(res.reply ?? "", /cannot receive future external notifications/);
 });
 
 test("triggered destination turns tell the agent to return the deliverable, not self-send it", async () => {
@@ -124,4 +124,12 @@ test("triggered destination turns tell the agent to return the deliverable, not 
   assert.match(res.reply ?? "", /platform-managed destination/);
   assert.match(res.reply ?? "", /Core will deliver your final reply/);
   assert.match(res.reply ?? "", /Do not call Slack, email, chat, or other send APIs/);
+});
+
+test("a web turn's default delivery destination is its own web session", async () => {
+  const { deliveryCandidatesFor } = await import("../src/core/orchestrator/turn-helpers.ts");
+  const delivery = deliveryCandidatesFor("web", "web:session-1", undefined, scopeId("personal", "a@example.com"));
+  const chosen = delivery.candidates.find((c) => c.key === delivery.defaultKey);
+  assert.equal(chosen?.type, "web");
+  assert.equal(chosen?.target, "web:session-1");
 });

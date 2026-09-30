@@ -101,8 +101,7 @@ test("failed cron credential resolution notifies only the owner even when its re
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_ALICE");
   assert.equal(pending[0]!.destination.audienceScopeId, "personal:U_ALICE");
-  assert.match(pending[0]!.text, /couldn't resume the task automatically/);
-  assert.match(pending[0]!.text, /retry-ask/);
+  assert.match(pending[0]!.text, /^Access approved, but the task could not restart on its own\./);
   assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
 });
 

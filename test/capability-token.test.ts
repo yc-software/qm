@@ -7,6 +7,7 @@ import {
   BLOB_TRANSFER_AUD,
   CAPABILITY_TTL_MS,
   mintCapabilityToken,
+  parseSandboxCapabilityTtlMs,
   verifyBlobTransferCapability,
   verifyCapabilityToken,
   type CapabilityClaims,
@@ -209,5 +210,27 @@ test("session and run-attempt claims round-trip and reject malformed values", as
       ),
       null,
     );
+  }
+});
+
+test("sandbox capability TTL defaults to 48 hours and accepts hours or no expiry", () => {
+  assert.equal(parseSandboxCapabilityTtlMs(undefined), 48 * 3_600_000);
+  assert.equal(parseSandboxCapabilityTtlMs(" "), 48 * 3_600_000);
+  assert.equal(parseSandboxCapabilityTtlMs("72"), 72 * 3_600_000);
+  assert.equal(parseSandboxCapabilityTtlMs("0"), 0);
+  assert.equal(parseSandboxCapabilityTtlMs("None"), 0);
+  for (const bad of ["-1", "abc", "Infinity", "1e20", "0.00000001"])
+    assert.throws(() => parseSandboxCapabilityTtlMs(bad), /SANDBOX_CAPABILITY_TTL_HOURS/);
+});
+
+test("no-expiry capabilities are restricted to sandbox audiences and retain signature checks", async () => {
+  for (const aud of ["control-plane", "oauth-consent", "credential-broker", "egress-proxy"]) {
+    const token = await mintCapabilityToken(claims({ aud, exp: 0 }), SECRET);
+    assert.ok(await verifyCapabilityToken(token, SECRET, Number.MAX_SAFE_INTEGER));
+    assert.equal(await verifyCapabilityToken(token, "rotated-secret"), null);
+  }
+  for (const aud of [undefined, "browser-model", "blob-transfer", "secret-drop", "unknown"]) {
+    const token = await mintCapabilityToken(claims({ aud, exp: 0 }), SECRET);
+    assert.equal(await verifyCapabilityToken(token, SECRET), null);
   }
 });

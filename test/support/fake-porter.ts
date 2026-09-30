@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { NotFoundError } from "porter-sandbox";
 import type { PorterClientLike, PorterSandboxLike, PorterSandboxSpec } from "../../src/sandbox/porter-client.ts";
 
@@ -252,6 +252,15 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
         if (attached) throw new Error("volume is attached to a sandbox");
         rmSync(v.dir, { recursive: true, force: true });
         volumes.delete(name);
+      },
+      raw: {
+        async writeFile(id, body, options) {
+          const v = volumeById(id);
+          if (!v) throw new NotFoundError(`fake porter: no volume ${id}`);
+          const target = join(v.dir, options.path);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, body);
+        },
       },
     },
   };

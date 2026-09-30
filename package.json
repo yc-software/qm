@@ -74,9 +74,9 @@
     "@aws-sdk/credential-provider-node": "^3.972.70",
     "@aws-sdk/s3-request-presigner": "^3.1061.0",
     "@earendil-works/pi-ai": "0.82.0",
-    "@earendil-works/pi-coding-agent": "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.3/earendil-works-pi-coding-agent-0.82.0-qm-security.3.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.5/earendil-works-pi-coding-agent-0.82.0-qm-security.5.tgz",
     "@fly/sprites": "0.2.3",
-    "@openai/codex": "0.155.1",
+    "@openai/codex": "0.156.1",
     "@opencode-ai/plugin": "1.18.31",
     "@opencode-ai/sdk": "1.18.31",
     "@sentry/node": "10.75.0",
@@ -106,16 +106,17 @@
     "@hono/node-server": "2.0.10",
     "hono": "4.13.5",
     "@fastify/ajv-compiler": {
-      "fast-uri": "3.1.7"
+      "fast-uri": "3.1.8"
     },
     "ajv": {
-      "fast-uri": "3.1.7"
+      "fast-uri": "3.1.8"
     },
-    "brace-expansion": "^5.0.9",
+    "brace-expansion": "^5.0.12",
     "fast-json-stringify": {
-      "fast-uri": "4.1.4"
+      "fast-uri": "4.1.5"
     },
-    "undici": "8.9.0",
+    "undici": "8.10.2",
+    "ip-address": "10.7.2",
     "protobufjs": "7.6.5"
   },
   "devDependencies": {

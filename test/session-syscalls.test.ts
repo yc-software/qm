@@ -1745,11 +1745,15 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
       },
     },
   });
-  const forTurn = (liveTurn: boolean, opts: { readOnly?: boolean; audience?: Principal[]; surface?: string } = {}) =>
+  const forTurn = (
+    liveTurn: boolean,
+    opts: { readOnly?: boolean; audience?: Principal[]; surface?: string; memory?: string } = {},
+  ) =>
     factory.forTurn({
       session: room,
       scopeId: scope,
       liveTurn,
+      ...(opts.memory ? { memoryContext: { audience: opts.memory } } : {}),
       request: {
         surface: opts.surface ?? "web",
         conversation: { kind: "dm", threadRef: room.threadRef, audience: opts.audience ?? [actor] },
@@ -1805,6 +1809,38 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     } as Parameters<typeof factory.forTurn>[0]["request"],
   });
   for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })]) assert.equal(out.ok, false);
+  const unshareable =
+    "this conversation's earlier history was shared with a different audience, so it can't be forked from here.";
+  const checkpoint = async (audience: string, throughSeq: number) => {
+    const { lease } = await sessions.acquireLease(room.id);
+    assert.ok(lease);
+    await sessions.append(lease, {
+      type: "user",
+      scopeLabel: scope,
+      payload: { text: "hi", memoryContext: { kind: "memory_context", snapshot: { audience }, throughSeq } },
+    });
+    await sessions.releaseLease(lease);
+  };
+  assert.deepEqual(await forTurn(true, { memory: "before" }).start!({ fork: true }), {
+    ok: false,
+    message: unshareable,
+  });
+  await checkpoint("before", 0);
+  assert.deepEqual(await forTurn(true, { memory: "before" }).start!({ fork: true }), {
+    ok: false,
+    message: unshareable,
+  });
+  await checkpoint("before", -1);
+  const sameAudience = forTurn(true, { memory: "before" });
+  assert.equal((await sameAudience.start!({ fork: true })).ok, true);
+  const listedTitles = await sameAudience.list!();
+  assert.ok(listedTitles.ok);
+  assert.ok(listedTitles.sessions.some((s) => s.title === "room"));
+  const newAudience = forTurn(true, { memory: "after" });
+  assert.deepEqual(await newAudience.start!({ fork: true }), { ok: false, message: unshareable });
+  const hidden = await newAudience.list!();
+  assert.ok(hidden.ok);
+  assert.ok(!hidden.sessions.some((s) => s.title === "room"));
   const slack = forTurn(true, { surface: "slack" });
   for (const out of [
     await slack.list!(),
@@ -1816,5 +1852,5 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
-  assert.equal(started.length, 2);
+  assert.equal(started.length, 3);
 });

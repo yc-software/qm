@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { goalElapsedLabel, goalFloorLabel, goalObjectiveLabel, latestGoal } from "../src/goal-strip.ts";
+import {
+  goalElapsedLabel,
+  goalWorkedLabel,
+  goalFloorLabel,
+  goalObjectiveLabel,
+  latestGoal,
+} from "../src/goal-strip.ts";
 
 function msg(activity: Array<{ type: string; payload: unknown }>): unknown {
   return { role: "assistant", work: { status: "working", activity } };
@@ -33,18 +39,18 @@ test("latestGoal finds the newest goal snapshot across messages", () => {
 
 test("latestGoal reflects closure and get_goal null", () => {
   const closed = [
-    msg([{ type: "tool_result", payload: { tool: "create_goal", goal: record("active") } }]),
-    msg([{ type: "tool_result", payload: { tool: "update_goal", goal: record("complete") } }]),
+    msg([{ type: "tool_result", payload: { tool: "goal", goal: record("active") } }]),
+    msg([{ type: "tool_result", payload: { tool: "goal", goal: record("complete") } }]),
   ];
   assert.equal(latestGoal(closed)?.status, "complete");
   const paused = [
-    msg([{ type: "tool_result", payload: { tool: "create_goal", goal: record("active") } }]),
-    msg([{ type: "tool_result", payload: { tool: "update_goal", goal: record("paused") } }]),
+    msg([{ type: "tool_result", payload: { tool: "goal", goal: record("active") } }]),
+    msg([{ type: "tool_result", payload: { tool: "goal", goal: record("paused") } }]),
   ];
   assert.equal(latestGoal(paused)?.status, "paused");
   const cleared = [
-    msg([{ type: "tool_result", payload: { tool: "create_goal", goal: record("active") } }]),
-    msg([{ type: "tool_result", payload: { tool: "get_goal", goal: null } }]),
+    msg([{ type: "tool_result", payload: { tool: "goal", goal: record("active") } }]),
+    msg([{ type: "tool_result", payload: { tool: "goal", goal: null } }]),
   ];
   assert.equal(latestGoal(cleared), null);
   assert.equal(latestGoal([msg([{ type: "tool_result", payload: { tool: "execute" } }])]), null);
@@ -58,4 +64,9 @@ test("labels: elapsed, floor, objective trim", () => {
   assert.equal(goalFloorLabel(null), null);
   assert.equal(goalObjectiveLabel("a\nb\tc"), "a b c");
   assert.equal(goalObjectiveLabel("x".repeat(200)).length, 120);
+});
+
+test("worked time leads the label, the floor follows", () => {
+  assert.equal(goalWorkedLabel(720_000, "20m"), "12m worked · 20m floor");
+  assert.equal(goalWorkedLabel(45_000), "45s worked");
 });

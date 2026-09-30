@@ -378,8 +378,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
           return {
             ok: false,
             message:
-              "[live search runs as the asking person's own Slack login, and this turn has no connected one — " +
-              "if a person asked, point them at " +
+              "[live search runs as the asking person's own Slack login, and this turn has no connected one. " +
+              "Reading this conversation's history needs no personal login, so read it before concluding anything is missing; " +
+              "only if the message is elsewhere, and a person asked, point them at " +
               (deps.publicWebUrl
                 ? `${deps.publicWebUrl.replace(/\/$/, "")}/connect/slack/self-connect`
                 : "the web UI's Connectors page") +

@@ -1,5 +1,6 @@
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isStrongSigningSecret } from "./auth/source-auth.ts";
+import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { parseScopeId } from "./types.ts";
 import type { SandboxScopeDefaults } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
@@ -117,6 +118,7 @@ export interface Config {
   runMaxAgeMs: number;
   runWaitMs: number;
   backgroundJobTtlMs: number;
+  sandboxCapabilityTtlMs: number;
   backgroundJobTtlMaxMs: number;
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
@@ -1543,6 +1545,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     swarmDefaults,
     runMaxAgeMs,
     runWaitMs: (turnWallClockMs > 0 ? turnWallClockMs : runMaxAgeMs) + 60_000,
+    sandboxCapabilityTtlMs: parseSandboxCapabilityTtlMs(env.SANDBOX_CAPABILITY_TTL_HOURS),
     backgroundJobTtlMs:
       (numEnvStrict("BACKGROUND_JOB_TTL_SEC", env.BACKGROUND_JOB_TTL_SEC) ?? CONFIG_DEFAULTS.backgroundJobTtlSec) *
       1000,

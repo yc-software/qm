@@ -655,7 +655,7 @@ test("the personal-account picker preserves composer choices and saves context d
     const effortChoices = () => [...host.querySelectorAll<HTMLButtonElement>(".loadout-effort")];
     assert.deepEqual(
       effortChoices().map((item) => item.textContent?.trim()),
-      ["Legacy default", "Auto", "Provider default", "Low", "High"],
+      ["Default", "Auto", "Provider default", "Low", "High"],
     );
     effortChoices()
       .find((item) => item.textContent?.trim() === "Auto")!
@@ -663,10 +663,12 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.equal(composer!.state.effortLevel, "adaptive");
     assert.equal(saved().find(({ value }) => value === "pi:alpha")?.effort, "adaptive");
     button('[data-loadout-section="effort"]').click();
-    assert.equal(
-      effortChoices().some((item) => item.textContent?.trim() === "Legacy default"),
-      false,
-    );
+    effortChoices()
+      .find((item) => item.textContent?.trim() === "Default")!
+      .click();
+    assert.equal(composer!.state.effortLevel, "auto");
+    assert.equal(saved().find(({ value }) => value === "pi:alpha")?.effort, "auto");
+    button('[data-loadout-section="effort"]').click();
     effortChoices()
       .find((item) => item.textContent?.trim() === "Provider default")!
       .click();
@@ -682,6 +684,36 @@ test("the personal-account picker preserves composer choices and saves context d
     await tick();
     assert.equal(updates.at(-1)?.effortLevel, "adaptive");
     assert.equal(context.contextModelState.config.effective.effortLevel, "adaptive");
+    config.modelsByHarness.pi.push("gpt-6-astra", "gpt-6-astra-ultrafast");
+    config.modelCatalog!["gpt-6-astra"] = model("gpt-6-astra", "Astra", "openai");
+    config.modelCatalog!["gpt-6-astra-ultrafast"] = model("gpt-6-astra-ultrafast", "Astra Ultrafast", "openai");
+    config.fastModeModelIds!.push("gpt-6-astra");
+    config.effective = { harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "high", fastMode: true };
+    ctx.chat.state.threadRef = "web:tester:ultrafast";
+    localStorage.removeItem("web-ui:loadout");
+    await composer!.refreshRuntimeSelection(null, agent, true);
+    await mount();
+    button('[aria-label="Ultrafast"]').click();
+    assert.match(button(".loadout-button").getAttribute("aria-label")!, /Astra, High effort, Ultrafast/);
+    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
+    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "true");
+    assert.deepEqual(
+      saved().filter(({ value }) => value.includes("astra")),
+      [{ value: "pi:gpt-6-astra-ultrafast", effort: "high", fast: false }],
+    );
+    ctx.chat.state.threadRef = "web:tester:ultrafast-new-thread";
+    await mount();
+    assert.match(button(".loadout-button").getAttribute("aria-label")!, /High effort, Ultrafast/);
+    button('[data-loadout-section="add"]').click();
+    assert.equal(host.querySelector('[aria-label="Add Astra Ultrafast to presets"]'), null);
+    button('button[aria-label="Fast"]').click();
+    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "true");
+    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
+    button('[aria-label="Ultrafast"]').click();
+    button('[aria-label="Ultrafast"]').click();
+    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
+    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
+    assert.equal(composer!.state.effortLevel, "high");
   } finally {
     resetContext?.();
     composer?.dispose();
