@@ -92,7 +92,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     return item.status === "ready" || (item.status === "failed" && Boolean(item.parkedReason));
   });
   const counts = new Map<string, number>();
-  for (const item of open) counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
+  for (const item of attention) counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
   let candidates = attention;
   if (sent)
     candidates = summaries.filter(
