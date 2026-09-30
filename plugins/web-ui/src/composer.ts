@@ -1997,6 +1997,17 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     resetComposer,
     focusComposerEnd,
     fillSuggestedPrompt,
+    addAnnotations: (text: string, files: File[]): boolean => {
+      const agent = ctx.chat.state.agent;
+      if (!agent || composerState.processingFiles) return false;
+      composerState.draft = [composerState.draft.trim(), text].filter(Boolean).join("\n\n");
+      composerState.error = "";
+      persistDraft();
+      ctx.chat.drawActiveChat(agent);
+      if (files.length) void addFiles(files, agent);
+      focusComposerEnd();
+      return true;
+    },
     sendSuggestedPrompt: async (prompt: string, agent: Agent): Promise<void> => {
       if (
         agent !== ctx.chat.state.agent ||
