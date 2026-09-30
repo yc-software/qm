@@ -51,6 +51,60 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
 
 const { createClaudeHarness } = await import("../src/harness/claude-harness.ts");
 
+test("Claude sends workspace image tool results through MCP without recording image bytes", async () => {
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4zwAE/0Ho/38GAB7vBPzpVsU+AAAAAElFTkSuQmCC";
+  let delivered: unknown;
+  const tape: unknown[] = [];
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    const result = (await toolHandlers.get("files")!({ action: "read", path: "preview.png" })) as {
+      content: Array<{ type: string; data?: string; mimeType?: string; text?: string }>;
+    };
+    delivered = result.content;
+    yield {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "read-preview",
+            content: result.content.map((part) =>
+              part.type === "image"
+                ? { type: "image", source: { type: "base64", media_type: part.mimeType, data: part.data } }
+                : part,
+            ),
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      tool_use_result: result,
+    };
+    yield resultMessage("inspected");
+  };
+  const { turn, entries, llmRequests } = harnessTurn({
+    readOnly: false,
+    input: "Inspect the synthetic preview.",
+    tools: {
+      read: async () => ({
+        content: "[image: preview.png]",
+        sourceScopeId: "org:test",
+        image: { data, mimeType: "image/png" },
+      }),
+    } as unknown as HarnessTurnInput["tools"],
+    tape: async (record) => {
+      tape.push(record);
+    },
+  });
+  await createClaudeHarness({}).turns.runTurn(turn);
+  assert.deepEqual(delivered, [
+    { type: "text", text: "[image: preview.png]" },
+    { type: "image", data, mimeType: "image/png" },
+  ]);
+  assert.ok(tape.some((record) => JSON.stringify(record).includes("tool_result")));
+  assert.equal(JSON.stringify({ tape, entries, llmRequests }).includes(data), false);
+});
+
 function assistantMessage(id: string, text: string, usage: Record<string, number>): FakeSdkMessage {
   return {
     type: "assistant",

@@ -99,6 +99,39 @@ test("sniffImageDimensions reads PNG, JPEG, GIF, and WebP headers", () => {
   assert.deepEqual(sniffImageDimensions(webp(1024, 768)), { width: 1024, height: 768, format: "webp" });
 });
 
+test("sniffImageDimensions respects byte offsets across many JPEG and WebP segments", () => {
+  const jpegBytes = Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    Buffer.from("fffe0002".repeat(131_072), "hex"),
+    jpeg(800, 600).subarray(2),
+  ]);
+  const padding = Buffer.alloc(8);
+  const jpegBacking = Buffer.concat([padding, jpegBytes, padding]);
+  assert.deepEqual(
+    sniffImageDimensions(new Uint8Array(jpegBacking.buffer, jpegBacking.byteOffset + 8, jpegBytes.length)),
+    {
+      width: 800,
+      height: 600,
+      format: "jpeg",
+    },
+  );
+  const webpBytes = Buffer.concat([
+    webp(640, 480).subarray(0, 12),
+    Buffer.from("4a554e4b00000000".repeat(65_536), "hex"),
+    webp(640, 480).subarray(12),
+  ]);
+  webpBytes.writeUInt32LE(webpBytes.length - 8, 4);
+  const webpBacking = Buffer.concat([padding, webpBytes, padding]);
+  assert.deepEqual(
+    sniffImageDimensions(new Uint8Array(webpBacking.buffer, webpBacking.byteOffset + 8, webpBytes.length)),
+    {
+      width: 640,
+      height: 480,
+      format: "webp",
+    },
+  );
+});
+
 test("downscaleVisionImage leaves small images untouched without spawning a converter", async () => {
   const small = png(MAX_VISION_IMAGE_DIMENSION, 900);
   let spawned = false;

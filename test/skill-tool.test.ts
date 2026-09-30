@@ -7,7 +7,7 @@ import { scopeId } from "../src/types.ts";
 function ctx(useSkill: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>) {
   const calls: string[] = [];
   const sandbox = {
-    readFile: async (_h: SandboxHandle, _p: string) => null,
+    readFileBytes: async (_h: SandboxHandle, _p: string) => null,
     run: async (_h: SandboxHandle, command: string) => {
       calls.push(command);
       return { stdout: "ran", stderr: "", code: 0, timedOut: false };

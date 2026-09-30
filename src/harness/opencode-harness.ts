@@ -32,6 +32,7 @@ import { NonRetryableTurnError } from "../core/turn-error.ts";
 import {
   defineHarness,
   promptEnvelopeWithoutHistory,
+  stripDataUrls,
   type Harness,
   type HarnessTurnInput,
   type HarnessTurnResult,
@@ -39,6 +40,7 @@ import {
 import { coreToolOptions, type ToolContextRef } from "./agent-tools.ts";
 import {
   bridgedTools,
+  bridgedToolText,
   harnessToolContext,
   harnessToolOptions,
   oneShotModelUtilities,
@@ -208,18 +210,6 @@ export function modelRef(id: string): { providerID: string; modelID: string } {
   if (slash > 0) return { providerID: id.slice(0, slash), modelID: id.slice(slash + 1) };
   const resolved = resolveModel(id);
   return { providerID: String(resolved?.provider ?? (id.startsWith("gpt-") ? "openai" : "anthropic")), modelID: id };
-}
-
-function stripDataUrls(message: unknown): unknown {
-  const m = message as { parts?: unknown[] };
-  if (!m || !Array.isArray(m.parts)) return message;
-  const parts = m.parts.map((part) => {
-    const p = part as { url?: unknown };
-    if (typeof p?.url !== "string" || !p.url.startsWith("data:")) return part;
-    const { url: _url, ...rest } = p;
-    return { ...rest, omitted: true };
-  });
-  return { ...(message as Record<string, unknown>), parts };
 }
 
 function replayMessages(
@@ -669,12 +659,16 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               return json(res, 404, { output: `[tool unavailable: ${input.tool ?? "unknown"}]` });
             try {
               const result = await tool.execute(input.callID ?? randomBytes(8).toString("hex"), input.args ?? {});
-              const output = (result.content ?? [])
-                .filter((item) => item.type === "text")
-                .map((item) => item.text ?? "")
-                .join("\n");
+              const attachments = (result.content ?? [])
+                .filter((part) => part.type === "image")
+                .map((part) => ({
+                  type: "file",
+                  mime: part.mimeType,
+                  url: `data:${part.mimeType};base64,${part.data}`,
+                }));
               return json(res, 200, {
-                output,
+                output: bridgedToolText(result),
+                ...(attachments.length ? { attachments } : {}),
                 terminate: Boolean(
                   result.terminate ||
                   state.ref.runtimeHandoff ||
