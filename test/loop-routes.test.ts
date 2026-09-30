@@ -317,6 +317,24 @@ test("only the owner may read, patch, or delete a personal loop", async () => {
   assert.deepEqual((list.body as { loops: unknown[] }).loops, []);
 });
 
+test("the loops list reports each loop's queue, catching a list that answers with bare records the operator must open a loop to read", async () => {
+  const deps = services();
+  const created = await call(deps, "POST", "/v1/loops", CREATE);
+  const id = (created.body as { loop: { id: string } }).loop.id;
+  await deps.items.enqueue({ loopId: id, sourceKey: "waiting" });
+  const { item } = await deps.items.enqueue({ loopId: id, sourceKey: "being-worked" });
+  assert.ok(await deps.items.claim(item.id));
+
+  const list = await call(deps, "GET", "/v1/loops");
+  assert.equal(list.status, 200);
+  const entries = (list.body as { loops: Array<{ name: string; queue: Record<string, number> }> }).loops;
+  assert.equal(entries.length, 1);
+  const { oldestQueuedAgeMs, ...counts } = entries[0]!.queue;
+  assert.deepEqual(counts, { queued: 1, inProgress: 1, ready: 0, failed: 0 });
+  assert.equal(typeof oldestQueuedAgeMs, "number", "the whole ledger stats row rides along, not a hand-copied subset");
+  assert.equal(entries[0]!.name, CREATE.name, "the entry still carries every field a consumer reads today");
+});
+
 test("pausing a loop pauses its child cron; re-enabling resumes it", async () => {
   const deps = services();
   const created = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 3_600_000 } });

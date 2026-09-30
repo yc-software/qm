@@ -314,7 +314,13 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   for (const loop of all) {
     if (await canAdministerLoop(ctx, loop, acting)) visible.push(loop);
   }
-  return sendJson(ctx.res, 200, { loops: visible });
+  const loops = await Promise.all(
+    visible.map(async (loop) => ({
+      ...loop,
+      queue: (await collectVitals(loop, { items: deps.items, outputs: deps.outputs }, Date.now())).queue,
+    })),
+  );
+  return sendJson(ctx.res, 200, { loops });
 }
 
 async function getLoop(ctx: ApiCtx): Promise<void> {

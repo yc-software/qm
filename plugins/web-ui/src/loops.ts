@@ -24,6 +24,7 @@ interface LoopView {
   sources?: string[];
   lastFiredAt?: number;
   consecutiveFailedFires?: number;
+  queue?: LoopDetail["vitals"]["queue"];
 }
 
 interface LoopItemView {
@@ -576,12 +577,21 @@ function detailTpl(detail: LoopDetail): TemplateResult {
   `;
 }
 
+function queueLabel(queue: NonNullable<LoopView["queue"]>): string {
+  const parts = [
+    ...(queue.inProgress > 0 ? [`${queue.inProgress} working`] : []),
+    ...(queue.queued > 0 ? [`${queue.queued} queued`] : []),
+  ];
+  return parts.length > 0 ? parts.join(" · ") : "queue empty";
+}
+
 function loopRow(loop: LoopView): TemplateResult {
   return html`
     <button class="list-row loop-row" type="button" @click=${() => openLoop(loop.id)}>
       ${loopIcon(loop, 18)}<span class="loop-row-name">${loop.name}</span>
       ${healthBadge(loop)}
       <span class="loop-row-meta">last fire ${ago(loop.lastFiredAt)}</span>
+      ${loop.queue ? html`<span class="loop-row-meta">${queueLabel(loop.queue)}</span>` : nothing}
     </button>
   `;
 }
