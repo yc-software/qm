@@ -446,7 +446,7 @@ test("dev security secrets are stable, complete, and distinct", () => {
 });
 
 test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
-  assert.equal(OPENCODE_RUNTIME_VERSION, "1.18.32");
+  assert.equal(OPENCODE_RUNTIME_VERSION, "1.18.31");
   assert.equal(loadConfig({ HARNESS: "opencode", PI_MODEL: "pi-model" }).opencodeModel, "pi-model");
   assert.equal(
     loadConfig({ HARNESS: "opencode", PI_MODEL: "pi-model", OPENCODE_MODEL: "open-model" }).opencodeModel,
