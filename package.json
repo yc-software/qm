@@ -88,7 +88,7 @@
     "croner": "^10.0.1",
     "e2b": "^2.51.0",
     "emoji-datasource": "^16.0.0",
-    "fastify": "^5.12.1",
+    "fastify": "^5.12.5",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
     "modal": "^0.10.1",
@@ -104,7 +104,7 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.10",
-    "hono": "4.13.5",
+    "hono": "4.13.9",
     "@fastify/ajv-compiler": {
       "fast-uri": "3.1.8"
     },
