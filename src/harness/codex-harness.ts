@@ -12,7 +12,8 @@ import type { LlmCallUsage } from "../sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { asError, swallow } from "../util/errors.ts";
 import { countTokens } from "../util/tokens.ts";
-import { CodexAppServer, CodexRpcError, redactCodexDiagnostics } from "./codex-app-server.ts";
+import { CodexAppServer, CodexRpcError } from "./codex-app-server.ts";
+import { redactSecrets } from "./redact-secrets.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "./codex-auth.ts";
 import {
   childCodexAuthFromDerived,
@@ -172,7 +173,7 @@ export function codexNonRetryable(message: string): boolean {
 }
 
 export function codexProviderFailure(message: string): Error {
-  const safe = redactCodexDiagnostics(message);
+  const safe = redactSecrets(message);
   return codexNonRetryable(safe) ? new NonRetryableTurnError(safe) : new Error(safe);
 }
 export function codexChildToolAllowed(name: string, args?: unknown): boolean {

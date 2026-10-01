@@ -33,7 +33,8 @@ import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
-import { CodexAppServer, redactCodexDiagnostics } from "../src/harness/codex-app-server.ts";
+import { CodexAppServer } from "../src/harness/codex-app-server.ts";
+import { redactSecrets } from "../src/harness/redact-secrets.ts";
 import { DEFAULT_CODEX_MODEL_ID } from "../src/model/pi-models.ts";
 import { readCodexOAuthAuthFile } from "../src/harness/codex-auth.ts";
 import { acquireCodexOAuthAuthLock } from "../src/harness/codex-auth.ts";
@@ -719,12 +720,12 @@ test("Codex materializes ChatGPT OAuth auth as ephemeral child material without 
 
 test("Codex diagnostics redact credential-shaped stderr", () => {
   assert.equal(
-    redactCodexDiagnostics(
+    redactSecrets(
       '{"access_token":"access-secret","refresh_token":"refresh-secret"} Bearer bearer-secret-123456789 sk-secret-value',
     ),
     '{"access_token":"[redacted]","refresh_token":"[redacted]"} Bearer [redacted] [redacted]',
   );
-  const diagnostics = redactCodexDiagnostics(
+  const diagnostics = redactSecrets(
     "Authorization: Basic basic-secret-123456 Cookie: session-cookie-secret; Set-Cookie: refresh-cookie-secret; X-Api-Key: api-secret-123456 accessToken=camel-secret-123456 token=generic-secret-123456",
   );
   for (const secret of [
@@ -736,19 +737,19 @@ test("Codex diagnostics redact credential-shaped stderr", () => {
     "generic-secret-123456",
   ])
     assert.equal(diagnostics.includes(secret), false, secret);
-  const structured = redactCodexDiagnostics('authorization=["Bearer array-secret"] access_token="unterminated-secret');
+  const structured = redactSecrets('authorization=["Bearer array-secret"] access_token="unterminated-secret');
   assert.equal(structured.includes("array-secret"), false);
   assert.equal(structured.includes("unterminated-secret"), false);
-  const arrayDiagnostics = redactCodexDiagnostics('access_token=["first-array-secret","second-array-secret"]');
+  const arrayDiagnostics = redactSecrets('access_token=["first-array-secret","second-array-secret"]');
   assert.equal(arrayDiagnostics.includes("first-array-secret"), false);
   assert.equal(arrayDiagnostics.includes("second-array-secret"), false);
-  const malformedArray = redactCodexDiagnostics('access_token=["first-array-secret",\n"second-array-secret"');
+  const malformedArray = redactSecrets('access_token=["first-array-secret",\n"second-array-secret"');
   assert.equal(malformedArray.includes("first-array-secret"), false);
   assert.equal(malformedArray.includes("second-array-secret"), false);
-  const malformedObject = redactCodexDiagnostics('access_token={"a":"first-object-secret","b":"second-object-secret"}');
+  const malformedObject = redactSecrets('access_token={"a":"first-object-secret","b":"second-object-secret"}');
   assert.equal(malformedObject.includes("first-object-secret"), false);
   assert.equal(malformedObject.includes("second-object-secret"), false);
-  const nested = redactCodexDiagnostics(
+  const nested = redactSecrets(
     JSON.stringify({
       nested: { authorization: { header: "Bearer nested-secret" } },
       tokens: { access_token: ["one-secret"] },
@@ -756,8 +757,8 @@ test("Codex diagnostics redact credential-shaped stderr", () => {
   );
   assert.equal(nested.includes("nested-secret"), false);
   assert.equal(nested.includes("one-secret"), false);
-  assert.equal(redactCodexDiagnostics("id_token=header.payload.signature").includes("header.payload.signature"), false);
-  const generic = redactCodexDiagnostics(
+  assert.equal(redactSecrets("id_token=header.payload.signature").includes("header.payload.signature"), false);
+  const generic = redactSecrets(
     JSON.stringify({
       secret: "generic-secret",
       password: "generic-password",

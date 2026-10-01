@@ -391,9 +391,9 @@ const FAMILIES: AgentApiFamily[] = [
   {
     match: (m, p) =>
       (m === "GET" && (p === "/v1/conversations" || /^\/v1\/conversations\/[^/]+$/.test(p))) ||
-      (m === "POST" && (p === "/v1/conversations" || /^\/v1\/conversations\/[^/]+(?:\/fork)?$/.test(p))),
+      (m === "POST" && /^\/v1\/conversations\/[^/]+$/.test(p)),
     guidance:
-      "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving. When handing off a newly started conversation, share the exact webUrl returned by POST /v1/conversations; never guess or reconstruct its route.",
+      "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving.",
     routes: [
       {
         method: "GET",
@@ -406,18 +406,6 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/conversations/:id?tailTurns=20",
         summary:
           "read the bounded transcript of one of the asking person's conversations; defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a conversation they cannot see",
-      },
-      {
-        method: "POST",
-        path: "/v1/conversations",
-        summary:
-          "start a FRESH conversation in this scope (no inherited transcript) — body {text, title?}; text becomes its first message and a run begins there asynchronously. Returns {session, turn, webUrl?}; share webUrl verbatim when present (it is omitted without a valid configured public web URL). Unlike /fork, the new session starts with only what you put in text. Human-attended turns only — refused (403) from crons and other automations",
-      },
-      {
-        method: "POST",
-        path: "/v1/conversations/:id/fork",
-        summary:
-          "fork one of the asking person's conversations into a new conversation — body optionally {upToSeq}; returns 404 for a conversation they cannot see",
       },
     ],
   },

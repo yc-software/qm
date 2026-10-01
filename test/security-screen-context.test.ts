@@ -13,7 +13,6 @@ for (const surface of ["web", "slack", "swarm"]) {
     const built = buildApp(testConfig({ securityPosture: "auto" }), {
       securityScreener: {
         provider: "context-spy",
-        shadow: false,
         async classify(input) {
           calls.push(input);
           return { verdict: { decision: "auto" }, score: 0, threshold: 0.7 };

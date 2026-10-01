@@ -1635,7 +1635,9 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       access,
       reach,
       ...(invite ? { invitation: invite.invitation } : {}),
-      public: deployment?.public === true,
+      public:
+        deployment?.public === true &&
+        (await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId)),
       grantees,
     });
   } catch (e) {

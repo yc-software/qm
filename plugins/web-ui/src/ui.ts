@@ -1,6 +1,7 @@
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { tip } from "./tooltip.ts";
 import { Check, ChevronDown, Download, createElement, type IconNode } from "lucide";
 
 export function brandName(): string {
@@ -270,6 +271,7 @@ export interface MenuSelectOption {
   value: string | null;
   label: string;
   glyph?: IconNode;
+  disabledHint?: string;
 }
 
 export function menuSelect(props: {
@@ -290,8 +292,12 @@ export function menuSelect(props: {
         type="button"
         role="menuitemradio"
         aria-checked=${active ? "true" : "false"}
+        aria-disabled=${o.disabledHint ? "true" : nothing}
+        aria-description=${o.disabledHint || nothing}
+        ${tip(o.disabledHint ?? "")}
         @click=${(e: Event) => {
           e.stopPropagation();
+          if (o.disabledHint) return;
           closeFormMenus();
           props.onSelect(o.value ?? null);
         }}

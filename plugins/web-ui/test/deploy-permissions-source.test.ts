@@ -9,7 +9,8 @@ test("app permissions expose explicit private and public general-access states",
   assert.match(source, /Restricted/);
   assert.match(source, /Anyone with the link/);
   assert.match(source, /No sign-in required/);
-  assert.match(source, /JSON\.stringify\(\{ public: value === "public" \}\)/);
+  assert.match(source, /post\(\{ public: true \}\)/);
+  assert.match(source, /post\(\{ public: false \}\)/);
   assert.match(source, /Public\. Anyone can open this app\./);
 });
 
@@ -23,9 +24,8 @@ test("app permissions offer explicit view-only email grants outside the director
   assert.match(source, /Access granted, but no invitation email was sent/);
 });
 
-test("app permissions hide public links and outside emails when external sharing is off", () => {
+test("general access is one menu: restricted, the org, or (admin permitting) anyone with the link", () => {
   assert.match(source, /externalSharing = response\.externalSharing !== false/);
-  assert.match(source, /if \(!externalSharing\) return null;/);
-  assert.match(source, /\.\.\.\(externalSharing \? \[\{ value: "public", label: "Anyone with the link" \}\] : \[\]\)/);
-  assert.match(source, /Sharing outside your organization is turned off by an admin/);
+  assert.match(source, /disabledHint: "An org admin must turn on external app sharing first\."/);
+  assert.match(source, /post\(\{ scope: "org", access: "view" \}\)/);
 });
