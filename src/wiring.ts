@@ -2410,6 +2410,7 @@ export function buildApp(
     admittedWork,
     crons,
     samePerson: (a, b) => app.samePerson(a, b),
+    triageEnabledFor: (owner) => featureFlags.enabled("loop_triage", scopeId("personal", owner)),
     lock: advisoryLock,
     loops: loopStore,
     items: loopItems,

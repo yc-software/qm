@@ -137,6 +137,7 @@ function template() {
             <option value="inbox_loops">Inbox Loops</option>
             <option value="slack_loading_indicator">Slack loading indicator (experimental)</option>
             <option value="external_app_sharing">External app sharing (public links, outside emails)</option>
+            <option value="loop_triage">Loop triage (prioritize and consolidate)</option>
           </select></label
         >
         <div>

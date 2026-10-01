@@ -70,6 +70,7 @@ interface LoopDetail {
   items: LoopItemView[];
   outputs: LoopOutputView[];
   vitals: { queue: { queued: number; inProgress: number }; openOutputs: number };
+  triageAvailable?: boolean;
 }
 
 interface IngestionSource {
@@ -849,7 +850,7 @@ function detailTpl(detail: LoopDetail): TemplateResult {
         ? unconfirmed.map((o) => reviewRow(loop, o, "Confirm shipped"))
         : html`<p class="list-empty">Nothing needs confirmation.</p>`
     }
-    ${ingestionTpl(loop)} ${triageTpl(loop, items)}
+    ${ingestionTpl(loop)} ${detail.triageAvailable ? triageTpl(loop, items) : nothing}
     <h2 class="loop-section-title">Playbook <span class="loop-count">v${loop.playbookVersion}</span></h2>
     <textarea
       class="loop-playbook"

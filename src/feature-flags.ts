@@ -8,6 +8,7 @@ export const FEATURE_NAMES = [
   "inbox_loops",
   "slack_loading_indicator",
   "external_app_sharing",
+  "loop_triage",
 ] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 

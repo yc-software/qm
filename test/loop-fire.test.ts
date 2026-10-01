@@ -42,6 +42,7 @@ function service(
     turnResult?: TurnResult;
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
+    triageEnabledFor?: (owner: string) => Promise<boolean>;
   },
 ) {
   const loops = createLoopStore();
@@ -56,6 +57,7 @@ function service(
     admittedWork: overrides?.admittedWork,
     crons,
     samePerson: overrides?.samePerson,
+    triageEnabledFor: overrides?.triageEnabledFor ?? (async () => true),
     loops,
     items,
     outputs,
@@ -1022,6 +1024,17 @@ test("triage groups a flood read-only so only the representative is worked, with
       ["queued", representative.id],
       ["queued", representative.id],
     ],
+  );
+});
+
+test("triage does not run for a loop whose owner lacks the loop_triage flag", async () => {
+  const s = service(HAPPY, { triageEnabledFor: async () => false });
+  const loop = await makeLoop(s.loops);
+  await s.loops.update(loop.id, { triage: { prioritize: { enabled: true }, consolidate: { enabled: true } } });
+  await s.fire.fire(loop.id, "f1");
+  assert.equal(
+    s.turns.some((turn) => turn.text?.startsWith("[Loop triage]")),
+    false,
   );
 });
 

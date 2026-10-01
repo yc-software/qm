@@ -47,6 +47,7 @@ export interface LoopFireDeps {
   loops: LoopStore;
   crons?: Pick<CronStore, "get">;
   samePerson?: (a: string, b: string) => Promise<boolean>;
+  triageEnabledFor?: (owner: string) => Promise<boolean>;
   items: LoopItemLedger;
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
@@ -555,6 +556,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
 
   async function triage(loop: Loop, fireKey: string, threadRef: string): Promise<void> {
     try {
+      if (!(await deps.triageEnabledFor?.(loop.owner))) return;
       const work = triageWork(loop, await deps.items.byLoop(loop.id));
       if (!work) return;
       const patches = await decideTriage(loop, work, `${fireKey}:triage`, threadRef);

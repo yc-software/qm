@@ -337,17 +337,29 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { loops: visible });
 }
 
+async function triageAvailable(ctx: ApiCtx, loop: Loop): Promise<boolean> {
+  return (await ctx.deps.featureFlags?.enabled("loop_triage", scopeId("personal", loop.owner))) === true;
+}
+
 async function getLoop(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop } = loaded;
-  const [items, outputs, grants, vitals] = await Promise.all([
+  const [items, outputs, grants, vitals, triage] = await Promise.all([
     deps.items.byLoop(loop.id),
     deps.outputs.byLoop(loop.id),
     deps.grants.byLoop(loop.id),
     collectVitals(loop, { items: deps.items, outputs: deps.outputs }, Date.now()),
+    triageAvailable(ctx, loop),
   ]);
-  return sendJson(ctx.res, 200, { loop, items: sortLedgerItems(items, loop), outputs, grants, vitals });
+  return sendJson(ctx.res, 200, {
+    loop,
+    items: sortLedgerItems(items, loop),
+    outputs,
+    grants,
+    vitals,
+    triageAvailable: triage,
+  });
 }
 
 const STATES = new Set<LoopState>(["enabled", "paused", "quarantined", "archived"]);
@@ -437,6 +449,11 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       message: `triage must be {prioritize?, consolidate?: {enabled: boolean, instructions?: string up to ${TRIAGE_INSTRUCTIONS_MAX} chars}}`,
     });
   if (triage !== undefined) {
+    if (!(await triageAvailable(ctx, loop)))
+      return sendJson(ctx.res, 403, {
+        error: "forbidden",
+        message: "loop triage is not enabled for this loop's owner",
+      });
     if (!requireLiveHuman(ctx, acting)) return;
     patch.triage = triage;
   }
@@ -493,7 +510,8 @@ async function previewLoopTriage(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  if (!deps.fire || !(await triageAvailable(ctx, loop)))
+    return sendJson(ctx.res, 404, { error: "not_found", message: "loop triage is not available" });
   const triage = triageFromBody(isObj(ctx.body) ? ctx.body.triage : undefined);
   if (!triage)
     return sendJson(ctx.res, 400, {
