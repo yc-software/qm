@@ -42,7 +42,6 @@ import {
   type OidcConfig,
   type PrincipalRule,
   hostedDomainHint,
-  endSessionUrl,
 } from "./oidc.ts";
 import {
   proxyToSurface,
@@ -1079,20 +1078,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
     }
     const signedOutSession = currentSession(req);
-    let logoutOidc: OidcConfig | null = null;
-    if (!signedOutSession?.anon && signedOutSession?.oidcIssuer) {
-      if (trustedOidc?.issuer === signedOutSession.oidcIssuer && trustedOidc.clientId === signedOutSession.oidcClientId)
-        logoutOidc = trustedOidc;
-      else if (
-        !AUTH_BROKER_UPSTREAM &&
-        OIDC.issuer === signedOutSession.oidcIssuer &&
-        OIDC.clientId === signedOutSession.oidcClientId
-      )
-        logoutOidc = OIDC;
-    }
-    const localRedirect =
-      !AUTH_BROKER_UPSTREAM && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
-    const redirectTo = logoutOidc ? ((await endSessionUrl(logoutOidc)) ?? "/auth/signed-out") : localRedirect;
+    const redirectTo = !AUTH_BROKER_UPSTREAM && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
       clearCookie("portal_impersonate", "/", SECURE_COOKIES),
@@ -1634,7 +1620,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       );
       adminCache.delete(identity.sub);
     }
-    setAuthenticatedSession(res, identity.sub, identity.name, false, trustedOidc!);
+    setAuthenticatedSession(res, identity.sub, identity.name);
     res.writeHead(302, {
       location: sanitizeReturnTo(identity.returnTo, PUBLIC_URL, APPS_DOMAIN),
       "cache-control": "no-store",
@@ -1649,13 +1635,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   }
 }
 
-function setAuthenticatedSession(
-  res: ServerResponse,
-  sub: string,
-  name = "",
-  appOnly = false,
-  oidc?: OidcConfig,
-): void {
+function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", appOnly = false): void {
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
@@ -1665,7 +1645,6 @@ function setAuthenticatedSession(
     iat: now,
     exp: now + SESSION_TTL_S,
     ...(name ? { name } : {}),
-    ...(oidc ? { oidcIssuer: oidc.issuer, oidcClientId: oidc.clientId } : {}),
     ...(appOnly ? { appOnly: true } : {}),
   };
   setSession(res, [
@@ -1752,7 +1731,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     return fail(errMessage(e, "sign-in failed"));
   }
 
-  setAuthenticatedSession(res, principal.sub, name, principal.appOnly, OIDC);
+  setAuthenticatedSession(res, principal.sub, name, principal.appOnly);
   res.writeHead(302, {
     location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),
     "cache-control": "no-store",

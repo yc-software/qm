@@ -25,8 +25,6 @@ export function mintDesktopLogin(
       org: session.org,
       name: session.name,
       auth: session.auth ?? session.iat,
-      oidcIssuer: session.oidcIssuer,
-      oidcClientId: session.oidcClientId,
       sessionExp: session.exp,
       challenge,
       state,
@@ -91,9 +89,6 @@ export function openDesktopLogin(
     iat: now,
     exp: p.sessionExp,
     ...(typeof p.name === "string" ? { name: p.name } : {}),
-    ...(typeof p.oidcIssuer === "string" && typeof p.oidcClientId === "string"
-      ? { oidcIssuer: p.oidcIssuer, oidcClientId: p.oidcClientId }
-      : {}),
   };
   return { session, jti: p.jti, expiresAtMs: p.exp * 1000 };
 }

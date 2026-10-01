@@ -212,11 +212,3 @@ test("app-only sessions cannot mint desktop sessions", async () => {
     assert.equal(response.headers.get("set-cookie"), null);
   }
 });
-
-test("desktop transfer preserves the authenticated OIDC issuer and client binding", () => {
-  const session = { ...browser, oidcIssuer: "https://idp.example.test", oidcClientId: "portal-client" };
-  const code = mintDesktopLogin(session, secret, origin, challenge, state);
-  const result = openDesktopLogin(code, verifier, state, secret, origin, browser.org, 86400);
-  assert.equal(result?.session.oidcIssuer, session.oidcIssuer);
-  assert.equal(result?.session.oidcClientId, session.oidcClientId);
-});

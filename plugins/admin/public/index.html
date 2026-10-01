@@ -7248,12 +7248,12 @@
         if (API_BASE) {
           try {
             const response = await fetch("/auth/logout", { method: "POST", headers: { accept: "application/json" } });
-            if (!response.ok) return;
+            if (!response.ok) return alert(`Couldn't sign out (${response.status}). You are still signed in.`);
             const result = await response.json();
             location.href = result.redirectTo || "/";
-            return;
-          } catch {}
-          location.href = "/";
+          } catch (e) {
+            alert("Couldn't sign out: " + (e && e.message ? e.message : e));
+          }
           return;
         }
         refresh();

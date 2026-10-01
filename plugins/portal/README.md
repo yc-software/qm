@@ -146,20 +146,13 @@ disposable test deployment: the test redeems real links for its configured admin
 - **Surface isolation.** The private surface hop carries a signed portal identity; core verifies
   it independently, so a synthesized cookie alone confers no user authority. User deployments
   stay on a dedicated apps hostname and are never proxied through the portal or admin origin.
-- **External OIDC logout.** `POST /auth/logout` clears the portal cookies, then uses the
-  authenticated issuer and client binding to discover a same-origin
-  `end_session_endpoint`. Register the exact
-  `<PORTAL_PUBLIC_URL origin>/auth/signed-out` post-logout redirect URI with **each**
-  primary and trusted OIDC client. The browser must follow the returned
-  `redirectTo` (or the HTML response's redirect). The portal sends `client_id`,
-  not an `id_token_hint`: users must complete any provider logout confirmation
-  before the provider session ends. Cancelling that confirmation only leaves the
-  local portal session cleared. Missing, unsupported, unsafe, or unavailable
-  discovery falls back to the local signed-out page without ending the external
-  session; choosing Sign in can therefore reuse that provider session. Legacy
-  sessions without a provider binding also fall back locally rather than guessing
-  a provider. Built-in broker, anonymous, and local-development logout retain
-  their existing flows.
+- **Local logout.** `POST /auth/logout` clears the portal cookies and returns
+  `redirectTo`; browsers follow it to `/auth/signed-out`, a terminal page that
+  never redirects to the provider. Sign-out is local to this portal: it does not
+  contact the OIDC provider or end the provider session, so choosing **Sign in**
+  may complete silently through an existing provider session. Sign out of the
+  provider directly to end it everywhere. Built-in broker, anonymous, and
+  local-development logout retain their existing flows.
 - **Stateless session limits.** Clearing browser cookies does not revoke a copied
   portal session before `exp`; the core's `canAdminister` (re-read per request)
   remains the live admin revocation path.

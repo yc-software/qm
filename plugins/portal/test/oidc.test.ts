@@ -4,7 +4,6 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { exportJWK, SignJWT } from "jose";
 import {
   pkcePair,
-  endSessionUrl,
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
@@ -341,45 +340,4 @@ test("resolvePrincipal preserves deployment-only admission and fails closed for 
     })),
     { sub: "guest@partner.test", appOnly: true },
   );
-});
-
-test("endSessionUrl binds discovery to the configured issuer and callback origin", async () => {
-  const stub = (async (url: string | URL | Request, init?: RequestInit) => {
-    assert.equal(String(url), cfg.issuer + "/.well-known/openid-configuration");
-    assert.equal(init?.redirect, "error");
-    return Response.json({ issuer: cfg.issuer, end_session_endpoint: cfg.issuer + "/logout" });
-  }) as typeof fetch;
-  const result = new URL((await endSessionUrl(cfg, stub))!);
-  assert.equal(result.origin, cfg.issuer);
-  assert.equal(result.searchParams.get("client_id"), cfg.clientId);
-  assert.equal(result.searchParams.get("post_logout_redirect_uri"), "https://agent.example.com/auth/signed-out");
-  assert.equal(result.searchParams.has("id_token_hint"), false);
-});
-
-test("endSessionUrl fails locally for unsupported, mismatched, unsafe and unavailable providers", async () => {
-  for (const metadata of [
-    { issuer: cfg.issuer },
-    { issuer: "https://other.example", end_session_endpoint: cfg.issuer + "/logout" },
-    { issuer: cfg.issuer, end_session_endpoint: "https://evil.example/logout" },
-    { issuer: cfg.issuer, end_session_endpoint: "http://slack.com/logout" },
-    { issuer: cfg.issuer, end_session_endpoint: "https://user:pass@slack.com/logout" },
-    { issuer: cfg.issuer, end_session_endpoint: cfg.issuer + "/logout#fragment" },
-  ])
-    assert.equal(await endSessionUrl(cfg, (async () => Response.json(metadata)) as typeof fetch), null);
-  assert.equal(
-    await endSessionUrl(cfg, (async () => {
-      throw Error("offline");
-    }) as typeof fetch),
-    null,
-  );
-  assert.equal(await endSessionUrl(cfg, (async () => new Response("x".repeat(65_537))) as typeof fetch), null);
-  let calls = 0;
-  assert.equal(
-    await endSessionUrl({ ...cfg, issuer: "http://169.254.169.254" }, (async () => {
-      calls++;
-      return Response.json({});
-    }) as typeof fetch),
-    null,
-  );
-  assert.equal(calls, 0);
 });
