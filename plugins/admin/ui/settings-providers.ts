@@ -12,6 +12,7 @@ export const provider = {
   draft: {} as Record<string, any>,
   editing: false,
   originalName: "",
+  originalModels: {} as Record<string, any>,
   saving: false,
   message: "",
   error: false,
@@ -33,6 +34,7 @@ export function openProvider(item: any = null) {
   provider.revision++;
   provider.editing = !!item;
   provider.originalName = item?.name || "";
+  provider.originalModels = Object.fromEntries((item?.models || []).map((m: any) => [m.id, m]));
   provider.draft = {
     id: item?.id || "",
     name: item?.name || "",
@@ -70,7 +72,9 @@ export function providerBody() {
     .filter(Boolean)
     .map((l: string) => {
       const [id, name, contextWindow, maxTokens] = l.split("|").map((p) => p.trim());
+      const { name: _n, contextWindow: _c, maxTokens: _m, ...kept } = provider.originalModels[id] || {};
       return {
+        ...kept,
         id,
         ...(name ? { name } : {}),
         ...(contextWindow ? { contextWindow: Number(contextWindow) } : {}),
