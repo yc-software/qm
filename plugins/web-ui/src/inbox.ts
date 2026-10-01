@@ -630,21 +630,28 @@ async function toggleSelection(id: string): Promise<void> {
   }
 }
 
-async function shipReview(item: InboxItem, output: ReviewOutput): Promise<void> {
-  if (acting.has(item.id)) return;
+async function decideReview(
+  item: InboxItem,
+  output: ReviewOutput,
+  decision: "ship" | "return",
+  note = "",
+): Promise<boolean> {
+  if (acting.has(item.id)) return false;
   acting.add(item.id);
   drawAll();
   try {
     const result = await api<{ output: ReviewOutput }>(
       `/api/loops/${encodeURIComponent(item.loopId)}/outputs/${encodeURIComponent(output.id)}/decide`,
-      { method: "POST", body: JSON.stringify({ decision: "ship", note: "" }) },
+      { method: "POST", body: JSON.stringify({ decision, note }) },
     );
     const messages: Record<string, string> = { shipped: "Action completed", returned: "Changes requested" };
     notify(messages[result.output.state] ?? "Awaiting confirmation. Check the Loop before retrying.");
     await loadDetail(item.id, item.loopId);
     await refreshInbox({ silent: true });
+    return true;
   } catch (error) {
     notify(error instanceof Error ? error.message : "Could not confirm action");
+    return false;
   } finally {
     acting.delete(item.id);
     drawAll();
@@ -737,7 +744,7 @@ function artifactTpl(item: InboxItem, output: ReviewOutput, members: number): Te
               class="btn primary"
               ?disabled=${acting.has(item.id)}
               ${members > 1 ? tip(`Resolves all ${members}`) : nothing}
-              @click=${() => void shipReview(item, output)}
+              @click=${() => void decideReview(item, output, "ship")}
             >
               ${reviewActionLabel(output.shipAction)}
             </button>
@@ -1019,6 +1026,8 @@ export async function askAgent(
 ): Promise<boolean> {
   const text = message.trim();
   if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
+  const ready = item.outputs?.find((output) => output.state === "ready");
+  if (ready && text && !options?.attachments?.length) return decideReview(item, ready, "return", text);
   const { draft, conflictRevision } = snapshot;
   chatting.add(item.id);
   drawAll();

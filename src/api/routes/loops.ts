@@ -12,7 +12,7 @@ import type { ShipGrantStore } from "../../loops/ship-grant-store.ts";
 import type { LoopFireService } from "../../loops/loop-fire.ts";
 import { collectVitals } from "../../loops/governor.ts";
 import { buildShipGrant } from "../../loops/ship-gate.ts";
-import { sortLedgerItems } from "../../loops/ledger-view.ts";
+import { consolidates, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { settleGroup } from "../../loops/triage.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
@@ -449,7 +449,8 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       message: `triage must be {prioritize?, consolidate?: {enabled: boolean, instructions?: string up to ${TRIAGE_INSTRUCTIONS_MAX} chars}}`,
     });
   if (triage !== undefined) {
-    if (!(await triageAvailable(ctx, loop)))
+    const enabling = Object.values(triage).some((setting) => setting?.enabled === true);
+    if (enabling && !(await triageAvailable(ctx, loop)))
       return sendJson(ctx.res, 403, {
         error: "forbidden",
         message: "loop triage is not enabled for this loop's owner",
@@ -567,7 +568,8 @@ async function decideOutputLocked(ctx: ApiCtx): Promise<void> {
       const shipped = await deps.fire.shipOutput(loop.id, outputId, acting.actorId, note);
       if (!shipped) return decisionMissing();
       const item = await deps.items.get(shipped.itemId);
-      if (item) await settleGroup(deps.items, item);
+      if (item && consolidates(loop))
+        await settleGroup(deps.items, item).catch((e: unknown) => swallow("loop group settle", e));
       return sendJson(ctx.res, 200, { output: shipped });
     } catch (e) {
       return sendJson(ctx.res, 502, { error: "ship_failed", message: errMessage(e) });

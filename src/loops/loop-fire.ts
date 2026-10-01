@@ -467,7 +467,6 @@ function shipPrompt(loop: Loop, output: LoopOutput, note?: string): string {
     "```untrusted-data",
     data,
     "```",
-    "If a skill named after this action is available, load it and follow it to carry out the action.",
     "If the action is already done (e.g. the PR was already opened as ready), say so and stop.",
     "[End loop ship]",
   ].join("\n");

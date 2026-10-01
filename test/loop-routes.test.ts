@@ -356,6 +356,18 @@ test("a playbook edit through PATCH versions the playbook", async () => {
   assert.equal(loop.playbook, "triage harder");
 });
 
+test("without the loop_triage flag, triage can be turned off but not on", async () => {
+  const deps = services();
+  const created = await call(deps, "POST", "/v1/loops", CREATE);
+  const id = (created.body as { loop: { id: string } }).loop.id;
+  const on = await call(deps, "PATCH", `/v1/loops/${id}`, { triage: { prioritize: { enabled: true } } });
+  assert.equal(on.status, 403);
+  const off = await call(deps, "PATCH", `/v1/loops/${id}`, { triage: { consolidate: { enabled: false } } });
+  assert.equal(off.status, 200);
+  const read = await call(deps, "GET", `/v1/loops/${id}`);
+  assert.equal((read.body as { triageAvailable: boolean }).triageAvailable, false);
+});
+
 test("deleting a loop deletes its child cron and grants", async () => {
   const deps = services();
   const created = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 3_600_000 } });
