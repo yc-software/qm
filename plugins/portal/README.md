@@ -151,8 +151,9 @@ disposable test deployment: the test redeems real links for its configured admin
   never redirects to the provider. Sign-out is local to this portal: it does not
   contact the OIDC provider or end the provider session, so choosing **Sign in**
   may complete silently through an existing provider session. Sign out of the
-  provider directly to end it everywhere. Built-in broker, anonymous, and
-  local-development logout retain their existing flows.
+  provider directly to end it everywhere. Built-in broker and anonymous logout
+  retain their existing flows. Local-development logout also stops on the
+  signed-out page until the user chooses **Sign in**.
 - **Stateless session limits.** Clearing browser cookies does not revoke a copied
   portal session before `exp`; the core's `canAdminister` (re-read per request)
   remains the live admin revocation path.
