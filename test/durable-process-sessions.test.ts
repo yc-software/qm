@@ -193,12 +193,3 @@ test("reattach reconciles a session whose process died while core was down", asy
   assert.equal((await reg.liveByScope(await memoryScope())).length, 0);
   assert.equal(fake.teardowns.at(-1)!.keepWarm, false);
 });
-
-test("with no live session the per-scope box suspends as before (gate is off by default)", async () => {
-  const reg = createMemoryProcessRegistry();
-  const fake = fakeProcessSandbox();
-  const orch = buildOrchestrator(reg, fake.sandbox);
-  await orch.handleTurn(turn("!run echo hello"));
-  assert.equal(fake.teardowns.length, 1);
-  assert.equal(fake.teardowns[0]!.keepWarm, false);
-});

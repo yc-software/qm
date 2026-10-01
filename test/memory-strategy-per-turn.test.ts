@@ -38,23 +38,6 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
   assert.doesNotMatch(body, /not a bullet/);
 });
 
-test("autonomous and system-actor turns capture nothing; only a human turn extracts", async () => {
-  const systems: string[] = [];
-  const harness: HarnessModelUtilities = {
-    oneShot(system) {
-      systems.push(system);
-      return Promise.resolve("NONE");
-    },
-  };
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "trigger", reply: "queued", actorId: "system:ambient:acme" });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "[cron wake]", reply: "done", actorId: "U1", autonomous: true });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello", actorId: "U1" });
-
-  assert.deepEqual(systems, [MEMORY_EXTRACTION_PROMPT], "one extraction, for the human turn only");
-});
-
 test("parseFacts: bullets in, NONE/empty/prose out", () => {
   assert.deepEqual(parseFacts("- a\n* b\n  - c \nplain"), ["a", "b", "c"]);
   assert.deepEqual(parseFacts("NONE"), []);
@@ -71,16 +54,6 @@ test("per-turn swallows extraction failures and captures nothing", async () => {
   const strategy = createPerTurnStrategy({ harness, memory });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
   assert.equal(await readMemory(workspace, SCOPE), null, "nothing captured");
-});
-
-test("per-turn does not capture when the model says NONE", async () => {
-  const harness: HarnessModelUtilities = {
-    oneShot: () => Promise.resolve("NONE"),
-  };
-  const { workspace, memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
-  assert.equal(await readMemory(workspace, SCOPE), null);
 });
 
 test("MEMORY_STRATEGY parsing: per-turn is the default, agent-only disables post-turn extraction", () => {

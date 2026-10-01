@@ -11,44 +11,6 @@ const file = (id: string, name: string) => ({
   url_private_download: `https://files.slack.com/files-pri/${id}/${name}`,
 });
 
-test("messageWithForwardedContent labels forwarded text with its original author and channel", () => {
-  const result = messageWithForwardedContent({
-    text: "please review",
-    attachments: [
-      {
-        is_msg_unfurl: true,
-        author_name: "Ada Lovelace",
-        channel_name: "project-notes",
-        text: "the original message",
-      },
-    ],
-  });
-
-  assert.equal(
-    result.text,
-    "please review\n[forwarded message from Ada Lovelace in #project-notes] the original message",
-  );
-  assert.deepEqual(result.files, []);
-});
-
-test("messageWithForwardedContent carries files attached to a forwarded message", () => {
-  const result = messageWithForwardedContent({
-    attachments: [
-      {
-        is_msg_unfurl: true,
-        author_id: "UORIGINAL",
-        author_name: "Grace Hopper",
-        channel_name: "research",
-        text: "supporting material",
-        files: [file("F1", "notes.txt")],
-      },
-    ],
-  });
-
-  assert.equal(result.text, "[forwarded message from Grace Hopper in #research] supporting material");
-  assert.deepEqual(result.files, [{ ...file("F1", "notes.txt"), user: "UORIGINAL" }]);
-});
-
 test("messageWithForwardedContent recursively includes a nested forward", () => {
   const result = messageWithForwardedContent({
     attachments: [

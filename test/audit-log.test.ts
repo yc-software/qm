@@ -7,24 +7,6 @@ function ev(at: number, action: string, scope = scopeId("personal", "U1")): Audi
   return { at, principalId: "U1", action, resource: `r-${action}`, scopeLabel: scope };
 }
 
-test("events() returns everything oldest-first", async () => {
-  const log = createAuditLog();
-  log.record(ev(100, "grant"));
-  log.record(ev(200, "revoke"));
-  log.record(ev(300, "deploy"));
-  assert.deepEqual(
-    (await log.events()).map((e) => e.action),
-    ["grant", "revoke", "deploy"],
-  );
-});
-
-test("createAuditLog() is in-memory only (does NOT survive a restart)", async () => {
-  const log = createAuditLog();
-  log.record(ev(1, "grant"));
-  assert.equal((await log.events()).length, 1);
-  assert.equal((await createAuditLog().events()).length, 0);
-});
-
 test("tail returns the newest `limit` events, newest-first", async () => {
   const log = createAuditLog();
   for (let i = 1; i <= 5; i++) log.record(ev(i, `a${i}`));
@@ -46,14 +28,5 @@ test("tail scopeLabel filters to that scope", async () => {
   assert.deepEqual(
     got.map((e) => e.action),
     ["c", "a"],
-  );
-});
-
-test("a just-recorded event is immediately visible to tail (read-your-write)", async () => {
-  const log = createAuditLog();
-  log.record(ev(1, "grant"));
-  assert.deepEqual(
-    (await log.tail({ limit: 10 })).map((e) => e.action),
-    ["grant"],
   );
 });

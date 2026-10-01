@@ -12,7 +12,7 @@ export interface AdminGrant {
   createdAt?: number;
 }
 
-export function grantKey(principalId: string, scopeId: ScopeId, role: AdminRole): string {
+function grantKey(principalId: string, scopeId: ScopeId, role: AdminRole): string {
   return JSON.stringify([principalId, scopeId, role]);
 }
 

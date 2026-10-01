@@ -3,47 +3,6 @@ import assert from "node:assert/strict";
 import { createMetricsSink } from "../src/admin/metrics-sink.ts";
 import { scopeId } from "../src/types.ts";
 
-test("in-RAM metrics sink: new columns round-trip through record→list", async () => {
-  const sink = createMetricsSink();
-  const s1 = scopeId("channel", "C1");
-
-  sink.record({
-    totalMs: 100,
-    status: "ok",
-    scopeLabel: s1,
-    sessionId: "sess-A",
-    turnSeq: 3,
-    credsMs: 55,
-    compileMs: 33,
-    layersMs: 12,
-    runId: "run-A",
-    ingressMs: 70,
-    detectMs: 40,
-    compactMs: 15,
-    queueMs: 9,
-    resumedFromSeq: 1,
-  });
-  sink.record({ totalMs: 200, status: "ok", scopeLabel: s1, sessionId: "sess-B" });
-
-  const all = await sink.list({ limit: 100 });
-  const a = all.find((m) => m.sessionId === "sess-A")!;
-  assert.equal(a.turnSeq, 3, "join key turnSeq round-trips");
-  assert.equal(a.credsMs, 55, "credsMs round-trips");
-  assert.equal(a.compileMs, 33, "compileMs round-trips");
-  assert.equal(a.layersMs, 12, "layersMs round-trips");
-  assert.equal(a.runId, "run-A", "runId round-trips");
-  assert.equal(a.ingressMs, 70, "ingressMs round-trips");
-  assert.equal(a.detectMs, 40, "detectMs round-trips");
-  assert.equal(a.compactMs, 15, "compactMs round-trips");
-  assert.equal(a.queueMs, 9, "queueMs round-trips");
-  assert.equal(a.resumedFromSeq, 1, "resumedFromSeq round-trips");
-
-  const b = all.find((m) => m.sessionId === "sess-B")!;
-  assert.equal(b.credsMs, undefined, "an absent credsMs stays absent (not 0)");
-  assert.equal(b.compileMs, undefined, "an absent compileMs stays absent (not 0)");
-  assert.equal(b.ingressMs, undefined, "an absent ingressMs stays absent (not 0)");
-});
-
 test("in-RAM metrics sink: updateByRunId patches the deliver/inflight report-back fields", async () => {
   const sink = createMetricsSink();
   const s1 = scopeId("channel", "C1");

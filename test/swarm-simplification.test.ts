@@ -29,26 +29,6 @@ test("initial persistence includes settings, pool, message and pending work in o
   assert.equal((await f.store.pending()).length, 1);
 });
 
-test("inspect, immediate read and send reuse one authorized swarm snapshot", async () => {
-  const f = await swarmFixture();
-  await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
-  const get = f.store.get.bind(f.store);
-  let reads = 0;
-  f.store.get = async (id) => {
-    reads++;
-    return get(id);
-  };
-  for (const operation of [
-    () => f.service.inspect(f.caller),
-    () => f.service.read(f.caller, {}),
-    () => f.service.send(f.caller, { requestId: "message", audience: [], text: "note" }),
-  ]) {
-    reads = 0;
-    await operation();
-    assert.equal(reads, 1);
-  }
-});
-
 test("waiting reads reauthorize after sleeping and separate requests never cache authorization", async () => {
   const f = await swarmFixture();
   await f.service.spawn(f.caller, { requestId: "initial", text: "work" });

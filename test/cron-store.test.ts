@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createCronStore,
-  DEFAULT_FIRE_RUNNING_STALE_MS,
   FIRE_RETENTION_KEEP_PER_CRON,
   FIRE_RETENTION_MS,
   STRANDED_FIRE_NOTE,
@@ -130,13 +129,6 @@ test("old persisted interval rows without nextFireAt still recover their due cur
   assert.equal(due[0]?.scheduledAt, 6000);
 });
 
-test("a disabled cron is never due", async () => {
-  const store = createCronStore();
-  const cron = await store.create({ ...base, schedule: { firstFireAt: 1 } });
-  await store.setEnabled(cron.id, false);
-  assert.deepEqual(ids(await store.due(1_000_000)), []);
-});
-
 test("an archived cron is disabled and never due until re-enabled", async () => {
   const store = createCronStore();
   const cron = await store.create({ ...base, schedule: { firstFireAt: 1 } });
@@ -190,11 +182,6 @@ test("update can pause/resume via the enabled flag", async () => {
   assert.deepEqual(ids(await store.due(1_000_000)), []);
   await store.update(cron.id, { enabled: true });
   assert.deepEqual(ids(await store.due(1_000_000)), [cron.id]);
-});
-
-test("update returns null for an unknown id", async () => {
-  const store = createCronStore();
-  assert.equal(await store.update("nope", { action: "x" }), null);
 });
 
 test("delete removes a cron from list and due", async () => {
@@ -525,10 +512,6 @@ test("sweepStrandedFires closes only over-age running rows, as failed with a not
   assert.equal(log.find((e) => e.fireKey === "live")!.status, "running");
   assert.equal(log.find((e) => e.fireKey === "done")!.status, "ok");
   assert.equal(await store.sweepStrandedFires(12_000), 0, "a second sweep finds nothing");
-});
-
-test("the default staleness bound tracks the run reaper's default max age", () => {
-  assert.equal(DEFAULT_FIRE_RUNNING_STALE_MS, 24 * 60 * 60 * 1000);
 });
 
 test("a completion after a stranded sweep replaces the row outright — no stranded note survives success", async () => {

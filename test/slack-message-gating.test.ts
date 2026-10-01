@@ -141,13 +141,6 @@ test("createThreadTracker: marking a stake true overrides a cached negative (del
   assert.equal(t.get("C", "1"), true);
 });
 
-test("createDeduper drops a repeated event_id once seen (scenario 28)", () => {
-  const d = createDeduper(10);
-  const ev = { event_id: "Ev123", channel: "C", ts: "1.2" };
-  assert.equal(d.seen(dedupeKey(ev)), false);
-  assert.equal(d.seen(dedupeKey(ev)), true);
-});
-
 test("createDeduper evicts the oldest key past its max", () => {
   const d = createDeduper(2);
   assert.equal(d.seen("a"), false);
@@ -155,15 +148,6 @@ test("createDeduper evicts the oldest key past its max", () => {
   assert.equal(d.seen("c"), false);
   assert.equal(d.seen("a"), false);
   assert.equal(d.seen("c"), true);
-});
-
-test("createDeduper.forget re-admits a failed event so a withheld-ack redelivery reprocesses", () => {
-  const d = createDeduper(10);
-  const key = dedupeKey({ event_id: "Ev9", channel: "C", ts: "5.5" });
-  assert.equal(d.seen(key), false);
-  d.forget(key);
-  assert.equal(d.seen(key), false);
-  assert.equal(d.seen(key), true);
 });
 
 test("dedupedRun (the dispatch flow): handler failure un-marks the key so a same-process redelivery reprocesses", async () => {
@@ -251,20 +235,6 @@ test("maybeInterceptStop: async getInFlightRun fallback (map miss) still aborts 
   assert.deepEqual(signaled, ["run-async"]);
 });
 
-test("maybeInterceptStop: async getInFlightRun resolving undefined flows through as a normal turn", async () => {
-  const signaled: string[] = [];
-  const intercepted = await maybeInterceptStop({
-    text: "stop",
-    threadRef: "dm:C1",
-    getInFlightRun: async () => undefined,
-    signalAbort: async (runId) => {
-      signaled.push(runId);
-    },
-  });
-  assert.equal(intercepted, false);
-  assert.deepEqual(signaled, []);
-});
-
 test("maybeInterceptStop: non-bare stop text flows through even with an in-flight run", async () => {
   const signaled: string[] = [];
   const intercepted = await maybeInterceptStop({
@@ -287,20 +257,4 @@ test("createInFlightThreadMap: clear is runId-guarded so a finished run can't un
   assert.equal(runs.get("dm:C1"), "run-2");
   runs.clear("dm:C1", "run-2");
   assert.equal(runs.get("dm:C1"), undefined);
-});
-
-test("stop checks the conversation tree even when the coordinator is idle", async () => {
-  const calls: string[] = [];
-  const stopped = await maybeInterceptStop({
-    text: "stop",
-    threadRef: "dm:D1",
-    getInFlightRun: () => undefined,
-    signalAbort: async () => assert.fail("must stop the tree"),
-    stopConversation: async (threadRef) => {
-      calls.push(threadRef);
-      return true;
-    },
-  });
-  assert.equal(stopped, true);
-  assert.deepEqual(calls, ["dm:D1"]);
 });

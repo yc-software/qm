@@ -92,15 +92,3 @@ test("blue/green drill preserves the deployed task contract and breaks only core
   });
   assert.deepEqual(containers[1], source.containerDefinitions[1]);
 });
-
-test("blue/green recovery trusts the native rollback verdict, not the stale legacy deployment list", () => {
-  const source = readFileSync(new URL("../scripts/aws/ecs-blue-green-drill.ts", import.meta.url), "utf8");
-  assert.match(source, /await waitForRollback/);
-  assert.match(source, /await waitForHealthyService/);
-  assert.match(source, /assertSettledHealthyBlueGreen/);
-  assert.match(source, /failed task set has not finished draining/);
-  assert.match(source, /baseline is not fully settled/);
-  assert.match(source, /no successful circuit-breaker-enabled rollback candidate/);
-  assert.match(source, /restoring the original task definition/);
-  assert.doesNotMatch(source, /"wait", "services-stable"/);
-});

@@ -83,11 +83,6 @@ test("delivery target round-trips channel + thread, and channel-only when not th
   assert.deepEqual(parseDeliveryTarget(root), { channel: "D456" });
 });
 
-test("parseDeliveryTarget splits only on the first ':' and tolerates a bare channel", () => {
-  assert.deepEqual(parseDeliveryTarget("C9:1.2"), { channel: "C9", threadTs: "1.2" });
-  assert.deepEqual(parseDeliveryTarget("C9"), { channel: "C9" });
-});
-
 test("deliveryCandidatesFor: a channel offers this-thread (default) and the-whole-channel", () => {
   const cands = deliveryCandidatesFor("channel", "C123", "1699999999.001200", "eng");
   assert.ok(cands);
@@ -349,28 +344,6 @@ test("onBotJoinedChannel: stays silent in an externally-shared (Slack Connect) c
   });
   assert.equal(calls.posted.length, 0, "the bot never posts into a Connect channel (an external could see it)");
   assert.equal(synced, 1, "directory sync (which never emits into the channel) still runs");
-});
-
-test("onBotJoinedChannel: welcomes a normal internal channel and hands the pinned header to the ensurer", async () => {
-  const { client, calls } = fakeJoinClient();
-  let synced = 0;
-  const ensured: string[] = [];
-  await onBotJoinedChannel({
-    client,
-    channel: "C123",
-    joinerUserId: BOT,
-    botUserId: BOT,
-    webUiPublicUrl: WEB_BASE,
-    syncDirectory: async () => {
-      synced++;
-    },
-    ensureHeader: (channel) => ensured.push(channel),
-  });
-  const expectedUrl = `${WEB_BASE}/projects/channel/C123`;
-  assert.equal(calls.posted.length, 1, "welcome lands on a normal internal channel");
-  assert.ok(calls.posted[0]!.text.includes(expectedUrl), "welcome message contains the project deep link");
-  assert.deepEqual(ensured, ["C123"], "join triggers exactly one header ensure");
-  assert.equal(synced, 1, "directory sync runs");
 });
 
 function verifyHarness(

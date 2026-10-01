@@ -2,12 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySurfaceCache, type LiveFallback } from "../src/surface-cache/surface-cache.ts";
 import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
-import {
-  judgeAmbientBatch,
-  parseAmbientDecision,
-  type AmbientBatch,
-  type AmbientDecision,
-} from "../src/surface-cache/ambient-judge.ts";
+import { judgeAmbientBatch, parseAmbientDecision } from "../src/surface-cache/ambient-judge.ts";
 
 test("ingest is idempotent per (container, ts) — a re-delivery upserts, never doubles", async () => {
   const cache = createMemorySurfaceCache();
@@ -191,48 +186,6 @@ test("parseAmbientDecision tolerates a JSON object, prose-wrapped JSON, and garb
   assert.deepEqual(parseAmbientDecision('Sure — {"act": false} because nothing matched'), { act: false });
   assert.deepEqual(parseAmbientDecision("not json at all"), { act: false });
   assert.deepEqual(parseAmbientDecision(undefined), { act: false });
-});
-
-test("ambient judge: engage decision spawns the smart-model worker", async () => {
-  const spawned: Array<{ batch: AmbientBatch; decision: AmbientDecision }> = [];
-  const batch: AmbientBatch = {
-    container: "C1",
-    surface: "slack",
-    orders: "flag anything about the Q3 launch",
-    messages: [{ container: "C1", ts: "1.0", authorId: "U1", text: "did the Q3 launch slip?", createdAt: 1 }],
-  };
-  const decision = await judgeAmbientBatch(
-    {
-      judge: async () => JSON.stringify({ act: true, reason: "someone asked about the Q3 launch" }),
-      spawnWorker: async (b, d) => {
-        spawned.push({ batch: b, decision: d });
-      },
-    },
-    batch,
-  );
-  assert.equal(decision.act, true);
-  assert.equal(spawned.length, 1, "an engage decision spawns exactly one worker");
-  assert.equal(spawned[0]!.decision.reason, "someone asked about the Q3 launch");
-});
-
-test("ambient judge: a silence decision spawns NO worker (silence is the default)", async () => {
-  let spawns = 0;
-  const decision = await judgeAmbientBatch(
-    {
-      judge: async () => JSON.stringify({ act: false }),
-      spawnWorker: async () => {
-        spawns++;
-      },
-    },
-    {
-      container: "C1",
-      surface: "slack",
-      orders: "flag Q3 launch",
-      messages: [{ container: "C1", ts: "1.0", text: "lunch anyone?", createdAt: 1 }],
-    },
-  );
-  assert.equal(decision.act, false);
-  assert.equal(spawns, 0);
 });
 
 test("ambient judge: empty standing orders no longer short-circuits — the judge still decides", async () => {

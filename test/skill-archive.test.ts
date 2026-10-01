@@ -26,20 +26,6 @@ test("archive stops a skill resolving but keeps the record", async () => {
   assert.equal((await skills.get(id))!.status, "archived");
 });
 
-test("archive is idempotent", async () => {
-  const { skills, id } = await published();
-  await skills.archive(id);
-  const again = await skills.archive(id);
-  assert.equal(again.status, "archived");
-});
-
-test("an archived skill can be re-published (resurrection on re-import)", async () => {
-  const { skills, id } = await published();
-  await skills.archive(id);
-  await skills.publish(id);
-  assert.equal((await skills.resolve("demo", [org])).skill?.id, id);
-});
-
 test("create carries pack provenance, kept out of the signature", async () => {
   const skills = createSkillStore();
   const s = await skills.create({

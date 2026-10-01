@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
-import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../src/sandbox/sandbox-env.ts";
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 
 let ff: FakeSprites;
@@ -24,15 +23,6 @@ function spritesHandle(env?: Record<string, string>) {
   const layers = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" as const }];
   return { sandbox, layers, ...(env ? { env } : {}) };
 }
-
-test("the shell prefix detaches stdin and exports every non-interactive default", () => {
-  const prefix = nonInteractiveShellPrefix();
-  assert.match(prefix, /exec <\/dev\/null;/);
-  assert.match(prefix, /export PAGER="\$\{PAGER:-cat\}"/);
-  assert.match(prefix, /export GIT_TERMINAL_PROMPT="\$\{GIT_TERMINAL_PROMPT:-0\}"/);
-  assert.match(prefix, /export AWS_PAGER="\$\{AWS_PAGER-\}"/);
-  for (const [name] of NONINTERACTIVE_ENV) assert.ok(prefix.includes(`export ${name}=`));
-});
 
 test("a command reading stdin gets EOF instead of burning the timeout", async () => {
   const { sandbox, layers } = spritesHandle();

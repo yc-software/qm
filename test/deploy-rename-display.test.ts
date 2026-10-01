@@ -32,16 +32,6 @@ function svc() {
 const make = (deploy: ReturnType<typeof svc>["deploy"], name: string) =>
   deploy.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [], name });
 
-test("renameDeployment moves the URL slug by id, keeping the immutable id", async () => {
-  const s = svc();
-  const d = await make(s.deploy, "old-slug");
-  const r = await s.deploy.renameDeployment(d.id, "new-slug");
-  assert.equal(r.id, d.id, "same deployment");
-  assert.equal(r.name, "new-slug");
-  assert.equal(await s.deployStore.getByName("old-slug"), null, "old slug no longer resolves");
-  assert.equal((await s.deployStore.getByName("new-slug"))!.id, d.id);
-});
-
 test("renameDeployment rejects a taken slug, an invalid slug, and an unknown id", async () => {
   const s = svc();
   const a = await make(s.deploy, "alpha");

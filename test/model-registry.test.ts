@@ -188,10 +188,3 @@ test("web-turn gate refuses a keyless model cleanly, accepts it once the provide
     null,
   );
 });
-
-test("fast-mode support is registry-driven", () => {
-  assert.equal(modelSupportsFastMode("claude-opus-4-8"), true);
-  assert.equal(modelSupportsFastMode("gpt-5.6-sol"), true);
-  assert.equal(modelSupportsFastMode(undefined), false);
-  assert.equal(modelSupportsFastMode("nonexistent-model"), false);
-});

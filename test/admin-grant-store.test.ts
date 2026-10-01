@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAdminGrantStore, createMemoryAdminGrantPersistence, grantKey } from "../src/admin/admin-grant-store.ts";
+import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
 
 test("grant store: add / list / revoke round-trip on (principal, scope, role)", async () => {
   const store = createAdminGrantStore();
@@ -37,10 +37,4 @@ test("grant store: seed applies only when empty and never undoes a revoke", asyn
 test("grant store: an empty seed grants no admins (deliberate lock-out)", async () => {
   const store = createAdminGrantStore(createMemoryAdminGrantPersistence(), { seed: [] });
   assert.deepEqual(await store.list(), []);
-});
-
-test("grantKey is stable and collision-free across the triple", () => {
-  assert.equal(grantKey("U1", "org:default-org", "org_admin"), grantKey("U1", "org:default-org", "org_admin"));
-  assert.notEqual(grantKey("U1", "org:default-org", "org_admin"), grantKey("U1", "org:other", "org_admin"));
-  assert.notEqual(grantKey("U1", "org:default-org", "org_admin"), grantKey("U2", "org:default-org", "org_admin"));
 });

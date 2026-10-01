@@ -1,6 +1,6 @@
 import type { SandboxHandle } from "./sandbox.ts";
 import { shq } from "../util/shell.ts";
-export const NONINTERACTIVE_ENV: ReadonlyArray<readonly [string, string]> = [
+const NONINTERACTIVE_ENV: ReadonlyArray<readonly [string, string]> = [
   ["PAGER", "cat"],
   ["GIT_PAGER", "cat"],
   ["GIT_EDITOR", "true"],

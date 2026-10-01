@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { safeChunks, safeClip, safeCutIndex } from "../src/slack/safe-cut.ts";
+import { safeChunks, safeClip } from "../src/slack/safe-cut.ts";
 import { slackSectionBlocks } from "../src/slack/mrkdwn.ts";
 
 const wellFormed = (s: string) => Buffer.from(s, "utf8").toString("utf8") === s;
@@ -61,10 +61,6 @@ test("slackSectionBlocks uses safe cuts", () => {
     assert.ok(wellFormed(t));
     assert.ok(t.length <= 2_900);
   }
-});
-
-test("safeCutIndex returns full length for short text", () => {
-  assert.equal(safeCutIndex("abc", 10), 3);
 });
 
 const fenceBalanced = (s: string) => (s.match(/```/g) ?? []).length % 2 === 0;

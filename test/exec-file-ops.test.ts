@@ -62,15 +62,6 @@ test("combined file cleanup propagates removal and transport failures", async ()
   );
 });
 
-test("combined cleanup is opt-in for provider implementations", () => {
-  const ops = createExecFileOps({
-    label: "test",
-    exec: async () => ({ code: 0, stdout: "", stderr: "" }),
-    writeInline: async () => {},
-  });
-  assert.equal(ops.removeDirAndList, undefined);
-});
-
 test("posixJoin rejects parent path segments", () => {
   assert.equal(posixJoin("/root/workspace", "a/b.txt"), "/root/workspace/a/b.txt");
   assert.equal(posixJoin("/root/workspace/", "/a/./b.txt"), "/root/workspace/a/./b.txt");

@@ -57,7 +57,7 @@ export interface CronPatch {
   sessionRef?: string | null;
 }
 
-export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
 
 export const STRANDED_FIRE_NOTE = "fire never completed — stranded by a restart or crash";
 

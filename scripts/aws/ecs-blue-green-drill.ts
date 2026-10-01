@@ -273,7 +273,7 @@ function rollbackActiveDeployment(config: QmConfig, arn: string): void {
   awsText(config, ["ecs", "stop-service-deployment", "--service-deployment-arn", arn, "--stop-type", "ROLLBACK"]);
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
+async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
   const { config } = loadConfigAt(args.configPath);
   const aws = requireAwsConfig(config);

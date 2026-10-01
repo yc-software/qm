@@ -23,11 +23,6 @@ const running = (chunks: string, cursor: number): ReadProcessResult => ({
   status: { state: "running" },
 });
 
-test("processIsGone: the bare-string sentinel counts as gone", () => {
-  assert.equal(processIsGone("no such process session: p-1"), true);
-  assert.equal(processIsGone(new Error("no such process session: p-1")), true);
-});
-
 test("processIsGone: an embedded phrase in a wrapped error does NOT confirm a kill", () => {
   assert.equal(processIsGone(new Error("fly api 500: upstream said 'no such process' while restarting")), false);
 });

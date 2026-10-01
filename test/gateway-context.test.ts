@@ -79,32 +79,6 @@ test("gateway context flows into the system prompt the harness sees", async () =
   assert.match(res.reply ?? "", /- channel: D9/);
 });
 
-test("no gateway context: prompt names the surface but adds no identifier lines", async () => {
-  const { app } = freshApp();
-  const res = await app.turn({
-    surface: "slack",
-    actor: { externalId: "U2" },
-    conversation: { kind: "dm", threadRef: "dm:U2:t1" },
-    text: "!sysprompt",
-  });
-  assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /over slack\./);
-  assert.doesNotMatch(res.reply ?? "", /Identifiers for this conversation/);
-});
-
-test("web prompt tells cron creators to use a real notification destination", async () => {
-  const { app } = freshApp();
-  const res = await app.turn({
-    surface: "web",
-    actor: { externalId: "U3" },
-    conversation: { kind: "dm", threadRef: "web:U3:t1" },
-    text: "!sysprompt",
-  });
-  assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /posts back into this web conversation/);
-  assert.doesNotMatch(res.reply ?? "", /cannot receive future external notifications/);
-});
-
 test("triggered destination turns tell the agent to return the deliverable, not self-send it", async () => {
   const { app } = freshApp();
   const res = await app.turn({

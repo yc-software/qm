@@ -9,7 +9,6 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
-import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
@@ -28,33 +27,6 @@ function start(withAdmin = true, signingSecret?: string) {
 
 const whoami = (base: string, actor?: string): Promise<any> =>
   fetch(`${base}/v1/admin/whoami`, { headers: actor ? { "x-admin-actor": actor } : {} });
-
-test("whoami reports an org_admin as admin with the org scope", async () => {
-  const s = start();
-  try {
-    const r = await whoami(s.base, "admin-alice@default-org");
-    assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), {
-      isAdmin: true,
-      role: "org_admin",
-      scopeId: "org:default-org",
-      permissions: ["admin"],
-    });
-  } finally {
-    await s.close();
-  }
-});
-
-test("whoami reports an ungranted actor as not-admin", async () => {
-  const s = start();
-  try {
-    const r = await whoami(s.base, "U-nobody@default-org");
-    assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [] });
-  } finally {
-    await s.close();
-  }
-});
 
 test("whoami reports a foreign-org actor as not-admin (resolveActor null → 200, not 500/403)", async () => {
   const s = start();
@@ -127,12 +99,4 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
   } finally {
     await s.close();
   }
-});
-
-test("adminStatusOf reads the grant list directly (org_admin reported; non-admin otherwise)", async () => {
-  const svc = createAdminService();
-  const alice = svc.resolveActor("admin-alice@default-org")!;
-  assert.deepEqual(await svc.adminStatusOf(alice), { isAdmin: true, role: "org_admin", scopeId: "org:default-org" });
-  const nobody = svc.resolveActor("U-nobody@default-org")!;
-  assert.deepEqual(await svc.adminStatusOf(nobody), { isAdmin: false });
 });

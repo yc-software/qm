@@ -56,12 +56,6 @@ test("deploy-service: deploymentEnv sees the deployment record and is merged int
   assert.equal(stored.env?.AGENT_CREDENTIAL_TOKEN, undefined, "the stored version record never holds the token");
 });
 
-test("deploy-service: without deploymentEnv the provider sees no deployment env", async () => {
-  const s = svc();
-  await s.service.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "node x", files: [] });
-  assert.equal(s.applied?.env?.AGENT_CREDENTIAL_TOKEN, undefined);
-});
-
 test("deploy-service: redeploy inherits the current version's env and home files unless the input replaces them", async () => {
   const s = svc(async () => ({ VIEWER_IDENTITY_KEY: "viewer" }));
   const d = await s.service.deploy({

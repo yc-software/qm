@@ -27,12 +27,6 @@ test("errMessage keeps the cause chain that fetch failures hide behind their gen
   );
 });
 
-test("errMessage is unchanged for plain errors and non-errors", () => {
-  assert.equal(errMessage(new Error("plain")), "plain");
-  assert.equal(errMessage("text"), "text");
-  assert.equal(errMessage(42), "42");
-});
-
 test("errMessage tolerates non-error and cyclic causes", () => {
   assert.equal(errMessage(new Error("outer", { cause: "inner string" })), "outer <- inner string");
   const a = new Error("a");

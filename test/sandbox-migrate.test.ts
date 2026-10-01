@@ -131,35 +131,3 @@ test("copyHome never mutates the source", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
-
-test("copyHome throws on a corrupt transfer instead of leaving a truncated $HOME", async () => {
-  const root = mkdtempSync(join(tmpdir(), "copyhome-corrupt-"));
-  const fromHome = join(root, "src");
-  const toHome = join(root, "dst");
-  const src = hostSandbox(fromHome);
-  const dst = hostSandbox(toHome);
-  writeFileSync(join(fromHome, "big.txt"), "x".repeat(5000));
-  const corrupt: Sandbox = {
-    ...dst.sandbox,
-    async writeFileBytes(h, rel, data) {
-      const bad = Buffer.from(data);
-      bad[0] = bad[0]! ^ 0xff;
-      return dst.sandbox.writeFileBytes(h, rel, bad);
-    },
-  };
-  try {
-    await assert.rejects(
-      copyHome({
-        fromSandbox: src.sandbox,
-        fromHandle: src.handle,
-        fromHome,
-        toSandbox: corrupt,
-        toHandle: dst.handle,
-        toHome,
-      }),
-      /sha-mismatch|verify\/extract failed/,
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});

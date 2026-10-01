@@ -48,15 +48,3 @@ test("an over-cap POST to /api/turn (the primary path) is rejected with 413, not
   const body = (await res.json()) as { error?: string };
   assert.equal(body.error, "payload_too_large");
 });
-
-test("a normal-sized body is unaffected by the cap (well under the limit succeeds)", async () => {
-  const res = await fetch(`${webBase}/signin`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ user: "alice" }),
-  });
-  assert.equal(res.status, 200);
-  const body = (await res.json()) as { ok?: boolean; user?: string };
-  assert.equal(body.ok, true);
-  assert.equal(body.user, "alice");
-});

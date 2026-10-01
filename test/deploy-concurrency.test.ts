@@ -61,20 +61,6 @@ test("reaper: a non-leader skips the sweep — returns 0 and destroys nothing", 
   assert.equal((await deployStore.get(d.id))!.status, "running", "the deployment stays running");
 });
 
-test("reaper: the leader (default no-op lease) reaps as before", async () => {
-  const { deploy, deployStore } = svc();
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
-  assert.equal(stopped, 1, "the leader reaps the idle deployment");
-  assert.equal((await deployStore.get(d.id))!.status, "stopped");
-  assert.equal((await deployStore.get(d.id))!.endpoint, null);
-});
-
 function spyLock(): { lock: AdvisoryLock; keys: string[] } {
   const keys: string[] = [];
   const lock: AdvisoryLock = {

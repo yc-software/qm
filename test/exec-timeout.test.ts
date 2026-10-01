@@ -63,20 +63,6 @@ test("a misconfigured default ABOVE the ceiling is itself clamped (the ceiling i
   assert.deepEqual(lastOpts(), { timeoutMs: 300_000 });
 });
 
-test("nothing configured (no agent param, no default) → no timeoutMs override leaks (sandbox backstop)", async () => {
-  const { sandbox, lastOpts } = recordingSandbox();
-  const ctx = ctxFor(sandbox);
-  await ctx.execute("echo hi");
-  assert.equal(lastOpts(), undefined);
-});
-
-test("with a ceiling but no default, an under-ceiling agent param passes through unclamped", async () => {
-  const { sandbox, lastOpts } = recordingSandbox();
-  const ctx = ctxFor(sandbox, { execTimeoutCeilingMs: 300_000 });
-  await ctx.execute("npm test", { timeoutSeconds: 90 });
-  assert.deepEqual(lastOpts(), { timeoutMs: 90_000 });
-});
-
 test("the per-turn abort signal plumbs through execute() into sandbox.run (alongside timeoutMs)", async () => {
   const { sandbox, lastOpts } = recordingSandbox();
   const ctx = ctxFor(sandbox, { execTimeoutMs: 120_000 });

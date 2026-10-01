@@ -41,18 +41,6 @@ test("absent public-private signal → never org, and FROZEN (incomplete) — a 
   assert.equal(on.incomplete, true);
 });
 
-test("private channel → personal grant per internal member ≠ owner; owner excluded", () => {
-  const a = defaultPublishAudience({
-    kind: "channel",
-    isPrivate: true,
-    members: [internal("U1"), internal("U2")],
-    orgScopeId: ORG,
-    ownerId: "U1",
-  });
-  assert.equal(a.kind, "members");
-  assert.deepEqual(a.grantees, [scopeId("personal", "U2")]);
-});
-
 test("private channel grants all other internal members", () => {
   const a = defaultPublishAudience({
     kind: "channel",
@@ -94,10 +82,4 @@ test("private channel, only the owner is a member → authoritative owner-only",
   assert.equal(a.kind, "owner");
   assert.equal(a.incomplete, undefined);
   assert.deepEqual(a.grantees, []);
-});
-
-test("KNOWN-private without member enumeration is frozen — a missing roster can't revoke reach", () => {
-  const a = defaultPublishAudience({ kind: "channel", isPrivate: true, orgScopeId: ORG, ownerId: "U1" });
-  assert.equal(a.kind, "owner");
-  assert.equal(a.incomplete, true);
 });

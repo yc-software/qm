@@ -34,7 +34,8 @@
         "scripts/slack-user-token.ts",
         "superserve/templates/qm-agent.ts",
         "superserve/templates/verify-qm-agent.ts",
-        "docs/qa/resource-search-demo.mjs"
+        "docs/qa/resource-search-demo.mjs",
+        ".codex/skills/test-audit/scripts/coverage-redundancy.mjs"
       ]
     },
     "desktop": {

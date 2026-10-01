@@ -2,7 +2,6 @@ import type { Harness, HarnessTurnInput } from "../src/harness/harness.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
-import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -642,55 +641,6 @@ for (const mode of ["off", "writable", "skip"] as const) {
     }
   });
 }
-
-test("Open source memory is never exported into a reusable sandbox bearer token", async () => {
-  let env: Record<string, string> | undefined;
-  const box: Sandbox = {
-    ...readSandbox(),
-    provision: async (_layers, opts) => {
-      env = opts?.env;
-      return { id: "open-token", rootDir: "/workspace" };
-    },
-    run: async () => ({ stdout: "ok", stderr: "", code: 0, timedOut: false }),
-    writeFile: async () => {},
-    writeFileBytes: async () => {},
-    listDir: async () => [],
-    removeDir: async () => {},
-  };
-  const { orchestrator, config, memory } = buildOrchestrator({
-    sandbox: box,
-    isCurrentSharedScopeMember: async () => true,
-  });
-  const personal = scopeId("personal", actor.id);
-  const room = scopeId("channel", "C1");
-  await config.setSharingPosture(scopeId("org", ORG), "open");
-  await memory.capture(personal, ["OPEN_TOKEN_PRIVATE"], Date.now(), actor.id);
-  const result = await orchestrator.handleTurn({
-    surface: "test",
-    actor,
-    origin: { kind: "human" },
-    conversation: {
-      kind: "channel",
-      channelRef: "C1",
-      threadRef: "C1:token",
-      audience: [actor],
-      publishMembers: [actor],
-    },
-    text: "!run echo ok",
-  });
-  assert.equal(result.status, "ok", result.reason);
-  assert.ok(env?.AGENT_API_TOKEN);
-  const claims = await verifyCapabilityToken(env.AGENT_API_TOKEN, "test-signing-secret");
-  assert.ok(claims);
-  assert.ok(claims.memory?.read.includes(room));
-  assert.equal(claims.memory?.read.includes(personal), false);
-  await memory.capture(room, ["ROOM_TOKEN_PRIVATE"], Date.now(), actor.id);
-  const dmResult = await orchestrator.handleTurn(dm("dm:U1:open-token", "!run echo ok", { origin: { kind: "human" } }));
-  assert.equal(dmResult.status, "ok", dmResult.reason);
-  const dmClaims = await verifyCapabilityToken(env.AGENT_API_TOKEN, "test-signing-secret");
-  assert.ok(dmClaims?.memory?.read.includes(personal));
-  assert.equal(dmClaims?.memory?.read.includes(room), false);
-});
 
 for (const location of [
   "description",

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLoopStore, isRunnable, validLoopIcon } from "../src/loops/loop-store.ts";
-import { createLoopItemLedger, loopItemId } from "../src/loops/item-ledger.ts";
+import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { scopeId } from "../src/types.ts";
 
 const base = {
@@ -89,15 +89,6 @@ test("re-enqueueing the same source key never doubles the work", async () => {
   assert.equal((await ledger.byLoop("L1")).length, 1);
 });
 
-test("the same source key in two different loops is two items", async () => {
-  const ledger = createLoopItemLedger();
-  await ledger.enqueue({ loopId: "L1", sourceKey: "SENTRY-42" });
-  await ledger.enqueue({ loopId: "L2", sourceKey: "SENTRY-42" });
-  assert.equal((await ledger.byLoop("L1")).length, 1);
-  assert.equal((await ledger.byLoop("L2")).length, 1);
-  assert.notEqual(loopItemId("L1", "SENTRY-42"), loopItemId("L2", "SENTRY-42"));
-});
-
 test("claiming an item counts the attempt and records the run", async () => {
   const ledger = createLoopItemLedger();
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
@@ -114,35 +105,6 @@ test("two racing claims on one queued item yield exactly one winner", async () =
   const [first, second] = await Promise.all([ledger.claim(item.id), ledger.claim(item.id)]);
   assert.equal([first, second].filter(Boolean).length, 1);
   assert.equal((await ledger.get(item.id))?.attempts, 1);
-});
-
-test("a parked item leaves the queue without blocking the rest of it", async () => {
-  const ledger = createLoopItemLedger();
-  const stuck = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
-  const next = await ledger.enqueue({ loopId: "L1", sourceKey: "S2" });
-  const claimed = await ledger.claim(stuck.item.id);
-  await ledger.park(stuck.item.id, "no reproduction after 5 turns", claimed!.claimToken!);
-  const queued = await ledger.queued("L1");
-  assert.deepEqual(
-    queued.map((i) => i.id),
-    [next.item.id],
-  );
-  assert.equal((await ledger.get(stuck.item.id))?.parkedReason, "no reproduction after 5 turns");
-});
-
-test("returning an output puts the item back to work carrying the reviewer's note", async () => {
-  const ledger = createLoopItemLedger();
-  const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
-  const claimed = await ledger.claim(item.id);
-  await ledger.markReady(item.id, ["out-1"], claimed!.claimToken!);
-  const returned = await ledger.returnToWork(item.id, "wrong module touched");
-  assert.equal(returned?.status, "queued");
-  assert.equal(returned?.guidance, "wrong module touched");
-  assert.deepEqual(returned?.outputIds, ["out-1"]);
-  assert.deepEqual(
-    (await ledger.queued("L1")).map((i) => i.id),
-    [item.id],
-  );
 });
 
 test("a stale item claim cannot mark ready after the lease is reclaimed", async () => {

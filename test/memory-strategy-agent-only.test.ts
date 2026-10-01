@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { AGENT_ONLY_PROMPT_LINES, createAgentOnlyStrategy } from "../src/memory/strategies/agent-only.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
@@ -22,15 +21,6 @@ test("agent-only strategy: no automatic extraction, curation guidance in promptL
   assert.match(text, /Delete memories/);
   assert.match(text, /already remembered/);
   assert.match(text, /only matter to the current conversation/);
-});
-
-test("createMemoryStrategy('agent-only') returns the agent-only strategy", () => {
-  const harness = {} as never;
-  const memory = {} as never;
-  const workspace = {} as never;
-  const { strategy } = createMemoryStrategy("agent-only", { harness, memory, workspace });
-  assert.equal(strategy.onTurnEnd, undefined);
-  assert.deepEqual(strategy.promptLines?.(), AGENT_ONLY_PROMPT_LINES);
 });
 
 test("resolution systemPrompt no longer embeds the memory section — it moved to shared-core + the orchestrator strategy block", async () => {

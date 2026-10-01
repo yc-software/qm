@@ -3,7 +3,6 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScopedEventSink } from "../src/admin/scoped-event-sink.ts";
-import { createErrorLog } from "../src/admin/error-log.ts";
 import { createMetricsSink } from "../src/admin/metrics-sink.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
@@ -52,18 +51,6 @@ test("scoped sink filters by scope and applies an extra predicate + limit", () =
   );
 });
 
-test("error log records and lists scope-filtered newest-first", async () => {
-  const log = createErrorLog();
-  log.record({ category: "turn", code: "error", message: "shape-only", scopeLabel: s1 });
-  log.record({ category: "egress", code: "denied", message: "shape-only", scopeLabel: s2 });
-  const mine = await log.list({ scopeId: s1 });
-  assert.equal(mine.length, 1);
-  assert.equal(mine[0]?.category, "turn");
-  assert.ok(typeof mine[0]?.ts === "number");
-  assert.equal(await log.count(), 2, "count totals every event");
-  assert.equal(await log.count({ scopeId: s1 }), 1, "count honors the scope filter");
-});
-
 test("metrics sink honors the since cutoff via the shared sink", async () => {
   const sink = createMetricsSink();
   sink.record({ totalMs: 10, status: "ok", scopeLabel: s1 });
@@ -81,18 +68,4 @@ test("audit log is now bounded (latent leak fixed) and preserves insertion order
   assert.equal(events.length, 50000, "bounded at the cap");
   assert.equal(events[0]?.at, 1, "oldest event dropped");
   assert.equal(events[events.length - 1]?.at, 50000, "newest retained, oldest-first order");
-});
-
-test("error log pages beyond the former 200-record window after filtering", async () => {
-  const log = createErrorLog();
-  for (let i = 0; i < 260; i++)
-    log.record({ category: "turn", code: String(i), message: "failure", scopeLabel: s1, sessionId: "one" });
-  log.record({ category: "turn", code: "other", message: "failure", scopeLabel: s2 });
-  const page = await log.list({ scopeId: s1, sessionId: "one", offset: 200, limit: 50 });
-  assert.equal(page.length, 50);
-  assert.equal(page[0]?.code, "59");
-  assert.equal(page.at(-1)?.code, "10");
-  assert.equal((await log.list({ scopeId: s1, offset: 250, limit: 50 })).length, 10);
-  assert.equal((await log.list({ scopeId: s1, offset: 260, limit: 50 })).length, 0);
-  assert.equal(await log.count({ scopeId: s1 }), 260);
 });

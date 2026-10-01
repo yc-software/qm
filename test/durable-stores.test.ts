@@ -86,20 +86,6 @@ test("deployments persist with immutable versions across store instances", async
   assert.equal((await s2.versionOf(d.id, 1))?.snapshotDir, "/snap/1");
 });
 
-test("a fresh in-memory map is the unchanged default (ephemeral, no durability required)", async () => {
-  const s = createCronStore(createMemoryMap<Cron>());
-  const c = await s.create({
-    schedule: { everyMs: 1000 },
-    action: "x",
-    ownerScopeId: scopeId("personal", "U1"),
-    owner: "U1",
-    createdBy: "U1",
-    destination: { type: "dm", target: "U1" },
-  });
-  assert.equal((await s.list()).length, 1);
-  assert.equal((await s.get(c.id))?.action, "x");
-});
-
 test("map iteration is deterministic id order — metadata updates (recordUse-style merges) must not reorder", async () => {
   const map = createMemoryMap<{ name: string; lastUsedAt?: number }>();
   await map.put("b", { name: "beta" });

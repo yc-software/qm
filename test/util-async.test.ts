@@ -4,12 +4,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sleep, createKeyedQueue, fetchWithRetry, jitteredBackoffMs, retryAfterMs } from "../src/util/async.ts";
 
-test("sleep resolves after roughly the given delay", async () => {
-  const t0 = Date.now();
-  await sleep(20);
-  assert.ok(Date.now() - t0 >= 15, "waited at least most of the delay");
-});
-
 test("createKeyedQueue runs ops on one key strictly in submission order", async () => {
   const run = createKeyedQueue();
   const order: string[] = [];

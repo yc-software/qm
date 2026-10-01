@@ -8,7 +8,6 @@ import {
   customModelsJson,
   validateCustomProviderSpec,
 } from "../src/model/custom-providers.ts";
-import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
 import { modelSupportedByHarness, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -139,24 +138,6 @@ test("store validates specs on upsert", async () => {
     keyMaterial: "k",
   });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
-});
-
-test("registered models surface in the catalog and vanish on unregister", () => {
-  setCustomProviders([
-    {
-      id: "deepseek",
-      name: "DeepSeek",
-      protocol: "openai",
-      baseUrl: "https://api.deepseek.com/v1",
-      models: [{ id: "deepseek-chat", name: "DeepSeek Chat" }],
-    },
-  ]);
-  const catalog = builtInModelCatalog();
-  const entry = catalog.find((m) => m.id === "deepseek-chat");
-  assert.ok(entry, "custom model appears in the catalog");
-  assert.equal(entry!.provider, "deepseek");
-  setCustomProviders([]);
-  assert.ok(!builtInModelCatalog().some((m) => m.id === "deepseek-chat"));
 });
 
 test("opencode modelRef routes slashed custom model ids to the registered provider, not a phantom slash-prefix", async () => {

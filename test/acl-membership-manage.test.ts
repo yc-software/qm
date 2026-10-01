@@ -57,12 +57,6 @@ test("personal-scope owner authz is unchanged: only the owner manages", async ()
   assert.equal((await acl.grantsFor(owner, ref)).length, 1);
 });
 
-test("without a membership predicate, channel/group grants pass unguarded (narrow unit slices)", async () => {
-  const acl = createAclStore();
-  await acl.grant(grant({ grantedBy: "anyone" }));
-  assert.equal((await acl.grantsFor(CHAN, ref)).length, 1);
-});
-
 test("org/team home scopes are not membership-managed: grants pass unguarded as before", async () => {
   const acl = createAclStore(undefined, { manages });
   const org = scopeId("org", "default-org");

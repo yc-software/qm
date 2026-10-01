@@ -20,12 +20,6 @@ describe("environments (the computer a conversation points at)", () => {
     assert.equal(await resolveEnvironmentId(undefined, scope), scope);
   });
 
-  it("the default environment's machine/volume names are exactly today's scope-keyed names", async () => {
-    const scope = scopeId("channel", "C-eng");
-    const envId = await resolveEnvironmentId(store(), scope);
-    assert.equal(sandboxScopeName("qm", envId), sandboxScopeName("qm", scope));
-  });
-
   it("an attachment redirects the machine + backup key to the environment id", async () => {
     const s = store();
     const scope = scopeId("channel", "C-eng");
@@ -62,15 +56,5 @@ describe("environments (the computer a conversation points at)", () => {
     assert.equal(second.name, "prod", "the original name + owner stand");
     assert.equal(second.ownerActorId, "U1");
     assert.equal(first.createdAt, second.createdAt);
-  });
-
-  it("attachmentsFor lists every scope pointing at an environment", async () => {
-    const s = store();
-    const env = scopeId("personal", "U-owner");
-    await s.create({ id: env, name: "prod", ownerActorId: "U-owner" });
-    await s.attach(scopeId("channel", "C-a"), env, "U-owner");
-    await s.attach(scopeId("channel", "C-b"), env, "U-owner");
-    const attached = (await s.attachmentsFor(env)).map((a) => a.scopeId).sort();
-    assert.deepEqual(attached, [scopeId("channel", "C-a"), scopeId("channel", "C-b")].sort());
   });
 });

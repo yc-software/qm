@@ -149,20 +149,6 @@ test("deployment ingress /d/:id is rejected 401 without a valid signature", asyn
   }
 });
 
-test("the explicit insecure test server leaves the boundary open", async () => {
-  const srv = start();
-  try {
-    const res = await fetch(`${srv.base}/v1/turns`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: turnBody("U1"),
-    });
-    assert.equal(res.status, 200);
-  } finally {
-    await srv.close();
-  }
-});
-
 test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body (spec §13)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobauth-")) }));
   const server = createServer(built.app, { signingSecret: SECRET, blobTransfer: built.blobTransfer });

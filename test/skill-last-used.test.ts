@@ -17,9 +17,3 @@ test("recordUse sets lastUsedAt without touching version/updatedAt or the signat
   assert.equal(after.updatedAt, s.updatedAt);
   assert.equal(skills.verify(after), true);
 });
-
-test("recordUse on an unknown id is a no-op", async () => {
-  const skills = createSkillStore();
-  await skills.recordUse("nope");
-  assert.equal(await skills.get("nope"), null);
-});

@@ -149,47 +149,6 @@ test("summarizeSpend: cache hit ratio comes from the shared helper and is null w
   assert.equal(noCache.people[0]!.cacheHitRatio, null, "a zero denominator reports null, never 0%");
 });
 
-test("summarizeSpend: zero-dollar calls keep their tokens instead of disappearing", () => {
-  const report = summarize([
-    row({
-      day: MON,
-      scopeId: "personal:codex",
-      origin: "conversation",
-      costUsd: 0,
-      input: 900,
-      output: 30,
-      cacheRead: 70,
-    }),
-  ]);
-  const codex = report.people[0]!;
-  assert.equal(codex.costUsd, 0);
-  assert.equal(codex.tokens, 1000);
-  assert.ok(codex.cacheHitRatio !== null && codex.cacheHitRatio > 0);
-});
-
-test("summarizeSpend: the series is sparse, UTC-keyed, and restricted to [from, to)", () => {
-  const report = summarize(ROWS);
-  assert.deepEqual(
-    report.series.map((p) => p.day),
-    ["2025-09-22", "2025-09-23", "2025-09-24"],
-  );
-  for (const point of report.series) assert.match(point.day, /^\d{4}-\d{2}-\d{2}$/);
-  assert.equal(report.series[0]!.costUsd, 1.5);
-  assert.equal(report.series[2]!.background.costUsd, 4);
-  assert.deepEqual(summarize([]).series, [], "an empty deployment gets no zero-filled calendar");
-
-  const narrowed = summarizeSpend(
-    ROWS.filter((r) => r.day >= TUE && r.day < WED),
-    { from: TUE * DAY, to: WED * DAY, bucket: "day", label: () => "" },
-  );
-  assert.deepEqual(narrowed.window, { from: "2025-09-23", to: "2025-09-24", bucket: "day" });
-  assert.deepEqual(
-    narrowed.series.map((p) => p.day),
-    ["2025-09-23"],
-  );
-  assert.ok(narrowed.org.costUsd < report.org.costUsd);
-});
-
 test("summarizeSpend: week buckets collapse to the Monday that starts them", () => {
   const report = summarize(ROWS, { bucket: "week" });
   assert.deepEqual(

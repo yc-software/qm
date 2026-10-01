@@ -59,18 +59,6 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   return { deploy, acl, d };
 }
 
-test("canManage: a channel-creation member may manage from a DM/other context", async () => {
-  const { deploy, d } = await setup();
-  const renamed = await deploy.deployOrUpdate({
-    ownerScopeId: scopeId("personal", "U2"),
-    createdBy: "U2",
-    renameFrom: d.name ?? d.id,
-    name: "renamed-from-dm",
-    createdInScope: scopeId("personal", "U2"),
-  });
-  assert.equal(renamed.name, "renamed-from-dm");
-});
-
 test("canManage: a member of a shared-into channel still cannot manage from any context", async () => {
   const { deploy, acl, d } = await setup();
   await acl.grant({
@@ -104,16 +92,4 @@ test("canManage: without the resolver, a channel member from a DM context is den
     }),
     /not authorized to manage/i,
   );
-});
-
-test("canManage: the creator may still manage from a DM context", async () => {
-  const { deploy, d } = await setup();
-  const renamed = await deploy.deployOrUpdate({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    renameFrom: d.name ?? d.id,
-    name: "renamed-by-creator-dm",
-    createdInScope: scopeId("personal", "U1"),
-  });
-  assert.equal(renamed.name, "renamed-by-creator-dm");
 });

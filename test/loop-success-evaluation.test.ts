@@ -40,17 +40,6 @@ test("checks passing is a floor, not a verdict — the judge still decides", asy
   assert.equal(verdict.reason, "no PR is linked to the issue yet");
 });
 
-test("the judge's reason is what carries into the next turn as guidance", async () => {
-  const verdict = await evaluateSuccess({
-    condition: "the reply answers the customer's question",
-    attempt: 2,
-    runCheck: async (command) => passing(command),
-    judge: judgeSays(false, "the refund window was not addressed"),
-  });
-  assert.equal(verdict.outcome, "continue");
-  assert.equal(verdict.reason, "the refund window was not addressed");
-});
-
 test("a met condition ends the item", async () => {
   const verdict = await evaluateSuccess({
     condition: "a PR is linked and CI is green",

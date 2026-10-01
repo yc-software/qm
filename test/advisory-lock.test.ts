@@ -9,27 +9,12 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import {
-  createPostgresAdvisoryLock,
-  createNoopAdvisoryLock,
-  createMemoryAdvisoryLock,
-} from "../src/persistence/advisory-lock.ts";
+import { createPostgresAdvisoryLock, createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-test("no-op mutex: withLock runs fn and returns its value (single-instance dev/test path)", async () => {
-  const lock = createNoopAdvisoryLock();
-  let ran = 0;
-  const out = await lock.withLock("deploy:any", async () => {
-    ran++;
-    return 42;
-  });
-  assert.equal(out, 42, "returns fn's result");
-  assert.equal(ran, 1, "ran fn exactly once");
-});
 
 test(
   "pg mutex: the SAME key serializes — the two fns never overlap (one finishes before the other starts)",

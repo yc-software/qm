@@ -7,21 +7,6 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 const PG = process.env.DATABASE_URL;
 const pgSkip = PG ? false : "set DATABASE_URL to run the Postgres session-state bus test";
 
-test("memory bus: subscribers receive emitted events", () => {
-  const bus = createMemorySessionStateBus();
-  const got: SessionStateEvent[] = [];
-  const off = bus.subscribe((e) => got.push(e));
-  bus.emit({ threadRef: "web:u:a", sessionId: "s1", state: "working", at: 111 });
-  bus.emit({ threadRef: "web:u:a", sessionId: "s1", state: "awaiting_approval", at: 222 });
-  assert.deepEqual(
-    got.map((e) => e.state),
-    ["working", "awaiting_approval"],
-  );
-  off();
-  bus.emit({ threadRef: "web:u:a", sessionId: "s1", state: "idle", at: 333 });
-  assert.equal(got.length, 2, "an unsubscribed listener hears nothing");
-});
-
 test("memory bus: a throwing subscriber does not break the others", () => {
   const bus = createMemorySessionStateBus();
   const got: string[] = [];

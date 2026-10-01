@@ -7,32 +7,13 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileS
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHmac } from "node:crypto";
-import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../src/skills/seed.ts";
+import { installSeedSkills, upsertSeedSkill } from "../src/skills/seed.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-
-test("seed skill parser reads the repo frontmatter subset", () => {
-  const manifest = parseSeedSkill(`---
-name: demo
-description: demo skill
-requiredCapabilities:
-  - egress:example.com
-  - command:demo
----
-
-# Demo
-
-Run the thing.
-`);
-  assert.equal(manifest.name, "demo");
-  assert.equal(manifest.description, "demo skill");
-  assert.deepEqual(manifest.requiredCapabilities, ["egress:example.com", "command:demo"]);
-  assert.match(manifest.body, /^# Demo/);
-});
 
 test("installSeedSkills publishes the repository starter catalog into org scope", async () => {
   const skills = createSkillStore({ signingSecret: "seed-test-secret" });

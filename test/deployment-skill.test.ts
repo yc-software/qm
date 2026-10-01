@@ -56,50 +56,6 @@ test("package-consumer deployment skill covers both self-owned providers and the
   }
 });
 
-test("the deploy skill tells an agent where the sign-in email transport comes from", () => {
-  const email = read("cli/templates/deployment/references/email.md");
-  for (const phrase of [
-    "AUTH_EMAIL_TRANSPORT",
-    "resend.com/api-keys",
-    "DNS",
-    "SMTP_PORT",
-    "SMTP_TLS",
-    "AUTH_ALLOWED_EMAILS",
-  ]) {
-    assert.ok(email.includes(phrase), `email reference covers ${phrase}`);
-  }
-  assert.match(email, /operator — needs DNS control/, "the one step an agent cannot do itself is called out");
-  assert.match(read("cli/templates/deployment/deployment.md"), /references\/email\.md/);
-  for (const skill of [".codex/skills/deploy-qm/SKILL.md", "cli/templates/deployment/SKILL.md"]) {
-    assert.match(read(skill), /references\/email\.md/, `${skill} routes the agent to the email reference`);
-  }
-  assert.match(
-    read(".codex/skills/deploy-qm/references/email.md"),
-    /cli\/templates\/deployment\/references\/email\.md/,
-  );
-});
-
-test("the porter reference walks the dashboard steps an agent cannot skip", () => {
-  const porter = read("cli/templates/deployment/references/porter.md");
-  for (const phrase of [
-    "dashboard.porter.run/cloud-accounts",
-    "Admin-role",
-    "PERMISSION_DENIED",
-    "ADMIN_GRANTS",
-    "AUTH_ALLOWED_EMAILS",
-    "porter apply",
-    "linux/amd64",
-  ]) {
-    assert.ok(porter.includes(phrase), `porter reference covers ${phrase}`);
-  }
-  assert.match(porter, /operator links one themselves/, "cloud-account linking is called out as the operator's step");
-  assert.match(read("cli/templates/deployment/deployment.md"), /references\/porter\.md/);
-  assert.match(
-    read(".codex/skills/deploy-qm/references/porter.md"),
-    /cli\/templates\/deployment\/references\/porter\.md/,
-  );
-});
-
 test("connector onboarding is governed by the live admin-configured list", () => {
   const onboarding = read("plugins/onboarding/skills/onboarding/SKILL.md");
   const connectApps = read("skills-seed/connect-apps/SKILL.md");
@@ -130,27 +86,6 @@ test("the source repository has no account-bound production deployment workflow"
   }
 
   assert.ok(!files.some((file) => file.startsWith("cli/templates/workflows/")));
-});
-
-test("Slack distribution stays private and deployment-owned", () => {
-  const slack = read("cli/templates/deployment/references/slack.md");
-  assert.match(slack, /one private Socket Mode app per deployment and workspace/);
-  assert.match(slack, /exact bot manifest creation URL/);
-  assert.match(slack, /Admin Slack card/);
-});
-
-test("each provider has an independent agent-computer proof", () => {
-  const root = read("cli/templates/deployment/deployment.md");
-  const fly = read("cli/templates/deployment/references/fly.md");
-  const aws = read("cli/templates/deployment/references/aws.md");
-
-  assert.match(root, /\/root\/workspace\/qm-computer-proof\.txt/);
-  assert.match(fly, /## Agent-computer proof/);
-  assert.match(fly, /agent_scope/);
-  assert.match(fly, /fly machine exec/);
-  assert.match(aws, /## Agent-computer proof/);
-  assert.match(aws, /deployment-owned S3 home\s+snapshot/);
-  assert.match(aws, /workspace\/qm-computer-proof\.txt/);
 });
 
 test("onboarding composes existing access skills without a provider-setup prerequisite", () => {

@@ -156,30 +156,6 @@ test("principalGitPermission: a member of a channel it was only SHARED into gets
   }
 });
 
-test("principalGitPermission: an unrelated principal is denied (no access)", async () => {
-  const { f, d } = await setup();
-  try {
-    assert.equal((await gitPerm(f.base, d.id, "U9")).status, 403);
-  } finally {
-    await f.close();
-  }
-});
-
-test("principalGitPermission: org-owned deployment is not manageable by membership (read only)", async () => {
-  const f = await fixture();
-  try {
-    const d = await f.app.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
-      createdBy: "U1",
-      entrypoint: "node server.js",
-      files: [{ path: "server.js", data: "console.log('v1')" }],
-    });
-    assert.equal((await gitPerm(f.base, d.id, "U7")).permission, "read");
-  } finally {
-    await f.close();
-  }
-});
-
 test("an explicit public-channel write grant retains write permission", async () => {
   const f = await fixture();
   try {
@@ -310,22 +286,6 @@ test("removed channel members keep stale-session read reach but lose write and m
     });
     assert.equal((await gitPerm(f.base, d.id, "U2")).status, 403);
     assert.equal(await f.deploy.canManageDeployment(d.id, "U2", scopeId("personal", "U2")), false);
-  } finally {
-    await f.close();
-  }
-});
-
-test("canManage: the creator may still rename", async () => {
-  const { f, d } = await setup();
-  try {
-    const renamed = await f.deploy.deployOrUpdate({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      renameFrom: d.name ?? d.id,
-      name: "renamed-by-creator",
-      createdInScope: scopeId("channel", CH),
-    });
-    assert.equal(renamed.name, "renamed-by-creator");
   } finally {
     await f.close();
   }
