@@ -9,7 +9,7 @@ test("the loaded conversation renders one assistant beside the source thread", (
   const page = inbox.match(/function itemPageTpl[\s\S]*?function keepingChatLogsPinned/)?.[0] ?? "";
   assert.match(
     page,
-    /\$\{contextTpl\(item\)\}\s*\$\{draftMessageTpl\(item\)\}[\s\S]*?inbox-item-thread[\s\S]*?\$\{detail\}[\s\S]*?item.detailLoaded && !usesOutputReview\(item\)[\s\S]*?<aside class="inbox-item-aside" aria-label="Conversation assistant">\$\{chatTpl\(item\)\}<\/aside>/,
+    /\$\{contextTpl\(item\)\}\s*\$\{draftMessageTpl\(item\)\}[\s\S]*?inbox-item-thread[\s\S]*?\$\{detail\}[\s\S]*?item.detailLoaded \? html`[\s\S]*?<aside class="inbox-item-aside" aria-label="Conversation assistant">\$\{chatTpl\(item\)\}<\/aside>/,
   );
   assert.equal(page.match(/chatTpl\(item\)/g)?.length, 1);
 });

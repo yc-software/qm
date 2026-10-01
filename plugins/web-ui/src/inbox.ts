@@ -231,7 +231,6 @@ const draftConflicts = new Map<string, number>();
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
 const acting = new Set<string>();
 const chatting = new Set<string>();
-const chatDrafts = new Map<string, string>();
 
 let archiveToastHost: HTMLDivElement | null = null;
 let archiveToastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -631,23 +630,14 @@ async function toggleSelection(id: string): Promise<void> {
   }
 }
 
-async function decideReview(
-  item: InboxItem,
-  output: ReviewOutput,
-  decision: "ship" | "return",
-  note: string,
-): Promise<void> {
+async function shipReview(item: InboxItem, output: ReviewOutput): Promise<void> {
   if (acting.has(item.id)) return;
-  if (decision === "return" && !note.trim()) {
-    notify("Add a note describing what should change.");
-    return;
-  }
   acting.add(item.id);
   drawAll();
   try {
     const result = await api<{ output: ReviewOutput }>(
       `/api/loops/${encodeURIComponent(item.loopId)}/outputs/${encodeURIComponent(output.id)}/decide`,
-      { method: "POST", body: JSON.stringify({ decision, note }) },
+      { method: "POST", body: JSON.stringify({ decision: "ship", note: "" }) },
     );
     const messages: Record<string, string> = { shipped: "Action completed", returned: "Changes requested" };
     notify(messages[result.output.state] ?? "Awaiting confirmation. Check the Loop before retrying.");
@@ -743,24 +733,11 @@ function artifactTpl(item: InboxItem, output: ReviewOutput, members: number): Te
     ${
       output.state === "ready"
         ? html`<div class="inbox-artifact-actions">
-            <input
-              aria-label="Requested changes"
-              placeholder="What should change?"
-              .value=${chatDrafts.get(output.id) ?? ""}
-              @input=${(event: Event) => chatDrafts.set(output.id, (event.target as HTMLInputElement).value)}
-            />
-            <button
-              class="btn"
-              ?disabled=${acting.has(item.id)}
-              @click=${() => void decideReview(item, output, "return", chatDrafts.get(output.id) ?? "")}
-            >
-              Request changes
-            </button>
             <button
               class="btn primary"
               ?disabled=${acting.has(item.id)}
               ${members > 1 ? tip(`Resolves all ${members}`) : nothing}
-              @click=${() => void decideReview(item, output, "ship", "")}
+              @click=${() => void shipReview(item, output)}
             >
               ${reviewActionLabel(output.shipAction)}
             </button>
@@ -770,14 +747,14 @@ function artifactTpl(item: InboxItem, output: ReviewOutput, members: number): Te
   </section>`;
 }
 
-function reviewTpl(item: InboxItem): TemplateResult {
+function reviewTpl(item: InboxItem, withChat = true): TemplateResult {
   if (!item.detailLoaded) return html`<div class="empty compact">Loading review…</div>`;
   const outputs = item.outputs ?? [];
   const members = groupOf(item).length;
   return html`<div class="inbox-generic-review">
     ${subjectTpl(item)}
     ${!outputs.length && item.proposalData ? html`<pre class="inbox-proposal-data">${JSON.stringify(item.proposalData, null, 2)}</pre>` : nothing}
-    ${outputs.map((output) => artifactTpl(item, output, members))} ${chatTpl(item)}
+    ${outputs.map((output) => artifactTpl(item, output, members))} ${withChat ? chatTpl(item) : nothing}
   </div>`;
 }
 
@@ -2055,7 +2032,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
   const grouped = groupOf(item).length > 1 ? subjectTpl(item) : nothing;
   let detail: TemplateResult;
   if (!item.detailLoaded) detail = html`<div class="empty compact">Loading message…</div>`;
-  else if (usesOutputReview(item)) detail = reviewTpl(item);
+  else if (usesOutputReview(item)) detail = reviewTpl(item, false);
   else
     detail = html`${grouped} ${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : nothing}`;
   return html`
@@ -2079,7 +2056,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         ${detail}
       </div>
     </div>
-    ${item.detailLoaded && !usesOutputReview(item) ? html`<aside class="inbox-item-aside" aria-label="Conversation assistant">${chatTpl(item)}</aside>` : nothing}
+    ${item.detailLoaded ? html`<aside class="inbox-item-aside" aria-label="Conversation assistant">${chatTpl(item)}</aside>` : nothing}
   `;
 }
 
@@ -2164,7 +2141,7 @@ function drawFull(): void {
   }
   syncInboxUrl(openSentEmail?.id ?? fullSurface.selectedId);
   const host = fullSurface.host;
-  host.classList.toggle("inbox-thread-page", Boolean(openItem?.detailLoaded && !usesOutputReview(openItem)));
+  host.classList.toggle("inbox-thread-page", Boolean(openItem?.detailLoaded));
   const surface = fullSurface;
   let page: TemplateResult | typeof nothing;
   if (openItem) page = itemPageTpl(openItem);

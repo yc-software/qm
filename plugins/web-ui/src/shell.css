@@ -13160,20 +13160,12 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .inbox-artifact-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  justify-content: flex-end;
   padding-top: 4px;
 }
-.inbox-artifact-actions input {
-  flex: 1;
-  min-width: 180px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: var(--font-12-5);
+.inbox-item-thread .inbox-generic-review {
+  padding: 0;
+  max-width: none;
 }
 
 .loop-ingestion {
