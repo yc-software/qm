@@ -10964,6 +10964,32 @@ h3.ambient-field-label {
 .loop-triage .loop-autopilot.on .loop-autopilot-switch {
   background: var(--cta);
 }
+.loop-triage-preview {
+  margin-top: 12px;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: 10px;
+  padding: 6px 10px 8px;
+}
+.loop-triage-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0 6px;
+  color: var(--muted-foreground, #667085);
+  font-size: 12px;
+}
+.loop-triage-preview-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted-foreground, #667085);
+}
+.loop-triage .loop-playbook-actions {
+  justify-content: flex-end;
+}
+.loop-triage .loop-success-condition {
+  margin-right: auto;
+}
 .loop-triage-instructions {
   margin-top: 8px;
   font-family: inherit;

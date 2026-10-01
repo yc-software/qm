@@ -35,8 +35,10 @@ import {
   heldMembers,
   parseTriageDecisions,
   planTriage,
+  previewWork,
   triageWork,
 } from "./triage.ts";
+import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
 
 export interface LoopFireDeps {
@@ -86,9 +88,12 @@ export interface LoopFireService {
     actorId: string,
   ): Promise<ItemTurnResult>;
   shipOutput(loopId: string, outputId: string, actorId: string, note?: string): Promise<LoopOutput | null>;
+  previewTriage(loop: Loop, triage: Loop["triage"]): Promise<TriagePreview[]>;
   returnOutput(loopId: string, outputId: string, actorId: string, note: string): Promise<LoopOutput | null>;
   sweepStale(now: number): Promise<void>;
 }
+
+export type TriagePreview = { id: string } & TriagePatch;
 
 function loopFireThreadRef(loopId: string, fireKey: string): string {
   return `loop:${loopId}:fire:${hashId([fireKey], 12)}`;
@@ -461,6 +466,7 @@ function shipPrompt(loop: Loop, output: LoopOutput, note?: string): string {
     "```untrusted-data",
     data,
     "```",
+    "If a skill named after this action is available, load it and follow it to carry out the action.",
     "If the action is already done (e.g. the PR was already opened as ready), say so and stop.",
     "[End loop ship]",
   ].join("\n");
@@ -508,23 +514,50 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     });
   }
 
+  async function decideTriage(
+    loop: Loop,
+    work: { open: LoopItem[]; pending: LoopItem[]; context: LoopItem[] },
+    fireKey: string,
+    threadRef: string,
+  ): Promise<Map<string, TriagePatch>> {
+    const outcome = await stageTurn(
+      loop,
+      fireKey,
+      threadRef,
+      triagePrompt(loop, work.context, work.pending),
+      undefined,
+      { readOnly: true },
+    );
+    const failure = stageFailure("triage", outcome);
+    if (failure) throw failure.error;
+    const parsed = fencedJson(outcome.reply ?? "");
+    if (parsed === undefined) throw new Error("triage: reply was not parseable");
+    return planTriage(loop, work.open, work.pending, parseTriageDecisions(listField(parsed, "items")));
+  }
+
+  async function previewTriage(loop: Loop, triage: Loop["triage"]): Promise<TriagePreview[]> {
+    const draft = { ...loop, triage };
+    if (!prioritizes(draft) && !consolidates(draft)) return [];
+    const work = previewWork(await deps.items.byLoop(loop.id));
+    if (work.open.length === 0) return [];
+    const fireKey = `loop:${loop.id}:triage-preview:${Date.now()}`;
+    const patches = await decideTriage(draft, work, fireKey, loopFireThreadRef(loop.id, fireKey));
+    return work.open.map((item) => {
+      const { priority, reason, groupId } = { ...item.triage, ...patches.get(item.id) };
+      return {
+        id: item.id,
+        ...(priority ? { priority } : {}),
+        ...(reason ? { reason } : {}),
+        ...(groupId ? { groupId } : {}),
+      };
+    });
+  }
+
   async function triage(loop: Loop, fireKey: string, threadRef: string): Promise<void> {
     try {
       const work = triageWork(loop, await deps.items.byLoop(loop.id));
       if (!work) return;
-      const outcome = await stageTurn(
-        loop,
-        `${fireKey}:triage`,
-        threadRef,
-        triagePrompt(loop, work.context, work.pending),
-        undefined,
-        { readOnly: true },
-      );
-      const failure = stageFailure("triage", outcome);
-      if (failure) throw failure.error;
-      const parsed = fencedJson(outcome.reply ?? "");
-      if (parsed === undefined) throw new Error("triage: reply was not parseable");
-      const patches = planTriage(loop, work.open, work.pending, parseTriageDecisions(listField(parsed, "items")));
+      const patches = await decideTriage(loop, work, `${fireKey}:triage`, threadRef);
       for (const [id, patch] of patches) await deps.items.setTriage(id, patch, "agent");
     } catch (error) {
       console.error("%s", `[loops] triage for ${loop.id} failed:`, errMessage(error));
@@ -929,5 +962,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     sweepStale,
     followUp: (...args) => admitted(() => followUp(...args)),
     itemAction: (...args) => admitted(() => itemAction(...args)),
+    previewTriage: (...args) => admitted(() => previewTriage(...args)),
   };
 }

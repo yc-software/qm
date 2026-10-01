@@ -488,6 +488,27 @@ async function deleteLoop(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { ok: true });
 }
 
+async function previewLoopTriage(ctx: ApiCtx): Promise<void> {
+  const loaded = await loadAdministrable(ctx);
+  if (!loaded) return;
+  const { deps, loop, acting } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
+  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  const triage = triageFromBody(isObj(ctx.body) ? ctx.body.triage : undefined);
+  if (!triage)
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: `triage must be {prioritize?, consolidate?: {enabled: boolean, instructions?: string up to ${TRIAGE_INSTRUCTIONS_MAX} chars}}`,
+    });
+  if (!requireLiveHuman(ctx, acting)) return;
+  try {
+    const items = await deps.fire.previewTriage(loop, { ...loop.triage, ...triage });
+    return sendJson(ctx.res, 200, { items });
+  } catch (e) {
+    return sendJson(ctx.res, 502, { error: "preview_failed", message: errMessage(e) });
+  }
+}
+
 async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
@@ -649,6 +670,7 @@ export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "PATCH", path: "/v1/loops/:id", auth: "either", handle: patchLoop },
   { method: "DELETE", path: "/v1/loops/:id", auth: "either", handle: deleteLoop },
   { method: "POST", path: "/v1/loops/:id/fire", auth: "either", handle: fireLoopNow },
+  { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "either", handle: previewLoopTriage },
   { method: "POST", path: "/v1/loops/:id/outputs/:outputId/decide", auth: "either", handle: decideOutput },
   { method: "POST", path: "/v1/loops/:id/grants", auth: "either", handle: graduateShipAction },
   { method: "POST", path: "/v1/loops/:id/autopilot", auth: "either", handle: setAutopilot },

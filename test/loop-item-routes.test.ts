@@ -69,6 +69,7 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       shipOutput: async () => null,
       returnOutput: async () => null,
       sweepStale: async () => {},
+      previewTriage: async () => [],
       followUp: async (loop: Loop, item: LoopItem, message: string, actorId: string) => {
         w.followUps.push({ itemId: item.id, message, actorId });
         await w.loops.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);

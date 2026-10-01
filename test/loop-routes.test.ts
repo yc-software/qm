@@ -388,6 +388,7 @@ test("decisions and grants require verified live-human evidence", async () => {
     sweepStale: async () => {},
     followUp: async () => null,
     itemAction: async () => ({ ok: true }),
+    previewTriage: async () => [],
   };
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const id = (created.body as { loop: { id: string } }).loop.id;
@@ -596,6 +597,7 @@ test("deciding an output ships or returns through the fire service", async () =>
     sweepStale: async () => {},
     followUp: async () => null,
     itemAction: async () => ({ ok: true }),
+    previewTriage: async () => [],
   };
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const id = (created.body as { loop: { id: string } }).loop.id;
@@ -617,6 +619,7 @@ test("deciding an output reports an active item decision lease", async () => {
     sweepStale: async () => {},
     followUp: async () => null,
     itemAction: async () => ({ ok: true }),
+    previewTriage: async () => [],
   };
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const loopId = (created.body as { loop: { id: string } }).loop.id;

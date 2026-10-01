@@ -652,7 +652,7 @@ async function shipReview(item: InboxItem, output: ReviewOutput): Promise<void> 
 }
 
 function reviewActionLabel(action: string): string {
-  const labels: Record<string, string> = { open_draft_pr: "Open draft PR", open_pr: "Open PR", send: "Send reply" };
+  const labels: Record<string, string> = { open_draft_pr: "Open draft PR", open_pr: "Open PR", send: "Send" };
   return labels[action] ?? `Approve ${action.replaceAll("_", " ")}`;
 }
 

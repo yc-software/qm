@@ -69,6 +69,18 @@ export function triageWork(
   return { open, pending, context: [...pending, ...context] };
 }
 
+export function previewWork(items: LoopItem[]): { open: LoopItem[]; pending: LoopItem[]; context: LoopItem[] } {
+  const open = [...openById(items).values()]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, TRIAGE_BATCH)
+    .map((item) => {
+      if (item.triage?.pinned?.length) return item;
+      const { triage: _triage, ...rest } = item;
+      return rest;
+    });
+  return { open, pending: open, context: open };
+}
+
 export function parseTriageDecisions(list: unknown[]): TriageDecision[] {
   const decisions: TriageDecision[] = [];
   for (const entry of list) {
