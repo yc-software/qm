@@ -71,7 +71,7 @@ test("every pinned dedicated-audience route actually resolves in the table", () 
   }
 });
 
-test("raw routes keep their declared auth contracts (they self-enforce, so the declaration is the pin)", () => {
+test("raw routes keep their declared auth contracts (front enforces capability audiences, handlers enforce the rest)", () => {
   const pins: Array<[string, string, RouteAuth]> = [
     ["GET", "/healthz", "public"],
     ["GET", "/readyz", "public"],

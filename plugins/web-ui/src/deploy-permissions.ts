@@ -1,17 +1,22 @@
 import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
-import { Globe, Lock, Search, X } from "lucide";
+import { Building2, Globe, Lock, Search, X } from "lucide";
 import { api } from "./core-bridge";
 import { closeFormMenus, icon, initials, menuSelect } from "./ui";
 import { scopeChip } from "./contexts";
 import { friendlyPrincipal } from "./deploy-view";
 import { errMessage } from "../../chassis/src/errors";
 import { peopleResults, type DirectoryMatch } from "./people-results";
+import { appState } from "./shell-state";
 
 interface Grant {
   scope: string;
   permission: "read" | "write";
 }
+
+type GeneralAccess = "restricted" | "org" | "public";
+
+const isOrgGrant = (grant: Grant): boolean => grant.scope === "org" || grant.scope.startsWith("org:");
 
 export async function openDeploymentPermissions(id: string, title: string, owner: string): Promise<void> {
   const opener = document.activeElement as HTMLElement | null;
@@ -21,6 +26,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   document.body.append(dialog);
   let grantees: Grant[] = [];
   let publicAccess = false;
+  let externalSharing = true;
   let matches: DirectoryMatch[] = [];
   let query = "";
   let access = "view";
@@ -77,21 +83,35 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       if (dialog.isConnected) draw();
     }
   };
-  const changePublic = async (value: string) => {
-    if (busy) return;
+  const orgGrant = (): Grant | undefined => grantees.find(isOrgGrant);
+  const generalAccess = (): GeneralAccess => {
+    if (publicAccess) return "public";
+    return orgGrant() ? "org" : "restricted";
+  };
+  const post = async (body: Record<string, unknown>) => {
+    const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    publicAccess = response.public;
+    grantees = response.grantees;
+  };
+  const changeGeneral = async (next: GeneralAccess) => {
+    if (busy || next === generalAccess() || (next === "public" && !externalSharing)) return;
     closeFormMenus();
     busy = true;
     error = "";
     draw();
     try {
-      const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
-        method: "POST",
-        body: JSON.stringify({ public: value === "public" }),
-      });
-      publicAccess = response.public;
-      grantees = response.grantees;
+      if (next === "public") await post({ public: true });
+      else {
+        if (publicAccess) await post({ public: false });
+        const grant = orgGrant();
+        if (next === "org" && !grant) await post({ scope: "org", access: "view" });
+        if (next === "restricted" && grant) await post({ scope: grant.scope, access: "none" });
+      }
     } catch (e) {
-      error = errMessage(e, "Could not update public access.");
+      error = errMessage(e, "Could not update general access.");
     } finally {
       busy = false;
       if (dialog.isConnected) draw();
@@ -132,8 +152,16 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       }
     }
   };
+  const orgName = (): string => appState.me?.companyName?.trim() || "Your organization";
+  const generalAccessNote = (): string => {
+    const level = generalAccess();
+    if (level === "public") return "Anyone on the internet with the link can open. No sign-in required";
+    if (level === "org") return `Anyone signed in to ${orgName()} can open`;
+    return "Only people with access can open";
+  };
   const emailCandidate = (): string | null => {
     const email = query.trim().toLowerCase();
+    if (!externalSharing) return null;
     if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
     if (
       owner.toLowerCase() === `personal:${email}` ||
@@ -289,29 +317,48 @@ export async function openDeploymentPermissions(id: string, title: string, owner
               >${owner.startsWith("personal:") ? friendlyPrincipal(owner.slice(9)) : scopeChip(owner)}</span
             ><span class="permission-owner">Owner</span>
           </div>
-          ${grantees.map((grant) => html`<div class="permission-row"><span class="project-member-avatar" aria-hidden="true">${initials(grant.scope.replace("personal:", ""))}</span><span class="permission-person-label">${names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
+          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row"><span class="project-member-avatar" aria-hidden="true">${initials(isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", ""))}</span><span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
         <div class="permission-section-label permission-general-label">General access</div>
         <div class="project-member-list">
           <div class="permission-row">
-            <span class="project-member-avatar" aria-hidden="true">${icon(publicAccess ? Globe : Lock, 16)}</span>
-            <span class="permission-person-label"
-              >${publicAccess ? "Anyone with the link" : "Restricted"}<small
-                >${publicAccess ? "No sign-in required" : "Only people with access can open"}</small
-              ></span
-            <fieldset class="permission-control" ?disabled=${busy}>
-              ${menuSelect({
-                value: publicAccess ? "public" : "restricted",
-                ariaLabel: "General access",
-                options: [
-                  { value: "restricted", label: "Restricted" },
-                  { value: "public", label: "Anyone with the link" },
-                ],
-                onSelect: (next) => {
-                  if (next) void changePublic(next);
-                },
-              })}
-            </fieldset>
+            <span class="project-member-avatar" aria-hidden="true"
+              >${icon({ public: Globe, org: Building2, restricted: Lock }[generalAccess()], 16)}</span
+            >
+            <span class="permission-person-label">
+              <fieldset class="permission-control general-access-control" ?disabled=${busy}>
+                ${menuSelect({
+                  value: generalAccess(),
+                  ariaLabel: "General access",
+                  className: "general-access-menu",
+                  options: [
+                    { value: "restricted", label: "Restricted" },
+                    { value: "org", label: orgName() },
+                    {
+                      value: "public",
+                      label: "Anyone with the link",
+                      ...(externalSharing
+                        ? {}
+                        : { disabledHint: "An org admin must turn on external app sharing first." }),
+                    },
+                  ],
+                  onSelect: (next) => {
+                    if (next === "restricted" || next === "org" || next === "public") void changeGeneral(next);
+                  },
+                })}
+              </fieldset>
+              <small>${generalAccessNote()}</small>
+            </span>
+            ${(() => {
+              const grant = generalAccess() === "org" ? orgGrant() : undefined;
+              return grant
+                ? permissionMenu(
+                    grant.permission === "write" ? "manage" : "view",
+                    `Access for ${orgName()}`,
+                    (value) => void change(grant.scope, value),
+                  )
+                : nothing;
+            })()}
           </div>
         </div>
         ${
@@ -328,8 +375,9 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   draw();
   dialog.showModal();
   try {
-    const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint);
+    const response = await api<{ public: boolean; externalSharing?: boolean; grantees: Grant[] }>(endpoint);
     publicAccess = response.public;
+    externalSharing = response.externalSharing !== false;
     grantees = response.grantees;
     loaded = true;
   } catch (e) {

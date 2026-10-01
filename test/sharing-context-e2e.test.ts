@@ -413,7 +413,7 @@ test("sharing e2e: local notebooks retain late facts while unclassified carried 
 });
 
 test("sharing e2e: screening off preserves carried skills without model calls", async (t) => {
-  const b = await fixture(t, { securityScreenBackend: "off" });
+  const b = await fixture(t, { securityScreen: "off" });
   await b.skill("personal:U1", "unscreened-helper", "SHARED_SKILL_OK");
   await assert.equal(
     await b.turn("!skill-run unscreened-helper python3 {dir}/scripts/value.py", true),

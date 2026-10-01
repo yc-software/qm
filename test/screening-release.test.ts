@@ -74,13 +74,12 @@ function request(threadRef = "fixture-thread"): TurnRequest {
   return { surface: "test", actor: { externalId: "U1" }, conversation: { kind: "dm", threadRef }, text: "run fixture" };
 }
 
-for (const securityPosture of ["dangerous", "auto", "strict"] as const) {
+for (const securityPosture of ["auto", "strict"] as const) {
   test(`${securityPosture}: real wrapper releases exact saved output without rerunning or widening permissions`, async () => {
     executions = 0;
-    const built = buildApp(testConfig({ securityPosture, securityScreenAllPostures: true }), {
+    const built = buildApp(testConfig({ securityPosture }), {
       securityScreener: {
         provider: "fixture-screen",
-        shadow: false,
         async classify() {
           return { verdict: { decision: "strict", reason: "fixture verdict" }, score: 1, threshold: 0.5 };
         },
@@ -127,19 +126,15 @@ for (const securityPosture of ["dangerous", "auto", "strict"] as const) {
 
 for (const failure of ["error", "timeout"] as const) {
   test(`real tool output is marked and audited when the proxy ${failure}s`, async () => {
-    const built = buildApp(
-      testConfig({ securityPosture: "dangerous", securityScreenAllPostures: true, securityScreenTimeoutMs: 10 }),
-      {
-        securityScreener: {
-          provider: "fixture-screen",
-          shadow: false,
-          async classify() {
-            if (failure === "timeout") await new Promise((resolve) => setTimeout(resolve, 50));
-            throw new Error("fixture unavailable");
-          },
+    const built = buildApp(testConfig({ securityPosture: "auto", securityScreenTimeoutMs: 10 }), {
+      securityScreener: {
+        provider: "fixture-screen",
+        async classify() {
+          if (failure === "timeout") await new Promise((resolve) => setTimeout(resolve, 50));
+          throw new Error("fixture unavailable");
         },
       },
-    );
+    });
     const result = await built.app.turn(request());
     assert.equal(result.status, "ok");
     assert.match(result.reply ?? "", /NOT security-screened/);
@@ -151,10 +146,9 @@ for (const failure of ["error", "timeout"] as const) {
 }
 
 test("released shared content retains scope and survives a failed continuation", async () => {
-  const built = buildApp(testConfig({ securityPosture: "dangerous", securityScreenAllPostures: true }), {
+  const built = buildApp(testConfig({ securityPosture: "auto" }), {
     securityScreener: {
       provider: "fixture-screen",
-      shadow: false,
       async classify() {
         return { verdict: { decision: "strict" }, score: 1, threshold: 0.5 };
       },

@@ -134,12 +134,10 @@ function strictPostAllowed(pathname: string, body: unknown): boolean {
   if (
     pathname === "/v1/surface-context" ||
     pathname === "/v1/projects" ||
-    pathname === "/v1/conversations" ||
     pathname === "/v1/memory/search" ||
     pathname === "/v1/search" ||
     pathname === "/v1/memory/restore" ||
-    pathname.startsWith("/v1/run-signals/") ||
-    /^\/v1\/conversations\/[^/]+\/fork$/.test(pathname)
+    pathname.startsWith("/v1/run-signals/")
   )
     return true;
   if (/^\/v1\/projects\/[^/]+(?:\/members(?:\/[^/]+)?)?$/.test(pathname)) return true;
@@ -180,83 +178,101 @@ declare module "fastify" {
 
 const rawBodies = new WeakMap<IncomingMessage, string>();
 
+async function verifyCapability(
+  req: IncomingMessage,
+  res: ServerResponse,
+  { app, deps, secret }: Wiring,
+  method: string,
+  pathname: string,
+  requiredAud: string | null,
+): Promise<CapabilityClaims | null> {
+  const capToken = capabilityFromHeaders(req);
+  if (!capToken) {
+    sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
+    return null;
+  }
+  const capSecret = deps.capabilitySecret ?? secret;
+  const capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
+  if (!capability) {
+    sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
+    return null;
+  }
+  if (
+    capability.externalSlack &&
+    !(
+      capability.aud === "credential-broker" &&
+      ((method === "POST" && pathname === "/v1/credentials/broker") ||
+        ((method === "GET" || method === "POST") && pathname.startsWith("/v1/credentials/git/")))
+    )
+  ) {
+    sendJson(res, 403, { error: "forbidden", message: "This operation requires a private conversation." });
+    return null;
+  }
+  if (deps.identity) {
+    await deps.identity.refresh();
+    if (deps.identity.classify(capability.actorId).type !== "internal") {
+      sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
+      return null;
+    }
+  }
+  if (capability.deployment !== undefined) {
+    const deployment = await app.getDeployment(capability.deployment);
+    if (
+      !deployment ||
+      deployment.id !== capability.deployment ||
+      deployment.status !== "running" ||
+      deployment.createdBy !== capability.actorId
+    ) {
+      sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
+      return null;
+    }
+  }
+  if (
+    !(capability.externalSlack
+      ? await externalSlackCapabilityAllowed(capability, deps)
+      : await app.authorizesCapabilityScope({
+          actorId: capability.actorId,
+          scopeId: capability.scopeId,
+          ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
+          ...(capability.botActor ? { botActor: true } : {}),
+          ...(capability.liveActor ? { liveActor: true } : {}),
+          ...(capability.members ? { members: capability.members } : {}),
+        }))
+  ) {
+    sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
+    return null;
+  }
+  if (requiredAud && capability.aud !== requiredAud) {
+    sendJson(res, 403, {
+      error: "forbidden",
+      message: `this route requires a capability token with audience "${requiredAud}"`,
+    });
+    return null;
+  }
+  return capability;
+}
+
 async function gate(
   req: IncomingMessage,
   res: ServerResponse,
-  { app, deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth }: Wiring,
+  wiring: Wiring,
   method: string,
   pathname: string,
   url: URL,
   raw: string,
   routeAuth: RouteAuth | undefined,
 ): Promise<GateResult | null> {
+  const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
   const requiredAud = typeof routeAuth === "object" ? routeAuth.aud : null;
   let capability: CapabilityClaims | null = null;
   const capToken = capabilityFromHeaders(req);
   if (isPublicRoute) {
     void isPublicRoute;
-  } else if (capToken) {
-    const capSecret = deps.capabilitySecret ?? secret;
-    capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
-    if (!capability) {
-      sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
-      return null;
-    }
-    if (
-      capability.externalSlack &&
-      !(
-        capability.aud === "credential-broker" &&
-        ((method === "POST" && pathname === "/v1/credentials/broker") ||
-          ((method === "GET" || method === "POST") && pathname.startsWith("/v1/credentials/git/")))
-      )
-    ) {
-      sendJson(res, 403, { error: "forbidden", message: "This operation requires a private conversation." });
-      return null;
-    }
-    if (deps.identity) {
-      await deps.identity.refresh();
-      if (deps.identity.classify(capability.actorId).type !== "internal") {
-        sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
-        return null;
-      }
-    }
-    if (capability.deployment !== undefined) {
-      const deployment = await app.getDeployment(capability.deployment);
-      if (
-        !deployment ||
-        deployment.id !== capability.deployment ||
-        deployment.status !== "running" ||
-        deployment.createdBy !== capability.actorId
-      ) {
-        sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
-        return null;
-      }
-    }
-    if (
-      !(capability.externalSlack
-        ? await externalSlackCapabilityAllowed(capability, deps)
-        : await app.authorizesCapabilityScope({
-            actorId: capability.actorId,
-            scopeId: capability.scopeId,
-            ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
-            ...(capability.botActor ? { botActor: true } : {}),
-            ...(capability.liveActor ? { liveActor: true } : {}),
-            ...(capability.members ? { members: capability.members } : {}),
-          }))
-    ) {
-      sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
-      return null;
-    }
-    if (requiredAud) {
-      if (capability.aud !== requiredAud) {
-        sendJson(res, 403, {
-          error: "forbidden",
-          message: `this route requires a capability token with audience "${requiredAud}"`,
-        });
-        return null;
-      }
-    } else if (routeAuth === "either") {
+  } else if (requiredAud || capToken) {
+    capability = await verifyCapability(req, res, wiring, method, pathname, requiredAud);
+    if (!capability) return null;
+    if (routeAuth === "either") {
       if (capability.aud !== undefined && capability.aud !== CONTROL_PLANE_AUD) {
         sendJson(res, 403, { error: "forbidden", message: "capability token audience not valid for this route" });
         return null;
@@ -268,13 +284,10 @@ async function gate(
           return null;
         }
       }
-    } else {
+    } else if (!requiredAud) {
       sendJson(res, 403, { error: "forbidden", message: "capability token not valid for this route" });
       return null;
     }
-  } else if (requiredAud) {
-    sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
-    return null;
   } else if (
     !(await verifyOrReject(
       req,
@@ -559,6 +572,11 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
       if ("path" in raw.route) requestNames.set(req, raw.route.path);
+      const routeAuth = raw.route.auth;
+      if (typeof routeAuth === "object") {
+        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth.aud);
+        if (!base.capability) return void req.resume();
+      }
       await run(raw.route, raw.params, base);
       return;
     }

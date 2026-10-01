@@ -1,5 +1,4 @@
 import { memoryForRequest, memoryBoundaryForRequest } from "./memory-access.ts";
-import { conversationWebUrl } from "../../util/conversation-links.ts";
 import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
@@ -109,61 +108,6 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
-async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability, deps } = ctx;
-  if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
-  if (!livePersonCapability(capability)) {
-    return sendJson(res, 403, {
-      error: "human_attended_only",
-      message:
-        "starting a fresh conversation requires a turn a person is attending — not a cron, trigger, or other automation",
-    });
-  }
-  const b = isObj(body) ? body : {};
-  if (typeof b.text !== "string" || !b.text.trim()) {
-    return sendJson(res, 400, { error: "bad_request", message: "text required — the new session's first message" });
-  }
-  if (b.title !== undefined && typeof b.title !== "string") {
-    return sendJson(res, 400, { error: "bad_request", message: "title must be a string" });
-  }
-  const out = await app.spawnSession(capability.actorId, {
-    scopeId: capability.scopeId,
-    ...(typeof b.title === "string" ? { title: b.title } : {}),
-  });
-  if (!out) return sendJson(res, 404, { error: "not_found", message: "cannot start a session in this scope" });
-  const session = out.session;
-  const sessionScope = parseScopeId(session.scopeId);
-  const turn = await app.turn({
-    surface: session.surface ?? "web",
-    actor: { externalId: capability.actorId },
-    conversation: {
-      kind: session.type,
-      threadRef: session.threadRef,
-      ...(sessionScope.kind === "channel" || sessionScope.kind === "group" ? { channelRef: sessionScope.ref } : {}),
-      ...(session.channelName ? { channelName: session.channelName } : {}),
-    },
-    text: b.text,
-    spawned: true,
-    async: true,
-  });
-  if (turn.status === "refused") {
-    await app.discardSession(session.id, capability.actorId);
-    return sendJson(res, 409, {
-      error: "seed_turn_refused",
-      message: (turn as { reason?: string }).reason ?? "the first message was refused",
-    });
-  }
-  const runId = (turn as { runId?: string }).runId;
-  const webUrl = conversationWebUrl(deps.portalUrl, session.id);
-  return sendJson(res, 202, {
-    session,
-    turn: { status: turn.status, ...(runId ? { runId } : {}) },
-    ...(webUrl ? { webUrl } : {}),
-  });
-}
-
 function agentConversation(session: Session) {
   return {
     id: session.id,
@@ -177,29 +121,6 @@ function agentConversation(session: Session) {
     color: session.color ?? null,
     lastActivityAt: session.lastActivityAt ?? session.createdAt,
   };
-}
-
-async function forkAgentConversation(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
-  const b = isObj(body) ? body : {};
-  if (b.upToSeq !== undefined && (typeof b.upToSeq !== "number" || !Number.isInteger(b.upToSeq) || b.upToSeq < 0)) {
-    return sendJson(res, 400, { error: "bad_request", message: "upToSeq must be a non-negative integer" });
-  }
-  const source = await app.getSessionForViewer(ctx.params.id!, capability.actorId, { tailTurns: 1 });
-  if (!source) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  const boundary = await memoryBoundaryForRequest(ctx, ctx.params.id!);
-  if (!boundary || boundary.throughSeq >= 0) return sendJson(res, 403, { error: "forbidden" });
-  const out = await app.forkSession(ctx.params.id!, capability.actorId, {
-    upToSeq: Math.min(b.upToSeq ?? boundary.latestSeq, boundary.latestSeq),
-  });
-  if (!out) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  return sendJson(res, 200, {
-    session: agentConversation(out.session),
-    entries: out.entries.filter((entry) => entry.type !== "system"),
-  });
 }
 
 function transcriptWindow(
@@ -1447,8 +1368,6 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },
   { method: "GET", path: "/v1/conversations/:id", auth: "either", handle: getAgentConversation },
   { method: "POST", path: "/v1/conversations/:id", auth: "either", handle: patchAgentConversation },
-  { method: "POST", path: "/v1/conversations", auth: "either", handle: spawnAgentConversation },
-  { method: "POST", path: "/v1/conversations/:id/fork", auth: "either", handle: forkAgentConversation },
   { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
   { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
   { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },

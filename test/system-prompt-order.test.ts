@@ -832,7 +832,6 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
   let updated = false;
   const securityScreener: SecurityScreener = {
     provider: "test",
-    shadow: false,
     classify: async ({ payload }) => {
       if (!updated && payload.includes("SAFE_DESCRIPTION")) {
         updated = true;
@@ -971,7 +970,6 @@ test("steered documents use the inbound security screen before writing their con
   };
   const securityScreener: SecurityScreener = {
     provider: "test",
-    shadow: false,
     classify: async ({ payload }) => ({
       verdict: { decision: payload.includes("STEER_UNTRUSTED_CONTENT") ? "strict" : "auto" },
       score: 0,
@@ -1063,7 +1061,6 @@ test("steered native office documents are screened after extraction", async () =
   };
   const securityScreener: SecurityScreener = {
     provider: "test",
-    shadow: false,
     classify: async ({ payload }) => {
       const blocked = payload.includes("DOCX-QUARTZ-731");
       screened ||= blocked;
@@ -1226,7 +1223,7 @@ test("connector revocation still refreshes system-authority permissions", async 
   assert.notEqual(prefix(first.reply!), prefix(second.reply!));
 });
 
-for (const mode of ["safe", "blocked", "unavailable", "ordinary", "off"] as const) {
+for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {
   test(`live inbox steering refreshes context with ${mode} screening`, async () => {
     const harness = createMockHarness();
     const thread = mode === "ordinary" ? "web:alice:default" : "web:alice:inbox";
@@ -1244,7 +1241,6 @@ for (const mode of ["safe", "blocked", "unavailable", "ordinary", "off"] as cons
     let refreshedScreens = 0;
     const securityScreener: SecurityScreener = {
       provider: "test",
-      shadow: false,
       classify: async ({ payload }) => {
         if (payload.includes("UPDATED_INBOX_SNAPSHOT")) {
           refreshedScreens++;
@@ -1255,16 +1251,16 @@ for (const mode of ["safe", "blocked", "unavailable", "ordinary", "off"] as cons
       },
     };
     const { orchestrator, config } = buildOrchestrator({ harness, securityScreener });
-    if (mode === "off") await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+    if (mode === "observe") await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
     const result = await orchestrator.handleTurn(dm(thread, "hello", { surface: "web" }));
     assert.equal(result.status, "ok", result.reason);
-    if (mode === "safe" || mode === "off") assert.match(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
+    if (mode === "safe" || mode === "observe") assert.match(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
     else if (mode === "ordinary") assert.equal(prepared!.text, "summarize again");
     else {
       assert.doesNotMatch(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
       assert.match(prepared!.text, /withheld/);
     }
-    if (mode === "ordinary" || mode === "off") assert.equal(refreshedScreens, 0);
+    if (mode === "ordinary") assert.equal(refreshedScreens, 0);
     else assert.ok(refreshedScreens > 0);
   });
 }
