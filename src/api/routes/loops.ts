@@ -670,7 +670,7 @@ export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "PATCH", path: "/v1/loops/:id", auth: "either", handle: patchLoop },
   { method: "DELETE", path: "/v1/loops/:id", auth: "either", handle: deleteLoop },
   { method: "POST", path: "/v1/loops/:id/fire", auth: "either", handle: fireLoopNow },
-  { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "either", handle: previewLoopTriage },
+  { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
   { method: "POST", path: "/v1/loops/:id/outputs/:outputId/decide", auth: "either", handle: decideOutput },
   { method: "POST", path: "/v1/loops/:id/grants", auth: "either", handle: graduateShipAction },
   { method: "POST", path: "/v1/loops/:id/autopilot", auth: "either", handle: setAutopilot },

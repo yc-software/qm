@@ -93,7 +93,7 @@ export interface LoopFireService {
   sweepStale(now: number): Promise<void>;
 }
 
-export type TriagePreview = { id: string } & TriagePatch;
+type TriagePreview = { id: string } & TriagePatch;
 
 function loopFireThreadRef(loopId: string, fireKey: string): string {
   return `loop:${loopId}:fire:${hashId([fireKey], 12)}`;
