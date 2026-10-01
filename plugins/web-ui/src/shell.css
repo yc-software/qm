@@ -13458,3 +13458,75 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .loadout-setting.loadout-ultrafast:not(:disabled):hover .loadout-toggle.on {
   background: var(--ultrafast-accent);
 }
+
+.loop-triage-prompt {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--font-12-5);
+  text-align: left;
+  white-space: pre-wrap;
+  cursor: text;
+}
+.loop-triage-prompt:hover {
+  border-color: color-mix(in srgb, var(--foreground) 24%, var(--border));
+}
+.loop-triage-dialog {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.loop-triage-dialog:not([open]) {
+  display: none;
+}
+.loop-triage-dialog .loop-triage-instructions {
+  width: 100%;
+  box-sizing: border-box;
+}
+.loop-triage-dialog-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.loop-triage-dialog-status {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.loop-triage-list {
+  max-height: 52vh;
+  overflow-y: auto;
+  gap: 10px;
+}
+.loop-triage-list.running {
+  opacity: 0.5;
+}
+.loop-triage-group.multi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+}
+.loop-triage-col {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 128px;
+}
+.loop-triage-was {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.loop-triage-none {
+  color: var(--muted-foreground);
+}

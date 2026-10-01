@@ -46,6 +46,8 @@ interface LoopItemView {
   parkedReason?: string;
   guidance?: string;
   updatedAt: number;
+  createdAt?: number;
+  sourcePayload?: { title?: string; from?: string; snippet?: string };
   triage?: { priority?: string; reason?: string; groupId?: string; pinned?: string[] };
 }
 
@@ -99,6 +101,7 @@ let playbookDraft: string | null = null;
 let returnDrafts = new Map<string, string>();
 let triageDrafts = new Map<TriageKind, string>();
 let triagePreview: TriagePreviewView[] | "running" | null = null;
+let triageEditing: TriageKind | null = null;
 const expandedGroups = new Set<string>();
 
 export function resetActiveLoop(): void {
@@ -113,6 +116,7 @@ export function resetActiveLoop(): void {
   returnDrafts = new Map();
   triageDrafts = new Map();
   triagePreview = null;
+  triageEditing = null;
   expandedGroups.clear();
 }
 
@@ -307,22 +311,22 @@ function saveTriage(loop: LoopView, kind: TriageKind, enabled: boolean): void {
   });
 }
 
-function draftTriage(loop: LoopView): Record<TriageKind, { enabled: boolean; instructions: string }> {
-  const draft = (kind: TriageKind) => ({
-    enabled: loop.triage?.[kind]?.enabled === true,
-    instructions: triageDrafts.get(kind) ?? loop.triage?.[kind]?.instructions ?? "",
+function draftTriage(loop: LoopView, kind: TriageKind): Record<TriageKind, { enabled: boolean; instructions: string }> {
+  const draft = (k: TriageKind) => ({
+    enabled: k === kind || loop.triage?.[k]?.enabled === true,
+    instructions: triageDrafts.get(k) ?? loop.triage?.[k]?.instructions ?? "",
   });
   return { prioritize: draft("prioritize"), consolidate: draft("consolidate") };
 }
 
-async function runTriagePreview(loop: LoopView): Promise<void> {
+async function runTriagePreview(loop: LoopView, kind: TriageKind): Promise<void> {
   if (triagePreview === "running") return;
   triagePreview = "running";
   paint();
   try {
     const out = await api<{ items: TriagePreviewView[] }>(`/api/loops/${encodeURIComponent(loop.id)}/triage/preview`, {
       method: "POST",
-      body: JSON.stringify({ triage: draftTriage(loop) }),
+      body: JSON.stringify({ triage: draftTriage(loop, kind) }),
     });
     triagePreview = out.items;
   } catch (e) {
@@ -333,78 +337,157 @@ async function runTriagePreview(loop: LoopView): Promise<void> {
 }
 
 const PREVIEW_RANK: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+const rank = (priority?: string): number => PREVIEW_RANK[priority ?? "normal"] ?? 2;
 
-function previewTpl(loop: LoopView, items: LoopItemView[]): TemplateResult | typeof nothing {
-  if (triagePreview === null) return nothing;
-  if (triagePreview === "running")
-    return html`<p class="loop-triage-preview-note" role="status">Running a dry run on open items…</p>`;
-  const current = new Map(items.map((item) => [item.id, item]));
-  const members = new Map<string, TriagePreviewView[]>();
-  for (const entry of triagePreview)
-    if (entry.groupId) members.set(entry.groupId, [...(members.get(entry.groupId) ?? []), entry]);
-  const heads = triagePreview
-    .filter((entry) => !entry.groupId || entry.groupId === entry.id || !members.has(entry.groupId))
-    .sort((a, b) => (PREVIEW_RANK[a.priority ?? "normal"] ?? 2) - (PREVIEW_RANK[b.priority ?? "normal"] ?? 2));
-  const changed = triagePreview.filter(
-    (entry) => entry.priority && entry.priority !== (current.get(entry.id)?.triage?.priority ?? "normal"),
-  ).length;
-  const summary = (id: string): string => {
-    const item = current.get(id);
-    return item?.sourceSummary ?? item?.sourceKey ?? id;
-  };
-  return html`<div class="loop-triage-preview">
-    <div class="loop-triage-preview-head">
-      <span
-        >Dry run · ${triagePreview.length} open item${triagePreview.length === 1 ? "" : "s"} into ${heads.length}
-        row${heads.length === 1 ? "" : "s"} · ${changed} priorit${changed === 1 ? "y" : "ies"} changed · nothing
-        saved</span
-      >
+function openTriageEditor(kind: TriageKind): void {
+  triageEditing = kind;
+  triagePreview = null;
+  paint();
+  queueMicrotask(() => {
+    const dialog = document.querySelector<HTMLDialogElement>(".loop-triage-dialog");
+    if (dialog && !dialog.open) dialog.showModal();
+  });
+}
+
+function closeTriageEditor(): void {
+  if (triageEditing) triageDrafts.delete(triageEditing);
+  triageEditing = null;
+  triagePreview = null;
+  paint();
+}
+
+function priorityCell(priority: string | undefined, reason: string | undefined, was?: string): TemplateResult {
+  const label = (p: string) => `${p[0]!.toUpperCase()}${p.slice(1)}`;
+  return html`<span class="loop-triage-col">
+    ${priority ? html`<span class="inbox-priority inbox-priority-${priority}" ${reason ? tip(reason) : nothing}>${label(priority)}</span>` : html`<span class="loop-triage-none">—</span>`}
+    ${was !== undefined && was !== priority ? html`<span class="loop-triage-was">was ${was ? label(was) : "—"}</span>` : nothing}
+  </span>`;
+}
+
+function itemKey(item: LoopItemView): string {
+  return item.sourcePayload?.from ?? item.sourceKey.split(":").pop() ?? item.sourceKey;
+}
+
+function itemText(item: LoopItemView): string {
+  return item.sourcePayload?.snippet || item.sourcePayload?.title || item.sourceSummary || item.sourceKey;
+}
+
+function editorRows(kind: TriageKind, items: LoopItemView[]): TemplateResult {
+  const preview = Array.isArray(triagePreview) ? new Map(triagePreview.map((entry) => [entry.id, entry])) : null;
+  const open = items.filter((item) => item.status !== "shipped" && item.status !== "skipped");
+  const scored = (preview ? open.filter((item) => preview.has(item.id)) : open).map((item) => {
+    const next = preview?.get(item.id);
+    return {
+      item,
+      priority: preview ? next?.priority : item.triage?.priority,
+      reason: preview ? next?.reason : item.triage?.reason,
+      groupId: preview ? next?.groupId : item.triage?.groupId,
+      was: preview ? (item.triage?.priority ?? "") : undefined,
+    };
+  });
+  const row = (entry: (typeof scored)[number]) =>
+    html`<li>
+      <span class="inbox-subject-key">${itemKey(entry.item)}</span>
+      <span class="inbox-subject-text" title=${itemText(entry.item)}>${itemText(entry.item)}</span>
+      ${priorityCell(entry.priority, entry.reason, entry.was)}
+    </li>`;
+  if (kind === "prioritize")
+    return html`<ul>
+      ${[...scored].sort((a, b) => rank(a.priority) - rank(b.priority)).map(row)}
+    </ul>`;
+  const groups = new Map<string, typeof scored>();
+  for (const entry of scored) {
+    const key = entry.groupId ?? entry.item.id;
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  const ordered = [...groups.values()].sort(
+    (a, b) => b.length - a.length || rank(a[0]!.priority) - rank(b[0]!.priority),
+  );
+  return html`${ordered.map(
+    (group) =>
+      html`<div class="loop-triage-group ${group.length > 1 ? "multi" : ""}">
+        ${group.length > 1 ? html`<div class="inbox-subject-label">${group.length} similar</div>` : nothing}
+        <ul>
+          ${group.map(row)}
+        </ul>
+      </div>`,
+  )}`;
+}
+
+function triageStatus(
+  kind: TriageKind,
+  items: LoopItemView[],
+  running: boolean,
+  preview: TriagePreviewView[] | null,
+): string {
+  if (running) return "Running a dry run on open items…";
+  if (!preview) return kind === "prioritize" ? "Current priorities" : "Current groups";
+  if (kind === "consolidate") {
+    const rows = new Set(preview.map((entry) => entry.groupId ?? entry.id)).size;
+    return `Dry run · ${preview.length} items into ${rows} rows · nothing saved`;
+  }
+  const before = new Map(items.map((item) => [item.id, item.triage?.priority ?? ""]));
+  const changed = preview.filter((entry) => (entry.priority ?? "") !== before.get(entry.id)).length;
+  return `Dry run · ${preview.length} items rescored · ${changed} changed · nothing saved`;
+}
+
+function triageEditorTpl(loop: LoopView, items: LoopItemView[]): TemplateResult | typeof nothing {
+  const kind = triageEditing;
+  if (!kind) return nothing;
+  const copy = TRIAGE_COPY[kind];
+  const saved = loop.triage?.[kind]?.instructions ?? "";
+  const draft = triageDrafts.get(kind) ?? saved;
+  const running = triagePreview === "running";
+  const preview = Array.isArray(triagePreview) ? triagePreview : null;
+  const status = triageStatus(kind, items, running, preview);
+  return html`<dialog
+    class="project-dialog loop-triage-dialog"
+    aria-labelledby="loop-triage-dialog-title"
+    @close=${closeTriageEditor}
+    @click=${(event: MouseEvent) => event.target === event.currentTarget && (event.currentTarget as HTMLDialogElement).close()}
+  >
+    <div class="project-dialog-head">
+      <div><h2 id="loop-triage-dialog-title">${copy.label}</h2></div>
+    </div>
+    <textarea
+      class="loop-playbook loop-triage-instructions"
+      rows="4"
+      aria-label=${`${copy.label} instructions`}
+      placeholder=${copy.placeholder}
+      .value=${draft}
+      @input=${(e: Event) => {
+        triageDrafts.set(kind, (e.target as HTMLTextAreaElement).value);
+        paint();
+      }}
+    ></textarea>
+    <div class="loop-triage-dialog-bar">
+      <span class="loop-triage-dialog-status" role="status">${status}</span>
+      <button class="btn" type="button" ?disabled=${running} @click=${() => void runTriagePreview(loop, kind)}>
+        Dry run
+      </button>
+    </div>
+    <section class="inbox-subject loop-triage-list ${running ? "running" : ""}">${editorRows(kind, items)}</section>
+    <div class="project-dialog-actions">
       <button
         class="btn"
         type="button"
+        @click=${() => document.querySelector<HTMLDialogElement>(".loop-triage-dialog")?.close()}
+      >
+        Cancel
+      </button>
+      <button
+        class="btn primary"
+        type="button"
+        ?disabled=${loopBusy || draft === saved}
         @click=${() => {
-          triagePreview = null;
-          paint();
+          saveTriage(loop, kind, true);
+          document.querySelector<HTMLDialogElement>(".loop-triage-dialog")?.close();
         }}
       >
-        Clear
+        Save
       </button>
     </div>
-    ${heads.map((head) => {
-      const group = (head.groupId ? members.get(head.groupId) : undefined) ?? [];
-      const was = current.get(head.id)?.triage?.priority;
-      return html`<div class="loop-item">
-          ${
-            head.priority
-              ? html`<span
-                  class="inbox-priority inbox-priority-${head.priority}"
-                  ${head.reason ? tip(head.reason) : nothing}
-                  >${head.priority[0]!.toUpperCase()}${head.priority.slice(1)}</span
-                >`
-              : nothing
-          }
-          ${group.length > 1 ? html`<span class="loop-item-key">${group.length} similar ·</span>` : nothing}
-          <span class="loop-item-summary">${summary(head.id)}</span>
-          <span class="loop-item-meta">${was && was !== head.priority ? `was ${was}` : ""}</span>
-        </div>
-        ${group
-          .filter((member) => member.id !== head.id)
-          .slice(0, 3)
-          .map(
-            (member) =>
-              html`<div class="loop-item loop-item-member">
-                <span class="loop-item-summary">${summary(member.id)}</span>
-              </div>`,
-          )}
-        ${
-          group.length > 4
-            ? html`<div class="loop-item loop-item-member">
-                <span class="loop-item-meta">and ${group.length - 4} more</span>
-              </div>`
-            : nothing
-        }`;
-    })}
-  </div>`;
+  </dialog>`;
 }
 
 function triageTpl(loop: LoopView, items: LoopItemView[]): TemplateResult {
@@ -413,8 +496,6 @@ function triageTpl(loop: LoopView, items: LoopItemView[]): TemplateResult {
       ${(Object.keys(TRIAGE_COPY) as TriageKind[]).map((kind) => {
         const setting = loop.triage?.[kind];
         const enabled = setting?.enabled === true;
-        const saved = setting?.instructions ?? "";
-        const draft = triageDrafts.get(kind);
         const copy = TRIAGE_COPY[kind];
         return html`<div class="loop-triage-setting">
           <button
@@ -433,47 +514,21 @@ function triageTpl(loop: LoopView, items: LoopItemView[]): TemplateResult {
           </button>
           ${
             enabled
-              ? html`<textarea
-                    class="loop-playbook loop-triage-instructions"
-                    rows="3"
-                    aria-label=${`${copy.label} instructions`}
-                    placeholder=${copy.placeholder}
-                    .value=${draft ?? saved}
-                    @input=${(e: Event) => {
-                      triageDrafts.set(kind, (e.target as HTMLTextAreaElement).value);
-                      paint();
-                    }}
-                  ></textarea>
-                  <div class="loop-playbook-actions">
-                    <span class="loop-success-condition">Leave blank to use the default.</span>
-                    <button
-                      class="btn"
-                      type="button"
-                      ?disabled=${loopBusy || triagePreview === "running"}
-                      ${tip("Re-triage the open items with these instructions without saving anything")}
-                      @click=${() => void runTriagePreview(loop)}
-                    >
-                      Dry run
-                    </button>
-                    ${
-                      draft !== undefined && draft !== saved
-                        ? html`<button
-                            class="btn primary"
-                            type="button"
-                            ?disabled=${loopBusy}
-                            @click=${() => saveTriage(loop, kind, true)}
-                          >
-                            Save
-                          </button>`
-                        : nothing
-                    }
-                  </div>`
+              ? html`<button
+                  class="loop-triage-prompt"
+                  type="button"
+                  aria-label=${`Edit ${copy.label} instructions`}
+                  ${tip("Edit and dry run")}
+                  @click=${() => openTriageEditor(kind)}
+                >
+                  ${setting?.instructions || html`<span class="loop-triage-none">Default instructions</span>`}
+                </button>`
               : nothing
           }
         </div>`;
       })}
     </div>
-    ${previewTpl(loop, items)}`;
+    ${triageEditorTpl(loop, items)}`;
 }
 
 function ledgerRows(loop: LoopView, items: LoopItemView[]): TemplateResult[] {
