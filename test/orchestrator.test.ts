@@ -3832,7 +3832,7 @@ test("environments: an unattached scope provisions through its own scope (today'
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox, directory } = buildApp(config);
   const realProvision = sandbox.provision.bind(sandbox);
   let rwScope: string | undefined;
   sandbox.provision = (layers, opts) => {
@@ -3844,7 +3844,11 @@ test("environments: an unattached scope provisions through its own scope (today'
   assert.equal(before.status, "ok");
   assert.equal(rwScope, scopeId("personal", "U1"), "no attachment ⇒ provision through the scope itself");
 
-  const env = await app.createEnvironment({ scopeId: scopeId("personal", "U-shared"), name: "prod", actorId: "U1" });
+  await directory.replaceChannels(
+    [{ channelId: "C-shared", name: "shared", isPrivate: false }],
+    [{ channelId: "C-shared", principalId: "U1" }],
+  );
+  const env = await app.createEnvironment({ scopeId: scopeId("channel", "C-shared"), name: "prod", actorId: "U1" });
   await app.attachScope({ scopeId: scopeId("personal", "U1"), environmentId: env.id, actorId: "U1" });
 
   rwScope = undefined;

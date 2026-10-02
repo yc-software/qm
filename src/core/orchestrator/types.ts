@@ -17,7 +17,11 @@ import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
 import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
-import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
+import type {
+  CanWriteScope,
+  IsCurrentSharedScopeMember,
+  ManagedGroupDirectory,
+} from "../../resolution/scope-membership.ts";
 import type { DirectoryStore } from "../../directory/directory-store.ts";
 import type { EnvironmentStore } from "../../environments/environment-store.ts";
 import type { SessionStore } from "../../sessions/session-store.ts";
@@ -200,6 +204,7 @@ export interface OrchestratorDeps {
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
+  canWriteScope?: CanWriteScope;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   reachExec?: boolean;

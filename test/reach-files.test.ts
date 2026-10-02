@@ -35,10 +35,11 @@ describe("POST /v1/reach with files", () => {
       body: JSON.stringify(body),
     });
 
-  const seedFile = async (actorId: string, relPath: string, data: string) => {
-    const handle = await built.sandbox.provision([
-      { scopeId: scopeId("personal", actorId), mountPath: "", mode: "rw" },
-    ]);
+  const seedFile = async (actorId: string, relPath: string, data: string) =>
+    seedScopeFile(scopeId("personal", actorId), relPath, data);
+
+  const seedScopeFile = async (scope: string, relPath: string, data: string) => {
+    const handle = await built.sandbox.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
     await built.sandbox.writeFile(handle, relPath, data);
     await built.sandbox.teardown(handle, { keepWarm: true });
   };
@@ -49,6 +50,7 @@ describe("POST /v1/reach with files", () => {
     await built.app.upsertDirectory([
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
+      { principalId: "U-dave", displayName: "Dave", type: "internal" },
     ]);
     server = createServer(built.app, {
       signingSecret: SECRET,
@@ -56,6 +58,7 @@ describe("POST /v1/reach with files", () => {
       blobTransfer: built.blobTransfer,
       files: built.files,
       environments: built.environments,
+      canWriteScope: built.canWriteScope,
       auditLog: built.auditLog,
     });
     bare = createServer(built.app, { signingSecret: SECRET });
@@ -217,6 +220,35 @@ describe("POST /v1/reach with files", () => {
     );
     assert.equal(res.status, 501);
     assert.equal(((await res.json()) as any).error, "not_configured");
+  });
+
+  it("an attached conversation composes files from the environment's box (reach's own call site never passes the share check)", async () => {
+    await built.directory.replaceChannels(
+      [{ channelId: "C-shared", name: "shared", isPrivate: false }],
+      [{ channelId: "C-shared", principalId: "U-dave" }],
+    );
+    const env = await built.app.createEnvironment({
+      scopeId: scopeId("channel", "C-shared"),
+      name: "shared-box",
+      actorId: "U-dave",
+    });
+    await built.app.attachScope({
+      scopeId: scopeId("personal", "U-dave"),
+      environmentId: env.id,
+      actorId: "U-dave",
+    });
+    await seedScopeFile(env.id, "reports/shared.md", "# from the shared box\n");
+
+    const res = await post(
+      base,
+      "/v1/reach",
+      { text: "from the shared box", recipient: "Alice", files: ["reports/shared.md"] },
+      { "x-agent-capability": await capDm("U-dave") },
+    );
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === body.deliveryId);
+    assert.equal(d!.attachments?.length, 1, "the file is read from the environment the DM is attached to");
   });
 
   it("a plain text-only reach still works unchanged", async () => {

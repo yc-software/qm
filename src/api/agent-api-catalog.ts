@@ -696,12 +696,12 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "POST",
         path: "/v1/environments",
-        summary: "promote this conversation's computer to a NAMED environment owned by this user",
+        summary: "promote this conversation's computer to a NAMED environment owned by this conversation",
       },
       {
         method: "POST",
         path: "/v1/environments/attach",
-        summary: "point this conversation at a named environment (owner attaches freely; others go through the owner)",
+        summary: "point this conversation at a named environment (only its owning conversation can share it)",
       },
     ],
   },

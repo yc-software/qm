@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import type { CanWriteScope } from "../resolution/scope-membership.ts";
 import type { ScopeId } from "../types.ts";
 
 export interface Environment {
@@ -33,10 +34,24 @@ export interface EnvironmentStore {
   attachmentsFor(environmentId: string): Promise<EnvironmentAttachment[]>;
 }
 
-export async function resolveEnvironmentId(store: EnvironmentStore | undefined, scopeId: ScopeId): Promise<string> {
+export async function resolveEnvironmentId(
+  store: EnvironmentStore | undefined,
+  scopeId: ScopeId,
+  canWriteScope: CanWriteScope | undefined,
+): Promise<string> {
   if (!store) return scopeId;
   const attachment = await store.getAttachment(scopeId);
-  return attachment ? attachment.environmentId : scopeId;
+  if (!attachment || attachment.environmentId === scopeId) return scopeId;
+  // an attachment is a share the owning scope granted, so it holds only while its granter still speaks for that scope
+  const shared = await canWriteScope?.(attachment.attachedBy, attachment.environmentId);
+  if (shared === undefined) {
+    throw new Error(
+      `environment ${attachment.environmentId} cannot be resolved for ${scopeId}: no membership check is wired to verify the share`,
+    );
+  }
+  // the check answers false for a swallowed directory error too, so deny the share without destroying it
+  if (!shared) return scopeId;
+  return attachment.environmentId;
 }
 
 function rowToEnvironment(r: Record<string, unknown>): Environment {

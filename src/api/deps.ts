@@ -46,6 +46,7 @@ import type { MemoryService } from "../memory/memory-service.ts";
 import type { SandboxMigrationRunner } from "../sandbox/sandbox-migration-runner.ts";
 import type { EgressEnforcement, Sandbox } from "../sandbox/sandbox.ts";
 import type { EnvironmentStore } from "../environments/environment-store.ts";
+import type { CanWriteScope } from "../resolution/scope-membership.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -183,6 +184,7 @@ export interface ServerDeps {
   sessionShares?: SessionShareStore;
   sessionShareBytes?: DurableByteStore;
   environments?: EnvironmentStore;
+  canWriteScope?: CanWriteScope;
   deploymentLayer?: DeploymentLayerStore;
   backgroundOwnership?: { store: BackgroundOwnershipStore; instanceId: string; deploymentId: string };
   deploymentControlSecret?: string;

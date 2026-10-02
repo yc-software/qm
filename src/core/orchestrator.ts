@@ -1107,7 +1107,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const useMemory = !external && input.skipMemory !== true;
-      const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
+      const environmentId = external
+        ? scopeId
+        : await resolveEnvironmentId(deps.environments, scopeId, deps.canWriteScope);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
       if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
       for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
