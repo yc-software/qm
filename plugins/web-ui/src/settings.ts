@@ -13,6 +13,7 @@ import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./t
 export type ThemeChoice = "light" | "dark" | "system" | "custom";
 
 const THEME_KEY = "theme";
+const RESTORE_ON_OPEN_KEY = "open:restore-last";
 const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
@@ -55,6 +56,24 @@ function storeCustomTheme(palette: Palette | null): void {
   } catch {
     void 0;
   }
+}
+
+export function restoreLastOnOpen(): boolean {
+  try {
+    return localStorage.getItem(RESTORE_ON_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setRestoreLastOnOpen(restore: boolean): void {
+  try {
+    if (restore) localStorage.setItem(RESTORE_ON_OPEN_KEY, "1");
+    else localStorage.removeItem(RESTORE_ON_OPEN_KEY);
+  } catch {
+    void 0;
+  }
+  drawSettings();
 }
 
 let themeParentOrigin: string | null = null;
@@ -225,6 +244,38 @@ function themeRow(): TemplateResult {
               : nothing
           }
         </div>
+      </div>
+    </div>
+  `;
+}
+
+const OPEN_OPTIONS: Array<{ restore: boolean; label: string }> = [
+  { restore: false, label: "New chat" },
+  { restore: true, label: "Last session" },
+];
+
+function openBehaviorRow(): TemplateResult {
+  const restore = restoreLastOnOpen();
+  return html`
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <div class="settings-row-title">When QM opens</div>
+        <div class="settings-row-note">Start on a new chat, or reopen the conversations you had open last time.</div>
+      </div>
+      <div class="settings-choice" role="radiogroup" aria-label="When QM opens">
+        ${OPEN_OPTIONS.map(
+          (option) => html`
+            <button
+              class="settings-choice-option ${restore === option.restore ? "selected" : ""}"
+              type="button"
+              role="radio"
+              aria-checked=${restore === option.restore ? "true" : "false"}
+              @click=${() => setRestoreLastOnOpen(option.restore)}
+            >
+              <span>${option.label}</span>
+            </button>
+          `,
+        )}
       </div>
     </div>
   `;
@@ -425,8 +476,8 @@ function settingsPane(): TemplateResult {
       <h1 class="pane-title">Settings</h1>
     </div>
     <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()}
-      ${accountRow()}
+      ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${sidebarSurfaceRow()}
+      ${can("admin") ? adminRow() : nothing} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>

@@ -45,6 +45,7 @@ interface HarnessOptions {
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
+  restoreLast?: boolean;
 }
 
 export const SESSION = {
@@ -61,6 +62,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     url: `http://localhost${opts.path}`,
     pretendToBeVisual: true,
   });
+  if (opts.restoreLast !== false) dom.window.localStorage.setItem("open:restore-last", "1");
   if (opts.savedCanvas)
     dom.window.localStorage.setItem(
       "web-ui:split-canvas:v1",
