@@ -1135,7 +1135,7 @@ export async function boot(): Promise<void> {
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
-  const restoreLast = restoreLastOnOpen();
+  const restoreLast = viewIntent || restoreLastOnOpen();
   if (restoreLast) loadPersistedSplit();
   if (restoreLast && !wantedSession && wanted !== "app-edit" && prefill === null) {
     const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {

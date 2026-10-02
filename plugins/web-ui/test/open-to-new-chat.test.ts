@@ -7,7 +7,7 @@ const read = (f: string): string => readFileSync(new URL(`../src/${f}`, import.m
 test("opening the app lands on a new chat unless the person opted to restore their last session", () => {
   const shell = read("shell.ts");
   const boot = shell.slice(shell.indexOf("const remoteSplitFetch = fetchRemoteSplit();"));
-  assert.match(boot, /const restoreLast = restoreLastOnOpen\(\);/);
+  assert.match(boot, /const restoreLast = viewIntent \|\| restoreLastOnOpen\(\);/);
   assert.match(boot, /if \(restoreLast\) loadPersistedSplit\(\);/, "the saved layout is not adopted by default");
   assert.match(
     boot,
@@ -31,8 +31,11 @@ test("a saved multiview layout is not reopened on a bare visit by default", asyn
   const { harness } = await import("./deep-link-boot-fixture.ts");
   const h = await harness({ path: "/", savedCanvas: true, restoreLast: false });
   try {
+    const saved = localStorage.getItem("web-ui:split-canvas:v1");
     h.releaseSessions();
     await h.boot();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(localStorage.getItem("web-ui:split-canvas:v1"), saved, "the saved layout survives for a later opt-in");
     assert.equal(document.querySelectorAll(".split-pane-content").length, 0);
     assert.doesNotMatch(h.visibleConversation().state.threadRef ?? "", /old-a|old-b/);
     assert.doesNotMatch(h.mainText(), /old-a|old-b/);
