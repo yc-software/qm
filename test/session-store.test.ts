@@ -121,47 +121,43 @@ test("peekLease reads the holder without contending for it, and clears on releas
 });
 
 test("acquireLeaseWithin outlasts a short hold and returns the winning lease", async () => {
-  const store = createMemorySessionStore();
-  const scope = scopeId("personal", "U1");
-  const s = await store.getOrCreateByThread("t-wait", "dm", scope);
-  const { lease: held } = await store.acquireLease(s.id, "compaction");
-  assert.ok(held);
-  setTimeout(() => void store.releaseLease(held!), 300);
+  const { store, id, held } = await heldBy("t-wait", "compaction");
+  setTimeout(() => void store.releaseLease(held), 300);
 
-  const attempt = await acquireLeaseWithin(store, s.id, "turn", 5_000);
+  const attempt = await acquireLeaseWithin(store, id, "turn", 5_000);
   assert.ok(attempt.lease, "the waiter wins once the short hold lapses");
 });
 
 test("acquireLeaseWithin gives up after its budget and reports the holder it lost to", async () => {
-  const store = createMemorySessionStore();
-  const scope = scopeId("personal", "U1");
-  const s = await store.getOrCreateByThread("t-wait-loses", "dm", scope);
-  const { lease: held } = await store.acquireLease(s.id, "compaction");
-  assert.ok(held);
+  const { store, id, held } = await heldBy("t-wait-loses", "compaction");
 
-  const attempt = await acquireLeaseWithin(store, s.id, "turn", 100);
+  const attempt = await acquireLeaseWithin(store, id, "turn", 100);
   assert.equal(attempt.lease, null, "the budget bounds the wait");
   assert.equal(attempt.heldBy, "compaction", "the loser still learns what outranked it");
   assert.ok((attempt.waitedMs ?? 0) >= 75, "the budget was actually spent waiting");
-  await store.releaseLease(held!);
+  await store.releaseLease(held);
 });
 
 test("acquireLeaseWithin bails immediately on holders the caller will not wait for", async () => {
-  const store = createMemorySessionStore();
-  const scope = scopeId("personal", "U1");
-  const s = await store.getOrCreateByThread("t-wait-turn", "dm", scope);
-  const { lease: held } = await store.acquireLease(s.id, "turn");
-  assert.ok(held);
+  const { store, id, held } = await heldBy("t-wait-turn", "turn");
 
   const started = Date.now();
-  const attempt = await acquireLeaseWithin(store, s.id, "turn", 5_000, {
+  const attempt = await acquireLeaseWithin(store, id, "turn", 5_000, {
     waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn",
   });
   assert.equal(attempt.lease, null);
   assert.equal(attempt.heldBy, "turn", "the refusal names the holder it declined to wait for");
   assert.ok(Date.now() - started < 1_000, "no wait is spent on a holder that will not release in time");
-  await store.releaseLease(held!);
+  await store.releaseLease(held);
 });
+
+async function heldBy(thread: string, holder: "compaction" | "turn") {
+  const store = createMemorySessionStore();
+  const s = await store.getOrCreateByThread(thread, "dm", scopeId("personal", "U1"));
+  const { lease } = await store.acquireLease(s.id, holder);
+  assert.ok(lease);
+  return { store, id: s.id, held: lease! };
+}
 
 const backends: Array<[string, () => SessionStore]> = [["memory", () => createMemorySessionStore()]];
 
@@ -178,14 +174,17 @@ for (const [name, make] of backends) {
     assert.equal((await store.listByParticipant("U1"))[0]?.forkBoundarySeq, 7);
   });
 
-  test(`${name}: one session per thread (getOrCreateByThread is idempotent)`, async () => {
+  test(`${name}: one session per thread (getOrCreateByThread is idempotent; getByThread is a pure lookup)`, async () => {
     const store = make();
     const scope = scopeId("personal", "U1");
+    assert.equal(await store.getByThread("t1"), null, "missing thread → null, no session created");
     const a = await store.getOrCreateByThread("t1", "dm", scope);
     const b = await store.getOrCreateByThread("t1", "dm", scope);
     const c = await store.getOrCreateByThread("t2", "dm", scope);
     assert.equal(a.id, b.id);
     assert.notEqual(a.id, c.id);
+    assert.equal((await store.getByThread("t1"))?.id, a.id);
+    assert.equal(await store.getByThread("still-nope"), null);
   });
 
   test(`${name}: single-writer lease + monotonic seq`, async () => {
@@ -204,28 +203,6 @@ for (const [name, make] of backends) {
 
     await store.releaseLease(lease);
     await assert.rejects(store.append(lease, { type: "user", payload: {}, scopeLabel: s.scopeId }));
-  });
-
-  test(`${name}: getByThread is a pure lookup (null on miss, never creates)`, async () => {
-    const store = make();
-    assert.equal(await store.getByThread("nope"), null, "missing thread → null, no session created");
-    const s = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));
-    const got = await store.getByThread("t1");
-    assert.equal(got?.id, s.id);
-    assert.equal(await store.getByThread("still-nope"), null);
-  });
-
-  test(`${name}: scopeSessionSummaries tags each row with its origin (conversation vs cron)`, async () => {
-    const store = make();
-    const scope = scopeId("personal", "U1");
-    await store.getOrCreateByThread("dm:D1", "dm", scope);
-    await store.getOrCreateByThread("agent:main:cron:c1", "dm", scope);
-    const rows = await store.scopeSessionSummaries(scope, false);
-    const byThreadOrigin = new Map(rows.map((r) => [r.id, r.origin]));
-    const conv = await store.getByThread("dm:D1");
-    const cron = await store.getByThread("agent:main:cron:c1");
-    assert.equal(byThreadOrigin.get(conv!.id), "conversation");
-    assert.equal(byThreadOrigin.get(cron!.id), "cron");
   });
 
   test(`${name}: scopeSessionStats rolls up totals/turns/byType across the whole scope`, async () => {
@@ -324,12 +301,15 @@ for (const [name, make] of backends) {
     assert.equal((await store.scopeSessionSummaries(scope, false)).length, 3, "unpaginated still returns all");
   });
 
-  test(`${name}: scopeSessionSummaries filters category before paginating`, async () => {
+  test(`${name}: scopeSessionSummaries tags each row with its origin and filters category before paginating`, async () => {
     const store = make();
     const scope = scopeId("personal", "U1");
     const convo = await store.getOrCreateByThread("dm:D1", "dm", scope);
-    await store.getOrCreateByThread("agent:main:cron:c1", "dm", scope);
+    const cron = await store.getOrCreateByThread("agent:main:cron:c1", "dm", scope);
     await store.getOrCreateByThread("agent:main:webhook:wh1", "dm", scope);
+    const origins = new Map((await store.scopeSessionSummaries(scope, false)).map((r) => [r.id, r.origin]));
+    assert.equal(origins.get(convo.id), "conversation");
+    assert.equal(origins.get(cron.id), "cron");
 
     const conversations = await store.scopeSessionSummaries(scope, false, {
       limit: 10,
@@ -706,7 +686,7 @@ for (const [name, make] of backends) {
     );
   });
 
-  test(`${name}: bounded participant listing returns recent rows and keeps the unbounded API`, async () => {
+  test(`${name}: listByParticipant powers unified history across scopes, bounded by limit`, async () => {
     const store = make();
     for (let i = 0; i < 5; i++) {
       const session = await store.getOrCreateByThread(`bounded:${i}`, "dm", scopeId("personal", "bounded-user"));
@@ -715,10 +695,6 @@ for (const [name, make] of backends) {
     assert.equal((await store.listByParticipant("bounded-user")).length, 5);
     assert.equal((await store.listByParticipant("bounded-user", { limit: 2 })).length, 2);
     assert.equal((await store.listByParticipant("bounded-user", { limit: 0 })).length, 0);
-  });
-
-  test(`${name}: listByParticipant powers unified history`, async () => {
-    const store = make();
     const s1 = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));
     const s2 = await store.getOrCreateByThread("t2", "channel", scopeId("channel", "C1"));
     await store.addParticipant(s1.id, "U1");
@@ -788,12 +764,14 @@ for (const [name, make] of backends) {
     assert.notEqual((await store.acquireLease(reborn.id)).lease, null, "the fresh session is leasable");
   });
 
-  test(`${name}: listByParticipant sets lastActivityAt to the most recent user message`, async () => {
+  test(`${name}: listByParticipant sets lastActivityAt to the most recent user message, falling back to createdAt`, async () => {
     let clock = Date.now() + 1_000_000;
     const store = createMemorySessionStore({ now: () => ++clock });
     const scope = scopeId("personal", "U1");
     const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
     await store.addParticipant(s.id, "U1");
+    const row = async () => (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
+    assert.equal((await row()).lastActivityAt, s.createdAt, "an entry-less session falls back to its creation time");
     const { lease } = await store.acquireLease(s.id);
     assert.ok(lease);
     await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
@@ -802,23 +780,11 @@ for (const [name, make] of backends) {
     await store.append(lease, { type: "tool_call", payload: {}, scopeLabel: scope });
     await store.releaseLease(lease);
 
-    const row = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
     assert.equal(
-      row.lastActivityAt,
+      (await row()).lastActivityAt,
       lastUser.createdAt,
       "tracks the last user message, ignoring the agent's later assistant/tool entries",
     );
-  });
-
-  test(`${name}: listByParticipant falls back to createdAt for an entry-less session`, async () => {
-    let clock = Date.now() + 1_000_000;
-    const store = createMemorySessionStore({ now: () => ++clock });
-    const scope = scopeId("personal", "U1");
-    const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
-    await store.addParticipant(s.id, "U1");
-
-    const row = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
-    assert.equal(row.lastActivityAt, s.createdAt, "an entry-less session falls back to its creation time");
   });
 
   test(`${name}: listByParticipant reports whether the transcript has any entries`, async () => {
@@ -884,57 +850,33 @@ for (const [name, make] of backends) {
     assert.equal(row.color, "#3b82f6", "color survives");
   });
 
-  test(`${name}: updateParticipantView rename/archive is per-participant`, async () => {
+  test(`${name}: updateParticipantView rename/archive/pin/color is per-participant and clears`, async () => {
     const store = make();
     const s = await store.getOrCreateByThread("t1", "channel", scopeId("channel", "C1"));
     await store.addParticipant(s.id, "U1");
     await store.addParticipant(s.id, "U2");
+    const view = async (who: string) => (await store.listByParticipant(who)).find((x) => x.id === s.id)!;
+    const assertBlank = (row: Awaited<ReturnType<typeof view>>, why?: string) => {
+      assert.equal(row.title ?? null, null);
+      assert.ok(!row.archived);
+      assert.ok(!row.pinned, why && `one participant's pin never ${why}`);
+      assert.equal(row.color ?? null, null, why && `one participant's color never ${why}`);
+    };
 
-    const before = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
-    assert.equal(before.title ?? null, null);
-    assert.ok(!before.archived);
-
-    await store.updateParticipantView(s.id, "U1", { title: "Roadmap", archived: true });
-    const u1 = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
+    assertBlank(await view("U1"));
+    await store.updateParticipantView(s.id, "U1", { title: "Roadmap", archived: true, pinned: true, color: "#ef4444" });
+    const u1 = await view("U1");
     assert.equal(u1.title, "Roadmap");
     assert.equal(u1.archived, true);
+    assert.equal(u1.pinned, true);
+    assert.equal(u1.color, "#ef4444");
+    assertBlank(await view("U2"), "reaches another participant");
 
-    const u2 = (await store.listByParticipant("U2")).find((x) => x.id === s.id)!;
-    assert.equal(u2.title ?? null, null);
-    assert.ok(!u2.archived);
-
-    await store.updateParticipantView(s.id, "U1", { title: null, archived: false });
-    const u1b = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
-    assert.equal(u1b.title ?? null, null);
-    assert.ok(!u1b.archived);
+    await store.updateParticipantView(s.id, "U1", { title: null, archived: false, pinned: false, color: null });
+    assertBlank(await view("U1"));
 
     await store.updateParticipantView(s.id, "U3", { title: "nope" });
     assert.equal((await store.listByParticipant("U3")).length, 0);
-  });
-
-  test(`${name}: updateParticipantView pin/color is per-participant and clears`, async () => {
-    const store = make();
-    const s = await store.getOrCreateByThread("t-pin", "channel", scopeId("channel", "C2"));
-    await store.addParticipant(s.id, "U1");
-    await store.addParticipant(s.id, "U2");
-
-    const before = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
-    assert.ok(!before.pinned);
-    assert.equal(before.color ?? null, null);
-
-    await store.updateParticipantView(s.id, "U1", { pinned: true, color: "#ef4444" });
-    const u1 = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
-    assert.equal(u1.pinned, true);
-    assert.equal(u1.color, "#ef4444");
-
-    const u2 = (await store.listByParticipant("U2")).find((x) => x.id === s.id)!;
-    assert.ok(!u2.pinned, "one participant's pin never pins the thread for another");
-    assert.equal(u2.color ?? null, null, "one participant's color never colors it for another");
-
-    await store.updateParticipantView(s.id, "U1", { pinned: false, color: null });
-    const u1b = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
-    assert.ok(!u1b.pinned);
-    assert.equal(u1b.color ?? null, null);
   });
 
   test(`${name}: addParticipant can initialize a private title without resetting an active tenure`, async () => {

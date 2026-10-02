@@ -11,7 +11,7 @@ import {
   type SandboxDefault,
   type SandboxResourceRollout,
 } from "../src/sandbox/sandbox-resources.ts";
-import { createSandboxRouter, type SandboxRoute } from "../src/sandbox/sandbox-routing.ts";
+import { createSandboxRouter, type SandboxBackendName, type SandboxRoute } from "../src/sandbox/sandbox-routing.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -77,6 +77,22 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   const router = createSandboxRouter({ routes, backends: { local: backend }, defaultBackend: "local", resources });
   const layers = [{ scopeId: "personal:alice", mode: "rw" as const, mountPath: "/" }];
   return { records, defaults, routes, resources, router, provisioned, layers, backend, options, rollout };
+}
+
+function onBackend(fx: ReturnType<typeof fixture>, kind: SandboxBackendName, backend: Sandbox = fx.backend) {
+  const backends = { [kind]: backend };
+  const resources = createSandboxResources({ ...fx.options, backends, defaultBackend: kind });
+  const router = createSandboxRouter({ routes: fx.routes, backends, defaultBackend: kind, resources });
+  return { resources, router };
+}
+
+function withProcesses(sandbox: Sandbox, processId: string) {
+  sandbox.profile.processSessions = true;
+  sandbox.startProcess = async () => ({ processId });
+  sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
+  sandbox.writeStdin = async () => {};
+  sandbox.signalProcess = async () => {};
+  sandbox.listProcesses = async () => [];
 }
 
 test("blank sandbox identities coexist and default changes never copy files or redirect existing handles", async () => {
@@ -225,16 +241,11 @@ test("retirement refuses the default, waits for an active command, and prevents 
   await assert.rejects(resources.retire("alice", record.id), /default/);
   const handle = await router.provision(layers);
   await resources.setDefault("alice", "personal:alice", null);
-  let finish!: () => void;
-  let started!: () => void;
-  const running = new Promise<void>((resolve) => {
-    started = resolve;
-  });
+  const started = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
   backend.run = async () => {
-    started();
-    await new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    started.resolve();
+    await finish.promise;
     return { stdout: "done", stderr: "", code: 0, timedOut: false };
   };
   let destroyed = false;
@@ -242,10 +253,10 @@ test("retirement refuses the default, waits for an active command, and prevents 
     destroyed = true;
   };
   const command = router.run(handle, "work");
-  await running;
+  await started.promise;
   const retiring = resources.retire("alice", record.id);
   assert.equal(destroyed, false);
-  finish();
+  finish.resolve();
   await command;
   await retiring;
   assert.equal(destroyed, true);
@@ -303,20 +314,14 @@ for (const fail of [false, true])
   test(`retirement waits for outstanding creation ${fail ? "failure" : "success"} and remains terminal`, async () => {
     const { resources, records, backend } = fixture();
     const provision = backend.provision;
-    let release!: () => void;
-    let entered!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
+    const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
     let first = true;
     backend.provision = async (layers, options) => {
       if (first) {
         first = false;
-        entered();
-        await gate;
+        started.resolve();
+        await gate.promise;
         if (fail) throw new Error("create failed");
       }
       return provision(layers, options);
@@ -328,7 +333,7 @@ for (const fail of [false, true])
         assert.match(String(error), /create failed/);
       },
     );
-    await started;
+    await started.promise;
     const record = (await records.all())[0]!;
     let retired = false;
     const retiring = resources.retire("alice", record.id).then(() => {
@@ -337,7 +342,7 @@ for (const fail of [false, true])
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(retired, false);
     assert.equal((await records.get(record.id))?.state, "provisioning");
-    release();
+    gate.resolve();
     await Promise.all([completed, retiring]);
     assert.equal((await records.get(record.id))?.state, "retired");
     await assert.rejects(
@@ -752,14 +757,7 @@ test("retirement preserves core live-work and owning-scope guards before direct 
 });
 
 test("retirement waits for background startup to commit its live registry row", async () => {
-  const { options, backend, routes, layers } = fixture((sandbox) => {
-    sandbox.profile.processSessions = true;
-    sandbox.startProcess = async () => ({ processId: "job" });
-    sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
-    sandbox.writeStdin = async () => {};
-    sandbox.signalProcess = async () => {};
-    sandbox.listProcesses = async () => [];
-  });
+  const { options, backend, routes, layers } = fixture((sandbox) => withProcesses(sandbox, "job"));
   const registry = createMemoryProcessRegistry();
   const resources = createSandboxResources({
     ...options,
@@ -795,14 +793,7 @@ test("retirement waits for background startup to commit its live registry row", 
 });
 
 test("failed background registration kills its process and releases the resource lock", async () => {
-  const { resources, router, backend, layers } = fixture((sandbox) => {
-    sandbox.profile.processSessions = true;
-    sandbox.startProcess = async () => ({ processId: "unregistered" });
-    sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
-    sandbox.writeStdin = async () => {};
-    sandbox.signalProcess = async () => {};
-    sandbox.listProcesses = async () => [];
-  });
+  const { resources, router, backend, layers } = fixture((sandbox) => withProcesses(sandbox, "unregistered"));
   assert.ok(supportsProcessSessions(router));
   const record = await resources.create("alice", "personal:alice", "local");
   const handle = await router.provision(layers, { sandboxId: record.id });
@@ -844,9 +835,9 @@ for (const [kind, waiting] of [
   ["sprites", "checkpoint"],
 ] as const) {
   test(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
-    const { options, backend, layers, routes } = fixture();
-    const resources = createSandboxResources({ ...options, backends: { [kind]: backend }, defaultBackend: kind });
-    const router = createSandboxRouter({ routes, backends: { [kind]: backend }, defaultBackend: kind, resources });
+    const fx = fixture();
+    const { backend, layers } = fx;
+    const { resources, router } = onBackend(fx, kind);
     const record = await resources.create("alice", "personal:alice", kind);
     await resources.setDefault("alice", "personal:alice", record.id);
     const handle = await router.provision(layers);
@@ -896,9 +887,9 @@ for (const [kind, waiting] of [
 }
 
 test("Modal provisioning and destructive cleanup wait for active operations", { timeout: 10000 }, async () => {
-  const { options, backend, layers, routes } = fixture();
-  const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
-  const router = createSandboxRouter({ routes, backends: { modal: backend }, defaultBackend: "modal", resources });
+  const fx = fixture();
+  const { backend, layers } = fx;
+  const { resources, router } = onBackend(fx, "modal");
   const record = await resources.create("alice", "personal:alice", "modal");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const entered = Promise.withResolvers<void>();
@@ -934,9 +925,9 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
 });
 
 test("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
-  const { options, backend, layers, routes } = fixture();
-  const resources = createSandboxResources({ ...options, backends: { sprites: backend }, defaultBackend: "sprites" });
-  const router = createSandboxRouter({ routes, backends: { sprites: backend }, defaultBackend: "sprites", resources });
+  const fx = fixture();
+  const { backend, layers } = fx;
+  const { resources, router } = onBackend(fx, "sprites");
   const record = await resources.create("alice", "personal:alice", "sprites");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const release = Promise.withResolvers<void>();
@@ -958,10 +949,10 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
 });
 
 test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
-  const { options, backend, layers, routes } = fixture();
-  const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
-  const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
-  const router = createSandboxRouter({ routes, backends: { e2b: parking }, defaultBackend: "e2b", resources });
+  const fx = fixture();
+  const parking: Sandbox = { ...fx.backend, profile: { ...fx.backend.profile, parksOnTeardown: true } };
+  const { layers } = fx;
+  const { resources, router } = onBackend(fx, "e2b", parking);
   const record = await resources.create("alice", "personal:alice", "e2b");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const entered = Promise.withResolvers<void>();

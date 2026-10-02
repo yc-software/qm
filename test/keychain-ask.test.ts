@@ -31,7 +31,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type ScopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -47,6 +47,9 @@ function kcAt(now: () => number): Keychain {
     now,
   });
 }
+
+const bobAsks = (k: Keychain, credentialId: string, purpose: string, requesterScopeId: ScopeId = "channel:C1") =>
+  k.createAsk({ credentialId, requesterId: "U_BOB", requesterScopeId, purpose });
 
 const GH = {
   ownerId: "U_ALICE",
@@ -100,12 +103,7 @@ test("createAsk: owner derived from the credential, purpose frozen, dedup per (c
   assert.equal(again.ask.id, ask.id, "one pending ask per (credential, scope, task) — re-asks are silent");
   assert.equal(again.ask.purpose, "clone acme/payments and run the tests", "the original purpose stays frozen");
 
-  const elsewhere = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C2",
-    purpose: "other room",
-  });
+  const elsewhere = await bobAsks(k, cred.id, "other room", "channel:C2");
   assert.equal(elsewhere.existing, false, "a different scope is a different ask");
 });
 
@@ -186,12 +184,7 @@ test("approveAsk: same createGrant owner gate, audience from the record, single 
   const t = 1_000_000;
   const k = kcAt(() => t);
   const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "clone the repo",
-  });
+  const { ask } = await bobAsks(k, cred.id, "clone the repo");
 
   await assert.rejects(
     k.approveAsk({ askId: ask.id, ownerId: "U_BOB", mode: "once", purpose: "alice said fine" }),
@@ -233,12 +226,7 @@ test("approveAsk: same createGrant owner gate, audience from the record, single 
 test("declineAsk is owner-gated and single-resolution", async () => {
   const k = kcAt(Date.now);
   const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "p",
-  });
+  const { ask } = await bobAsks(k, cred.id, "p");
 
   await assert.rejects(k.declineAsk({ askId: ask.id, ownerId: "U_BOB" }), (e: KeychainError) => e.status === 403);
   const declined = await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE", note: "not for prod" });
@@ -255,12 +243,7 @@ test("expiry: lazy flip on read, sweep returns each expired ask exactly once", a
   let t = 1_000_000;
   const k = kcAt(() => t);
   const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "p",
-  });
+  const { ask } = await bobAsks(k, cred.id, "p");
 
   t += ASK_TTL_MS + 1;
   const listed = await k.listAsks({ requesterScopeId: "channel:C1" });
@@ -288,7 +271,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   let t = 1_000_000;
   const k = kcAt(() => t);
   const cred = await k.save(GH);
-  await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "p" });
+  await bobAsks(k, cred.id, "p");
   t += ASK_TTL_MS + 1;
 
   const fired: KeychainAsk[] = [];
@@ -316,12 +299,7 @@ test("sweep is the durable retry for approve/decline resolutions that never fire
   let t = 1_000_000;
   const k = kcAt(() => t);
   const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "p",
-  });
+  const { ask } = await bobAsks(k, cred.id, "p");
   await k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "yes" });
 
   const fired: KeychainAsk[] = [];
@@ -344,12 +322,8 @@ test("sweep isolates per-ask failures — one failed fire doesn't starve the bat
   const t = 1_000_000;
   const k = kcAt(() => t);
   const cred = await k.save(GH);
-  const a1 = (
-    await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "p1" })
-  ).ask;
-  const a2 = (
-    await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C2", purpose: "p2" })
-  ).ask;
+  const a1 = (await bobAsks(k, cred.id, "p1")).ask;
+  const a2 = (await bobAsks(k, cred.id, "p2", "channel:C2")).ask;
   await k.approveAsk({ askId: a1.id, ownerId: "U_ALICE", mode: "once", purpose: "y1" });
   await k.approveAsk({ askId: a2.id, ownerId: "U_ALICE", mode: "once", purpose: "y2" });
 
@@ -600,6 +574,8 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       headers: { "content-type": "application/json", "x-agent-capability": cap },
       body: JSON.stringify(body),
     });
+  const saveCred = async (body: object, cap: string) =>
+    ((await (await post("/v1/keychain/credentials", body, cap)).json()) as any).credential;
   const get = (path: string, cap: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
   const waitFor = async <T>(probe: () => Promise<T[]>, ms = 5_000): Promise<T[]> => {
     const start = Date.now();
@@ -655,9 +631,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   });
 
   it("the web approval route decides through the same card path, owner only, never by capability", async () => {
-    const { credential } = (await (
-      await post("/v1/keychain/credentials", { service: "web-card", secret: "w" }, await capFor("U_ALICE"))
-    ).json()) as any;
+    const credential = await saveCred({ service: "web-card", secret: "w" }, await capFor("U_ALICE"));
     const { ask } = (await (
       await post(
         "/v1/keychain/asks",
@@ -703,14 +677,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     );
   });
 
-  it("gates creation: personal ownership and directory-verified channel membership", async () => {
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        { service: "github", secret: "ghp_alice", envKey: "GITHUB_TOKEN", accountLabel: "alice-acme" },
-        await capFor("U_ALICE"),
-      )
-    ).json()) as any;
+  it("gates creation: personal ownership, directory-verified channel membership, and a valid expiry", async () => {
+    const credential = await saveCred(
+      { service: "github", secret: "ghp_alice", envKey: "GITHUB_TOKEN", accountLabel: "alice-acme" },
+      await capFor("U_ALICE"),
+    );
 
     const fromDm = await post("/v1/keychain/asks", { credential: credential.id, purpose: "p" }, await capFor("U_BOB"));
     assert.equal(fromDm.status, 403, "dm scopes cannot send asks in v1");
@@ -738,18 +709,14 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const unknownCred = await post("/v1/keychain/asks", { credential: "nope", purpose: "p" }, await bobInInfra());
     assert.equal(unknownCred.status, 404);
-  });
 
-  it("rejects invalid ask expiry at the route boundary", async () => {
-    const { credential } = (await (
-      await post("/v1/keychain/credentials", { service: "invalid-ask-exp", secret: "x" }, await capFor("U_ALICE"))
-    ).json()) as any;
-    const res = await post(
+    const invalidExpiry = await saveCred({ service: "invalid-ask-exp", secret: "x" }, await capFor("U_ALICE"));
+    const badExpiry = await post(
       "/v1/keychain/asks",
-      { credential: credential.id, purpose: "p", expiresAt: "not-a-date" },
+      { credential: invalidExpiry.id, purpose: "p", expiresAt: "not-a-date" },
       await bobInInfra(),
     );
-    assert.equal(res.status, 400);
+    assert.equal(badExpiry.status, 400, "invalid ask expiry is rejected at the route boundary");
   });
 
   it("creates the ask, posts ONE card in the requesting conversation without ids or purpose text, dedups silently", async () => {
@@ -806,13 +773,10 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   });
 
   it("public channel: any internal owner is askable", async () => {
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        { service: "npm", secret: "npm_alice", envKey: "NPM_TOKEN" },
-        await capFor("U_ALICE"),
-      )
-    ).json()) as any;
+    const credential = await saveCred(
+      { service: "npm", secret: "npm_alice", envKey: "NPM_TOKEN" },
+      await capFor("U_ALICE"),
+    );
     const res = await post(
       "/v1/keychain/asks",
       { credential: credential.id, purpose: "publish the package" },
@@ -908,7 +872,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
       assert.ok(!registered.includes(removed), `${removed} is no longer registered`);
-    // An unregistered path answers exactly like any unknown route: the capability gate refuses it.
     const unknown = await (await post("/v1/keychain/no-such-route", {}, liveOwner)).json();
     for (const [path, body] of [
       ["/v1/keychain/grants", { credential: gh.id, mode: "standing", purpose: "owner says yes" }],
@@ -1074,13 +1037,10 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       const personal = scopeId("personal", "U_ALICE");
       const token = await capFor("U_ALICE", personal, { triggered: true, threadRef });
       const live = await capFor("U_ALICE", personal, { liveActor: true });
-      const { credential } = (await (
-        await post(
-          "/v1/keychain/credentials",
-          { service: `cron-${mode}`, secret: "dummy-cron-value", envKey: "CRON_QA_TOKEN" },
-          live,
-        )
-      ).json()) as any;
+      const credential = await saveCred(
+        { service: `cron-${mode}`, secret: "dummy-cron-value", envKey: "CRON_QA_TOKEN" },
+        live,
+      );
       const seed = await built.app.turn({
         surface: "slack",
         actor: { externalId: "U_ALICE" },
@@ -1146,13 +1106,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   it("a scheduled personal request can be declined without granting access", async () => {
     const live = await capFor("U_ALICE", "personal:U_ALICE", { liveActor: true });
     const token = await capFor("U_ALICE", "personal:U_ALICE", { triggered: true });
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        { service: "cron-decline", secret: "dummy", envKey: "CRON_QA_TOKEN" },
-        live,
-      )
-    ).json()) as any;
+    const credential = await saveCred({ service: "cron-decline", secret: "dummy", envKey: "CRON_QA_TOKEN" }, live);
     const { ask } = (await (
       await post("/v1/keychain/asks", { credential: credential.id, purpose: "dummy declined check" }, token)
     ).json()) as any;
@@ -1173,13 +1127,10 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   });
 
   it("expiry: the scheduler sweep fires exactly one expired-resolution turn into the asking channel", async () => {
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        { service: "vercel", secret: "v_alice", envKey: "VERCEL_TOKEN" },
-        await capFor("U_ALICE"),
-      )
-    ).json()) as any;
+    const credential = await saveCred(
+      { service: "vercel", secret: "v_alice", envKey: "VERCEL_TOKEN" },
+      await capFor("U_ALICE"),
+    );
     const made = (await (
       await post(
         "/v1/keychain/asks",
@@ -1213,8 +1164,6 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
       apiBaseUrl: "http://core.test",
     }),
   );
-  // The recorded script is the backend's OUTER `sh -c` wrapper, so the export's single quotes
-  // arrive shell-escaped — match the token's own alphabet instead of the quoting around it.
   const extractToken = (since: number): CapabilityClaims | null => {
     for (const script of fakeSprites.execScripts().slice(since)) {
       const m = /export AGENT_API_TOKEN=\W*([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/.exec(script);

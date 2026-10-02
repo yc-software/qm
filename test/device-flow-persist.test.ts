@@ -43,6 +43,23 @@ function sprites() {
 }
 const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
 
+async function box(ownerScope: string = scopeId("personal", "U1"), ownerId: string = "U1") {
+  const sb = sprites();
+  const k = kc();
+  const layers = rw(ownerScope);
+  const h = await sb.provision(layers);
+  const io = (handle: typeof h = h) => ({ sandbox: sb, handle, keychain: k, ownerId });
+  const rebuild = async (from: typeof h = h) => {
+    rmSync(ff.homeDir(from.id), { recursive: true, force: true });
+    const next = await sb.provision(layers);
+    await materializeDeviceFlowLogins(io(next));
+    return next;
+  };
+  return { sb, k, h, layers, io, rebuild };
+}
+
+const b64 = (text: string) => Buffer.from(text).toString("base64");
+
 function acmecliCredentialLayer(binary?: string, approvals?: Array<{ pattern: string; reason?: string }>): string {
   const dir = mkdtempSync(join(tmpdir(), "dfp-layer-"));
   mkdirSync(join(dir, "tools/acmecli"), { recursive: true });
@@ -69,9 +86,7 @@ test("deviceFlowCredOwner: the person on their own personal box, the scope on a 
 });
 
 test("capture saves changed login bundles per service and fingerprint-skips unchanged ones", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   const login = await sb.run(
     h,
     "mkdir -p ~/.config/gh && printf 'oauth_token: gho_SECRET' > ~/.config/gh/hosts.yml && " +
@@ -79,7 +94,7 @@ test("capture saves changed login bundles per service and fingerprint-skips unch
   );
   assert.equal(login.code, 0, login.stderr);
 
-  const input = { sandbox: sb, handle: h, keychain: k, ownerId: "U1" };
+  const input = io();
   assert.deepEqual((await captureDeviceFlowLogins(input)).sort(), ["gh", "netrc"]);
 
   const records = await k.listByOwner("U1");
@@ -95,9 +110,7 @@ test("capture saves changed login bundles per service and fingerprint-skips unch
 });
 
 test("capture grabs the AWS SSO token under .aws/sso/cache; gcloud's cache/logs bulk dirs are pruned", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io, rebuild } = await box();
   const setup = await sb.run(
     h,
     "mkdir -p ~/.aws/sso/cache ~/.aws/cli/cache ~/.config/gcloud/logs ~/.config/gcloud/cache && " +
@@ -109,7 +122,7 @@ test("capture grabs the AWS SSO token under .aws/sso/cache; gcloud's cache/logs 
   );
   assert.equal(setup.code, 0, setup.stderr);
 
-  const input = { sandbox: sb, handle: h, keychain: k, ownerId: "U1" };
+  const input = io();
   assert.deepEqual((await captureDeviceFlowLogins(input)).sort(), ["aws", "gcloud"]);
 
   const records = await k.listByOwner("U1");
@@ -126,18 +139,14 @@ test("capture grabs the AWS SSO token under .aws/sso/cache; gcloud's cache/logs 
     "the real gcloud cred is captured; its cache (discovery docs) and logs bulk dirs are pruned",
   );
 
-  rmSync(ff.homeDir(h.id), { recursive: true, force: true });
-  const h2 = await sb.provision(rw(scopeId("personal", "U1")));
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const h2 = await rebuild();
   const back = await sb.run(h2, "cat ~/.aws/sso/cache/token.json");
   assert.equal(back.code, 0, back.stderr);
   assert.match(back.stdout, /sso_SECRET/, "auth survived machine replacement");
 });
 
 test("an unregistered ~/.config tool is neither swept nor stored (known services still are)", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   await sb.run(
     h,
     "mkdir -p ~/.config/gh ~/.config/acmecorp && printf 'oauth_token: gho_OK' > ~/.config/gh/hosts.yml && " +
@@ -145,10 +154,7 @@ test("an unregistered ~/.config tool is neither swept nor stored (known services
   );
   const skipped: string[] = [];
   const saved = await captureDeviceFlowLogins({
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
+    ...io(),
     onAnomaly: (s) => skipped.push(s),
   });
   assert.deepEqual(saved, ["gh"], "the known service is captured; the unregistered one is not");
@@ -156,71 +162,44 @@ test("an unregistered ~/.config tool is neither swept nor stored (known services
   assert.ok(!(await k.listByOwner("U1")).some((c) => c.service === "acmecorp"), "acmecorp was never stored");
 });
 
-test("lossless migration only follows device-flow records, not operator-saved credentials", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
-  await sb.run(h, "mkdir -p ~/.config/opsaved && printf 'operator_secret' > ~/.config/opsaved/auth.json");
-  await k.save({
-    ownerId: "U1",
-    service: "opsaved",
-    files: [{ path: ".config/opsaved/auth.json", contentBase64: Buffer.from("op_v0").toString("base64") }],
-    origin: "agent-session:personal:U1",
-  });
-
-  assert.deepEqual(
-    await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" }),
-    [],
-    "an operator/API-saved credential is not adopted into the device-flow sweep and not overwritten",
-  );
-  const rec = (await k.listByOwner("U1")).find((c) => c.service === "opsaved");
-  assert.equal(rec?.origin, "agent-session:personal:U1", "its origin is untouched");
+test("capture never adopts or clobbers an operator-saved record, for a swept or an unregistered service", async () => {
+  for (const [service, path, onBox, stored] of [
+    ["gh", ".config/gh/hosts.yml", "oauth_token: gho_BOX", "oauth_token: gho_OPERATOR"],
+    ["opsaved", ".config/opsaved/auth.json", "operator_secret", "op_v0"],
+  ] as const) {
+    const { sb, k, h, io } = await box();
+    await sb.run(h, `mkdir -p ~/${path.slice(0, path.lastIndexOf("/"))} && printf '${onBox}' > ~/${path}`);
+    await k.save({
+      ownerId: "U1",
+      service,
+      files: [{ path, contentBase64: b64(stored) }],
+      origin: "agent-session:personal:U1",
+    });
+    assert.deepEqual(await captureDeviceFlowLogins(io()), [], `${service} is neither adopted nor overwritten`);
+    const rec = (await k.listByOwner("U1")).find((c) => c.service === service);
+    assert.equal(rec?.origin, "agent-session:personal:U1", "the operator's record and origin survive capture");
+  }
 });
 
 test("lossless migration: a service captured before keeps being swept via its record targets", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
+  const { sb, k, h: h1, io, rebuild } = await box();
   await sb.run(h1, "mkdir -p ~/.config/acmecorp && printf 'tok_v1' > ~/.config/acmecorp/auth.json");
   await k.save({
     ownerId: "U1",
     service: "acmecorp",
-    files: [{ path: ".config/acmecorp/auth.json", contentBase64: Buffer.from("tok_v0").toString("base64") }],
+    files: [{ path: ".config/acmecorp/auth.json", contentBase64: b64("tok_v0") }],
     origin: DEVICE_FLOW_ORIGIN,
   });
 
-  assert.deepEqual(await captureDeviceFlowLogins({ sandbox: sb, handle: h1, keychain: k, ownerId: "U1" }), [
-    "acmecorp",
-  ]);
+  assert.deepEqual(await captureDeviceFlowLogins(io(h1)), ["acmecorp"]);
 
-  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
-  const h2 = await sb.provision(layers);
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const h2 = await rebuild(h1);
   const back = await sb.run(h2, "cat ~/.config/acmecorp/auth.json");
   assert.match(back.stdout, /tok_v1/, "the previously-captured tool's rotated login still rides along");
 });
 
-test("pre-XDG holdout: a tool that keeps its login in ~/.<tool> (fly) is captured + restored", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
-  await sb.run(h1, "mkdir -p ~/.fly && printf 'access_token: fo1_SECRET' > ~/.fly/config.yml");
-  assert.deepEqual(await captureDeviceFlowLogins({ sandbox: sb, handle: h1, keychain: k, ownerId: "U1" }), ["fly"]);
-
-  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
-  const h2 = await sb.provision(layers);
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
-  const back = await sb.run(h2, "cat ~/.fly/config.yml");
-  assert.match(back.stdout, /fo1_SECRET/, "a non-XDG holdout's login survived machine replacement");
-});
-
 test("large multi-file bundle round-trips intact (past the exec ~16KiB request + ~4MB response caps)", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
+  const { sb, k, h: h1, io, rebuild } = await box();
   const setup =
     "mkdir -p ~/.config/bigtool && " +
     "for i in $(seq 0 29); do head -c 102400 /dev/zero | tr '\\0' 'X' > ~/.config/bigtool/part$i.dat; done && " +
@@ -228,19 +207,14 @@ test("large multi-file bundle round-trips intact (past the exec ~16KiB request +
   assert.equal((await sb.run(h1, setup)).code, 0);
 
   const bigInput = {
-    sandbox: sb,
-    handle: h1,
-    keychain: k,
-    ownerId: "U1",
+    ...io(h1),
     credentialPaths: [{ path: ".config/bigtool", kind: "directory" as const }],
   };
   assert.deepEqual(await captureDeviceFlowLogins(bigInput), ["bigtool"]);
   const rec = (await k.listByOwner("U1")).find((c) => c.service === "bigtool");
   assert.equal(rec?.targets?.length, 30, "every file in the large bundle was captured, none dropped to truncation");
 
-  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
-  const h2 = await sb.provision(layers);
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const h2 = await rebuild(h1);
   const check = await sb.run(
     h2,
     'echo "size=$(wc -c < ~/.config/bigtool/part0.dat)"; echo "sentinel=$(tail -c 18 ~/.config/bigtool/part29.dat)"; echo "count=$(ls ~/.config/bigtool | wc -l)"',
@@ -262,9 +236,7 @@ test("large multi-file bundle round-trips intact (past the exec ~16KiB request +
 });
 
 test("shape backstop: a registered path that balloons past the caps is skipped loudly, not stored", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   await sb.run(
     h,
     "mkdir -p ~/.config/gh ~/.config/bloat && printf 'oauth_token: gho_OK' > ~/.config/gh/hosts.yml && " +
@@ -272,10 +244,7 @@ test("shape backstop: a registered path that balloons past the caps is skipped l
   );
   const skipped: string[] = [];
   const saved = await captureDeviceFlowLogins({
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
+    ...io(),
     credentialPaths: [{ path: ".config/bloat", kind: "directory" }],
     onAnomaly: (service) => skipped.push(service),
   });
@@ -285,9 +254,7 @@ test("shape backstop: a registered path that balloons past the caps is skipped l
 });
 
 test("a browser profile under ~/.config no longer trips the capture — neither swept nor warned", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   const setup = await sb.run(
     h,
     "mkdir -p ~/.config/gh ~/.config/chromium-headless/Default && " +
@@ -301,10 +268,7 @@ test("a browser profile under ~/.config no longer trips the capture — neither 
 
   const skipped: string[] = [];
   const saved = await captureDeviceFlowLogins({
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
+    ...io(),
     onAnomaly: (s) => skipped.push(s),
   });
   assert.deepEqual(saved, ["gh"], "only the real login is captured");
@@ -313,19 +277,14 @@ test("a browser profile under ~/.config no longer trips the capture — neither 
 });
 
 test("materialize round-trip: login → machine replaced → files restored 0600 behind the symlinks", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
+  const { sb, h: h1, io, rebuild } = await box();
   await sb.run(
     h1,
     "mkdir -p ~/.config/glab && printf 'token: glpat_SECRET' > ~/.config/glab/config.yml && chmod 600 ~/.config/glab/config.yml",
   );
-  await captureDeviceFlowLogins({ sandbox: sb, handle: h1, keychain: k, ownerId: "U1" });
+  await captureDeviceFlowLogins(io(h1));
 
-  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
-  const h2 = await sb.provision(layers);
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const h2 = await rebuild(h1);
 
   const restored = await sb.run(
     h2,
@@ -339,32 +298,26 @@ test("materialize round-trip: login → machine replaced → files restored 0600
 });
 
 test("materialize never overwrites a file already on disk — the live machine's login wins", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, h, io } = await box();
   await sb.run(h, "mkdir -p ~/.config/gh && printf 'oauth_token: gho_OLD' > ~/.config/gh/hosts.yml");
-  await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" });
+  await captureDeviceFlowLogins(io());
 
   await sb.run(h, "printf 'oauth_token: gho_NEWER' > ~/.config/gh/hosts.yml");
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" });
+  await materializeDeviceFlowLogins(io());
   const read = await sb.run(h, "cat ~/.config/gh/hosts.yml");
   assert.equal(read.stdout, "oauth_token: gho_NEWER");
 });
 
 test("a legacy bundle stamped with a past expiresAt (by the deleted refresher) still restores", async () => {
-  const sb = sprites();
-  const k = kc();
+  const { sb, k, h, io } = await box();
   await k.save({
     ownerId: "U1",
     service: "aws",
-    files: [
-      { path: ".aws/config", contentBase64: Buffer.from("[default]\nregion=us-west-2", "utf8").toString("base64") },
-    ],
+    files: [{ path: ".aws/config", contentBase64: b64("[default]\nregion=us-west-2") }],
     origin: DEVICE_FLOW_ORIGIN,
     expiresAt: Date.now() - 3_600_000,
   });
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" });
+  await materializeDeviceFlowLogins(io());
   const read = await sb.run(h, "cat ~/.aws/config");
   assert.match(read.stdout, /us-west-2/, "file bundles are durability-only: a stale expiry stamp never blocks restore");
 });
@@ -396,7 +349,7 @@ test("ACMECLI quarantine removes the canonical root even with no record or a sta
   await k.save({
     ownerId: scopeId("channel", "C1"),
     service: "acmecli",
-    files: [{ path: ".acmecli/known.json", contentBase64: Buffer.from("old").toString("base64") }],
+    files: [{ path: ".acmecli/known.json", contentBase64: b64("old") }],
     origin: DEVICE_FLOW_ORIGIN,
   });
   await sb.run(h, "mkdir -p ~/.acmecli && printf known > ~/.acmecli/known.json && printf newer > ~/.acmecli/new.json");
@@ -503,7 +456,7 @@ test("removing platform credential vending preserves stored quarantine on person
     await built.keychain!.save({
       ownerId,
       service: "acmecli",
-      files: [{ path: ".acmecli/session.json", contentBase64: Buffer.from("stored-login").toString("base64") }],
+      files: [{ path: ".acmecli/session.json", contentBase64: b64("stored-login") }],
       origin: DEVICE_FLOW_ORIGIN,
     });
     const read = "!run cat ~/.acmecli/session.json";
@@ -520,25 +473,6 @@ test("removing platform credential vending preserves stored quarantine on person
   }
 });
 
-test("capture never clobbers an operator-saved record for a swept service", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
-  await sb.run(h, "mkdir -p ~/.config/gh && printf 'oauth_token: gho_BOX' > ~/.config/gh/hosts.yml");
-  await k.save({
-    ownerId: "U1",
-    service: "gh",
-    files: [
-      { path: ".config/gh/hosts.yml", contentBase64: Buffer.from("oauth_token: gho_OPERATOR").toString("base64") },
-    ],
-    origin: "agent-session:personal:U1",
-  });
-
-  assert.deepEqual(await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" }), []);
-  const rec = (await k.listByOwner("U1")).find((c) => c.service === "gh");
-  assert.equal(rec?.origin, "agent-session:personal:U1", "the operator's record and origin survive capture");
-});
-
 test("a shared-box capture sweeps only the scope owner's roots, never another person's registrations", async () => {
   const sb = sprites();
   const k = kc();
@@ -548,7 +482,7 @@ test("a shared-box capture sweeps only the scope owner's roots, never another pe
   await k.save({
     ownerId: "U1",
     service: "acmecorp",
-    files: [{ path: ".config/acmecorp/auth.json", contentBase64: Buffer.from("tok_v0").toString("base64") }],
+    files: [{ path: ".config/acmecorp/auth.json", contentBase64: b64("tok_v0") }],
     origin: DEVICE_FLOW_ORIGIN,
   });
 
@@ -558,23 +492,21 @@ test("a shared-box capture sweeps only the scope owner's roots, never another pe
 });
 
 test("a registered file under an already-swept dotdir is not tarred twice", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   await sb.run(h, 'mkdir -p ~/.aws/sso/cache && printf \'{"accessToken":"sso_X"}\' > ~/.aws/sso/cache/token.json');
   await k.save({
     ownerId: "U1",
     service: "aws",
-    files: [{ path: ".aws/sso/cache/token.json", contentBase64: Buffer.from("old").toString("base64") }],
+    files: [{ path: ".aws/sso/cache/token.json", contentBase64: b64("old") }],
     origin: DEVICE_FLOW_ORIGIN,
   });
 
-  assert.deepEqual(await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" }), ["aws"]);
+  assert.deepEqual(await captureDeviceFlowLogins(io()), ["aws"]);
   const rec = (await k.listByOwner("U1")).find((c) => c.service === "aws");
   assert.deepEqual(rec?.targets, [".aws/sso/cache/token.json"], "one entry, not a find+file-loop duplicate");
 
   assert.deepEqual(
-    await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" }),
+    await captureDeviceFlowLogins(io()),
     [],
     "an unchanged box fingerprints clean on the very next capture — no duplicate-entry churn",
   );
@@ -585,14 +517,14 @@ test("keychain.save with expectedOrigin atomically refuses to overwrite a foreig
   await k.save({
     ownerId: "U1",
     service: "tool",
-    files: [{ path: ".config/tool/auth.json", contentBase64: Buffer.from("operator").toString("base64") }],
+    files: [{ path: ".config/tool/auth.json", contentBase64: b64("operator") }],
     origin: "agent-session:personal:U1",
   });
   await assert.rejects(
     k.save({
       ownerId: "U1",
       service: "tool",
-      files: [{ path: ".config/tool/auth.json", contentBase64: Buffer.from("box").toString("base64") }],
+      files: [{ path: ".config/tool/auth.json", contentBase64: b64("box") }],
       origin: DEVICE_FLOW_ORIGIN,
       expectedOrigin: DEVICE_FLOW_ORIGIN,
     }),
@@ -601,14 +533,14 @@ test("keychain.save with expectedOrigin atomically refuses to overwrite a foreig
   await k.save({
     ownerId: "U1",
     service: "fresh",
-    files: [{ path: ".config/fresh/auth.json", contentBase64: Buffer.from("v1").toString("base64") }],
+    files: [{ path: ".config/fresh/auth.json", contentBase64: b64("v1") }],
     origin: DEVICE_FLOW_ORIGIN,
     expectedOrigin: DEVICE_FLOW_ORIGIN,
   });
   await k.save({
     ownerId: "U1",
     service: "fresh",
-    files: [{ path: ".config/fresh/auth.json", contentBase64: Buffer.from("v2").toString("base64") }],
+    files: [{ path: ".config/fresh/auth.json", contentBase64: b64("v2") }],
     origin: DEVICE_FLOW_ORIGIN,
     expectedOrigin: DEVICE_FLOW_ORIGIN,
   });
@@ -617,14 +549,12 @@ test("keychain.save with expectedOrigin atomically refuses to overwrite a foreig
 });
 
 test("registered roots beyond the cap are dropped with one anomaly, after collapsing covered roots", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { k, io } = await box();
   for (let i = 0; i < 70; i++) {
     await k.save({
       ownerId: "U1",
       service: `svc${i}`,
-      files: [{ path: `.config/svc${i}/a/auth.json`, contentBase64: Buffer.from(`t${i}`).toString("base64") }],
+      files: [{ path: `.config/svc${i}/a/auth.json`, contentBase64: b64(`t${i}`) }],
       origin: DEVICE_FLOW_ORIGIN,
     });
   }
@@ -632,16 +562,13 @@ test("registered roots beyond the cap are dropped with one anomaly, after collap
     await k.save({
       ownerId: "U1",
       service: "aws",
-      files: [{ path: ".aws/sso/cache/token.json", contentBase64: Buffer.from("x").toString("base64") }],
+      files: [{ path: ".aws/sso/cache/token.json", contentBase64: b64("x") }],
       origin: DEVICE_FLOW_ORIGIN,
     });
   }
   const anomalies: string[] = [];
   await captureDeviceFlowLogins({
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
+    ...io(),
     onAnomaly: (s, d) => anomalies.push(`${s}: ${d}`),
   });
   assert.equal(anomalies.length, 1, "exactly one truncation anomaly");
@@ -649,24 +576,19 @@ test("registered roots beyond the cap are dropped with one anomaly, after collap
 });
 
 test("the cap drops whole services, never a subset of one record's files", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   const paths = Array.from({ length: 70 }, (_, i) => `.tool/f${i}.json`);
   await sb.run(h, "mkdir -p ~/.tool && " + paths.map((p) => `printf x > ~/${p}`).join(" && "));
   await k.save({
     ownerId: "U1",
     service: "tool",
-    files: paths.map((p) => ({ path: p, contentBase64: Buffer.from("v0").toString("base64") })),
+    files: paths.map((p) => ({ path: p, contentBase64: b64("v0") })),
     origin: DEVICE_FLOW_ORIGIN,
   });
 
   const anomalies: string[] = [];
   const saved = await captureDeviceFlowLogins({
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
+    ...io(),
     onAnomaly: (s, d) => anomalies.push(`${s}: ${d}`),
   });
   assert.deepEqual(saved, [], "a single record whose files exceed the cap is skipped whole, not saved shrunk");
@@ -675,17 +597,11 @@ test("the cap drops whole services, never a subset of one record's files", async
 });
 
 test("register_login captures a real CLI login and it survives a machine rebuild", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
+  const { sb, k, h: h1, io, rebuild } = await box();
   await sb.run(h1, 'mkdir -p ~/.kaggle && printf \'{"username":"u","key":"kag_SECRET"}\' > ~/.kaggle/kaggle.json');
 
   const result = await registerLoginPaths({
-    sandbox: sb,
-    handle: h1,
-    keychain: k,
-    ownerId: "U1",
+    ...io(h1),
     service: "kaggle",
     paths: [{ path: ".kaggle/kaggle.json", kind: "file" }],
   });
@@ -694,36 +610,14 @@ test("register_login captures a real CLI login and it survives a machine rebuild
   assert.deepEqual(rec?.capturePaths, [{ path: ".kaggle/kaggle.json", kind: "file" }]);
   assert.ok(!JSON.stringify(await k.listByOwner("U1")).includes("kag_SECRET"), "metadata only in the listing");
 
-  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
-  const h2 = await sb.provision(layers);
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const h2 = await rebuild(h1);
   const back = await sb.run(h2, "cat ~/.kaggle/kaggle.json");
   assert.match(back.stdout, /kag_SECRET/, "the registered login is restored on a fresh machine");
 });
 
-test("a registered service keeps being swept — a later rotation is captured without re-registering", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
-  await sb.run(h, "mkdir -p ~/.config/rotato && printf 'refresh_v1' > ~/.config/rotato/creds");
-  await registerLoginPaths({
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
-    service: "rotato",
-    paths: [{ path: ".config/rotato", kind: "directory" }],
-  });
-
-  await sb.run(h, "printf 'refresh_v2_ROTATED' > ~/.config/rotato/creds");
-  assert.deepEqual(await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" }), ["rotato"]);
-});
-
-test("register_login rejects paths outside the service, built-in overlaps, and missing files", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
-  const base = { sandbox: sb, handle: h, keychain: k, ownerId: "U1" };
+test("register_login rejects paths outside the service, built-in overlaps, missing files, operator-owned services, and capture bookkeeping", async () => {
+  const { sb, k, h, io } = await box();
+  const base = io();
 
   await assert.rejects(
     registerLoginPaths({ ...base, service: "aws", paths: [{ path: ".aws/sso/cache", kind: "directory" }] }),
@@ -738,42 +632,31 @@ test("register_login rejects paths outside the service, built-in overlaps, and m
     registerLoginPaths({ ...base, service: "absent", paths: [{ path: ".absent/creds", kind: "file" }] }),
     /nothing to capture|nothing was captured/,
   );
-});
 
-test("register_login refuses to adopt a service already owned by an operator/API save", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
   await sb.run(h, "mkdir -p ~/.opstool && printf 'x' > ~/.opstool/creds");
   await k.save({
     ownerId: "U1",
     service: "opstool",
-    files: [{ path: ".opstool/creds", contentBase64: Buffer.from("op").toString("base64") }],
+    files: [{ path: ".opstool/creds", contentBase64: b64("op") }],
     origin: "agent-session:personal:U1",
   });
   await assert.rejects(
-    registerLoginPaths({
-      sandbox: sb,
-      handle: h,
-      keychain: k,
-      ownerId: "U1",
-      service: "opstool",
-      paths: [{ path: ".opstool/creds", kind: "file" }],
-    }),
+    registerLoginPaths({ ...base, service: "opstool", paths: [{ path: ".opstool/creds", kind: "file" }] }),
     /not created by a login capture/,
+  );
+
+  await sb.run(h, "printf 'notacred' > ~/.cred-state");
+  await assert.rejects(
+    registerLoginPaths({ ...base, service: "sneaky", paths: [{ path: ".cred-state", kind: "file" }] }),
+    /capture bookkeeping/,
   );
 });
 
 test("register_login handles a .cache/<tool> layout and re-captures rotations under the declared service", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   await sb.run(h, "mkdir -p ~/.cache/huggingface && printf 'hf_v1' > ~/.cache/huggingface/token");
   const reg = await registerLoginPaths({
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
+    ...io(),
     service: "huggingface",
     paths: [{ path: ".cache/huggingface/token", kind: "file" }],
   });
@@ -784,7 +667,7 @@ test("register_login handles a .cache/<tool> layout and re-captures rotations un
 
   await sb.run(h, "printf 'hf_v2_ROTATED' > ~/.cache/huggingface/token");
   assert.deepEqual(
-    await captureDeviceFlowLogins({ sandbox: sb, handle: k && h, keychain: k, ownerId: "U1" }),
+    await captureDeviceFlowLogins(io()),
     ["huggingface"],
     "a plain re-capture groups the rotation under the registered service via its stored capturePaths",
   );
@@ -792,11 +675,9 @@ test("register_login handles a .cache/<tool> layout and re-captures rotations un
 });
 
 test("capture-on-change: an unchanged box ships nothing — gated by the box-side hash, not just the fingerprint", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   await sb.run(h, "mkdir -p ~/.config/gh && printf 'oauth_token: gho_V1' > ~/.config/gh/hosts.yml");
-  const input = { sandbox: sb, handle: h, keychain: k, ownerId: "U1" };
+  const input = io();
   assert.deepEqual(await captureDeviceFlowLogins(input), ["gh"]);
   const state = await sb.run(h, "cat ~/.cred-state");
   assert.equal(state.code, 0, "the committed per-service hash state exists after a successful capture");
@@ -814,30 +695,27 @@ test("capture-on-change: an unchanged box ships nothing — gated by the box-sid
   assert.deepEqual(await captureDeviceFlowLogins(input), ["gh"], "a real change ships and re-creates the record");
 });
 
-test("capture-on-change: a rebuilt box (no state file) re-ships everything", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
+test("capture-on-change: a rebuilt box (no state file) restores a pre-XDG ~/.<tool> login (fly) and re-ships everything", async () => {
+  const { sb, h: h1, io, rebuild } = await box();
   await sb.run(h1, "mkdir -p ~/.fly && printf 'access_token: fo1_X' > ~/.fly/config.yml");
-  assert.deepEqual(await captureDeviceFlowLogins({ sandbox: sb, handle: h1, keychain: k, ownerId: "U1" }), ["fly"]);
+  assert.deepEqual(await captureDeviceFlowLogins(io(h1)), ["fly"]);
 
-  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
-  const h2 = await sb.provision(layers);
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const h2 = await rebuild(h1);
+  assert.match(
+    (await sb.run(h2, "cat ~/.fly/config.yml")).stdout,
+    /fo1_X/,
+    "a non-XDG holdout's login survived machine replacement",
+  );
   await sb.run(h2, "printf 'access_token: fo1_ROTATED' > ~/.fly/config.yml");
   assert.deepEqual(
-    await captureDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" }),
+    await captureDeviceFlowLogins(io(h2)),
     ["fly"],
     "with no state file the fresh box ships, and the rotation lands",
   );
 });
 
-test("restore preserves each file's captured mode, defaulting old records to 0600", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
+test("a registered directory keeps being swept, and restore preserves each file's captured mode with a 0600 floor", async () => {
+  const { sb, h: h1, io, rebuild } = await box();
   await sb.run(
     h1,
     "mkdir -p ~/.modes && printf 'secret' > ~/.modes/tight && chmod 600 ~/.modes/tight && " +
@@ -845,17 +723,18 @@ test("restore preserves each file's captured mode, defaulting old records to 060
       "printf '#!/bin/sh' > ~/.modes/hook && chmod 700 ~/.modes/hook",
   );
   await registerLoginPaths({
-    sandbox: sb,
-    handle: h1,
-    keychain: k,
-    ownerId: "U1",
+    ...io(h1),
     service: "modes",
     paths: [{ path: ".modes", kind: "directory" }],
   });
+  await sb.run(h1, "printf 'secret_ROTATED' > ~/.modes/tight");
+  assert.deepEqual(
+    await captureDeviceFlowLogins(io(h1)),
+    ["modes"],
+    "a registered directory keeps being swept — a later rotation is captured without re-registering",
+  );
 
-  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
-  const h2 = await sb.provision(layers);
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const h2 = await rebuild(h1);
   const modes = await sb.run(h2, "stat -c '%a %n' ~/.modes/* 2>/dev/null || stat -f '%Lp %N' ~/.modes/*");
   assert.match(modes.stdout, /600 .*tight/, "the 0600 credential stays 0600 (deployctl/kaggle tamper checks)");
   assert.match(modes.stdout, /600 .*open/, "group/other bits are stripped on restore — the mode floor policy");
@@ -863,29 +742,23 @@ test("restore preserves each file's captured mode, defaulting old records to 060
 });
 
 test("a failed mid-bundle restore rolls back that bundle's files instead of leaving a partial set", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
+  const { sb, h: h1, io, layers } = await box();
   await sb.run(
     h1,
     "mkdir -p ~/.aws/sso/cache ~/.aws/cli/cache && printf 'a' > ~/.aws/sso/cache/a.json && " +
       "printf 'b' > ~/.aws/cli/cache/b.json && printf 'c' > ~/.aws/config",
   );
-  await captureDeviceFlowLogins({ sandbox: sb, handle: h1, keychain: k, ownerId: "U1" });
+  await captureDeviceFlowLogins(io(h1));
 
   await sb.run(h1, "mkdir -p ~/.config/gh && printf 'oauth_token: gho_OK' > ~/.config/gh/hosts.yml");
-  await captureDeviceFlowLogins({ sandbox: sb, handle: h1, keychain: k, ownerId: "U1" });
+  await captureDeviceFlowLogins(io(h1));
 
   rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
   const h2 = await sb.provision(layers);
   await sb.run(h2, "mkdir -p ~/.aws && printf 'blocking' > ~/.aws/sso");
   const anomalies: string[] = [];
   const restored = await materializeDeviceFlowLogins({
-    sandbox: sb,
-    handle: h2,
-    keychain: k,
-    ownerId: "U1",
+    ...io(h2),
     onAnomaly: (s, d) => anomalies.push(`${s}: ${d}`),
   });
   assert.deepEqual(restored.slice().sort(), ["gh"], "the healthy bundle restores even when a sibling bundle fails");
@@ -894,14 +767,12 @@ test("a failed mid-bundle restore rolls back that bundle's files instead of leav
   assert.equal(leftover.stdout.trim(), "0", "no partial multi-file set is left behind");
 
   await sb.run(h2, "rm -f ~/.aws/sso");
-  const clean = await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const clean = await materializeDeviceFlowLogins(io(h2));
   assert.deepEqual(clean, ["aws"], "a later healthy restore brings the whole set");
 });
 
 test("a root that mutates during the tar is reported volatile and its service is skipped this turn", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   await sb.run(h, "mkdir -p ~/.config/gh && printf 'oauth_token: gho_MIDWRITE' > ~/.config/gh/hosts.yml");
   const volatileSb = {
     ...sb,
@@ -918,83 +789,62 @@ test("a root that mutates during the tar is reported volatile and its service is
   );
   assert.ok(!(await k.listByOwner("U1")).some((c) => c.service === "gh"));
 
-  assert.deepEqual(
-    await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" }),
-    ["gh"],
-    "the next quiet turn captures it cleanly",
-  );
+  assert.deepEqual(await captureDeviceFlowLogins(io()), ["gh"], "the next quiet turn captures it cleanly");
 });
 
 test("~/.netrc: whole-file capture keeps every tool's entries, and a live machine's copy is never clobbered", async () => {
-  const sb = sprites();
-  const k = kc();
-  const layers = rw(scopeId("personal", "U1"));
-  const h1 = await sb.provision(layers);
+  const { sb, h: h1, io, rebuild } = await box();
   await sb.run(
     h1,
     "printf 'machine api.wandb.ai\\n  login user\\n  password wandb_KEY\\nmachine api.heroku.com\\n  login u@x\\n  password heroku_TOK\\n' > ~/.netrc && chmod 600 ~/.netrc",
   );
-  assert.deepEqual(await captureDeviceFlowLogins({ sandbox: sb, handle: h1, keychain: k, ownerId: "U1" }), ["netrc"]);
+  assert.deepEqual(await captureDeviceFlowLogins(io(h1)), ["netrc"]);
 
-  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
-  const h2 = await sb.provision(layers);
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  const h2 = await rebuild(h1);
   const restored = await sb.run(h2, "cat ~/.netrc");
   assert.match(restored.stdout, /wandb_KEY/, "wandb's entry survived the rebuild");
   assert.match(restored.stdout, /heroku_TOK/, "heroku's entry survived in the same file");
 
   await sb.run(h2, "printf 'machine api.wandb.ai\\n  login user\\n  password wandb_NEWER\\n' > ~/.netrc");
-  await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  await materializeDeviceFlowLogins(io(h2));
   const kept = await sb.run(h2, "cat ~/.netrc");
   assert.match(kept.stdout, /wandb_NEWER/, "a live machine's .netrc is never clobbered by restore");
   assert.doesNotMatch(kept.stdout, /heroku_TOK/, "restore did not merge stale entries over the live file");
 });
 
 test("a squatted quarantine dir makes capture fail LOUDLY, never silently skip", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, h, io } = await box();
   await sb.run(
     h,
     "rm -rf ~/.agent-displaced && printf squat > ~/.agent-displaced && mkdir -p ~/.config/gh && printf 'oauth_token: gho_X' > ~/.config/gh/hosts.yml",
   );
-  await assert.rejects(
-    captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" }),
-    /workspace unavailable|write .* failed/,
-  );
+  await assert.rejects(captureDeviceFlowLogins(io()), /workspace unavailable|write .* failed/);
 });
 
 test("old-name debris (.agent-cred-*) is reaped by the next capture", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, h, io } = await box();
   await sb.run(
     h,
     "printf stale > ~/.agent-cred-state && printf leak > ~/.agent-cred-capture.abc123 && " +
       "mkdir -p ~/.config/gh && printf 'oauth_token: gho_X' > ~/.config/gh/hosts.yml",
   );
-  await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" });
+  await captureDeviceFlowLogins(io());
   const left = await sb.run(h, "ls ~/.agent-cred-* 2>/dev/null | wc -l");
   assert.equal(left.stdout.trim(), "0", "legacy scratch and state files are removed");
 });
 
 test("a static sweep anomaly fires once, not on every subsequent capture", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   await sb.run(h, "mkdir -p ~/.config/gh && printf 'oauth_token: gho_X' > ~/.config/gh/hosts.yml");
   await k.save({
     ownerId: "U1",
     service: "weird",
-    files: [{ path: ".weird/has space/tok", contentBase64: Buffer.from("x").toString("base64") }],
+    files: [{ path: ".weird/has space/tok", contentBase64: b64("x") }],
     origin: DEVICE_FLOW_ORIGIN,
   });
   const anomalies: string[] = [];
   const input = {
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
+    ...io(),
     onAnomaly: (s: string, d: string) => anomalies.push(`${s}: ${d}`),
   };
   await captureDeviceFlowLogins(input);
@@ -1005,16 +855,11 @@ test("a static sweep anomaly fires once, not on every subsequent capture", async
 });
 
 test("register_login under a cap-blown fixed dotdir is allowed until the auto service actually persists", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const { sb, k, h, io } = await box();
   await sb.run(h, "mkdir -p ~/.cargo && printf 'crates_TOKEN' > ~/.cargo/credentials.toml");
 
   const result = await registerLoginPaths({
-    sandbox: sb,
-    handle: h,
-    keychain: k,
-    ownerId: "U1",
+    ...io(),
     service: "crates",
     paths: [{ path: ".cargo/credentials.toml", kind: "file" }],
   });
@@ -1027,7 +872,7 @@ test("register_login under a cap-blown fixed dotdir is allowed until the auto se
   await k.save({
     ownerId: "U2",
     service: "cargo",
-    files: [{ path: ".cargo/credentials.toml", contentBase64: Buffer.from("x").toString("base64") }],
+    files: [{ path: ".cargo/credentials.toml", contentBase64: b64("x") }],
     origin: DEVICE_FLOW_ORIGIN,
   });
   const h2 = await sb.provision(rw(scopeId("personal", "U2")));
@@ -1045,31 +890,11 @@ test("register_login under a cap-blown fixed dotdir is allowed until the auto se
   );
 });
 
-test("register_login refuses capture bookkeeping paths", async () => {
-  const sb = sprites();
-  const k = kc();
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
-  await sb.run(h, "printf 'notacred' > ~/.cred-state");
-  await assert.rejects(
-    registerLoginPaths({
-      sandbox: sb,
-      handle: h,
-      keychain: k,
-      ownerId: "U1",
-      service: "sneaky",
-      paths: [{ path: ".cred-state", kind: "file" }],
-    }),
-    /capture bookkeeping/,
-  );
-});
-
 test("a concurrent-save race skips that service and retries it on the next capture", async () => {
-  const sb = sprites();
-  const k = kc();
+  const { sb, k, h, io } = await box();
   const anomalies: string[] = [];
-  const h = await sb.provision(rw(scopeId("personal", "U1")));
   await sb.run(h, "mkdir -p ~/.racy ~/.calm && printf 'r1' > ~/.racy/creds && printf 'c1' > ~/.calm/creds");
-  const base = { sandbox: sb, handle: h, keychain: k, ownerId: "U1" };
+  const base = io();
   await registerLoginPaths({ ...base, service: "racy", paths: [{ path: ".racy/creds", kind: "file" }] });
   await registerLoginPaths({ ...base, service: "calm", paths: [{ path: ".calm/creds", kind: "file" }] });
 
@@ -1103,7 +928,7 @@ test("removed layer tools retain quarantine, capture exclusion and reset-to-lega
     await built.keychain!.save({
       ownerId,
       service: "retired",
-      files: [{ path: ".retired/session", contentBase64: Buffer.from("stored-login").toString("base64") }],
+      files: [{ path: ".retired/session", contentBase64: b64("stored-login") }],
       origin: DEVICE_FLOW_ORIGIN,
     });
     const read = "!run cat ~/.retired/session";
