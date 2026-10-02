@@ -1,8 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { connect as netConnect, type Socket } from "node:net";
-import { connect as tlsConnect } from "node:tls";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createTransport } from "nodemailer";
 import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue } from "./util.ts";
@@ -117,151 +116,41 @@ export interface SmtpVerifyOptions {
 
 export class SmtpRejectedError extends Error {}
 
-function smtpTlsMode(declared: string | undefined, port: number): SmtpTlsMode {
+export class SmtpUnreachableError extends Error {}
+
+const SMTP_CONNECTION_CODES = new Set(["ECONNECTION", "ETIMEDOUT", "EDNS"]);
+
+export function smtpTlsMode(declared: string | undefined, port: number): SmtpTlsMode {
   const mode = declared?.trim().toLowerCase();
   if (mode === "implicit" || mode === "none" || mode === "starttls") return mode;
   return port === 465 ? "implicit" : "starttls";
 }
 
-class SmtpProbe {
-  private buffer = "";
-  private waiter: { resolve: (reply: { code: number; text: string }) => void; reject: (e: Error) => void } | null =
-    null;
-  private failure: Error | null = null;
-
-  private socket: Socket;
-
-  constructor(socket: Socket, timeoutMs: number) {
-    this.socket = socket;
-    socket.setTimeout(timeoutMs, () => this.fail(new Error("SMTP timed out")));
-    this.attach(socket);
-  }
-
-  private attach(socket: Socket): void {
-    socket.on("data", (chunk: Buffer) => this.onData(chunk.toString("utf8")));
-    socket.on("error", (e: Error) => this.fail(e));
-    socket.on("close", () => this.fail(new Error("SMTP connection closed")));
-  }
-
-  private fail(e: Error): void {
-    this.failure ??= e;
-    const waiter = this.waiter;
-    this.waiter = null;
-    waiter?.reject(e);
-  }
-
-  private onData(chunk: string): void {
-    this.buffer += chunk;
-    const lines = this.buffer.split("\r\n");
-    let text = "";
-    for (let i = 0; i < lines.length - 1; i++) {
-      const line = lines[i]!;
-      if (!/^\d{3}[ -]/.test(line)) {
-        this.fail(new Error(`SMTP sent an unparseable reply: ${line}`));
-        return;
-      }
-      text += line.slice(4);
-      if (line[3] === " ") {
-        this.buffer = lines.slice(i + 1).join("\r\n");
-        const waiter = this.waiter;
-        this.waiter = null;
-        waiter?.resolve({ code: Number(line.slice(0, 3)), text });
-        return;
-      }
-      text += "\n";
-    }
-  }
-
-  read(): Promise<{ code: number; text: string }> {
-    if (this.failure) return Promise.reject(this.failure);
-    return new Promise((resolve, reject) => {
-      this.waiter = { resolve, reject };
-    });
-  }
-
-  command(line: string): Promise<{ code: number; text: string }> {
-    this.socket.write(`${line}\r\n`);
-    return this.read();
-  }
-
-  async upgrade(host: string): Promise<void> {
-    const plain = this.socket;
-    for (const event of ["data", "error", "close"]) plain.removeAllListeners(event);
-    const secure = tlsConnect({ socket: plain, servername: host }) as unknown as Socket;
-    secure.on("error", () => undefined);
-    await new Promise<void>((resolve, reject) => {
-      secure.once("secureConnect", () => resolve());
-      secure.once("error", reject);
-    });
-    secure.removeAllListeners("error");
-    this.socket = secure;
-    this.attach(secure);
-  }
-
-  close(): void {
-    for (const event of ["data", "error", "close"]) this.socket.removeAllListeners(event);
-    this.socket.on("error", () => undefined);
-    this.socket.destroy();
-  }
-}
-
-async function openSmtpSocket(options: SmtpVerifyOptions, timeoutMs: number): Promise<Socket> {
-  const socket =
-    options.tls === "implicit"
-      ? (tlsConnect({ host: options.host, port: options.port, servername: options.host }) as unknown as Socket)
-      : netConnect({ host: options.host, port: options.port });
-  return new Promise<Socket>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`SMTP connect to ${options.host}:${options.port} timed out`)),
-      timeoutMs,
-    );
-    socket.once(options.tls === "implicit" ? "secureConnect" : "connect", () => {
-      clearTimeout(timer);
-      socket.removeAllListeners("error");
-      resolve(socket);
-    });
-    socket.once("error", (e: Error) => {
-      clearTimeout(timer);
-      socket.destroy();
-      reject(e);
-    });
-  });
-}
-
 export async function smtpVerify(options: SmtpVerifyOptions): Promise<void> {
   const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
-  const probe = new SmtpProbe(await openSmtpSocket(options, timeoutMs), timeoutMs);
-  const expect = (reply: { code: number; text: string }, codes: readonly number[], what: string): void => {
-    if (codes.includes(reply.code)) return;
-    const detail = `${what}: ${reply.code} ${reply.text.split("\n")[0] ?? ""}`;
-    if (reply.code >= 500) throw new SmtpRejectedError(`SMTP rejected ${detail}`);
-    throw new Error(`SMTP did not accept ${detail}`);
-  };
+  const transporter = createTransport({
+    host: options.host,
+    port: options.port,
+    secure: options.tls === "implicit",
+    requireTLS: options.tls === "starttls",
+    ignoreTLS: options.tls === "none",
+    name: "qm-check",
+    auth: options.username || options.password ? { user: options.username, pass: options.password } : undefined,
+    connectionTimeout: timeoutMs,
+    greetingTimeout: timeoutMs,
+    socketTimeout: timeoutMs,
+  });
   try {
-    expect(await probe.read(), [220], "greeting");
-    let ehlo = await probe.command(`EHLO qm-check`);
-    expect(ehlo, [250], "EHLO");
-    if (options.tls === "starttls") {
-      if (!/\bSTARTTLS\b/i.test(ehlo.text))
-        throw new Error("SMTP server does not offer STARTTLS — refusing to send credentials in cleartext");
-      expect(await probe.command("STARTTLS"), [220], "STARTTLS");
-      await probe.upgrade(options.host);
-      ehlo = await probe.command(`EHLO qm-check`);
-      expect(ehlo, [250], "EHLO");
-    }
-    const steps = /\bPLAIN\b/.test(ehlo.text)
-      ? [`AUTH PLAIN ${Buffer.from(`\0${options.username}\0${options.password}`, "utf8").toString("base64")}`]
-      : [
-          "AUTH LOGIN",
-          Buffer.from(options.username, "utf8").toString("base64"),
-          Buffer.from(options.password, "utf8").toString("base64"),
-        ];
-    for (const [index, line] of steps.entries()) {
-      expect(await probe.command(line), index === steps.length - 1 ? [235] : [334], "AUTH");
-    }
-    await probe.command("QUIT").catch(() => undefined);
+    await transporter.verify();
+  } catch (e) {
+    const { code, responseCode, syscall } = e as { code?: string; responseCode?: number; syscall?: string };
+    if (code === "EAUTH" || (responseCode ?? 0) >= 500)
+      throw new SmtpRejectedError(`SMTP rejected: ${errMessage(e)}`, { cause: e });
+    if (SMTP_CONNECTION_CODES.has(code ?? "") || syscall === "connect")
+      throw new SmtpUnreachableError(`SMTP ${errMessage(e)}`, { cause: e });
+    throw new Error(`SMTP ${errMessage(e)}`, { cause: e });
   } finally {
-    probe.close();
+    transporter.close();
   }
 }
 

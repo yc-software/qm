@@ -1,5 +1,6 @@
-import type { SmtpTlsMode } from "./smtp.ts";
 import { parsePasswordHash } from "./password.ts";
+
+type SmtpTlsMode = "starttls" | "implicit" | "none";
 
 type EmailTransportKind = "resend" | "smtp";
 

@@ -50,21 +50,42 @@ test(
       const tarballBytes = readFileSync(tarball);
       const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as Record<string, unknown>;
       const version = packageManifest["version"] as string;
+      const published = new Map<string, { manifest: Record<string, unknown>; tarball: Buffer }>([
+        ["@yc-software/qm", { manifest: packageManifest, tarball: tarballBytes }],
+      ]);
+      for (const dependency of Object.keys((packageManifest["dependencies"] ?? {}) as Record<string, string>)) {
+        const source = join(cliDir, "node_modules", dependency);
+        const [dependencyPack] = JSON.parse(
+          execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", dir], {
+            cwd: source,
+            encoding: "utf8",
+            env,
+          }),
+        ) as Array<{ filename: string }>;
+        published.set(dependency, {
+          manifest: JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as Record<string, unknown>,
+          tarball: readFileSync(join(dir, dependencyPack!.filename)),
+        });
+      }
       registry = createServer((request, response) => {
         const origin = `http://${request.headers.host}`;
-        if (request.url && decodeURIComponent(request.url) === "/@yc-software/qm") {
+        const path = decodeURIComponent(request.url ?? "");
+        const metadata = published.get(path.slice(1));
+        if (metadata) {
+          const name = path.slice(1);
+          const packageVersion = metadata.manifest["version"] as string;
           response.setHeader("content-type", "application/json");
           response.end(
             JSON.stringify({
-              name: "@yc-software/qm",
-              "dist-tags": { latest: version },
+              name,
+              "dist-tags": { latest: packageVersion },
               versions: {
-                [version]: {
-                  ...packageManifest,
+                [packageVersion]: {
+                  ...metadata.manifest,
                   dist: {
-                    tarball: `${origin}/@yc-software/qm/-/qm-${version}.tgz`,
-                    shasum: createHash("sha1").update(tarballBytes).digest("hex"),
-                    integrity: `sha512-${createHash("sha512").update(tarballBytes).digest("base64")}`,
+                    tarball: `${origin}/${name}/-/package-${packageVersion}.tgz`,
+                    shasum: createHash("sha1").update(metadata.tarball).digest("hex"),
+                    integrity: `sha512-${createHash("sha512").update(metadata.tarball).digest("base64")}`,
                   },
                 },
               },
@@ -72,9 +93,11 @@ test(
           );
           return;
         }
-        if (request.url === `/@yc-software/qm/-/qm-${version}.tgz`) {
+        const download = /^\/(.+)\/-\/package-[^/]+\.tgz$/.exec(path)?.[1];
+        const archive = download ? published.get(download) : undefined;
+        if (archive) {
           response.setHeader("content-type", "application/octet-stream");
-          response.end(tarballBytes);
+          response.end(archive.tarball);
           return;
         }
         response.statusCode = 404;

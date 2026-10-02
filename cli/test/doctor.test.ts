@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer, type AddressInfo } from "node:net";
 import {
   doctorCommon,
   localDoctorSecrets,
@@ -704,4 +705,45 @@ test("doctor without required local values warns-and-skips the live Slack check 
     if (priorApp !== undefined) process.env.SLACK_APP_TOKEN = priorApp;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("doctor probes an implicit-TLS SMTP relay with a TLS handshake instead of waiting for a plaintext greeting", async () => {
+  let firstByte: number | undefined;
+  const server = createServer((socket) => {
+    socket.on("error", () => undefined);
+    socket.once("data", (chunk: Buffer) => {
+      firstByte = chunk[0];
+      socket.destroy();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const smtpConfig: QmConfig = {
+    ...config,
+    sandbox: undefined,
+    services: ["core", "portal", "auth"],
+    env: {
+      core: { HARNESS: "mock" },
+      auth: {
+        AUTH_EMAIL_TRANSPORT: "smtp",
+        AUTH_ALLOWED_EMAIL_DOMAIN: "example.com",
+        SMTP_PORT: String(port),
+        SMTP_TLS: "implicit",
+      },
+    },
+  };
+  const log = console.log;
+  const warn = console.warn;
+  console.log = (): void => {};
+  console.warn = (): void => {};
+  const started = Date.now();
+  try {
+    await assert.rejects(doctorCommon(smtpConfig, new Map([["SMTP_HOST", "127.0.0.1"]])), /SMTP relay .* failed: /);
+  } finally {
+    console.log = log;
+    console.warn = warn;
+    server.close();
+  }
+  assert.equal(firstByte, 0x16, "the probe opened with a TLS ClientHello");
+  assert.ok(Date.now() - started < 5_000, "the probe did not sit waiting for a plaintext greeting");
 });

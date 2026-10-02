@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createServer, type Server, type Socket } from "node:net";
+import { createServer, type AddressInfo, type Server, type Socket } from "node:net";
 import type { QmConfig } from "../src/config.ts";
 import { CliError } from "../src/log.ts";
 import {
@@ -10,6 +10,7 @@ import {
   nodeEngineProblem,
   smtpVerify,
   SmtpRejectedError,
+  SmtpUnreachableError,
 } from "../src/preflight.ts";
 
 const CONFIG: QmConfig = {
@@ -90,11 +91,27 @@ test("fly sandbox preflight warns instead of failing when the Fly API is unreach
 interface FakeSmtp {
   server: Server;
   port: number;
+  commands: string[];
+  tlsClientHello: () => boolean;
   close: () => Promise<void>;
 }
 
-function fakeSmtp(password: string): Promise<FakeSmtp> {
+function fakeSmtp(
+  password: string,
+  options: { offerStartTls?: boolean; implicitTls?: boolean; refuseStartTls?: boolean } = {},
+): Promise<FakeSmtp> {
+  const commands: string[] = [];
+  let tlsClientHello = false;
+  const awaitTls = (socket: Socket): void => {
+    socket.removeAllListeners("data");
+    socket.once("data", (chunk: Buffer) => {
+      tlsClientHello = chunk[0] === 0x16;
+      socket.destroy();
+    });
+  };
   const server = createServer((socket: Socket) => {
+    socket.on("error", () => undefined);
+    if (options.implicitTls) return awaitTls(socket);
     socket.write("220 fake ESMTP\r\n");
     let buffer = "";
     socket.on("data", (chunk: Buffer) => {
@@ -103,8 +120,14 @@ function fakeSmtp(password: string): Promise<FakeSmtp> {
       while ((index = buffer.indexOf("\r\n")) !== -1) {
         const line = buffer.slice(0, index);
         buffer = buffer.slice(index + 2);
-        if (line.startsWith("EHLO")) socket.write("250-fake\r\n250 AUTH PLAIN LOGIN\r\n");
-        else if (line.startsWith("AUTH PLAIN")) {
+        commands.push(line.split(" ")[0]!);
+        if (line.startsWith("EHLO"))
+          socket.write(`250-fake\r\n${options.offerStartTls ? "250-STARTTLS\r\n" : ""}250 AUTH PLAIN LOGIN\r\n`);
+        else if (line === "STARTTLS" && options.refuseStartTls) socket.write("554 5.7.0 TLS not available\r\n");
+        else if (line === "STARTTLS" && options.offerStartTls) {
+          socket.write("220 ready\r\n");
+          return awaitTls(socket);
+        } else if (line.startsWith("AUTH PLAIN")) {
           const decoded = Buffer.from(line.slice("AUTH PLAIN ".length), "base64").toString("utf8");
           socket.write(decoded === `\0user\0${password}` ? "235 ok\r\n" : "535 auth failed\r\n");
         } else if (line === "QUIT") {
@@ -120,6 +143,8 @@ function fakeSmtp(password: string): Promise<FakeSmtp> {
       resolve({
         server,
         port: typeof address === "object" && address ? address.port : 0,
+        commands,
+        tlsClientHello: () => tlsClientHello,
         close: () => new Promise((done) => server.close(() => done())),
       });
     });
@@ -137,6 +162,47 @@ test("smtpVerify authenticates without sending mail and rejects bad credentials"
   } finally {
     await smtp.close();
   }
+});
+
+test("smtpVerify never sends credentials outside TLS when TLS is configured", async () => {
+  const verify = (port: number, tls: "starttls" | "implicit") =>
+    smtpVerify({ host: "127.0.0.1", port, username: "user", password: "right", tls, timeoutMs: 3000 });
+  const plain = await fakeSmtp("right");
+  const upgrading = await fakeSmtp("right", { offerStartTls: true });
+  const implicit = await fakeSmtp("right", { implicitTls: true });
+  try {
+    await assert.rejects(() => verify(plain.port, "starttls"), /STARTTLS/);
+    assert.ok(!plain.commands.includes("AUTH"));
+    await assert.rejects(() => verify(upgrading.port, "starttls"));
+    assert.deepEqual(upgrading.commands, ["EHLO", "STARTTLS"]);
+    assert.ok(upgrading.tlsClientHello());
+    await assert.rejects(() => verify(implicit.port, "implicit"));
+    assert.ok(implicit.tlsClientHello());
+    assert.deepEqual(implicit.commands, []);
+  } finally {
+    await Promise.all([plain.close(), upgrading.close(), implicit.close()]);
+  }
+});
+
+test("smtpVerify treats permanent SMTP refusals as rejections and connection failures as unreachable", async () => {
+  const refusing = await fakeSmtp("right", { offerStartTls: true, refuseStartTls: true });
+  try {
+    await assert.rejects(
+      () =>
+        smtpVerify({ host: "127.0.0.1", port: refusing.port, username: "user", password: "right", tls: "starttls" }),
+      SmtpRejectedError,
+    );
+  } finally {
+    await refusing.close();
+  }
+  const closed = createServer();
+  await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+  const { port } = closed.address() as AddressInfo;
+  await new Promise<void>((resolve) => closed.close(() => resolve()));
+  await assert.rejects(
+    () => smtpVerify({ host: "127.0.0.1", port, username: "user", password: "right", tls: "none" }),
+    SmtpUnreachableError,
+  );
 });
 
 test("email preflight fails check on rejected SMTP credentials and warns on stray transport vars", async () => {

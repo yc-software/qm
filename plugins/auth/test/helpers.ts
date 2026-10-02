@@ -101,6 +101,7 @@ export async function startHarness(
     trustedSignInLabel?: string;
     emailAllowed?: (email: string) => Promise<boolean>;
     sessions?: RememberedSessions;
+    mailer?: Mailer;
   } = {},
 ): Promise<Harness> {
   const cfg = readConfig(testEnv(options.env));
@@ -136,7 +137,7 @@ export async function startHarness(
     signer: new TokenSigner(cfg.tokenSecret, cfg.issuer),
     claims,
     sessions,
-    mailer: emailConfigured(cfg) ? mailer : null,
+    mailer: emailConfigured(cfg) ? (options.mailer ?? mailer) : null,
     ...(options.brandName ? { brandName: options.brandName } : {}),
     emailAllowed: options.emailAllowed ?? (async () => false),
     now: () => now.ms,
