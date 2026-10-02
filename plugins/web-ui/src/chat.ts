@@ -114,7 +114,6 @@ import {
   type SubagentMailRef,
   type ToolActivity,
   type TurnOptions,
-  userMessagesBefore,
   type WorkBlock,
   fileContentUrl,
 } from "./core-bridge";
@@ -1995,20 +1994,13 @@ export function createChatSurface(
     const sessionId = chatState.sessionId;
     const sourceThreadRef = chatState.threadRef;
     if (!agent || !sessionId) return;
-    const messages = agent.state.messages as Array<{ role?: string }>;
-    const target = messages[index];
-    if (!target) return;
-    const isUser = target.role === "user" || target.role === "user-with-attachments";
-    let userOrdinal = 0;
-    for (let i = 0; i <= index; i++) {
-      const role = messages[i]?.role;
-      if (role === "user" || role === "user-with-attachments") userOrdinal++;
-    }
+    const messages = agent.state.messages;
+    if (!messages[index]) return;
+    const floorSeq = chatState.forkSession?.forkBoundarySeq ?? -1;
     try {
       const { entries } = await api<{ entries: SessionEntry[] }>(`/api/sessions/${encodeURIComponent(sessionId)}`);
-      const anchor = chatState.transcriptAnchorSeq;
-      if (anchor !== null) userOrdinal += userMessagesBefore(entries ?? [], anchor);
-      const upToSeq = forkCutSeq(entries ?? [], userOrdinal, isUser);
+      const upToSeq = forkCutSeq(entries ?? [], messages, index, floorSeq);
+      if (upToSeq === undefined) throw new Error("That message is still saving. Try forking again in a moment.");
       const forked = await forkSession(sessionId, upToSeq);
       const split = inheritedTranscript(forked.session, forked.entries ?? []);
       ctx.composer.carryModelPick(sourceThreadRef, forked.session.threadRef);
