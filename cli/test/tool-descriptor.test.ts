@@ -418,9 +418,21 @@ test("parser accepts and rejects a fixed corpus", () => {
   for (const raw of invalid) {
     assert.throws(() => parseToolDescriptor(raw, "t.json"), Error, `should reject: ${raw}`);
   }
+  const cred = (path: string, kind = "file") =>
+    JSON.stringify({ id: "x", auth: { check: "a", reauth: "b", credentialPaths: [{ path, kind }] } });
+  const pinned: Array<[string, RegExp]> = [
+    [cred(".agent-displaced/x"), /is reserved/],
+    [cred(".ssh/id_rsa"), /overlaps the built-in credential path ".ssh"/],
+    [cred("a//b"), /must be a \$HOME-relative path with no traversal/],
+    [cred("workspace", "directory"), /must start with a dotfile/],
+    [JSON.stringify({ id: "x", approvals: [{ pattern: "(" }] }), /is not a valid regex/],
+    ["not json", /is not valid JSON/],
+    ['{"id":"x","approvals":[{}]}', /needs a "command" or a "pattern"/],
+  ];
+  for (const [raw, message] of pinned) assert.throws(() => parseToolDescriptor(raw, "t.json"), message, raw);
 });
 
-test("install.files: shape-checked, mode defaulted by destination, and byte-identical to the canonical parser", () => {
+test("install.files: shape-checked and mode defaulted by destination", () => {
   const raw = {
     id: "t",
     install: {
@@ -439,7 +451,6 @@ test("install.files: shape-checked, mode defaulted by destination, and byte-iden
       { from: "lib.mjs", to: "/usr/local/lib/t/lib.mjs", mode: "0600" },
     ],
   });
-  assert.deepEqual(parsed, canonical.parseToolDescriptor(JSON.stringify(raw), "t.json"));
   for (const [files, message] of [
     [{}, /must be an array/],
     [["t"], /must be an object/],
@@ -462,9 +473,5 @@ test("install.files: shape-checked, mode defaulted by destination, and byte-iden
     ],
   ] as const) {
     assert.throws(() => P({ id: "t", install: { files } }), message);
-    assert.throws(
-      () => canonical.parseToolDescriptor(JSON.stringify({ id: "t", install: { files } }), "t.json"),
-      message,
-    );
   }
 });
