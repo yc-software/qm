@@ -4,11 +4,11 @@ import test from "node:test";
 
 const read = (f: string): string => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 
-test("opening the app lands on a new chat unless the person opted to restore their last session", () => {
+test("opening the app restores the last session unless the person opted into a new chat", () => {
   const shell = read("shell.ts");
   const boot = shell.slice(shell.indexOf("const remoteSplitFetch = fetchRemoteSplit();"));
-  assert.match(boot, /const restoreLast = viewIntent \|\| restoreLastOnOpen\(\);/);
-  assert.match(boot, /if \(restoreLast\) loadPersistedSplit\(\);/, "the saved layout is not adopted by default");
+  assert.match(boot, /const restoreLast = viewIntent \|\| !\(await openNewChatFetch\);/);
+  assert.match(boot, /if \(restoreLast\) loadPersistedSplit\(\);/, "the saved layout is only adopted when restoring");
   assert.match(
     boot,
     /if \(restoreLast && bareEntry && !restoredCanvasNeedsSessionList\(\)\) mountRestoredCanvas\(true\);/,
@@ -20,16 +20,18 @@ test("opening the app lands on a new chat unless the person opted to restore the
   assert.doesNotMatch(boot, /^ {2}loadPersistedSplit\(\);$/m, "no unconditional layout restore on open");
 });
 
-test("the restore-on-open setting defaults off and is a per-browser choice in settings", () => {
+test("the open setting is stored per user and defaults to the last session", () => {
   const settings = read("settings.ts");
-  assert.match(settings, /return localStorage\.getItem\(RESTORE_ON_OPEN_KEY\) === "1";/);
+  assert.match(settings, /openNewChat = rec\?\.value === true;/);
+  assert.match(settings, /putUiState\(OPEN_NEW_CHAT_KEY/);
+  assert.doesNotMatch(settings, /localStorage\.\w+\(OPEN_NEW_CHAT_KEY/);
   assert.match(settings, /\$\{openBehaviorRow\(\)\}/);
-  assert.match(settings, /\{ restore: false, label: "New chat" \}/);
+  assert.match(settings, /\{ newChat: false, label: "Last session" \}/);
 });
 
-test("a saved multiview layout is not reopened on a bare visit by default", async () => {
+test("opting into a new chat skips the saved multiview layout on a bare visit", async () => {
   const { harness } = await import("./deep-link-boot-fixture.ts");
-  const h = await harness({ path: "/", savedCanvas: true, restoreLast: false });
+  const h = await harness({ path: "/", savedCanvas: true, openNewChat: true });
   try {
     const saved = localStorage.getItem("web-ui:split-canvas:v1");
     h.releaseSessions();
@@ -44,7 +46,7 @@ test("a saved multiview layout is not reopened on a bare visit by default", asyn
   }
 });
 
-test("opting in reopens the saved multiview layout", async () => {
+test("by default the saved multiview layout reopens", async () => {
   const { harness } = await import("./deep-link-boot-fixture.ts");
   const h = await harness({ path: "/", savedCanvas: true });
   try {

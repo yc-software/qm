@@ -45,7 +45,7 @@ interface HarnessOptions {
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
-  restoreLast?: boolean;
+  openNewChat?: boolean;
 }
 
 export const SESSION = {
@@ -62,7 +62,6 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     url: `http://localhost${opts.path}`,
     pretendToBeVisual: true,
   });
-  if (opts.restoreLast !== false) dom.window.localStorage.setItem("open:restore-last", "1");
   if (opts.savedCanvas)
     dom.window.localStorage.setItem(
       "web-ui:split-canvas:v1",
@@ -152,6 +151,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         effective: { harnessId: "pi", modelId: "m" },
         upgradeAvailable: false,
       });
+    }
+    if (path.startsWith("/api/ui-state?key=open-new-chat")) {
+      return Response.json({ value: opts.openNewChat ?? null, updatedAt: opts.openNewChat ? 1 : 0 });
     }
     if (path.startsWith("/api/ui-state")) {
       if (opts.holdRemoteSplit) await remoteSplitHeld;

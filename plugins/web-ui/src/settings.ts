@@ -1,7 +1,7 @@
 import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
-import { api, withBase } from "./core-bridge";
+import { api, fetchUiState, putUiState, withBase } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./ui";
@@ -13,7 +13,6 @@ import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./t
 export type ThemeChoice = "light" | "dark" | "system" | "custom";
 
 const THEME_KEY = "theme";
-const RESTORE_ON_OPEN_KEY = "open:restore-last";
 const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
@@ -56,24 +55,6 @@ function storeCustomTheme(palette: Palette | null): void {
   } catch {
     void 0;
   }
-}
-
-export function restoreLastOnOpen(): boolean {
-  try {
-    return localStorage.getItem(RESTORE_ON_OPEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function setRestoreLastOnOpen(restore: boolean): void {
-  try {
-    if (restore) localStorage.setItem(RESTORE_ON_OPEN_KEY, "1");
-    else localStorage.removeItem(RESTORE_ON_OPEN_KEY);
-  } catch {
-    void 0;
-  }
-  drawSettings();
 }
 
 let themeParentOrigin: string | null = null;
@@ -249,28 +230,45 @@ function themeRow(): TemplateResult {
   `;
 }
 
-const OPEN_OPTIONS: Array<{ restore: boolean; label: string }> = [
-  { restore: false, label: "New chat" },
-  { restore: true, label: "Last session" },
+const OPEN_NEW_CHAT_KEY = "open-new-chat";
+let openNewChat = false;
+
+export async function loadOpenNewChat(timeoutMs = 2000): Promise<boolean> {
+  const rec = await Promise.race([
+    fetchUiState(OPEN_NEW_CHAT_KEY).catch(() => null),
+    new Promise<null>((resolve) => window.setTimeout(() => resolve(null), timeoutMs)),
+  ]);
+  openNewChat = rec?.value === true;
+  return openNewChat;
+}
+
+function setOpenNewChat(value: boolean): void {
+  openNewChat = value;
+  drawSettings();
+  void putUiState(OPEN_NEW_CHAT_KEY, value, Date.now()).catch(() => void 0);
+}
+
+const OPEN_OPTIONS: Array<{ newChat: boolean; label: string }> = [
+  { newChat: false, label: "Last session" },
+  { newChat: true, label: "New chat" },
 ];
 
 function openBehaviorRow(): TemplateResult {
-  const restore = restoreLastOnOpen();
   return html`
     <div class="settings-row">
       <div class="settings-row-copy">
         <div class="settings-row-title">When QM opens</div>
-        <div class="settings-row-note">Start on a new chat, or reopen the conversations you had open last time.</div>
+        <div class="settings-row-note">Reopen the conversations you had open last time, or start on a new chat.</div>
       </div>
       <div class="settings-choice" role="radiogroup" aria-label="When QM opens">
         ${OPEN_OPTIONS.map(
           (option) => html`
             <button
-              class="settings-choice-option ${restore === option.restore ? "selected" : ""}"
+              class="settings-choice-option ${openNewChat === option.newChat ? "selected" : ""}"
               type="button"
               role="radio"
-              aria-checked=${restore === option.restore ? "true" : "false"}
-              @click=${() => setRestoreLastOnOpen(option.restore)}
+              aria-checked=${openNewChat === option.newChat ? "true" : "false"}
+              @click=${() => setOpenNewChat(option.newChat)}
             >
               <span>${option.label}</span>
             </button>
