@@ -22,7 +22,6 @@
  *   semantics — keep working at least this much) and an optional token cap
  *   (wind down when exhausted; never auto-complete).
  */
-import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
 
 type GoalStatus = "active" | "paused" | "complete";
@@ -92,10 +91,6 @@ export function createGoalRecord(input: {
     createdAt: now,
     updatedAt: now,
   };
-}
-
-export function meterGoalCall(goal: GoalRecord, usage: LlmCallUsage | null): void {
-  goal.tokensUsed += Math.max(0, (usage?.input ?? 0) + (usage?.output ?? 0));
 }
 
 function escapeTags(text: string): string {

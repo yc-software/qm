@@ -97,7 +97,6 @@ for (const status of ["blocked", "paused", "active"]) {
     await create.execute("c1", { objective: "hopeless" });
     const before = structuredClone(ref.goal);
     for (let round = 0; round < 5; round++) {
-      ref.goalRound = round;
       const result = await update.execute(`u${round}`, { status, note: "api is down" });
       assert.match(textOf(result as never), /Invalid arguments/);
     }
