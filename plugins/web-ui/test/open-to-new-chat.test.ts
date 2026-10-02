@@ -22,7 +22,7 @@ test("opening the app restores the last session unless the person opted into a n
 
 test("the open setting is stored per user and defaults to the last session", () => {
   const settings = read("settings.ts");
-  assert.match(settings, /openNewChat = rec\?\.value === true;/);
+  assert.match(settings, /openNewChat = rec\.value === true;/);
   assert.match(settings, /putUiState\(OPEN_NEW_CHAT_KEY/);
   assert.doesNotMatch(settings, /localStorage\.\w+\(OPEN_NEW_CHAT_KEY/);
   assert.match(settings, /\$\{openBehaviorRow\(\)\}/);

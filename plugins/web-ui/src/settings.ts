@@ -232,17 +232,32 @@ function themeRow(): TemplateResult {
 
 const OPEN_NEW_CHAT_KEY = "open-new-chat";
 let openNewChat = false;
+let openNewChatTouched = false;
 
 export async function loadOpenNewChat(timeoutMs = 2000): Promise<boolean> {
-  const rec = await Promise.race([
-    fetchUiState(OPEN_NEW_CHAT_KEY).catch(() => null),
-    new Promise<null>((resolve) => window.setTimeout(() => resolve(null), timeoutMs)),
+  const fetched = fetchUiState(OPEN_NEW_CHAT_KEY).then(
+    (rec) => {
+      if (!openNewChatTouched) {
+        openNewChat = rec.value === true;
+        drawSettings();
+      }
+      return openNewChat;
+    },
+    () => null,
+  );
+  let timer = 0;
+  const value = await Promise.race([
+    fetched,
+    new Promise<null>((resolve) => {
+      timer = window.setTimeout(() => resolve(null), timeoutMs);
+    }),
   ]);
-  openNewChat = rec?.value === true;
-  return openNewChat;
+  window.clearTimeout(timer);
+  return value ?? false;
 }
 
 function setOpenNewChat(value: boolean): void {
+  openNewChatTouched = true;
   openNewChat = value;
   drawSettings();
   void putUiState(OPEN_NEW_CHAT_KEY, value, Date.now()).catch(() => void 0);
