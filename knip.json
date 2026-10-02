@@ -68,6 +68,7 @@
     },
     "deploy/connector-sdk": {
       "ignoreDependencies": ["@composio/core"]
-    }
+    },
+    "deploy/**": {}
   }
 }
