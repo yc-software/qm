@@ -310,8 +310,8 @@ export function forkCutSeq(
   floorSeq = -1,
 ): number | undefined {
   const isUser = (message: unknown): boolean => {
-    const role = (message as { role?: string } | undefined)?.role;
-    return role === "user" || role === "user-with-attachments";
+    const m = message as { role?: string; opener?: boolean; resumeAnchor?: boolean } | undefined;
+    return (m?.role === "user" || m?.role === "user-with-attachments") && !m.opener && !m.resumeAnchor;
   };
   let base = floorSeq;
   let unsaved = 0;

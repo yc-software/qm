@@ -1996,7 +1996,7 @@ export function createChatSurface(
     if (!agent || !sessionId) return;
     const messages = agent.state.messages;
     if (!messages[index]) return;
-    const floorSeq = chatState.forkSession?.forkBoundarySeq ?? -1;
+    const floorSeq = Math.max(chatState.forkSession?.forkBoundarySeq ?? -1, (chatState.transcriptAnchorSeq ?? 0) - 1);
     try {
       const { entries } = await api<{ entries: SessionEntry[] }>(`/api/sessions/${encodeURIComponent(sessionId)}`);
       const upToSeq = forkCutSeq(entries ?? [], messages, index, floorSeq);

@@ -39,4 +39,10 @@ test("an unsaved live prompt maps to the next saved user entry after the last sa
   const live = [...entriesToMessages(LOG.slice(0, 4)), { role: "user", content: "second" }];
   assert.equal(forkCutSeq(LOG, live, 2), 4);
   assert.equal(forkCutSeq(LOG.slice(0, 4), live, 2), undefined);
+  const resumed = [
+    ...entriesToMessages(LOG.slice(0, 4)),
+    { role: "user", content: "", resumeAnchor: true },
+    { role: "assistant" },
+  ];
+  assert.equal(forkCutSeq(LOG, resumed, 3), 3);
 });
