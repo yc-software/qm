@@ -58,6 +58,9 @@
     },
     "@mariozechner/mini-lit": {
       "marked": "^18.0.5"
-    }
+    },
+    "@codemirror/lang-liquid": "6.3.2",
+    "@lezer/highlight": "1.2.4",
+    "@lezer/javascript": "1.5.5"
   }
 }
