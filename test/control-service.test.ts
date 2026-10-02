@@ -986,7 +986,7 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
       verification: { scheme: "github", secret: "shh-secret" },
       filters: [{ path: "action", in: ["opened"] }],
     },
-    claims("U1"),
+    claims("U1", scopeId("personal", "U1"), { liveActor: true }),
     "https://portal.example",
   );
   assert.ok(r.ok, JSON.stringify(r));

@@ -83,7 +83,7 @@ export interface WebhookCreateRequest {
 
 export type WebhookCreateResult =
   | { ok: true; webhook: Webhook; url: string; secret?: string }
-  | { ok: false; code: "bad_request" | "unknown_destination" | "webhook_create_failed"; message: string };
+  | { ok: false; code: "bad_request" | "forbidden" | "unknown_destination" | "webhook_create_failed"; message: string };
 
 export interface CronPatchRequest {
   runtime?: Cron["runtime"];
@@ -809,6 +809,13 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
+      if (capability.triggered || !livePersonCapability(capability)) {
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "webhook registration requires a live turn started by its owner",
+        };
+      }
       const resolved = resolveCapabilityDestination(capability, req.destinationKey);
       if (!resolved.ok) {
         return {

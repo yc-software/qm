@@ -82,6 +82,44 @@ test("createToolContext.cronCreate creates a real cron through the shared servic
   assert.equal(stored.title, "digest");
 });
 
+test("webhook registration through the tool requires a live person and leaves refused calls without effects", async () => {
+  const { built, control } = build();
+  const request = { action: "handle the event", verification: { scheme: "hmac-sha256" as const, secret: "secret" } };
+  const auditBefore = await built.auditLog.events();
+  for (const scope of ["personal:U1", "channel:C1"] as const) {
+    for (const extra of [
+      {},
+      { liveActor: false, liveAuthor: false },
+      { triggered: true },
+      { triggered: true, liveActor: true },
+      { triggered: true, liveAuthor: true },
+    ]) {
+      const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), scopeId: scope, ...extra } });
+      const result = await ctx.webhookCreate(request);
+      assert.equal(result.ok, false, JSON.stringify({ scope, extra }));
+      assert.equal(result.ok ? undefined : result.code, "forbidden");
+      assert.deepEqual(await built.app.listWebhooks(), []);
+      assert.deepEqual(await built.auditLog.events(), auditBefore);
+    }
+  }
+  for (const extra of [{ liveActor: true }, { liveAuthor: true }]) {
+    const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), ...extra } });
+    const result = await ctx.webhookCreate(request);
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.equal(result.webhook.owner, "U1");
+    assert.equal(result.secret, "secret");
+  }
+  const [webhook] = await built.app.listWebhooks();
+  await built.app.setWebhookEnabled(webhook!.id, false);
+  const disabled = await built.app.listWebhooks();
+  const auditAfter = await built.auditLog.events();
+  const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), triggered: true } });
+  const result = await ctx.webhookCreate(request);
+  assert.equal(result.ok ? undefined : result.code, "forbidden");
+  assert.deepEqual(await built.app.listWebhooks(), disabled);
+  assert.deepEqual(await built.auditLog.events(), auditAfter);
+});
+
 test("ledger replay: a cron create is CACHED — a crash-replay does NOT create a second cron", async () => {
   const { built, control } = build();
   const { ledger } = memoryLedger();
