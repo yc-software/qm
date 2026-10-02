@@ -1,4 +1,4 @@
-import type { SandboxResources } from "./sandbox-resources.ts";
+import type { SandboxResource, SandboxResources } from "./sandbox-resources.ts";
 import { parseScopeId, type ScopeKind, type WorkspaceLayer } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
@@ -55,6 +55,10 @@ export interface RoutingSandboxOptions {
   scopeDefaults?: SandboxScopeDefaults;
   resources?: SandboxResources;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
+}
+
+export function failedSandboxMessage(record: SandboxResource): string {
+  return `sandbox ${record.id} failed to provision${record.error ? ` (${record.error})` : ""}; retry create with the same reservation or retire it`;
 }
 
 export const ROUTE_CACHE_TTL_MS = 15_000;
@@ -174,6 +178,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       if (provOpts?.sandboxId && !resource) throw new Error("sandbox inventory unavailable");
       if (resource === null) throw new NoDefaultSandboxError();
       if (resource) {
+        if (resource.state === "failed") throw new Error(failedSandboxMessage(resource));
         const sandbox = backends[resource.backend];
         if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
         const routedLayers = layers.map((layer) =>

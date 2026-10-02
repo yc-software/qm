@@ -1008,3 +1008,30 @@ test("a verified live turn can create only its own new scope computer without di
   await assert.rejects(turn.access("alice", computer.id), /permission/);
   await assert.rejects(turn.setDefault("alice", scope, computer.id), /permission/);
 });
+
+test("a sandbox whose creation failed cannot become the default or be provisioned until it is recreated", async () => {
+  let failNext = true;
+  const { resources, router, layers } = fixture((backend) => {
+    const provision = backend.provision.bind(backend);
+    backend.provision = async (l, o) => {
+      if (failNext && l.some((layer) => layer.scopeId.startsWith("sandbox-"))) {
+        failNext = false;
+        throw new Error("provider quota exceeded");
+      }
+      return provision(l, o);
+    };
+  });
+  await assert.rejects(resources.create("alice", "personal:alice", "local", "x", "res-failed"), /quota/);
+  assert.equal((await resources.get("res-failed")).state, "failed");
+  await assert.rejects(resources.setDefault("alice", "personal:alice", "res-failed"), /failed to provision/);
+  await assert.rejects(router.provision(layers, { sandboxId: "res-failed" }), /failed to provision/);
+  assert.equal(
+    (await resources.get("res-failed")).state,
+    "failed",
+    "no machine was provisioned behind a failed record",
+  );
+
+  assert.equal((await resources.create("alice", "personal:alice", "local", "x", "res-failed")).state, "ready");
+  await resources.setDefault("alice", "personal:alice", "res-failed");
+  assert.equal((await router.provision(layers)).resourceId, "res-failed");
+});

@@ -8,6 +8,7 @@ import {
   type SandboxScopeDefaults,
   type SandboxBackendName,
   type SandboxRoute,
+  failedSandboxMessage,
 } from "./sandbox-routing.ts";
 import type { Sandbox, SandboxHandle, AgentComputerSpec, ProvisionOptions, ComputerStatus } from "./sandbox.ts";
 
@@ -383,6 +384,7 @@ export function createSandboxResources(opts: {
           const record = await get(id);
           await authorize(actorId, record.ownerScopeId);
           if (record.state === "retired") throw new Error("sandbox has been retired");
+          if (record.state === "failed") throw new Error(failedSandboxMessage(record));
           if (record.ownerScopeId !== scopeId)
             throw new Error(
               "the default sandbox must belong to this scope; use sandbox_id for another authorized scope",
