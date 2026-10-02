@@ -1,5 +1,6 @@
 import { PgBoss } from "pg-boss";
 import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 import { errMessage } from "../util/errors.ts";
 
@@ -36,11 +37,15 @@ export function createPgBossCronQueue(
   let pg: PgPool | null = null;
   const boss = new PgBoss({
     schema,
+    useListenNotify: true,
     db: {
       executeSql: async (text, values) => {
         if (!pg) throw new Error("Cron queue database is closed");
         return (await pg.pool()).query(text, values);
       },
+      listen: async (channel, onNotification, onReconnect) => ({
+        close: subscribePostgresChannel(databaseUrl, channel, onNotification, onReconnect),
+      }),
     },
   });
   async function closePool() {
@@ -67,12 +72,21 @@ export function createPgBossCronQueue(
         const localConcurrency = Math.min(32, Math.max(1, Math.trunc(fireConcurrency)));
         await boss.work<CronFireJob>(
           FIRE_QUEUE,
-          { pollingIntervalSeconds: 1, batchSize: 1, localConcurrency },
+          {
+            pollingIntervalSeconds: 1,
+            notifyPollingIntervalSeconds: CRON_TICK_SECONDS,
+            batchSize: 1,
+            localConcurrency,
+          },
           async (jobs) => {
             for (const job of jobs) await handlers.onFire(job.data);
           },
         );
-        await boss.work(TICK_QUEUE, { pollingIntervalSeconds: 1 }, () => handlers.onTick());
+        await boss.work(
+          TICK_QUEUE,
+          { pollingIntervalSeconds: 1, notifyPollingIntervalSeconds: CRON_TICK_SECONDS },
+          () => handlers.onTick(),
+        );
       } catch (e) {
         if (initialized) {
           await Promise.all([

@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 
-type Adapter = { executeSql(text: string, values?: unknown[]): Promise<unknown> };
+type Adapter = {
+  executeSql(text: string, values?: unknown[]): Promise<unknown>;
+  listen(
+    channel: string,
+    notify: (payload: string) => void,
+    reconnect: () => void,
+  ): Promise<{ close(): Promise<void> }>;
+};
+const subscriptions: { url: string; channel: string; notify: (payload: string) => void; closed: boolean }[] = [];
 const pools: { closed: boolean }[] = [];
 let adapter: Adapter;
 let failStart = false;
@@ -20,6 +28,18 @@ mock.module("../src/persistence/pg-pool.ts", {
         close: async () => {
           state.closed = true;
         },
+      };
+    },
+  },
+});
+
+mock.module("../src/persistence/postgres-listener.ts", {
+  namedExports: {
+    subscribePostgresChannel: (url: string, channel: string, notify: (payload: string) => void) => {
+      const subscription = { url, channel, notify, closed: false };
+      subscriptions.push(subscription);
+      return async () => {
+        subscription.closed = true;
       };
     },
   },
@@ -112,4 +132,25 @@ test("resuming polling failure preserves the database for admitted callbacks", a
     await queue.stop();
   }
   assert.ok(pools.at(-1)?.closed);
+});
+
+test("pg-boss LISTEN rides the shared listener on the queue database", async () => {
+  const queue = createPgBossCronQueue("postgres://cron-db");
+  await queue.start(handlers, 60_000);
+  try {
+    const received: string[] = [];
+    const handle = await adapter.listen(
+      "pgboss_abc",
+      (payload) => received.push(payload),
+      () => {},
+    );
+    const subscription = subscriptions.at(-1)!;
+    assert.deepEqual([subscription.url, subscription.channel], ["postgres://cron-db", "pgboss_abc"]);
+    subscription.notify("cron-fire");
+    assert.deepEqual(received, ["cron-fire"]);
+    await handle.close();
+    assert.ok(subscription.closed);
+  } finally {
+    await queue.stop();
+  }
 });
