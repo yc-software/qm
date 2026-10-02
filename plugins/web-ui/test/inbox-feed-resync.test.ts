@@ -33,9 +33,9 @@ test("the BFF treats a core-side resync frame like a dropped feed", () => {
   assert.match(consume, /event: \$\{eventName\}_resync`\)\) \{\s*onReconnect\?\.\(\);\s*continue;/);
 });
 
-test("a resync while the inbox is hidden marks it stale, and the next staleness-gated refresh consumes the mark", () => {
-  const wired = inbox.match(/onInboxResync\(\(\) => \{[\s\S]*?\n {2}\}\);/)?.[0] ?? "";
-  assert.match(wired, /resyncMissedWhileHidden = true;\s*return;/);
+test("a resync or item event while the inbox is hidden marks it stale, and the next staleness-gated refresh consumes the mark", () => {
+  const gate = inbox.match(/async function refreshWhenVisible[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(gate, /resyncMissedWhileHidden = true;\s*return;\s*\}\s*await refreshInbox\(\{ silent: true \}\);/);
   const refresh = inbox.match(/export async function refreshInbox[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(
     refresh,
@@ -59,14 +59,12 @@ test("the browser handles inbox_resync frames and treats its own reconnect the s
 test("a resync lands as a silent inbox refresh", () => {
   assert.match(conversations, /\(\) => inboxResyncHandler\?\.\(\)/);
   const wired = inbox.match(/onInboxResync\(\(\) => \{[\s\S]*?\}\);/)?.[0] ?? "";
-  assert.match(wired, /refreshInbox\(\{ silent: true \}\)/);
+  assert.match(wired, /void refreshWhenVisible\(\);/);
 });
 
 test("realtime inbox events flow through the coalescer, so a burst refetches every touched item", () => {
   assert.match(inbox, /enqueueRealtimeEvent\(\{ loopId: event\.loopId, itemId: event\.itemId \}\);/);
-  assert.match(inbox, /createInboxEventCoalescer\(/);
-  const flush = inbox.match(/async function applyRealtimeBatch[\s\S]*?\n\}/)?.[0] ?? "";
-  assert.match(flush, /await refreshInbox\(\{ silent: true \}\)/);
+  assert.match(inbox, /createInboxEventCoalescer\(\s*250,\s*\(\) => void refreshWhenVisible\(\),/);
 });
 
 test("a refresh requested while one is in flight re-runs instead of being dropped", () => {

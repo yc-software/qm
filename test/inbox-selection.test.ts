@@ -14,6 +14,7 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
@@ -598,7 +599,7 @@ test("email classification is projected only by the flagged inbox endpoint", asy
   }
 });
 
-test("inbox viewers are exactly the candidates who can administer the loop, including shared group scopes", async () => {
+test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and aliases", async (t) => {
   const store = createLoopStore();
   const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
   const { loop: personal } = await store.create({
@@ -608,7 +609,7 @@ test("inbox viewers are exactly the candidates who can administer the loop, incl
     name: "Mine",
   });
   const { loop: group } = await store.create({ ...base, owner: "alice", ownerScopeId: "group:core", name: "Team" });
-  const members = new Set(["alice", "bob"]);
+  const members = new Set(["alice", "bob", "carol"]);
   const route = inboxRoutes.find((r) => "path" in r && r.path === "/v1/inbox/viewers")!;
   const ask = async (body: unknown, capability: unknown = null) => {
     let status = 0;
@@ -618,7 +619,13 @@ test("inbox viewers are exactly the candidates who can administer the loop, incl
       body,
       url: new URL("http://local/v1/inbox/viewers"),
       capability,
-      deps: { loops: { store } },
+      deps: {
+        loops: { store },
+        identity: {
+          refresh: async () => {},
+          classify: (id: string) => ({ id, type: id === "carol" ? "deactivated" : "internal" }),
+        },
+      },
       app: {
         samePerson: async (a: string, b: string) => a === b,
         membershipControlsScope: async (scope: string) => scope.startsWith("group:"),
@@ -635,11 +642,13 @@ test("inbox viewers are exactly the candidates who can administer the loop, incl
     } as unknown as ApiCtx);
     return { status, data };
   };
-  const candidates = ["alice", "bob", "mallory"];
+  const candidates = ["alice", "bob-slack", "carol", "mallory"];
+  installPrincipalLinks({ canonical: (key) => (key === "bob-slack" ? "bob" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
   assert.deepEqual((await ask({ loopId: personal.id, candidates })).data.viewers, ["alice"]);
-  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob"]);
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob-slack"]);
   members.delete("alice");
-  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["bob"]);
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["bob-slack"]);
   assert.equal((await ask({ loopId: "missing", candidates })).status, 404);
   assert.equal((await ask({ loopId: group.id, candidates }, { actorId: "mallory" })).status, 403);
 });

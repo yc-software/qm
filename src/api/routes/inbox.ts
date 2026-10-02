@@ -1,4 +1,5 @@
 import { migrateInbox } from "../../loops/inbox-migration.ts";
+import { canonicalPerson } from "../../directory/person.ts";
 import { scopeId, type Loop } from "../../types.ts";
 import { ensureDefaultInboxLoops, findInboxLoop } from "../../loops/inbox-loop.ts";
 import {
@@ -208,8 +209,14 @@ async function viewers(ctx: ApiCtx): Promise<void> {
   const candidates = Array.isArray(body.candidates)
     ? [...new Set(body.candidates.filter((value): value is string => typeof value === "string"))]
     : [];
+  const identity = ctx.deps.identity;
+  await identity?.refresh();
   const allowed = await Promise.all(
-    candidates.map((actorId) => canAdministerLoop(ctx, loop, { actorId, liveHuman: false })),
+    candidates.map(
+      async (id) =>
+        (!identity || identity.classify(id).type === "internal") &&
+        canAdministerLoop(ctx, loop, { actorId: canonicalPerson(id), liveHuman: false }),
+    ),
   );
   sendJson(ctx.res, 200, { viewers: candidates.filter((_, i) => allowed[i]) });
 }

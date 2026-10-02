@@ -34,7 +34,7 @@ import { embeddedComposer } from "./embedded-composer";
 import type { ComposerSubmission } from "./composer";
 import { api, ApiError, putUiState } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
-import { createInboxEventCoalescer, type InboxItemRef } from "./inbox-coalesce";
+import { createInboxEventCoalescer } from "./inbox-coalesce";
 import { charForName, ensureEmojiIndex } from "./emoji-picker";
 import type { DensityTier } from "./density";
 import { deepLinkPath, UI_BASE } from "./deep-link";
@@ -789,11 +789,15 @@ let realtimeWired = false;
 
 const enqueueRealtimeEvent = createInboxEventCoalescer(
   250,
-  (batch) => void applyRealtimeBatch(batch),
+  () => void refreshWhenVisible(),
   (fn, ms) => void window.setTimeout(fn, ms),
 );
 
-async function applyRealtimeBatch(_batch: InboxItemRef[]): Promise<void> {
+async function refreshWhenVisible(): Promise<void> {
+  if (document.visibilityState !== "visible" || !anySurfaceVisible()) {
+    resyncMissedWhileHidden = true;
+    return;
+  }
   await refreshInbox({ silent: true });
 }
 
@@ -812,11 +816,7 @@ function ensureRealtime(): void {
   });
   onInboxResync(() => {
     if (!can("inbox")) return;
-    if (document.visibilityState !== "visible" || !anySurfaceVisible()) {
-      resyncMissedWhileHidden = true;
-      return;
-    }
-    void refreshInbox({ silent: true });
+    void refreshWhenVisible();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !anySurfaceVisible()) return;
