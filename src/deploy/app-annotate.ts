@@ -21,7 +21,8 @@ export const ANNOTATE_JS = String.raw`
   const annotationStatus = document.getElementById("ann-status");
   let annotating = false, annotationReady = false, annotationLoading = false;
   let annotationChatOpen = document.querySelector("#chat-toggle")?.getAttribute("aria-expanded") === "true";
-  let snapshot = null, draining = false, retryTimer;
+  let draining = false, retryTimer;
+  const snapshots = new Map();
   const delivered = new Map();
   const session = crypto.randomUUID();
   const notifyAnnotations = (text) => { annotationStatus.textContent = text; };
@@ -101,15 +102,15 @@ export const ANNOTATE_JS = String.raw`
     return { text, files };
   };
   const drainAnnotations = async () => {
-    if (draining || !snapshot) return;
+    if (draining || !snapshots.size) return;
     draining = true;
     clearTimeout(retryTimer);
     try {
-      while (snapshot) {
-        const current = snapshot;
+      while (snapshots.size) {
+        const current = snapshots.values().next().value;
         const removed = [...delivered.keys()].find((id) => id.startsWith(current.scope + ":") && !current.annotations.some((item) => current.scope + ":" + item.id === id));
         const changed = !removed && current.annotations.find((item) => delivered.get(current.scope + ":" + item.id)?.revision !== JSON.stringify(item));
-        if (!changed && !removed) break;
+        if (!changed && !removed) { snapshots.delete(current.scope); continue; }
         const annotationId = session + ":" + (changed ? current.scope + ":" + changed.id : removed);
         const revision = changed ? JSON.stringify(changed) : null;
         const content = changed ? await annotationContent(changed, current) : { text: "", files: [] };
@@ -136,7 +137,7 @@ export const ANNOTATE_JS = String.raw`
       notifyAnnotations("");
     }
     if (event.data?.type === "qm:devbar-snapshot" && typeof event.data.payload?.scope === "string" && Array.isArray(event.data.payload.annotations)) {
-      snapshot = event.data.payload;
+      snapshots.set(event.data.payload.scope, event.data.payload);
       void drainAnnotations();
     }
   });

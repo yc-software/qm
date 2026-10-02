@@ -8,6 +8,23 @@ function nodePath(node: Node): string {
   return `${nodePath(parent)}/${name}[${siblings.findIndex((sibling) => sibling === node) + 1}]`;
 }
 
+export function resolveTextSelection(
+  quote: NonNullable<ReturnType<typeof readTextSelection>>["textSelection"],
+  document: Document,
+): Range | null {
+  try {
+    const start = document.evaluate(quote.start.xpath, document, null, 9, null).singleNodeValue;
+    const end = document.evaluate(quote.end.xpath, document, null, 9, null).singleNodeValue;
+    if (!start || !end) return null;
+    const range = document.createRange();
+    range.setStart(start, quote.start.offset);
+    range.setEnd(end, quote.end.offset);
+    return range.toString() === quote.exact ? range : null;
+  } catch {
+    return null;
+  }
+}
+
 export function readTextSelection(selection: Selection | null) {
   if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
   const range = selection.getRangeAt(0);

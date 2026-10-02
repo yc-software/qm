@@ -120,6 +120,35 @@ test("delivery is single flight while waiting for chat and preserves latest edit
   assert.equal(f.posts.length, 2);
   assert.match(f.posts[1]!.text, /latest/);
 });
+test("navigation drains every pending page after delayed chat acknowledgement", async (t) => {
+  const f = fixture(t);
+  f.setAck(false);
+  f.send([item("one"), item("two")], "page-a");
+  await tick();
+  f.send([item("one")], "page-b");
+  await tick();
+  assert.equal(f.posts.length, 1);
+  f.setAck(true);
+  f.w.dispatchEvent(
+    new f.w.MessageEvent("message", {
+      source: f.chat.contentWindow,
+      origin: "https://portal.example.com",
+      data: { type: "qm:annotations-ack", id: f.posts[0]!.id },
+    }),
+  );
+  await tick();
+  assert.deepEqual(
+    f.posts.map((post) => post.annotationId.split(":").slice(1).join(":")),
+    ["page-a:one", "page-a:two", "page-b:one"],
+  );
+  f.send([item("two", "Updated after navigation")], "page-a");
+  await tick();
+  assert.equal(f.posts[3]!.annotationId, f.posts[0]!.annotationId);
+  assert.equal(f.posts[3]!.remove, true);
+  assert.equal(f.posts[4]!.annotationId, f.posts[1]!.annotationId);
+  assert.match(f.posts[4]!.text, /Updated after navigation/);
+  assert.equal(f.posts.length, 5);
+});
 test("bundled Devbar mounts original controls without Copy, Export or Agent", async (t) => {
   const dom = new JSDOM("<!doctype html><body><button>App button</button></body>", {
     url: "https://demo.apps.example.com/",
@@ -158,18 +187,10 @@ test("bundled Devbar mounts original controls without Copy, Export or Agent", as
     if (event.data?.type === "qm:devbar-snapshot") snapshots.push(event.data.payload);
   });
   toggle(false, true);
-  w.Range.prototype.getBoundingClientRect = () => ({
-    x: 10,
-    y: 10,
-    left: 10,
-    top: 10,
-    right: 100,
-    bottom: 30,
-    width: 90,
-    height: 20,
-    toJSON() {},
-  });
+  let quoteRect = new w.DOMRect(10, 10, 90, 20);
+  w.Range.prototype.getBoundingClientRect = () => quoteRect;
   const appButton = w.document.querySelector("body > button")!;
+  appButton.getBoundingClientRect = () => new w.DOMRect(200, 200, 400, 200);
   await tick();
   w.document.elementFromPoint = () => appButton;
   appButton.dispatchEvent(new w.MouseEvent("mousemove", { bubbles: true, clientX: 10, clientY: 10 }));
@@ -183,6 +204,14 @@ test("bundled Devbar mounts original controls without Copy, Export or Agent", as
   assert.equal(w.document.querySelector('[data-devbar="quote-prompt"]'), null);
   const note = w.document.querySelector<HTMLInputElement>('[data-devbar="note-input"] input')!;
   assert.ok(note, "highlighting immediately opens the shared comment editor");
+  const quoteEditor = note.closest<HTMLElement>('[data-devbar="note-input"]')!;
+  assert.equal(quoteEditor.style.left, "10px");
+  assert.equal(quoteEditor.style.top, "38px");
+  quoteRect = new w.DOMRect(40, 50, 90, 20);
+  w.dispatchEvent(new w.Event("scroll"));
+  await tick();
+  assert.equal(quoteEditor.style.left, "40px");
+  assert.equal(quoteEditor.style.top, "78px");
   for (const key of ["a", "s", "m", "d", "c"])
     note.dispatchEvent(new w.KeyboardEvent("keydown", { key, bubbles: true }));
   assert.equal(w.document.querySelector<HTMLElement>("[data-devbar=root]")?.dataset.passive, "true");
@@ -199,6 +228,25 @@ test("bundled Devbar mounts original controls without Copy, Export or Agent", as
   assert.equal(quote.data.textSelection.suffix, " button");
   assert.equal(quote.data.textSelection.start.xpath, "/html[1]/body[1]/button[1]/text()[1]");
   assert.equal(w.document.querySelector('[data-devbar="note-input"]'), null);
+  const savedQuote = w.document.querySelector<HTMLElement>(".devbar-selection-marker-clickable")!;
+  assert.equal(savedQuote.style.left, "38px");
+  assert.equal(savedQuote.style.top, "48px");
+  assert.equal(savedQuote.style.width, "94px");
+  assert.equal(savedQuote.style.height, "24px");
+  quoteRect = new w.DOMRect(80, 90, 120, 30);
+  await tick();
+  assert.equal(savedQuote.style.left, "78px");
+  assert.equal(savedQuote.style.top, "88px");
+  assert.equal(savedQuote.style.width, "124px");
+  assert.equal(savedQuote.style.height, "34px");
+  savedQuote.click();
+  await tick();
+  const quoteThread = w.document.querySelector<HTMLElement>('[data-devbar="thread-popover"]')!;
+  assert.ok(quoteThread, "saved quotes open the shared annotation editor");
+  assert.equal(quoteThread.style.left, "212px");
+  assert.equal(quoteThread.style.top, "90px");
+  quoteThread.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
+  await tick();
   toggle(false);
   await tick();
   toggle(true);
