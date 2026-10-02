@@ -9,3 +9,5 @@ deploy/stacks/.generated/
 deploy/helm/templates/
 
 .generated/
+
+src/deploy/vendor/

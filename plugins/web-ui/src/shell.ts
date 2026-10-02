@@ -1205,7 +1205,9 @@ export async function boot(): Promise<void> {
     if (/^[a-z0-9-]{1,63}$/.test(slug)) {
       openAppEditChat(slug);
       if (params.get("embed") === "1")
-        watchAppAnnotations(slug, (text, files) => mainConversation().composer.addAnnotations(text, files));
+        watchAppAnnotations(slug, (text, files, id, remove) =>
+          mainConversation().composer.addAnnotations(text, files, id, remove),
+        );
       return;
     }
     showMainEmpty("This edit link is missing a valid app name.");

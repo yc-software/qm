@@ -31,6 +31,7 @@ test("embedded chat takes annotations only from its own app shell and acks once"
     assert.deepEqual(added, []);
     send("https://demo.apps.example.com", parent);
     send("https://demo.apps.example.com", parent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(added, [["fix the button", 1]]);
     assert.equal(acks.length, 2);
     assert.deepEqual(acks[0], [{ type: "qm:annotations-ack", id: "1" }, "https://demo.apps.example.com"]);

@@ -184,6 +184,24 @@ test("stopping returns Send immediately and queues every submit path without int
     host.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(requests, Array(5).fill("/api/turn"), "normal queue submission still works");
+    await t.test("annotations become native attachments without changing the draft or sending", async () => {
+      composer!.state.draft = "Keep my typed message";
+      composer!.state.attachments = [];
+      const sent = requests.length;
+      assert.equal(await composer!.addAnnotations("Button context", [], "button-one"), true);
+      assert.equal(composer!.state.draft, "Keep my typed message");
+      assert.equal(composer!.state.attachments.length, 1);
+      assert.equal(composer!.state.attachments[0]!.extractedText, "Button context");
+      const id = composer!.state.attachments[0]!.id;
+      assert.equal(await composer!.addAnnotations("Updated context", [], "button-one"), true);
+      assert.equal(composer!.state.attachments.length, 1);
+      assert.equal(composer!.state.attachments[0]!.id, id);
+      assert.equal(composer!.state.attachments[0]!.extractedText, "Updated context");
+      assert.equal(requests.length, sent);
+      assert.equal(await composer!.addAnnotations("", [], "button-one", true), true);
+      assert.equal(composer!.state.attachments.length, 0);
+      assert.equal(composer!.state.draft, "Keep my typed message");
+    });
     composer!.state.draft = "Preparing attachment";
     composer!.state.processingFiles = true;
     draw();
