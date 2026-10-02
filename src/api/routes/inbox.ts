@@ -200,8 +200,23 @@ async function access(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function viewers(ctx: ApiCtx): Promise<void> {
+  if (ctx.capability || ctx.actor) return sendJson(ctx.res, 403, { error: "forbidden" });
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const loop = typeof body.loopId === "string" ? await loopDeps(ctx)?.store.get(body.loopId) : undefined;
+  if (!loop) return sendJson(ctx.res, 404, { error: "not_found" });
+  const candidates = Array.isArray(body.candidates)
+    ? [...new Set(body.candidates.filter((value): value is string => typeof value === "string"))]
+    : [];
+  const allowed = await Promise.all(
+    candidates.map((actorId) => canAdministerLoop(ctx, loop, { actorId, liveHuman: false })),
+  );
+  sendJson(ctx.res, 200, { viewers: candidates.filter((_, i) => allowed[i]) });
+}
+
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/inbox", auth: "source", handle: inbox },
+  { method: "POST", path: "/v1/inbox/viewers", auth: "source", handle: viewers },
   { method: "GET", path: "/v1/inbox/access", auth: "source", handle: access },
   { method: "PUT", path: "/v1/inbox", auth: "source", handle: inbox },
 ];

@@ -597,3 +597,49 @@ test("email classification is projected only by the flagged inbox endpoint", asy
     assert.equal((await disabled.call("GET", null, `filter=${filter}`)).status, 403);
   }
 });
+
+test("inbox viewers are exactly the candidates who can administer the loop, including shared group scopes", async () => {
+  const store = createLoopStore();
+  const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
+  const { loop: personal } = await store.create({
+    ...base,
+    owner: "alice",
+    ownerScopeId: "personal:alice",
+    name: "Mine",
+  });
+  const { loop: group } = await store.create({ ...base, owner: "alice", ownerScopeId: "group:core", name: "Team" });
+  const members = new Set(["alice", "bob"]);
+  const route = inboxRoutes.find((r) => "path" in r && r.path === "/v1/inbox/viewers")!;
+  const ask = async (body: unknown, capability: unknown = null) => {
+    let status = 0;
+    let data: any;
+    await route.handle({
+      method: "POST",
+      body,
+      url: new URL("http://local/v1/inbox/viewers"),
+      capability,
+      deps: { loops: { store } },
+      app: {
+        samePerson: async (a: string, b: string) => a === b,
+        membershipControlsScope: async (scope: string) => scope.startsWith("group:"),
+        managesScope: async (who: string, scope: string) => scope === "group:core" && members.has(who),
+      },
+      res: {
+        writeHead: (value: number) => {
+          status = value;
+        },
+        end: (value: string) => {
+          data = JSON.parse(value);
+        },
+      },
+    } as unknown as ApiCtx);
+    return { status, data };
+  };
+  const candidates = ["alice", "bob", "mallory"];
+  assert.deepEqual((await ask({ loopId: personal.id, candidates })).data.viewers, ["alice"]);
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob"]);
+  members.delete("alice");
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["bob"]);
+  assert.equal((await ask({ loopId: "missing", candidates })).status, 404);
+  assert.equal((await ask({ loopId: group.id, candidates }, { actorId: "mallory" })).status, 403);
+});
