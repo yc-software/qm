@@ -1,6 +1,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers, highlightSpecialChars, keymap } from "@codemirror/view";
-import { defaultHighlightStyle, foldGutter, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, foldGutter, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { languages } from "@codemirror/language-data";
 import { search, searchKeymap } from "@codemirror/search";
 
@@ -26,7 +27,15 @@ export async function mountFileEditor(
         lineNumbers(),
         highlightSpecialChars(),
         foldGutter(),
-        syntaxHighlighting(defaultHighlightStyle),
+        syntaxHighlighting(
+          HighlightStyle.define([
+            { tag: [tags.keyword, tags.typeName], color: "var(--ultrafast-accent)" },
+            { tag: [tags.string, tags.regexp], color: "var(--success)" },
+            { tag: [tags.number, tags.bool, tags.atom], color: "var(--warning)" },
+            { tag: [tags.propertyName, tags.function(tags.variableName)], color: "var(--markdown-link)" },
+            { tag: tags.comment, color: "var(--muted-foreground)" },
+          ]),
+        ),
         search(),
         keymap.of(searchKeymap),
         EditorView.theme({
