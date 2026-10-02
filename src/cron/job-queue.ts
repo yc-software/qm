@@ -1,5 +1,5 @@
 import { PgBoss } from "pg-boss";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgPool, type PoolClient } from "../persistence/pg-pool.ts";
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 import { errMessage } from "../util/errors.ts";
 
@@ -27,6 +27,86 @@ const HEALTHY_SEND_MAX_AGE_MS = 30_000;
 const FIRE_QUEUE = "cron-fire";
 const TICK_QUEUE = "cron-tick";
 const CRON_TICK_SECONDS = 5;
+const NOTIFY_POLLING_INTERVAL_SECONDS = 10;
+
+async function listenForPgBoss(
+  pool: PgPool,
+  channel: string,
+  onNotification: (payload: string) => void,
+  onReconnect: () => void,
+): Promise<{ close(): Promise<void> }> {
+  let client: PoolClient | null = null;
+  let closed = false;
+  let established = false;
+  let attempt = 0;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let connecting: Promise<void> | null = null;
+
+  const release = () => {
+    const previous = client;
+    client = null;
+    if (!previous) return;
+    previous.release(true);
+  };
+  const schedule = () => {
+    if (closed || retry) return;
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5));
+    attempt += 1;
+    retry = setTimeout(() => {
+      retry = undefined;
+      connecting = connect();
+      void connecting.catch(() => schedule());
+    }, delay);
+    retry.unref?.();
+  };
+  const connect = async (): Promise<void> => {
+    if (closed) return;
+    const next = await (await pool.sessionPool()).connect();
+    if (closed) {
+      next.release(true);
+      return;
+    }
+    client = next;
+    const disconnect = () => {
+      if (client !== next) return;
+      release();
+      if (established) {
+        established = false;
+        schedule();
+      }
+    };
+    next.on("error", disconnect);
+    next.on("end", disconnect);
+    next.on("notification", (message) => {
+      if (client === next && message.payload !== undefined) onNotification(message.payload);
+    });
+    try {
+      await next.query(`LISTEN "${channel.replaceAll('"', '""')}"`);
+      if (closed || client !== next) return;
+      established = true;
+      attempt = 0;
+      onReconnect();
+    } catch (error) {
+      disconnect();
+      throw error;
+    }
+  };
+  connecting = connect();
+  try {
+    await connecting;
+  } catch (error) {
+    release();
+    throw error;
+  }
+  return {
+    async close() {
+      closed = true;
+      if (retry) clearTimeout(retry);
+      await connecting?.catch(() => undefined);
+      release();
+    },
+  };
+}
 
 export function createPgBossCronQueue(
   databaseUrl: string,
@@ -36,10 +116,15 @@ export function createPgBossCronQueue(
   let pg: PgPool | null = null;
   const boss = new PgBoss({
     schema,
+    useListenNotify: true,
     db: {
       executeSql: async (text, values) => {
         if (!pg) throw new Error("Cron queue database is closed");
         return (await pg.pool()).query(text, values);
+      },
+      listen: async (channel, onNotification, onReconnect) => {
+        if (!pg) throw new Error("Cron queue database is closed");
+        return listenForPgBoss(pg, channel, onNotification, onReconnect);
       },
     },
   });
@@ -67,12 +152,21 @@ export function createPgBossCronQueue(
         const localConcurrency = Math.min(32, Math.max(1, Math.trunc(fireConcurrency)));
         await boss.work<CronFireJob>(
           FIRE_QUEUE,
-          { pollingIntervalSeconds: 1, batchSize: 1, localConcurrency },
+          {
+            pollingIntervalSeconds: 1,
+            notifyPollingIntervalSeconds: NOTIFY_POLLING_INTERVAL_SECONDS,
+            batchSize: 1,
+            localConcurrency,
+          },
           async (jobs) => {
             for (const job of jobs) await handlers.onFire(job.data);
           },
         );
-        await boss.work(TICK_QUEUE, { pollingIntervalSeconds: 1 }, () => handlers.onTick());
+        await boss.work(
+          TICK_QUEUE,
+          { pollingIntervalSeconds: 1, notifyPollingIntervalSeconds: NOTIFY_POLLING_INTERVAL_SECONDS },
+          () => handlers.onTick(),
+        );
       } catch (e) {
         if (initialized) {
           await Promise.all([
