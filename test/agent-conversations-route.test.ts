@@ -72,8 +72,8 @@ describe("agent conversations self-API", async () => {
       assert.deepEqual(
         (
           (await list.json()) as { conversations: Array<{ id: string; status: SessionStatus | null }> }
-        ).conversations.find((s) => s.id === mineId)?.status,
-        undefined,
+        ).conversations.find((s) => s.id === mineId)?.status ?? null,
+        status,
       );
     }
   });
