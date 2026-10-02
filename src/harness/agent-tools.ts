@@ -1283,7 +1283,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "expensive storage: it is an index, not a datastore. Save pointers to data, never the data " +
       "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
       "belongs in a file written with the files tool, with at most one memory line naming that file and what " +
-      "it holds. If a fact is a list that grows, it's a file. Two caveats: files are this " +
+      "it holds. If a fact is a list that grows, it's a file. Files are this " +
       "conversation's own (a pointer read from another conversation is a hint of where state " +
       "lives, not a path you can open). " +
       'action="remember" appends durable `facts` now — short, self-contained bullets (a preference, ' +
