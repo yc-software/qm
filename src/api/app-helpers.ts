@@ -381,13 +381,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       scopeId("org", orgIdOf()),
     ]);
     try {
-      const [sessions, channels, groups, projects] = await Promise.all([
-        deps.sessions ? sessionsForViewer(principalId) : Promise.resolve([]),
+      const [historicalScopes, channels, groups, projects] = await Promise.all([
+        deps.sessions ? deps.sessions.scopesForParticipant(principalId) : Promise.resolve([]),
         deps.directory ? deps.directory.listChannelsFor(principalId) : Promise.resolve([]),
         deps.directory?.listGroupsFor?.(principalId) ?? Promise.resolve([]),
         projectsForViewer(principalId),
       ]);
-      const historical = new Set(sessions.map((session) => session.scopeId));
+      const historical = new Set(historicalScopes);
       for (const channel of channels) {
         const scope = scopeId("channel", channel.channelId);
         if (channel.isPrivate === true || historical.has(scope)) scopes.add(scope);

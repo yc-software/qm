@@ -728,7 +728,7 @@ for (const [name, make] of backends) {
     assert.equal((await store.listByParticipant("U2")).length, 1);
   });
 
-  test(`${name}: getForParticipant returns exactly the row listByParticipant returns`, async () => {
+  test(`${name}: participant session and scope projections preserve historical membership`, async () => {
     const store = make();
     await assertParticipantSessionParity(store, `parity-${name}-a`);
     await assertParticipantSessionParity(store, `parity-${name}-b`);

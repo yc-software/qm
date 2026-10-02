@@ -37,7 +37,7 @@ export interface TriggerDeps {
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
     conversationMembers?: DirectoryStore["conversationMembers"];
   };
-  sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+  sessions?: { participantHasScope(principalId: string, scope: ScopeId): Promise<boolean> };
 }
 
 export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fastMode" | "attachments"> {
@@ -125,8 +125,7 @@ async function relayAttribution(deps: TriggerDeps, spec: TriggerSpec): Promise<s
 }
 
 async function participatesInScope(deps: TriggerDeps, actorId: string, scope: ScopeId): Promise<boolean> {
-  const sessions = await deps.sessions?.listByParticipant(actorId).catch(() => []);
-  return sessions?.some((s) => s.scopeId === scope) === true;
+  return (await deps.sessions?.participantHasScope(actorId, scope).catch(() => false)) === true;
 }
 
 async function actorMayReadScope(
@@ -143,11 +142,12 @@ async function actorMayReadScope(
     return kind !== "group" && kind !== "channel" ? { ok: true } : { ok: false, note: MEMBERSHIP_SKIP_NOTE };
   if (kind === "group") {
     if (await isVisible(deps.directory, actorId, { kind: "group", groupId: ref })) return { ok: true };
+    const known = await deps.directory.groupMembership?.(ref, actorId).catch(() => undefined);
+    if (known === false) return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
     if (snapshotGap) {
       if (await participatesInScope(deps, actorId, scope)) return { ok: true };
       return { ok: false, note: UNKNOWN_HOME_SKIP_NOTE };
     }
-    const known = await deps.directory.groupMembership?.(ref, actorId).catch(() => undefined);
     if (known === undefined && (await participatesInScope(deps, actorId, scope))) return { ok: true };
     return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
   }

@@ -30,7 +30,7 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
     channelMember: async (channelId: string, principalId: string) =>
       channelId === "C1" && (principalId === "U1" || principalId === "U2"),
   };
-  const sessions = { listByParticipant: async (_p: string) => [] };
+  const sessions = { scopesForParticipant: async (_p: string) => [] };
   const auditLog = { record: () => undefined };
   const crons = { list: async () => [] };
   const webhooks = { list: async () => [] };

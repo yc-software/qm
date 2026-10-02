@@ -1351,6 +1351,24 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return participantSessions(principalId, opts);
     },
 
+    async participantHasScope(principalId, scope): Promise<boolean> {
+      const rows = await q(
+        `SELECT EXISTS(SELECT 1 FROM participants p JOIN sessions s ON s.id = p.session_id
+          WHERE p.principal_id = $1 AND s.scope_id = $2) AS present`,
+        [principalId, scope],
+      );
+      return rows[0]?.present === true;
+    },
+
+    async scopesForParticipant(principalId): Promise<ScopeId[]> {
+      const rows = await q(
+        `SELECT DISTINCT s.scope_id FROM participants p JOIN sessions s ON s.id = p.session_id
+          WHERE p.principal_id = $1 ORDER BY s.scope_id`,
+        [principalId],
+      );
+      return rows.map((row) => row.scope_id as ScopeId);
+    },
+
     async getForParticipant(sessionId, principalId): Promise<Session | null> {
       return participantSession(sessionId, principalId);
     },

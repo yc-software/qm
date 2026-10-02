@@ -526,6 +526,23 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         : out;
     },
 
+    async participantHasScope(principalId, scope) {
+      for (const id of participants.get(principalId) ?? []) {
+        const session = sessions.get(id);
+        if (session && session.scopeId === scope) return true;
+      }
+      return false;
+    },
+
+    async scopesForParticipant(principalId) {
+      const scopes = new Set<ScopeId>();
+      for (const id of participants.get(principalId) ?? []) {
+        const scope = sessions.get(id)?.scopeId;
+        if (scope !== undefined) scopes.add(scope);
+      }
+      return [...scopes].sort();
+    },
+
     async getForParticipant(sessionId, principalId) {
       if (!participants.get(principalId)?.has(sessionId)) return null;
       return participantSession(sessionId, principalId);
