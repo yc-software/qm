@@ -1,3 +1,4 @@
+import { previewFile } from "./file-open.ts";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
@@ -479,13 +480,20 @@ export function chipBadge(
   size?: number,
   href?: string,
   download = false,
+  mimetype?: string,
 ): TemplateResult {
   const inner = html`${icon(glyph, 14)}<span dir="auto">${name}</span
     >${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}`;
   if (!href) return html`<span class="file-chip">${inner}</span>`;
   if (download) return html`<a class="file-chip" href=${href} download=${name}>${inner}</a>`;
   return html`<span class="file-chip-group"
-    ><a class="file-chip" href=${href} target="_blank" rel="noreferrer">${inner}</a
+    ><a
+      class="file-chip"
+      href=${href}
+      target="_blank"
+      rel="noreferrer"
+      @click=${(event: MouseEvent) => previewFile(event, name, href, mimetype)}
+      >${inner}</a
     ><a class="file-chip-download" href=${href} download=${name} title="Download ${name}" aria-label="Download ${name}"
       >${icon(Download, 14)}</a
     ></span

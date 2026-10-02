@@ -3202,8 +3202,8 @@ export function createChatSurface(
     redrawTranscript();
   }
 
-  function fileChip(name: string, size?: number, href?: string): TemplateResult {
-    return chipBadge(Paperclip, name, size, href);
+  function fileChip(name: string, size?: number, href?: string, mimetype?: string): TemplateResult {
+    return chipBadge(Paperclip, name, size, href, false, mimetype);
   }
 
   function inlineHtmlName(name?: string, mimeType?: string): boolean {
@@ -3339,7 +3339,7 @@ export function createChatSurface(
       }
       if (src) return inlineHtmlFrame(a.fileName, src, a.size, artifactHref);
     }
-    return fileChip(a.fileName, a.size, artifactHref ?? localContentUrl(a));
+    return fileChip(a.fileName, a.size, artifactHref ?? localContentUrl(a), a.mimeType);
   }
 
   function deliveredFileBadge(file: DeliveredFile): TemplateResult {
@@ -3352,7 +3352,7 @@ export function createChatSurface(
       /></a>`;
     }
     if (inlineHtmlName(file.name, file.mimetype)) return inlineHtmlFrame(file.name, href, file.sizeBytes, href);
-    return fileChip(file.name, file.sizeBytes, href);
+    return fileChip(file.name, file.sizeBytes, href, file.mimetype);
   }
 
   function scrollToBottom(): void {

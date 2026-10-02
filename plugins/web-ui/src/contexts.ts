@@ -1,3 +1,4 @@
+import { previewFile } from "./file-open.ts";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -901,6 +902,7 @@ function fileRow(f: ScopeFile): TemplateResult {
             ? html`<a
                 class="context-resource-link"
                 href=${fileContentUrl(f.id, f.name)}
+                @click=${(event: MouseEvent) => previewFile(event, f.name, fileContentUrl(f.id, f.name), f.mimetype)}
                 target="_blank"
                 rel="noreferrer"
                 >Open</a

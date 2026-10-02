@@ -13551,3 +13551,58 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .loop-triage-none {
   color: var(--muted-foreground);
 }
+
+.project-dialog.file-viewer {
+  width: min(960px, calc(100vw - 32px));
+  height: min(800px, calc(100dvh - 48px));
+  padding: 0;
+  overflow: hidden;
+}
+.file-viewer[open] {
+  display: flex;
+  flex-direction: column;
+}
+.file-viewer-head,
+.file-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.file-viewer-head strong {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.file-viewer-toolbar {
+  flex-wrap: wrap;
+}
+.file-viewer-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+.file-viewer-content.file-viewer-editor {
+  padding: 0;
+}
+.file-viewer-notice {
+  margin: 8px 20px;
+}
+.file-viewer-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--font-13);
+}
+.file-viewer-table {
+  border-collapse: collapse;
+  font-size: var(--font-13);
+}
+.file-viewer-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  min-width: 80px;
+}
