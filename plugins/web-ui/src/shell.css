@@ -9379,7 +9379,7 @@ h3.ambient-field-label {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px 18px;
+  padding: 0 10px 4px;
 }
 .inbox-filter-bar:not(:has(.inbox-filter)) {
   padding-bottom: 0;
