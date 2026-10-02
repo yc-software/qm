@@ -1274,8 +1274,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "memory",
     description:
       "Your durable memory of the person or team you work for — the ONE way to read or change it. " +
-      "It is NOT a file: never write it with files action write or shell commands (those land on your computer " +
-      "and are silently lost). It persists across every conversation and surface (continuity — " +
+      "It is NOT a file: writing MEMORY.md with files or the shell does not touch it. It persists across every conversation and surface (continuity — " +
       "you're a colleague who remembers, not a fresh chat each time); this conversation can only " +
       "ever touch its OWN memory, no one else's, by design. " +
       'action="search" finds remembered facts matching every word of `query` (case-insensitive) ' +
@@ -1283,11 +1282,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Every line is loaded into your context on every future turn, so memory is your most " +
       "expensive storage: it is an index, not a datastore. Save pointers to data, never the data " +
       "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
-      "belongs in a file on your computer, with at most one memory line naming that file and what " +
+      "belongs in a file written with the files tool, with at most one memory line naming that file and what " +
       "it holds. If a fact is a list that grows, it's a file. Two caveats: files are this " +
       "conversation's own (a pointer read from another conversation is a hint of where state " +
-      "lives, not a path you can open), and disk is less durable than memory — keep working " +
-      "state you could rebuild from its source. " +
+      "lives, not a path you can open). " +
       'action="remember" appends durable `facts` now — short, self-contained bullets (a preference, ' +
       "an identifier, an ongoing project, how they like to work); never secrets, credentials, " +
       "one-off trivia, or anything already recorded somewhere you can look up. " +
