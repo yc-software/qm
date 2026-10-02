@@ -98,7 +98,9 @@ export function openFileViewer(
         if (result.meta.truncated || result.data.length > 1000 || result.data.some((row) => row.length > 100))
           notice = "Preview limited to 1,000 rows and 100 columns. Download for the full file.";
         if (result.errors.length)
-          notice = "This file contains CSV formatting errors. Some cells may not display as intended.";
+          notice = [notice, "This file contains CSV formatting errors. Some cells may not display as intended."]
+            .filter(Boolean)
+            .join(" ");
         render(
           html`<table class="file-viewer-table">
             <tbody>
