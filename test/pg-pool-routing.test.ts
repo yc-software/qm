@@ -141,15 +141,11 @@ test(
     let fired = false;
     try {
       await store.q("SELECT 1");
-      await queue.start(
-        {
-          onFire: async () => {
-            fired = true;
-          },
-          onTick: async () => {},
+      await queue.start({
+        onFire: async () => {
+          fired = true;
         },
-        5_000,
-      );
+      });
       await queue.enqueueFire({ cronId: "pool-test", scheduledAt: Date.now() });
       const deadline = Date.now() + 10_000;
       while (!fired && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
@@ -166,15 +162,11 @@ test(
       await queue.stop();
       assert.equal((await store.q("SELECT 42 AS answer"))[0]!.answer, 42);
       fired = false;
-      await queue.start(
-        {
-          onFire: async () => {
-            fired = true;
-          },
-          onTick: async () => {},
+      await queue.start({
+        onFire: async () => {
+          fired = true;
         },
-        5_000,
-      );
+      });
       await queue.enqueueFire({ cronId: "pool-test-restart", scheduledAt: Date.now() });
       const restartedDeadline = Date.now() + 10_000;
       while (!fired && Date.now() < restartedDeadline) await new Promise((r) => setTimeout(r, 50));

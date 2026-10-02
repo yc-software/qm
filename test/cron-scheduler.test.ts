@@ -1147,7 +1147,6 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
   const gates = [0, 1].map(() => ({ entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }));
   let attempts = 0;
   let onFire!: (job: CronFireJob) => Promise<void>;
-  let onTick!: () => Promise<void>;
   const enqueued: CronFireJob[] = [];
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
@@ -1174,7 +1173,6 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
     jobQueue: {
       async start(handlers) {
         onFire = handlers.onFire;
-        onTick = handlers.onTick;
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -1189,7 +1187,7 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
   let second: Promise<void> | undefined;
   try {
     await gates[0]!.entered.promise;
-    await onTick();
+    for (let i = 0; i < 50 && !enqueued.length; i++) await new Promise((r) => setImmediate(r));
     clock++;
     second = onFire(enqueued.at(-1)!);
     await gates[1]!.entered.promise;

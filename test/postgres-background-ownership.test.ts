@@ -51,30 +51,22 @@ test(
     const newEntered = Promise.withResolvers<void>();
     let oldFinished = false;
     try {
-      await queue.start(
-        {
-          onTick: async () => {},
-          onFire: async () => {
-            oldEntered.resolve();
-            await oldFinish.promise;
-            oldFinished = true;
-          },
+      await queue.start({
+        onFire: async () => {
+          oldEntered.resolve();
+          await oldFinish.promise;
+          oldFinished = true;
         },
-        60_000,
-      );
+      });
       await queue.enqueueFire({ cronId: "old", scheduledAt: Date.now() });
       await oldEntered.promise;
       await queue.stopClaims!();
       assert.equal(oldFinished, false);
-      await queue.start(
-        {
-          onTick: async () => {},
-          onFire: async () => {
-            newEntered.resolve();
-          },
+      await queue.start({
+        onFire: async () => {
+          newEntered.resolve();
         },
-        60_000,
-      );
+      });
       await queue.enqueueFire({ cronId: "new", scheduledAt: Date.now() });
       await newEntered.promise;
       assert.equal(oldFinished, false);
