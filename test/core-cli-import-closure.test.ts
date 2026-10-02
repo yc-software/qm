@@ -8,8 +8,12 @@ import { dirname, join, relative, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 
 const runtimeImports = (file: string): string[] =>
-  [...readFileSync(file, "utf8").matchAll(/^(?:import|export)\s+(?!type\b)[^;]*?\sfrom\s+"([^"]+)"/gm)]
-    .map((m) => m[1]!)
+  [
+    /^(?:import|export)\s+(?!type\b)[^;]*?\sfrom\s+["']([^"']+)["']/gm,
+    /\bimport\s*\(\s*["']([^"']+)["']/g,
+    /^\s*import\s+["']([^"']+)["']/gm,
+  ]
+    .flatMap((re) => [...readFileSync(file, "utf8").matchAll(re)].map((m) => m[1]!))
     .filter((spec) => spec.startsWith("."))
     .map((spec) => relative(root, resolve(dirname(file), spec)));
 
