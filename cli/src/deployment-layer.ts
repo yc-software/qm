@@ -4,7 +4,7 @@ import { join, relative, sep } from "node:path";
 import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue, readEnvFile, sleep } from "./util.ts";
-import { parseToolDescriptor } from "./sandbox-layer.ts";
+import { parseToolDescriptor } from "./tool-descriptor.ts";
 
 interface DeploymentLayerFile {
   path: string;
