@@ -6,7 +6,7 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildMemoryContextSnapshot } from "../src/memory/context-boundary.ts";
 import type { MemoryRecords } from "../src/memory/records.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";

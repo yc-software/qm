@@ -1,5 +1,6 @@
 import type { BaseCtx, Route } from "./route.ts";
-import { canonicalPayload, verifyOrReject } from "../http.ts";
+import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
+import { verifyOrReject } from "../http.ts";
 
 const HEARTBEAT_MS = 25_000;
 

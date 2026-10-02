@@ -72,6 +72,7 @@ import {
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
+  isMissingOrPlaceholder,
   portFromEnv,
 } from "../../chassis/src/env.ts";
 
@@ -1875,11 +1876,6 @@ export function bootChecks(): void {
     for (const p of problems) console.error(`[portal] FATAL: ${p}`);
     throw new Error(`portal refusing to start: ${problems.length} misconfiguration(s)`);
   }
-}
-
-function isMissingOrPlaceholder(value: string | undefined): boolean {
-  const candidate = value?.trim();
-  return !candidate || /^(replace-me|placeholder|changeme|todo)$/i.test(candidate);
 }
 
 function validEmailDomain(value: string): boolean {

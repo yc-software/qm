@@ -156,10 +156,6 @@ export async function readRawBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTE
   return chunks.length === 0 ? "" : Buffer.concat(chunks).toString("utf8");
 }
 
-export function canonicalPayload(method: string, pathWithQuery: string, tail: string): string {
-  return `${method}\n${pathWithQuery}\n${tail}`;
-}
-
 export async function verifyOrReject(
   req: IncomingMessage,
   res: ServerResponse,
@@ -185,10 +181,6 @@ export async function verifyOrReject(
     return false;
   }
   return true;
-}
-
-export function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
 export function contentDispositionAttachment(name: string, kind: "attachment" | "inline" = "attachment"): string {

@@ -1,4 +1,4 @@
-import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
