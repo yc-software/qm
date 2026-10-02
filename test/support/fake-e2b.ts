@@ -30,6 +30,7 @@ export interface FakeE2b {
   createdCount(name: string): number;
   homeDir(name: string): string;
   pause(name: string): void;
+  pauseErrors: Error[];
 
   expirePaused(): void;
   loseNextCommand(name: string): void;
@@ -79,6 +80,7 @@ export function installFakeE2b(): FakeE2b {
   const fake: FakeE2b = {
     client: null as unknown as E2bClient,
     metrics: null,
+    pauseErrors: [],
     current: (name) => {
       const r = byName(name);
       return r && !r.expired ? { sandboxId: r.sandboxId, state: r.state, metadata: r.metadata } : null;
@@ -152,6 +154,8 @@ export function installFakeE2b(): FakeE2b {
       r.timeoutMs.push(ms);
     },
     async pause(): Promise<void> {
+      const refused = fake.pauseErrors.shift();
+      if (refused) throw refused;
       if (r.expired) throw new E2bSandboxGoneError(r.sandboxId, "sandbox was not found");
       r.state = "paused";
     },

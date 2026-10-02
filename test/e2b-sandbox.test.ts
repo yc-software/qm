@@ -189,6 +189,28 @@ test("teardown pauses the sandbox; destroy kills it", async () => {
   assert.equal(fake.current(h.id), null);
 });
 
+const busy = (): Error =>
+  Object.assign(new Error("Service temporarily unavailable, please retry - node is busy"), { statusCode: 503 });
+
+test("teardown retries a pause the provider refused as busy", async () => {
+  const h = await sandbox.provision(layers);
+  fake.pauseErrors.push(busy(), busy());
+  await sandbox.teardown(h);
+  assert.equal(fake.current(h.id)?.state, "paused");
+  assert.equal(fake.pauseErrors.length, 0);
+});
+
+test("teardown gives up on a pause that stays refused, and does not retry other errors", async () => {
+  const h = await sandbox.provision(layers);
+  fake.pauseErrors.push(busy(), busy(), busy(), busy(), busy());
+  await assert.rejects(sandbox.teardown(h), /temporarily unavailable/);
+  assert.equal(fake.pauseErrors.length, 1);
+  fake.pauseErrors.length = 0;
+  fake.pauseErrors.push(new Error("boom"), busy());
+  await assert.rejects(sandbox.teardown(h), /boom/);
+  assert.equal(fake.pauseErrors.length, 1);
+});
+
 test("keepWarm teardown leaves the sandbox running for background work", async () => {
   const a = await sandbox.provision(layers);
   await sandbox.writeFile(a, "keep.txt", "resident\n");

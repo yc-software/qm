@@ -4,7 +4,8 @@ import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
-import { createKeyedQueue } from "../util/async.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import { createKeyedQueue, jitteredBackoffMs } from "../util/async.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -664,7 +665,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     if (stored?.nativePause && snapshotDue(stored, tdOpts, nativeSnapshotIntervalMs))
       await captureRecoverySnapshot(scope, session, stored.recoverySnapshotId);
     try {
-      await session.pause();
+      await pauseWithRetry(session);
       await store.merge(scope, { preservationState: "paused", preservationError: undefined });
       sessionByName.delete(handle.id);
     } catch (error) {
@@ -675,4 +676,19 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   }
 
   return sandbox;
+}
+
+const PAUSE_ATTEMPTS = 4;
+const PAUSE_RETRY_STATUSES: ReadonlySet<unknown> = new Set([429, 503]);
+
+async function pauseWithRetry(session: { pause(): Promise<void> }): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await session.pause();
+    } catch (error) {
+      const status = (error as { statusCode?: unknown } | null)?.statusCode;
+      if (attempt >= PAUSE_ATTEMPTS || !PAUSE_RETRY_STATUSES.has(status)) throw error;
+      await sleep(jitteredBackoffMs(attempt));
+    }
+  }
 }
