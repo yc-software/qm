@@ -811,7 +811,7 @@ function ensureRealtime(): void {
   realtimeWired = true;
   onInboxItemEvent((event) => {
     if (!can("inbox")) return;
-    if (!inboxState.selected.some((loop) => loop.id === event.loopId)) return;
+    if (inboxState.loaded && !inboxState.selected.some((loop) => loop.id === event.loopId)) return;
     enqueueRealtimeEvent({ loopId: event.loopId, itemId: event.itemId });
   });
   onInboxResync(() => {

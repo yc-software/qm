@@ -64,6 +64,11 @@ test("a resync lands as a silent inbox refresh", () => {
 
 test("realtime inbox events flow through the coalescer, so a burst refetches every touched item", () => {
   assert.match(inbox, /enqueueRealtimeEvent\(\{ loopId: event\.loopId, itemId: event\.itemId \}\);/);
+  assert.match(
+    inbox,
+    /if \(inboxState\.loaded && !inboxState\.selected\.some\(\(loop\) => loop\.id === event\.loopId\)\) return;/,
+    "an event that lands before the first load finishes still queues a follow-up refresh",
+  );
   assert.match(inbox, /createInboxEventCoalescer\(\s*250,\s*\(\) => void refreshWhenVisible\(\),/);
 });
 
