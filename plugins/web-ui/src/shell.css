@@ -3833,47 +3833,6 @@ qm-markdown .tok-in {
   max-width: min(280px, 46vw);
   color: var(--foreground);
 }
-.fast-toggle.active {
-  color: var(--cta);
-}
-.fast-toggle.unavailable,
-.fast-toggle.unavailable:hover,
-.fast-toggle.unavailable:focus-visible {
-  opacity: 0.4;
-  color: var(--muted-foreground);
-  cursor: not-allowed;
-}
-.fast-toggle .icon {
-  position: relative;
-  z-index: 1;
-}
-.fast-toggle.active .icon {
-  color: var(--cta);
-}
-.fast-toggle.charging .icon {
-  animation: fast-charge 760ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-@keyframes fast-charge {
-  0% {
-    filter: none;
-    transform: scale(1);
-  }
-  38% {
-    transform: scale(1.22) rotate(-8deg);
-  }
-  64% {
-    transform: scale(0.94) rotate(4deg);
-  }
-  100% {
-    filter: none;
-    transform: scale(1) rotate(0);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .fast-toggle.charging .icon {
-    animation: none;
-  }
-}
 .menu-popover {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -4742,9 +4701,6 @@ summary.stopped-head:focus-visible {
 }
 .stopped-work[open] > .stopped-head .icon {
   transform: rotate(90deg);
-}
-.file-note .icon {
-  opacity: 0.8;
 }
 .readonly-chat .custom-chat-shell {
   display: flex;
@@ -6101,7 +6057,6 @@ a.connector-widget:focus-visible {
   }
   .composer-toolbar .icon-btn,
   .composer-toolbar .menu-button,
-  .composer-toolbar .fast-toggle,
   .composer-toolbar .runtime-default-btn,
   .composer-toolbar .send-btn {
     min-height: 44px;
@@ -6793,9 +6748,6 @@ a.connector-widget:focus-visible {
   color: var(--muted-foreground);
   font-size: var(--font-13);
   line-height: 1.55;
-}
-.project-members .context-section-label {
-  padding-top: 24px;
 }
 .project-member-list {
   display: grid;
@@ -10407,11 +10359,6 @@ h3.ambient-field-label {
 .inbox-handled-toggle:hover {
   color: var(--foreground);
 }
-.inbox-source-toggle.on {
-  color: var(--foreground);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
 .pane-kind-glyph {
   display: inline-flex;
   color: var(--muted-foreground);
@@ -11159,12 +11106,6 @@ h3.ambient-field-label {
   .composer-toolbar .stop-btn {
     width: 44px;
     height: 44px;
-  }
-  .composer-toolbar .settings-button {
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    justify-content: center;
   }
   .composer-toolbar .send-btn {
     width: 44px;
