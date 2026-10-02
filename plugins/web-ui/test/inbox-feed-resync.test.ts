@@ -19,7 +19,7 @@ test("the BFF's inbox feed announces reconnects, mirroring the session-state fee
 
 test("the BFF treats a core-side resync frame like a dropped feed", () => {
   const consume = server.match(/async function consumeCoreFeed\([\s\S]*?\n\}/)?.[0] ?? "";
-  assert.match(consume, /event: \$\{eventName\}_resync`\)\) \{\s*onReconnect\?\.\(\);\s*continue;/);
+  assert.match(consume, /frame\.event === `\$\{eventName\}_resync`\) \{\s*onReconnect\?\.\(\);\s*continue;/);
 });
 
 test("a resync while the inbox is hidden marks it stale, and the next staleness-gated refresh consumes the mark", () => {

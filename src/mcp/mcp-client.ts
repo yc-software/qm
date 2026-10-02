@@ -9,6 +9,8 @@
 // policy. See mcp-tool-service.ts for the layer that turns registered
 // servers into agent tools.
 
+import { parseSseFrames } from "../../plugins/chassis/src/sse.ts";
+
 const TOKEN_SKEW_MS = 60_000;
 const MCP_ACCEPT = "application/json, text/event-stream";
 
@@ -53,18 +55,9 @@ interface McpEnvelope {
 }
 
 function parseSseEnvelopes(body: string): McpEnvelope[] {
-  const out: McpEnvelope[] = [];
-  for (const frame of body.split(/\r?\n\r?\n/)) {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).replace(/^ /, ""))
-      .join("\n");
-    if (!data) continue;
-    const parsed = safeJson(data) as McpEnvelope | null;
-    if (parsed) out.push(parsed);
-  }
-  return out;
+  return parseSseFrames(`${body}\n\n`)
+    .frames.map((frame) => (frame.data ? (safeJson(frame.data) as McpEnvelope | null) : null))
+    .filter((e): e is McpEnvelope => !!e);
 }
 
 function parseMcpEnvelope(text: string, contentType: string | null | undefined, id?: unknown): McpEnvelope | null {

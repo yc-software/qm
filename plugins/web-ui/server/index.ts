@@ -20,6 +20,7 @@ import {
   type HttpMethod,
 } from "../../chassis/src/core-client.ts";
 import { findRoute } from "../../chassis/src/router.ts";
+import { openSseStream, parseSseFrames, SSE_HEADERS, sseFrame } from "../../chassis/src/sse.ts";
 import {
   json,
   gzipAccepted,
@@ -278,7 +279,7 @@ function sendHtml(res: ServerResponse, status: number, html: string): void {
 }
 
 function sseEvent(res: ServerResponse, event: string, data: unknown): void {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  res.write(sseFrame(data, { event }));
 }
 
 function mayManageDeployment(d: { permission?: unknown }): boolean {
@@ -601,19 +602,16 @@ async function consumeCoreFeed(
           const { value, done } = await reader.read();
           if (done) break;
           buf += decoder.decode(value, { stream: true });
-          const frames = buf.split("\n\n");
-          buf = frames.pop() ?? "";
-          for (const frame of frames) {
-            const lines = frame.split("\n");
-            if (lines.some((l) => l === `event: ${eventName}_resync`)) {
+          const parsed = parseSseFrames(buf);
+          buf = parsed.rest;
+          for (const frame of parsed.frames) {
+            if (frame.event === `${eventName}_resync`) {
               onReconnect?.();
               continue;
             }
-            if (!lines.some((l) => l === `event: ${eventName}`)) continue;
-            const data = lines.find((l) => l.startsWith("data: "))?.slice("data: ".length);
-            if (!data) continue;
+            if (frame.event !== eventName || !frame.data) continue;
             try {
-              onEvent(JSON.parse(data));
+              onEvent(JSON.parse(frame.data));
             } catch {
               void 0;
             }
@@ -2564,28 +2562,20 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/deliveries/events",
     handle: async (c) => {
       const { req, res, user } = c;
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-      res.write(": open\n\n");
-      let set = deliveryClients.get(user);
-      if (!set) {
-        set = new Set();
-        deliveryClients.set(user, set);
-      }
-      set.add(res);
-      const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
-      beat.unref?.();
-      req.on("close", () => {
-        clearInterval(beat);
-        const s = deliveryClients.get(user);
-        if (s) {
-          s.delete(res);
-          if (!s.size) deliveryClients.delete(user);
+      openSseStream(req, res, SSE_HEARTBEAT_MS, () => {
+        let set = deliveryClients.get(user);
+        if (!set) {
+          set = new Set();
+          deliveryClients.set(user, set);
         }
+        set.add(res);
+        return () => {
+          const s = deliveryClients.get(user);
+          if (s) {
+            s.delete(res);
+            if (!s.size) deliveryClients.delete(user);
+          }
+        };
       });
       return;
     },
@@ -2728,12 +2718,7 @@ const apiRoutes: readonly WebRoute[] = [
           json(res, upstream.status, { error: "stream_unavailable" });
           return;
         }
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache, no-transform",
-          connection: "keep-alive",
-          "x-accel-buffering": "no",
-        });
+        res.writeHead(200, SSE_HEADERS);
         const source = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
         source.on("error", () => res.destroy());
         source.pipe(res);

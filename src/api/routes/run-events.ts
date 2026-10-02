@@ -1,4 +1,5 @@
 import { sendJson } from "../http.ts";
+import { SSE_HEADERS, sseFrame } from "../../../plugins/chassis/src/sse.ts";
 import type { SessionEntry } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -55,7 +56,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       res.destroy();
       return;
     }
-    res.write(`${id === undefined ? "" : `id: ${id}\n`}data: ${JSON.stringify(data)}\n\n`);
+    res.write(sseFrame(data, { id }));
   };
   const drained = (): Promise<void> =>
     new Promise((resolve) => {
@@ -157,12 +158,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
   heartbeat.unref?.();
   res.on("close", cleanup);
   req.on("error", () => res.destroy());
-  res.writeHead(200, {
-    "content-type": "text/event-stream; charset=utf-8",
-    "cache-control": "no-cache, no-transform",
-    connection: "keep-alive",
-    "x-accel-buffering": "no",
-  });
+  res.writeHead(200, SSE_HEADERS);
   send({ type: "RUN_STARTED", threadId: runId, runId });
   await refresh(initial);
   if (!closed) await refresh();
