@@ -66,7 +66,7 @@ test("real Modal adapter creates blank worker computers without snapshot or rest
     assert.equal(snapshotCalls, 0);
     assert.equal(restoreCalls, 0);
     assert.equal(snapshotStore.puts(), 0);
-    assert.equal(fake.totalCreated(), 3);
+    assert.equal(fake.totalCreated(), 4);
   } finally {
     fake.cleanup();
   }

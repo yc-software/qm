@@ -19,6 +19,41 @@ const compile = (source: string): string =>
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText;
 
+test("pane header updates scan session metadata linearly and retain parent-title invalidation", () => {
+  let reads = 0;
+  const list = Array.from({ length: 128 }, (_, index) => ({
+    get id() {
+      reads++;
+      return `session-${index}`;
+    },
+    title: `Title ${index}`,
+    parentSessionId: index === 126 ? "session-0" : undefined,
+  }));
+  const panels = [126, 127].map((index) => ({ id: `pane-${index}`, params: { sessionId: `session-${index}` } }));
+  const signature = runInNewContext(
+    compile(
+      `${functionSource(split, "paneSession")}\n${functionSource(split, "computeHeaderSignature")}\ncomputeHeaderSignature;`,
+    ),
+    {
+      sessionsState: { list },
+      dockApi: { panels },
+      panelParams: (panel: { params: object }) => panel.params,
+      paneCrumb: () => null,
+      paneTitle: () => "Conversation",
+      paneIsWorking: () => false,
+      paneAwaitsInput: () => false,
+      paneBackground: () => null,
+      paneKindBadge: () => 0,
+    },
+  ) as () => string;
+  const before = signature();
+  assert.match(before, /session-0\|Title 0/);
+  assert.ok(reads <= list.length * panels.length * 8, `Header update visited ${reads} session IDs`);
+  list[0]!.title = "Renamed parent";
+  assert.notEqual(signature(), before);
+  assert.match(signature(), /session-0\|Renamed parent/);
+});
+
 test("single-pane navigation follows the pane identity without depending on the session list", () => {
   const dockApi = { panels: [] as { params: { sessionId?: string; appId?: string } }[] };
   const splitState = { active: true };

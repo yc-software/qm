@@ -329,3 +329,25 @@ for (const writer of ["teardown", "reaper"] as const) {
     await sb.destroyScope!(scope);
   });
 }
+
+test("failed overlapping preparation releases only its own sandbox lease", async () => {
+  const fake = installFakeMicrovm();
+  let failPreparation = false;
+  const sb = makeSandbox(fake, {
+    fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+      if (failPreparation && new URL(String(url)).pathname === "/exec") {
+        failPreparation = false;
+        throw new Error("injected preparation failure");
+      }
+      return fake.fetchImpl(url, init);
+    }) as typeof fetch,
+  });
+  const layers = rw(scopeId("personal", "overlapping-preparation"));
+  const first = await sb.provision(layers);
+  failPreparation = true;
+  await assert.rejects(sb.provision(layers), /injected preparation failure/);
+  assert.equal(fake.bodies.get(first.id)?.state, "RUNNING");
+  assert.equal(fake.s3store.size, 0);
+  await sb.teardown(first);
+  assert.equal(fake.bodies.get(first.id)?.state, "SUSPENDED");
+});

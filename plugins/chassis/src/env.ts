@@ -13,3 +13,8 @@ if (!secret(process.env.PORTAL_IDENTITY_SECRET) && CORE_SIGNING_SECRET) {
 export function portFromEnv(fallback: number): number {
   return Number(process.env.PORT ?? fallback);
 }
+
+export function isMissingOrPlaceholder(value: string | undefined): boolean {
+  const candidate = value?.trim();
+  return !candidate || /^(replace-me|placeholder|changeme|todo)$/i.test(candidate);
+}

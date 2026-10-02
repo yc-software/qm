@@ -10,6 +10,7 @@ import {
   latestAssistantParts,
   openCodeHarnessConfigOptions,
   openCodeMessageId,
+  openCodeToolDefinitions,
 } from "../src/harness/opencode-harness.ts";
 import type { OpencodeClient } from "@opencode-ai/sdk";
 import type { Config } from "../src/config.ts";
@@ -377,7 +378,7 @@ test("custom providers materialize into the opencode config (enabled + provider 
           name: "LiteLLM",
           protocol: "openai" as const,
           baseUrl: "http://litellm.internal:4000/v1",
-          models: [{ id: "deepseek-chat", name: "DeepSeek", contextWindow: 128000, maxTokens: 8192 }],
+          models: [{ id: "deepseek-chat", name: "DeepSeek", contextWindow: 128000, maxTokens: 8192, reasoning: true }],
         },
         apiKey: "sk-lite",
       },
@@ -404,7 +405,12 @@ test("custom providers materialize into the opencode config (enabled + provider 
     assert.equal(litellm.npm, "@ai-sdk/openai-compatible");
     assert.equal(litellm.options.baseURL, "http://litellm.internal:4000/v1");
     assert.equal(litellm.options.apiKey, "sk-lite");
-    assert.deepEqual(litellm.models["deepseek-chat"], { name: "DeepSeek", limit: { context: 128000, output: 8192 } });
+    assert.deepEqual(litellm.models["deepseek-chat"], {
+      name: "DeepSeek",
+      reasoning: true,
+      limit: { context: 128000, output: 8192 },
+    });
+    assert.equal(config.provider["responses-proxy"].models["responses-model"].reasoning, false);
     assert.equal(config.provider["responses-proxy"].npm, "@ai-sdk/openai");
     assert.equal(config.provider["responses-proxy"].options.apiKey, "sk-responses");
   } finally {
@@ -721,3 +727,13 @@ for (const surfaceTools of [false, true]) {
     assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
   });
 }
+
+test("OpenCode's fixed tool list includes the web-only sessions tool", () => {
+  const definitions = openCodeToolDefinitions({});
+  for (const name of ["subagents", "sessions"])
+    assert.ok(
+      definitions.some((tool) => tool.name === name),
+      name,
+    );
+  assert.doesNotMatch(definitions.find((tool) => tool.name === "subagents")!.description, /use sessions/);
+});

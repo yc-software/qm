@@ -54,6 +54,9 @@ export function runResultDelivery(
     ...(run.request.slackSource
       ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
       : {}),
+    ...(run.request.slackSource?.externalPolicyNamespace
+      ? { slackPolicyNamespace: run.request.slackSource.externalPolicyNamespace }
+      : {}),
     ...(editRef ? { editRef } : {}),
     ...(taskList.length ? { taskList: taskList.map(({ id, title, status }) => ({ id, title, status })) } : {}),
     ...(webTranscript ? { webTranscript } : {}),

@@ -1,3 +1,4 @@
+import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSandboxRouter, type SandboxRoute } from "../src/sandbox/sandbox-routing.ts";
@@ -371,3 +372,24 @@ for (const combined of [true, false]) {
     assert.deepEqual(calls, combined ? ["combined:old:keep"] : ["remove:old", "list:keep"]);
   });
 }
+
+test("failed scratch initialization keeps its routed backend for cleanup", async () => {
+  const { router, sprites, seed } = build({ "personal:partial": { backend: "sprites" } });
+  await seed();
+  sprites.provision = async () => {
+    throw new SandboxProvisionCleanupError({ id: "partial", rootDir: "/workspace", scratch: true });
+  };
+  let pending: SandboxHandle | undefined;
+  await assert.rejects(
+    router.provision([], { scratch: { key: "turn" }, routeScopeId: "personal:partial" }),
+    (error: Error) => {
+      assert.ok(error instanceof SandboxProvisionCleanupError);
+      pending = error.handle;
+      assert.equal(pending.backend, "sprites");
+      return true;
+    },
+  );
+  assert.ok(pending);
+  await router.teardown(pending, { destroy: true });
+  assert.deepEqual(sprites.calls, ["teardown"]);
+});

@@ -227,6 +227,83 @@ test("upward wheel loads history even when the transcript cannot scroll", () => 
   }
 });
 
+test("a transcript too short to fill the viewport keeps loading earlier pages until it does", () => {
+  const f = fixture();
+  try {
+    f.fit();
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+    stack.prepend(button);
+    const page = () => stack.append(f.s.ownerDocument.createElement("article"));
+    let loads = 0;
+    button.onclick = () => {
+      loads++;
+      button.disabled = true;
+    };
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "no scroll or wheel is needed when there is nothing to scroll");
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "a page already loading is not requested twice");
+    page();
+    button.disabled = false;
+    f.resize(30, 50);
+    assert.equal(loads, 2, "still short after a page arrives, so the next page loads");
+    for (let i = 0; i < 6; i++) f.grow();
+    page();
+    button.disabled = false;
+    f.resize(30, 50);
+    f.viewport.sync(f.s);
+    assert.equal(loads, 2, "once the content overflows well past the top, loading waits for the reader");
+    button.remove();
+  } finally {
+    f.close();
+  }
+});
+
+test("a page that fails to load is not retried by auto-fill until the reader asks", () => {
+  const f = fixture();
+  try {
+    f.fit();
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    f.s.querySelector(".message-stack")!.prepend(button);
+    let loads = 0;
+    button.onclick = () => loads++;
+    f.viewport.sync(f.s);
+    f.resize(30, 50);
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "no growth since the last automatic load means no automatic retry");
+    f.wheelUp();
+    assert.equal(loads, 2, "the reader can still ask for it");
+  } finally {
+    f.close();
+  }
+});
+
+test("a hidden pane never pulls history just because it has no height", () => {
+  const dom = new JSDOM('<section class="chat-scroll"><div class="message-stack"></div></section>');
+  const s = dom.window.document.querySelector<HTMLElement>("section")!;
+  Object.defineProperties(s, { clientHeight: { value: 0 }, scrollHeight: { value: 0 } });
+  const button = dom.window.document.createElement("button");
+  button.className = "earlier-messages-btn";
+  s.querySelector(".message-stack")!.prepend(button);
+  let loads = 0;
+  button.onclick = () => loads++;
+  const viewport = createTranscriptViewport();
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+  Object.assign(globalThis, { getComputedStyle: dom.window.getComputedStyle.bind(dom.window) });
+  try {
+    viewport.sync(s);
+    assert.equal(loads, 0);
+  } finally {
+    viewport.dispose();
+    if (saved) Object.defineProperty(globalThis, "getComputedStyle", saved);
+    else Reflect.deleteProperty(globalThis, "getComputedStyle");
+    dom.window.close();
+  }
+});
+
 test("a bottom-pinned stream follows growth instantly and coalesces frames", () => {
   const f = fixture();
   try {

@@ -116,7 +116,8 @@ test("cron credential approval resumes the original fire once and delivers to th
   assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
   assert.deepEqual(request.triggerDestination, destination);
   assert.deepEqual(request.unattendedGrants, ["allowed-job-grant"]);
-  assert.match(request.text, /dummy-grant/);
+  assert.match(request.text, /approved access until revoked/);
+  assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
   const pending = await f.deliveries.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_CAROL");

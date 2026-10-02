@@ -1,3 +1,4 @@
+import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import { Readable } from "node:stream";
@@ -700,4 +701,65 @@ test("repeated destroy teardown never targets an unrelated default scope", async
   await backend.teardown(handle, { destroy: true });
   assert.deepEqual(await store.get("default"), defaultRecord);
   assert.equal(await store.get(scope), null);
+});
+
+test("forced scratch destruction surfaces failure and retries the same live session", async () => {
+  let kills = 0;
+  const client = {
+    ...fake.client,
+    async create(opts: Parameters<typeof fake.client.create>[0]) {
+      const session = await fake.client.create(opts);
+      return {
+        ...session,
+        async kill() {
+          if (kills++ === 0) throw new Error("transient delete failure");
+          await session.kill();
+        },
+      };
+    },
+  };
+  const box = make({ client });
+  const handle = await box.provision(layers, { scratch: { key: "destroy-retry" } });
+  await assert.rejects(box.teardown(handle, { destroy: true }), /transient delete failure/);
+  await box.teardown(handle, { destroy: true });
+  assert.equal(kills, 2);
+});
+
+test("released scratch handles cannot recreate a persistent sandbox", async () => {
+  const handle = await sandbox.provision(layers, { scratch: { key: "released-handle" } });
+  await sandbox.teardown(handle, { destroy: true });
+  await assert.rejects(sandbox.run(handle, "true"), /handle has been released/);
+});
+
+test("failed scratch preparation retains the live session when rollback fails", async () => {
+  let kills = 0;
+  const box = make({
+    client: {
+      ...fake.client,
+      async create(opts: Parameters<typeof fake.client.create>[0]) {
+        const session = await fake.client.create(opts);
+        return {
+          ...session,
+          async runCommand() {
+            throw new Error("preparation failed");
+          },
+          async kill() {
+            if (kills++ === 0) throw new Error("sentinel-secret");
+            await session.kill();
+          },
+        };
+      },
+    },
+  });
+  let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
+  await assert.rejects(box.provision(layers, { scratch: { key: "failed-preparation" } }), (error: Error) => {
+    assert.ok(error instanceof SandboxProvisionCleanupError);
+    pending = error.handle;
+    assert.equal(error.cause, undefined);
+    assert.ok(!error.message.includes("sentinel-secret"));
+    return true;
+  });
+  assert.ok(pending);
+  await box.teardown(pending, { destroy: true });
+  assert.equal(kills, 2);
 });

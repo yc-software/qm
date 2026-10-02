@@ -22,8 +22,16 @@ export function gzipAccepted(req: IncomingMessage | undefined): boolean {
   return explicit ?? wildcard ?? false;
 }
 
+export function withVary(res: ServerResponse, value: string): string {
+  const existing = res.getHeader("vary");
+  const tokens = [...(existing === undefined ? [] : String(existing).split(",")), ...value.split(",")]
+    .map((token) => token.trim())
+    .filter(Boolean);
+  return [...new Map(tokens.map((token) => [token.toLowerCase(), token])).values()].join(", ");
+}
+
 export function sendBuffered(res: ServerResponse, status: number, headers: Record<string, string>, body: string): void {
-  const out = { ...headers, vary: "accept-encoding" };
+  const out = { ...headers, vary: withVary(res, "accept-encoding") };
   if (Buffer.byteLength(body) < COMPRESS_MIN_BYTES || !gzipAccepted(res.req)) {
     res.writeHead(status, out);
     res.end(body);
@@ -145,19 +153,15 @@ export class PayloadTooLargeError extends Error {
 
 const MAX_BODY_BYTES = 1_000_000;
 
-export async function readRawBody(req: IncomingMessage): Promise<string> {
+export async function readRawBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new PayloadTooLargeError();
+    if (size > maxBytes) throw new PayloadTooLargeError();
     chunks.push(chunk as Buffer);
   }
   return chunks.length === 0 ? "" : Buffer.concat(chunks).toString("utf8");
-}
-
-export function canonicalPayload(method: string, pathWithQuery: string, tail: string): string {
-  return `${method}\n${pathWithQuery}\n${tail}`;
 }
 
 export async function verifyOrReject(
@@ -185,10 +189,6 @@ export async function verifyOrReject(
     return false;
   }
   return true;
-}
-
-export function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
 export function contentDispositionAttachment(name: string, kind: "attachment" | "inline" = "attachment"): string {

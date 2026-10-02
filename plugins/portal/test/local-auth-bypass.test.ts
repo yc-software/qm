@@ -71,6 +71,14 @@ test("local auth bypass respects logout until explicit login", async () => {
   });
   assert.equal(logout.status, 200);
   assert.match(logout.headers.get("set-cookie") ?? "", /portal_local_logout=1/);
+  const destination = ((await logout.json()) as { redirectTo: string }).redirectTo;
+  assert.equal(destination, "/auth/signed-out");
+  const landing = await fetch(`${base}${destination}`, {
+    headers: { cookie: "portal_local_logout=1" },
+    redirect: "manual",
+  });
+  assert.equal(landing.status, 200);
+  assert.match(await landing.text(), /You have signed out of this portal/);
 
   const loggedOut = await fetch(`${base}/admin/api/me`, {
     headers: { cookie: "portal_local_logout=1" },

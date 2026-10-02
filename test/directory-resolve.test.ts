@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -125,6 +125,36 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   it("rejects a request without a capability token (gated like the rest of the agent API)", async () => {
     const res = await fetch(`${base}/v1/directory/resolve?q=carol`);
     assert.equal(res.status, 401);
+  });
+  it("source pushes persist one observed room and reject malformed or stale partial writes", async () => {
+    const post = (body: object) => {
+      const raw = JSON.stringify(body);
+      return fetch(`${base}/v1/directory`, {
+        method: "POST",
+        headers: {
+          ...signedRequestHeaders(SECRET, "POST", "/v1/directory", raw),
+          "content-type": "application/json",
+        },
+        body: raw,
+      });
+    };
+    await built.app.upsertChannels([{ channelId: "C_OTHER", name: "other" }], [], 10);
+    const body = {
+      channels: [{ channelId: "C_LIVE", name: "live", isPrivate: true }],
+      channelMembers: [{ channelId: "C_LIVE", principalId: "U1" }],
+      channelsSyncedAt: 30,
+      partialChannels: true,
+    };
+    assert.equal((await post(body)).status, 200);
+    assert.equal(await built.directory.channelPrivacy("C_OTHER"), false);
+    assert.equal(await built.directory.channelMember("C_LIVE", "U1"), true);
+    assert.equal((await post({ ...body, channelsSyncedAt: 20 })).status, 409);
+    for (const invalid of [
+      { ...body, channelsSyncedAt: undefined },
+      { ...body, channelMembers: undefined },
+      { ...body, partialChannels: "true" },
+    ])
+      assert.equal((await post(invalid)).status, 400);
   });
 });
 

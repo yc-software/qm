@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test"
+    "test": "node --test",
+    "hash-password": "node src/hash-password.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

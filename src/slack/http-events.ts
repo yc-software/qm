@@ -63,7 +63,8 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
     }
     let body: Record<string, unknown>;
     try {
-      body = JSON.parse(raw) as Record<string, unknown>;
+      const form = raw.startsWith("payload=") ? new URLSearchParams(raw).get("payload") : null;
+      body = JSON.parse(form ?? raw) as Record<string, unknown>;
     } catch {
       return respond(res, 400, { error: "invalid_json" });
     }

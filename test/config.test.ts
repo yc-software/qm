@@ -98,10 +98,11 @@ test("production and unauthenticated-core escape hatch are parsed once", () => {
 
 test("harness security posture defaults to auto and validates named modes", () => {
   assert.equal(loadConfig({}).securityPosture, "auto");
-  assert.equal(loadConfig({}).securityScreenBackend, "off");
-  assert.equal(loadConfig({ SECURITY_SCREEN_BACKEND: "model" }).securityScreenBackend, "model");
-  assert.equal(loadConfig({ SECURITY_SCREEN_BACKEND: "off" }).securityScreenBackend, "off");
-  assert.throws(() => loadConfig({ SECURITY_SCREEN_BACKEND: "typo" }), /SECURITY_SCREEN_BACKEND/);
+  assert.equal(loadConfig({}).securityScreen, "off");
+  assert.equal(loadConfig({}).securityScreenClassifier, "model");
+  assert.equal(loadConfig({ SECURITY_SCREEN: "Observe" }).securityScreen, "observe");
+  assert.equal(loadConfig({ SECURITY_SCREEN: "enforce" }).securityScreen, "enforce");
+  assert.throws(() => loadConfig({ SECURITY_SCREEN: "shadow" }), /SECURITY_SCREEN="shadow" is not recognized/);
   assert.equal(loadConfig({}).securityScreenProxy, undefined);
   assert.equal(loadConfig({}).securityScreenTimeoutMs, 15_000);
   assert.equal(loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: "25" }).securityScreenTimeoutMs, 25);
@@ -111,25 +112,22 @@ test("harness security posture defaults to auto and validates named modes", () =
     () => loadConfig({ HARNESS_SECURITY_POSTURE: "permissive" }),
     /HARNESS_SECURITY_POSTURE="permissive" is not recognized/,
   );
+  const proxy = {
+    SECURITY_SCREEN: "observe",
+    SECURITY_SCREEN_CLASSIFIER: "proxy",
+    SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
+    SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
+    SECURITY_SCREEN_PROXY_TOKEN: "test-token",
+  };
   assert.throws(
-    () => loadConfig({ SECURITY_SCREEN_BACKEND: "proxy" }),
-    /requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, SECURITY_SCREEN_PROXY_TOKEN, and SECURITY_SCREEN_PROXY_ROLLOUT/,
+    () => loadConfig({ SECURITY_SCREEN_CLASSIFIER: "proxy" }),
+    /requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN/,
   );
-  assert.deepEqual(
-    loadConfig({
-      SECURITY_SCREEN_BACKEND: "proxy",
-      SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-      SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
-      SECURITY_SCREEN_PROXY_TOKEN: "test-token",
-      SECURITY_SCREEN_PROXY_ROLLOUT: "enforce",
-    }).securityScreenProxy,
-    {
-      provider: "example-screen",
-      endpoint: "https://screen.example.test/classify",
-      token: "test-token",
-      shadow: false,
-    },
-  );
+  assert.deepEqual(loadConfig(proxy).securityScreenProxy, {
+    provider: "example-screen",
+    endpoint: "https://screen.example.test/classify",
+    token: "test-token",
+  });
   for (const timeout of ["0", "-1", "1.5", "2147483648"]) {
     assert.throws(
       () => loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: timeout }),
@@ -138,18 +136,11 @@ test("harness security posture defaults to auto and validates named modes", () =
   }
   assert.throws(
     () => loadConfig({ SECURITY_SCREEN_PROXY_PROVIDER: "example-screen" }),
-    /requires SECURITY_SCREEN_BACKEND=proxy/,
+    /requires SECURITY_SCREEN_CLASSIFIER=proxy/,
   );
   for (const provider of ["Bad Provider", "surface", "origin", "-leading", `${"x".repeat(64)}`]) {
     assert.throws(
-      () =>
-        loadConfig({
-          SECURITY_SCREEN_BACKEND: "proxy",
-          SECURITY_SCREEN_PROXY_PROVIDER: provider,
-          SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
-          SECURITY_SCREEN_PROXY_TOKEN: "test-token",
-          SECURITY_SCREEN_PROXY_ROLLOUT: "shadow",
-        }),
+      () => loadConfig({ ...proxy, SECURITY_SCREEN_PROXY_PROVIDER: provider }),
       /SECURITY_SCREEN_PROXY_PROVIDER/,
     );
   }
@@ -160,28 +151,23 @@ test("harness security posture defaults to auto and validates named modes", () =
     "https://screen.example.test./classify",
   ]) {
     assert.throws(
-      () =>
-        loadConfig({
-          SECURITY_SCREEN_BACKEND: "proxy",
-          SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-          SECURITY_SCREEN_PROXY_ENDPOINT: endpoint,
-          SECURITY_SCREEN_PROXY_TOKEN: "test-token",
-          SECURITY_SCREEN_PROXY_ROLLOUT: "shadow",
-        }),
+      () => loadConfig({ ...proxy, SECURITY_SCREEN_PROXY_ENDPOINT: endpoint }),
       /SECURITY_SCREEN_PROXY_ENDPOINT/,
     );
   }
-  assert.throws(
-    () =>
-      loadConfig({
-        SECURITY_SCREEN_BACKEND: "proxy",
-        SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-        SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
-        SECURITY_SCREEN_PROXY_TOKEN: "test-token",
-        SECURITY_SCREEN_PROXY_ROLLOUT: "gradual",
-      }),
-    /SECURITY_SCREEN_PROXY_ROLLOUT/,
-  );
+});
+
+test("retired security screen variables fail loudly unless they only said off", () => {
+  assert.equal(loadConfig({ SECURITY_SCREEN_BACKEND: "off" }).securityScreen, "off");
+  for (const env of [
+    { SECURITY_SCREEN_BACKEND: "proxy" },
+    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN: "observe" },
+    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN_ALL_POSTURES: "false" },
+    { SECURITY_SCREEN_ALL_POSTURES: "true" },
+    { SECURITY_SCREEN_PROXY_ROLLOUT: "shadow" },
+  ]) {
+    assert.throws(() => loadConfig(env), /retired.*SECURITY_SCREEN=off\|observe\|enforce/);
+  }
 });
 
 test("sharing posture defaults to isolated and accepts only isolated or open", () => {
@@ -682,6 +668,21 @@ test("DEPLOY_PROVIDER=porter refuses to boot without a cluster and tolerates a m
   );
 });
 
+test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain", () => {
+  const cluster = {
+    DEPLOY_PROVIDER: "porter",
+    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_DEPLOY_PROJECT_ID: "7",
+    PORTER_DEPLOY_CLUSTER_ID: "9",
+    PORTER_DEPLOY_VISIBILITY: "internal",
+  };
+  assert.equal(loadConfig(cluster).porterDeploy.visibility, "internal");
+  assert.throws(
+    () => loadConfig({ ...cluster, PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com" }),
+    /PORTER_DEPLOY_APPS_DOMAIN/,
+  );
+});
+
 test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
   assert.throws(
     () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
@@ -959,12 +960,9 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
 });
 
-test("screening across postures is explicit and requires an enabled backend", () => {
-  assert.equal(loadConfig({}).securityScreenAllPostures, false);
-  assert.equal(
-    loadConfig({ SECURITY_SCREEN_BACKEND: "model", SECURITY_SCREEN_ALL_POSTURES: "true" }).securityScreenAllPostures,
-    true,
-  );
-  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "true" }), /requires an enabled/);
-  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "typo" }), /SECURITY_SCREEN_ALL_POSTURES/);
+test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
+  assert.equal(loadConfig({}).sandboxCapabilityTtlMs, 48 * 3_600_000);
+  assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "168" }).sandboxCapabilityTtlMs, 168 * 3_600_000);
+  assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "none" }).sandboxCapabilityTtlMs, 0);
+  assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
 });

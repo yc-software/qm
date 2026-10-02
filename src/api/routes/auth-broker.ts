@@ -1,3 +1,4 @@
+import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { AdminError } from "../../admin/admin-service.ts";
@@ -68,7 +69,7 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
   const grants = (await deps.acl?.list()) ?? [];
   const deployments = await app.listDeployments();
-  const appOnly = deployments.some(
+  const granted = deployments.filter(
     (d) =>
       d.status !== "archived" &&
       grants.some(
@@ -79,6 +80,10 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
           g.permission === "read",
       ),
   );
+  const allowedOwners = await Promise.all(
+    granted.map((d) => externalAppSharingAllowed(deps.featureFlags, d.ownerScopeId)),
+  );
+  const appOnly = allowedOwners.some(Boolean);
   return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });
 }
 

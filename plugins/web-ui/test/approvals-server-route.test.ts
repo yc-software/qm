@@ -20,6 +20,7 @@ const storedRequest = {
 };
 
 const calls: Call[] = [];
+let inboxEnabled = false;
 const core = createServer((req: IncomingMessage, res) => {
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
@@ -31,6 +32,26 @@ const core = createServer((req: IncomingMessage, res) => {
       body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {},
     });
     res.setHeader("content-type", "application/json");
+    if (url.startsWith("/v1/inbox/access")) {
+      res.end(JSON.stringify({ enabled: inboxEnabled }));
+      return;
+    }
+    if (url.startsWith("/v1/approvals/a-inbox")) {
+      res.end(
+        JSON.stringify({
+          sessionId: "inbox-session",
+          request: {
+            ...storedRequest,
+            conversation: {
+              kind: url.includes("channel") ? "channel" : "dm",
+              threadRef: url.includes("other") ? "web:bob:inbox" : "web:alice:inbox",
+            },
+            conversationHeader: "Stored inbox snapshot",
+          },
+        }),
+      );
+      return;
+    }
     if (url.startsWith("/v1/approvals/a-swarm")) {
       let sessionId = "worker";
       if (url.includes("hidden")) sessionId = "hidden";
@@ -42,6 +63,26 @@ const core = createServer((req: IncomingMessage, res) => {
           request: { ...storedRequest, surface: "swarm", conversation: { threadRef: "swarm:root:worker" } },
         }),
       );
+      return;
+    }
+    if (url.startsWith("/v1/approvals/a-sub")) {
+      let sessionId = "child";
+      if (url.includes("hidden")) sessionId = "hidden";
+      if (url.includes("mismatch")) sessionId = "child-mismatch";
+      res.end(
+        JSON.stringify({
+          sessionId,
+          request: { ...storedRequest, conversation: { kind: "dm", threadRef: "agent:main:subagent:c1" } },
+        }),
+      );
+      return;
+    }
+    if (url.startsWith("/v1/sessions/child-mismatch")) {
+      res.end(JSON.stringify({ session: { id: "child-mismatch", threadRef: "agent:main:subagent:other" } }));
+      return;
+    }
+    if (url.startsWith("/v1/sessions/child")) {
+      res.end(JSON.stringify({ session: { id: "child", threadRef: "agent:main:subagent:c1" } }));
       return;
     }
     if (url.startsWith("/v1/sessions/hidden")) {
@@ -188,5 +229,62 @@ test("worker replay rejects a mismatched thread or non-worker session", async ()
     });
     assert.equal(response.status, 404);
     assert.equal(turnPosts(before).length, 0);
+  }
+});
+
+test("a visible subagent approval replays onto the child thread so the parent can unblock it", async () => {
+  const before = calls.length;
+  const r = await fetch(`${base}/api/approvals/a-sub`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ approved: true, scope: "once" }),
+  });
+  assert.equal(r.status, 200);
+  const posts = turnPosts(before);
+  assert.equal(posts.length, 1);
+  assert.equal((posts[0]!.body.conversation as { threadRef: string }).threadRef, "agent:main:subagent:c1");
+  assert.deepEqual(posts[0]!.body.approval, { requestId: "a-sub", approved: true, scope: "once" });
+});
+
+test("subagent approvals require the child session to be visible and on the same thread", async () => {
+  for (const id of ["a-sub-hidden", "a-sub-mismatch"]) {
+    const before = calls.length;
+    const response = await fetch(`${base}/api/approvals/${id}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ approved: true }),
+    });
+    assert.equal(response.status, 404);
+    assert.equal(turnPosts(before).length, 0);
+  }
+});
+
+test("inbox approval replay requires both current gates and preserves the screened snapshot", async () => {
+  const previous = process.env.INBOX_USERS;
+  try {
+    for (const [allowlist, enabled, id, status] of [
+      ["bob", true, "a-inbox", 403],
+      ["alice", false, "a-inbox", 403],
+      ["alice", true, "a-inbox-other", 403],
+      ["alice", true, "a-inbox-channel", 403],
+      ["alice", true, "a-inbox", 200],
+    ] as const) {
+      process.env.INBOX_USERS = allowlist;
+      inboxEnabled = enabled;
+      const before = calls.length;
+      const response = await fetch(`${base}/api/approvals/${id}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ approved: true }),
+      });
+      assert.equal(response.status, status, `${allowlist}/${enabled}/${id}`);
+      const posts = turnPosts(before);
+      assert.equal(posts.length, status === 200 ? 1 : 0);
+      if (status === 200) assert.equal(posts[0]!.body.conversationHeader, "Stored inbox snapshot");
+    }
+  } finally {
+    if (previous === undefined) delete process.env.INBOX_USERS;
+    else process.env.INBOX_USERS = previous;
+    inboxEnabled = false;
   }
 });

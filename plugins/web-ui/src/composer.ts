@@ -56,6 +56,9 @@ import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import {
   LOADOUT_CAP,
+  ULTRAFAST_MODEL_ID,
+  presetModelId,
+  ultrafastChoice,
   loadLoadout,
   saveLoadout,
   reconcileLoadout,
@@ -202,6 +205,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     void refreshRuntimeSelection(ctx.chat.state.scopeId, ctx.chat.state.agent ?? undefined, true);
   };
   window.addEventListener("model-account-changed", refreshAccount);
+  const revalidateRuntime = () => {
+    if (document.visibilityState === "visible")
+      void refreshRuntimeSelection(ctx.chat.state.scopeId, ctx.chat.state.agent ?? undefined, true);
+  };
+  document.addEventListener("visibilitychange", revalidateRuntime);
   let runtimeRequest = 0;
   let runtimeIdentity = "";
   let unsubscribeRuntime: (() => void) | undefined;
@@ -248,7 +256,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
         (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
-      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model, effort);
+      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model);
       return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
     },
     set effortLevel(value: EffortLevel) {
@@ -371,6 +379,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
               )
             ) {
               restoredLoadout = undefined;
+              followDefault(defaults);
             }
             defaults = next;
             syncRuntimeSelection(ctx.chat.state.agent ?? undefined);
@@ -387,13 +396,25 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     syncRuntimeSelection(agent);
   }
 
+  function followDefault(previous: { harnessId: string; modelId: string } | undefined): void {
+    const threadRef = ctx.chat.state.threadRef;
+    const pick = threadRef ? threadModelPicks.get(threadRef) : undefined;
+    const picked = pick ? modelOptionFor(pick, scopeKey()) : undefined;
+    if (!threadRef || !previous || !picked) return;
+    if (picked.harnessId !== previous.harnessId || picked.model.id !== previous.modelId) return;
+    forgetThreadPick(threadRef);
+    effortOverride = undefined;
+    fastModeOverride = undefined;
+    loadoutRestored = false;
+  }
+
   function restoreLoadoutSelection(): void {
     loadout = loadLoadout(loadoutKey);
     let selected = currentModelOption();
     const threadRef = ctx.chat.state.threadRef;
     if (selected && threadRef && !threadModelPicks.has(threadRef)) {
       const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout, selected.harnessId).find(
-        (option) => option.model.id === selected!.model.id,
+        (option) => presetModelId(option.value) === presetModelId(selected!.value),
       );
       if (preferred && preferred.value !== selected.value) {
         rememberThreadPick(threadRef, preferred.value);
@@ -918,9 +939,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     `;
   }
 
-  function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
+  function composerApprovalPanel(
+    approvals: PendingApproval[],
+    resolve: (decision: ApprovalDecision) => void = ctx.chat.resolveCommandApproval,
+  ): TemplateResult {
     const decide = (decision: ApprovalDecision): void => {
-      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) ctx.chat.resolveCommandApproval(decision);
+      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) resolve(decision);
     };
     return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
       ${approvals.map(
@@ -1010,7 +1034,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function normalizeLoadoutEntry(entry: LoadoutEntry, option: ModelOption): LoadoutEntry {
-    const levels = effortLevelsForHarness(option.harnessId, option.model, entry.effort);
+    const levels = effortLevelsForHarness(option.harnessId, option.model);
     const defaultEffort = defaultEffortForModel(option.model);
     const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : levels[0]!.value;
     return {
@@ -1863,9 +1887,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const selected = currentModelOption();
     if (
       !selected ||
-      !effortLevelsForHarness(selected.harnessId, selected.model, composerState.effortLevel).some(
-        (option) => option.value === level,
-      )
+      !effortLevelsForHarness(selected.harnessId, selected.model).some((option) => option.value === level)
     )
       return;
     composerState.effortLevel = level;
@@ -1877,6 +1899,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function toggleFastMode(agent: Agent): void {
     const selected = currentModelOption();
     if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
+    if (selected?.model.id === ULTRAFAST_MODEL_ID) {
+      const target = ultrafastChoice(getModelOptions(scopeKey()), selected);
+      if (target) applyLoadout({ ...activeLoadoutEntry(selected), value: target.value, fast: true }, agent);
+      return;
+    }
     if (
       !selected ||
       !harnessSupportsFastMode(selected.harnessId) ||
@@ -1942,6 +1969,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function dispose(): void {
     window.removeEventListener("model-account-changed", refreshAccount);
+    document.removeEventListener("visibilitychange", revalidateRuntime);
     modelPicker.dispose();
     unsubscribeRuntime?.();
     ++runtimeRequest;
@@ -1969,6 +1997,60 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     resetComposer,
     focusComposerEnd,
     fillSuggestedPrompt,
+    addAnnotations: async (
+      text: string,
+      files: File[],
+      annotationId = crypto.randomUUID(),
+      remove = false,
+    ): Promise<boolean> => {
+      const agent = ctx.chat.state.agent;
+      if (
+        !agent ||
+        composerState.processingFiles ||
+        ctx.chat.hasUnresolvedApproval() ||
+        ctx.chat.state.resolvingApprovals.size > 0
+      )
+        return false;
+      const prefix = `annotation_${annotationId}_`;
+      const retained = composerState.attachments.filter((attachment) => !attachment.id.startsWith(prefix));
+      if (remove) {
+        composerState.attachments = retained;
+        ctx.chat.drawActiveChat(agent);
+        return true;
+      }
+      if (retained.length + 1 + files.length > MAX_FILES_PER_MESSAGE) return false;
+      composerState.processingFiles = true;
+      ctx.chat.drawActiveChat(agent);
+      try {
+        const loaded = await Promise.all(files.map((file) => loadAnyAttachment(file)));
+        if (agent !== ctx.chat.state.agent) return false;
+        const remaining = composerState.attachments.filter((attachment) => !attachment.id.startsWith(prefix));
+        if (remaining.length + 1 + loaded.length > MAX_FILES_PER_MESSAGE) return false;
+        const bytes = new TextEncoder().encode(text);
+        const annotation: Attachment = {
+          id: prefix + "context",
+          type: "document",
+          fileName: "App annotation.md",
+          mimeType: "text/markdown",
+          size: bytes.length,
+          content: bytesToBase64(bytes),
+          extractedText: text,
+        };
+        composerState.attachments = [
+          ...remaining,
+          annotation,
+          ...loaded.map((attachment, index) => ({ ...attachment, id: prefix + index })),
+        ];
+        composerState.error = "";
+        return true;
+      } catch {
+        composerState.error = "Could not prepare annotation attachments. Retrying automatically.";
+        return false;
+      } finally {
+        composerState.processingFiles = false;
+        ctx.chat.drawActiveChat(agent);
+      }
+    },
     sendSuggestedPrompt: async (prompt: string, agent: Agent): Promise<void> => {
       if (
         agent !== ctx.chat.state.agent ||

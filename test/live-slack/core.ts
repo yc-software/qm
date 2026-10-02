@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { signedRequestHeaders } from "../../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
 

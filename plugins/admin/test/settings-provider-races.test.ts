@@ -78,3 +78,28 @@ test("old provider save cannot clear pending state in a reopened dialog", async 
   assert.equal((dom.window.document.getElementById("custom-provider-dialog") as HTMLDialogElement).open, false);
   dom.window.close();
 });
+
+test("reasoning edits preserve pricing and omitted positional fields", () => {
+  const { dom, ui } = fixture();
+  ui.openProvider({
+    id: "local",
+    name: "Local",
+    protocol: "openai",
+    baseUrl: "http://localhost:8000/v1",
+    models: [
+      { id: "thinking", contextWindow: 32768, maxTokens: 4096, reasoning: true, input: 0, output: 2 },
+      { id: "plain", name: "Plain", reasoning: false },
+    ],
+  });
+  assert.equal(ui.provider.draft.models, "thinking |  | 32768 | 4096 | true\nplain | Plain |  |  | false");
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.providerBody().models)), [
+    { id: "thinking", contextWindow: 32768, maxTokens: 4096, reasoning: true, input: 0, output: 2 },
+    { id: "plain", name: "Plain", reasoning: false },
+  ]);
+  ui.provider.draft.models = "thinking |  | 32768 | 4096 | false\nnew-model | New | 16000 | 2000 | true";
+  const models = ui.providerBody().models;
+  assert.equal(models[0].reasoning, false);
+  assert.equal(models[0].output, 2);
+  assert.equal(models[1].reasoning, true);
+  dom.window.close();
+});

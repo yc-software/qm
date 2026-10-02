@@ -104,7 +104,7 @@ test("compact overrides stop matching when the canvas returns to one pane", () =
   const overrides = rules.filter(
     ([, selector, declarations]) =>
       selector.includes(".split-pane-chat") &&
-      /(?:font-size: 12px|--composer-font-size: 12px|font-size: 21px)/.test(declarations),
+      /(?:font-size: 12px|--composer-font-size: 12px|font-size: var\(--font-21\))/.test(declarations),
   );
   assert.equal(overrides.length, 4);
   for (const [, selector] of overrides) {

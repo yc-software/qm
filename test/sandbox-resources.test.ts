@@ -837,12 +837,17 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
   assert.equal(resources.defaultBackend("channel:new"), "sprites");
 });
 
-for (const waiting of ["command", "checkpoint"] as const) {
-  test(`Modal ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
+for (const [kind, waiting] of [
+  ["modal", "command"],
+  ["modal", "checkpoint"],
+  ["sprites", "command"],
+  ["sprites", "checkpoint"],
+] as const) {
+  test(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
     const { options, backend, layers, routes } = fixture();
-    const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
-    const router = createSandboxRouter({ routes, backends: { modal: backend }, defaultBackend: "modal", resources });
-    const record = await resources.create("alice", "personal:alice", "modal");
+    const resources = createSandboxResources({ ...options, backends: { [kind]: backend }, defaultBackend: kind });
+    const router = createSandboxRouter({ routes, backends: { [kind]: backend }, defaultBackend: kind, resources });
+    const record = await resources.create("alice", "personal:alice", kind);
     await resources.setDefault("alice", "personal:alice", record.id);
     const handle = await router.provision(layers);
     const entered = Promise.withResolvers<void>();
@@ -926,6 +931,61 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
   }
   assert.equal(provisioned, true);
   assert.equal(destroyed, true);
+});
+
+test("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
+  const { options, backend, layers, routes } = fixture();
+  const resources = createSandboxResources({ ...options, backends: { sprites: backend }, defaultBackend: "sprites" });
+  const router = createSandboxRouter({ routes, backends: { sprites: backend }, defaultBackend: "sprites", resources });
+  const record = await resources.create("alice", "personal:alice", "sprites");
+  const handle = await router.provision(layers, { sandboxId: record.id });
+  const release = Promise.withResolvers<void>();
+  let running = 0;
+  let peak = 0;
+  backend.run = async (_handle, command) => {
+    peak = Math.max(peak, ++running);
+    if (peak === 3) release.resolve();
+    await release.promise;
+    running--;
+    return { stdout: command, stderr: "", code: 0, timedOut: false };
+  };
+  const results = await Promise.all(["a", "b", "c"].map((command) => router.run(handle, command)));
+  assert.deepEqual(
+    results.map((result) => result.stdout),
+    ["a", "b", "c"],
+  );
+  assert.equal(peak, 3);
+});
+
+test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
+  const { options, backend, layers, routes } = fixture();
+  const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
+  const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
+  const router = createSandboxRouter({ routes, backends: { e2b: parking }, defaultBackend: "e2b", resources });
+  const record = await resources.create("alice", "personal:alice", "e2b");
+  const handle = await router.provision(layers, { sandboxId: record.id });
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  parking.run = async () => {
+    entered.resolve();
+    await release.promise;
+    return { stdout: "done", stderr: "", code: 0, timedOut: false };
+  };
+  let parked = false;
+  parking.teardown = async () => {
+    parked = true;
+  };
+  const running = router.run(handle, "long");
+  await entered.promise;
+  const teardown = router.teardown(handle);
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(parked, false);
+  } finally {
+    release.resolve();
+    await Promise.all([running, teardown]);
+  }
+  assert.equal(parked, true);
 });
 
 test("a verified live turn can create only its own new scope computer without directory mutations", async () => {

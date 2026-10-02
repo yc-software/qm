@@ -22,6 +22,7 @@ interface FakeInstance {
 
 export interface InjectedFailure {
   headers?: Record<string, string>;
+  body?: string;
   match?: (call: { method: string; path: string }) => boolean;
 }
 
@@ -141,7 +142,10 @@ export function installFakeAgent37(): FakeAgent37 {
     const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
     if (at >= 0) {
       const [next] = injected.splice(at, 1);
-      return new Response(`injected ${next!.status}`, { status: next!.status, headers: next!.headers ?? {} });
+      return new Response(next!.body ?? `injected ${next!.status}`, {
+        status: next!.status,
+        headers: next!.headers ?? {},
+      });
     }
     if (url.pathname === "/v1/instances" && method === "GET") {
       return Response.json({ data: live().map(info) });

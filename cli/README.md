@@ -30,7 +30,15 @@ path locally.
 
 The CLI deploys long-running QM services; it is not the runtime. Docker runs
 them locally, Fly runs them as Fly apps with Fly Machines for agent computers, and AWS
-runs digest-pinned ARM64 tasks on ECS Fargate with Lambda MicroVM agent computers.
+runs digest-pinned tasks on ECS Fargate (amd64 by default for first-party services) with Lambda MicroVM agent computers.
+
+When upgrading an AWS source deployment that previously relied on the ARM64 default,
+set each existing workload's `architecture: "arm64"` explicitly until rebuilding
+its image for another platform. Secret rotation refuses a task-platform change
+before uploading secrets. New release candidates record their workload architectures;
+legacy source-built first-party candidates without that record require an explicit
+architecture matching the image, or regeneration with the current CLI. Candidate
+deployment and migration reject platform mismatches before accessing AWS.
 
 ## Deployment directory
 
@@ -154,12 +162,11 @@ receipts must keep the submission slot occupied until the CLI exits.
 sandboxes boot their platform's stock image; tools and skills arrive through the
 deployment-layer sync, which every ordinary `up` performs.
 
-Model screening is off by default. Set `securityScreen: { "backend": "model" }`
-to opt in, or configure a `securityScreen` proxy with a provider label, HTTPS
-endpoint, and `enforce` rollout to use an external screener without model fallback.
-The optional `shadow` rollout explicitly runs the model classifier and compares
-the proxy verdict. Route the proxy token through
-`secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`.
+Content screening is off by default. Set `securityScreen: { "mode": "observe" }`
+to record classifier verdicts without acting on them, or `"enforce"` to quarantine
+flagged content. The classifier is the built-in model unless `"classifier": "proxy"`
+names an external screener with a provider label and HTTPS endpoint; route its token
+through `secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`.
 
 ## Commands
 
@@ -199,7 +206,11 @@ environment. The CLI prints only the URL, which is a temporary login credential;
 do not publish it or put it in shared logs.
 
 `qm setup` offers email setup separately. Skip it to use administrator login
-without Resend or SMTP. To enable ordinary email login later, rerun `qm setup`
+without Resend or SMTP. For ordinary users before email is ready, the broker can
+accept passwords: hash one with `node plugins/auth/src/hash-password.ts
+user@example.com` and store the output with `qm secrets set AUTH_PASSWORD_USERS`.
+This is meant for onboarding; switch to email links or an identity provider
+afterwards. To enable ordinary email login later, rerun `qm setup`
 and configure the selected transport's complete credential set and sender,
 then push secrets and redeploy. Missing email credentials disable email sign-in;
 QM and `qm admin-login` remain available, even if a sender is still configured.

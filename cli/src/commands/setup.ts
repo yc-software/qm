@@ -71,6 +71,12 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
     "refused, both when a link is requested and again when one is opened.",
     "Set env.auth.AUTH_ALLOWED_EMAIL_DOMAIN in the config instead to admit a whole domain.",
   ],
+  AUTH_PASSWORD_USERS: [
+    "Optional. Comma-separated <email>:<hash> entries for password sign-in during onboarding.",
+    "Make a hash with: node plugins/auth/src/hash-password.ts admin@example.com",
+    "Each address must also be on AUTH_ALLOWED_EMAILS or under AUTH_ALLOWED_EMAIL_DOMAIN.",
+    "Move to email links or an identity provider once the deployment is running.",
+  ],
   AUTH_EMAIL_FROM: [
     "The verified sender sign-in links come from, for example",
     "Acme <no-reply@acme.com>. It must be a domain your email provider has verified.",

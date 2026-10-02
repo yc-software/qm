@@ -5,7 +5,7 @@ import { EGRESS_PROXY_AUD, verifyCapabilityToken, type CapabilityClaims } from "
 import { egressDecision, hostMatches, isHostDenied, type EgressVerdict } from "./resolution/egress-policy.ts";
 import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
-import { signedRequestHeaders } from "./auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
 import { errMessage } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";

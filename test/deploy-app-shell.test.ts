@@ -17,6 +17,9 @@ import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
 
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
+
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
 const PORTAL = "https://portal.example.com";
@@ -86,7 +89,9 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
     createdInScope: scopeId("channel", "CBUILT"),
   });
   await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
+  const featureFlags = createFeatureFlagStore(createMemoryMap<FeatureFlagRecord>());
   const server = createInsecureTestServer(app, {
+    featureFlags,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: GATE_SECRET,
     deployAppsLoginUrl: PORTAL,
@@ -98,7 +103,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   };
-  return { app, directory, port, close };
+  return { app, directory, port, close, featureFlags };
 }
 
 const HOST = "mysite.apps.example.com";
@@ -391,6 +396,42 @@ test("app shell: bare escape renders frame-denying apps at top level without for
     assert.equal(appRequestPath, "/?filter=recent");
     assert.equal(page.headers["x-frame-options"], "DENY");
     assert.equal(page.headers["content-security-policy"], "frame-ancestors 'none'");
+  } finally {
+    await f.close();
+  }
+});
+
+test("app shell: annotation assets are served to a flagged app owner", async () => {
+  const f = await widgetFixture();
+  await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), true, "admin");
+  try {
+    for (const kind of ["js", "css"]) {
+      const asset = await httpGet(f.port, `/__claw__/annotate.${kind}`, {
+        Host: HOST,
+        Cookie: `portal_session=${mintPortalSession("U1")}`,
+      });
+      assert.equal(asset.status, 200);
+      assert.ok(asset.body.length > 1000);
+      assert.doesNotMatch(asset.body, /__qmAppShell/);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+test("app shell: annotations default off and follow the signed-in manager flag", async () => {
+  const f = await widgetFixture();
+  try {
+    const headers = { Host: HOST, Cookie: `portal_session=${mintPortalSession("U1")}`, "sec-fetch-dest": "document" };
+    const disabled = await httpGet(f.port, "/", headers);
+    assert.doesNotMatch(disabled.body, /ann-toggle|qm:devbar/);
+    assert.equal((await httpGet(f.port, "/__claw__/annotate.js", headers)).status, 404);
+    await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "someone-else"), true, "admin");
+    assert.doesNotMatch((await httpGet(f.port, "/", headers)).body, /ann-toggle/);
+    await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), true, "admin");
+    assert.match((await httpGet(f.port, "/", headers)).body, /ann-toggle/);
+    await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), false, "admin");
+    assert.equal((await httpGet(f.port, "/__claw__/annotate.css", headers)).status, 404);
   } finally {
     await f.close();
   }

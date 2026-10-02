@@ -547,6 +547,7 @@ test("a trigger (no liveActor) cannot MOVE a personal skill INTO a shared scope 
 function callShareRoute(state: FakeState, capability: CapabilityClaims | null, body: unknown) {
   const out: { status?: number; body?: any } = {};
   const res = {
+    getHeader() {},
     writeHead(s: number) {
       out.status = s;
     },

@@ -44,7 +44,7 @@ test("expanded tool activity uses a compact log rhythm", () => {
   assert.match(css, /\.work-rows \{[\s\S]{0,120}?gap: 2px;/);
   assert.match(
     css,
-    /\.tool-row,[\s\S]{0,220}?font-size: calc\(var\(--chat-font-size\) - 1px\);[\s\S]{0,80}?line-height: 1\.35;/,
+    /\.tool-row,[\s\S]{0,220}?font-size: max\(min\(12px, calc\(var\(--chat-font-size\) - 1px\)\), calc\(\(var\(--chat-font-size\) - 1px\) \* var\(--text-scale\)\)\);[\s\S]{0,80}?line-height: 1\.35;/,
   );
   assert.match(css, /\.tool-row \.tool-summary \{[\s\S]{0,80}?min-height: 26px;/);
   assert.match(chat, /icon\(rowIcon, 15\)/);

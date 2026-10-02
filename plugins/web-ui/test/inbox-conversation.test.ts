@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
 
-test("draft is the first editable chat message and Send it submits the combined instruction", async () => {
+test("draft stays outside AI chat and Send it submits the combined instruction", async () => {
   const { dom, vite, host, close } = await createInboxFixture();
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     appState.me = { user: "taylor@example.com" };
-    const { chatTpl, toInboxItem, inboxState, resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");
-    const { render } = await vite.ssrLoadModule("lit");
+    const { chatTpl, draftMessageTpl, toInboxItem, inboxState, resetInboxState } =
+      await vite.ssrLoadModule("/src/inbox.ts");
+    const { render, html } = await vite.ssrLoadModule("lit");
     for (const source of ["gmail", "slack"]) {
       for (const instruction of ["", "Make it shorter"]) {
         render(null, host);
@@ -53,11 +54,12 @@ test("draft is the first editable chat message and Send it submits the combined 
           }
           return new Response(JSON.stringify({ item: ledger }), { headers: { "content-type": "application/json" } });
         };
-        render(chatTpl(item), host);
+        render(html`${draftMessageTpl(item)}${chatTpl(item)}`, host);
         await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
-        const first = host.querySelector(".inbox-chat-log")!.firstElementChild!;
-        const draft = first.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!;
-        assert.ok(draft, "draft is inside the first chat message");
+        const draft = host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!;
+        assert.ok(draft, "the conversation has an editable draft");
+        assert.equal(host.querySelector(".inbox-chat .inbox-draft"), null);
+        assert.equal(draft.closest(".inbox-draft")!.nextElementSibling, host.querySelector(".inbox-chat"));
         assert.equal(draft.value, "Original draft");
         draft.value = "Edited draft";
         draft.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
@@ -67,6 +69,8 @@ test("draft is the first editable chat message and Send it submits the combined 
         const send = host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!;
         assert.equal(send.parentElement, host.querySelector(".inbox-chat-suggestions"));
         assert.equal(send.parentElement!.firstElementChild, send);
+        assert.equal(send.parentElement!.parentElement, host.querySelector(".chat-bottom-dock"));
+        assert.equal(send.parentElement!.nextElementSibling, host.querySelector(".inbox-chat-composer"));
         assert.equal(host.querySelector(".inbox-chat-composer")!.textContent!.includes("Dismiss"), false);
         send.click();
         send.click();
@@ -84,17 +88,17 @@ test("draft is the first editable chat message and Send it submits the combined 
           thinkingLevel: "medium",
           fastMode: false,
         });
-        render(chatTpl(item), host);
+        render(html`${draftMessageTpl(item)}${chatTpl(item)}`, host);
         assert.equal(host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.disabled, true);
         assert.equal(host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.disabled, true);
         release();
         await new Promise((resolve) => setTimeout(resolve, 20));
         item.thread = [{ role: "human", text: "Make it shorter", at: 102 }];
-        render(chatTpl(item), host);
+        render(html`${draftMessageTpl(item)}${chatTpl(item)}`, host);
         assert.equal(host.querySelectorAll(".inbox-chat-suggestions .inbox-suggest-chip.primary").length, 1);
         assert.equal(host.querySelectorAll(".inbox-chat-suggestion").length, 0);
         for (const status of ["sent", "dismissed", "replied"]) {
-          render(chatTpl({ ...item, status }), host);
+          render(html`${draftMessageTpl({ ...item, status })}${chatTpl({ ...item, status })}`, host);
           assert.equal(host.querySelector(".inbox-chat-suggestions"), null);
         }
       }
@@ -121,7 +125,7 @@ test("draft is the first editable chat message and Send it submits the combined 
       staleLedger.proposal = { data: { body: "New agent draft" }, by: "agent", at: 200 };
       return Response.json({ item: staleLedger });
     };
-    render(chatTpl(staleItem), host);
+    render(html`${draftMessageTpl(staleItem)}${chatTpl(staleItem)}`, host);
     await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
     const staleDraft = host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!;
     staleDraft.value = "My edited reply";
@@ -134,7 +138,6 @@ test("draft is the first editable chat message and Send it submits the combined 
     assert.equal(host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.value, "My edited reply");
     // Different items keep separate picks and never rewrite the main composer's defaults.
     const { embeddedComposer } = await vite.ssrLoadModule("/src/embedded-composer.ts");
-    const { html } = await vite.ssrLoadModule("lit");
     const submissions: Array<{ text: string; model: string; fastMode: boolean }> = [];
     let unavailable = false;
     globalThis.fetch = async (_url, init) => {
@@ -262,7 +265,7 @@ test("draft is the first editable chat message and Send it submits the combined 
           item: { ...ledger, proposal: { ...ledger.proposal, data: { body: "New server draft" }, at: 101 } },
         });
       };
-      render(chatTpl(item), host);
+      render(html`${draftMessageTpl(item)}${chatTpl(item)}`, host);
       if (failure === "save") {
         const draft = host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!;
         draft.value = "Keep my edit";
@@ -271,7 +274,7 @@ test("draft is the first editable chat message and Send it submits the combined 
       await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
       host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
       await until(() => Boolean(host.querySelector(".composer-error")));
-      render(chatTpl(inboxState.items[0]), host);
+      render(html`${draftMessageTpl(inboxState.items[0])}${chatTpl(inboxState.items[0])}`, host);
       assert.equal(host.querySelector<HTMLTextAreaElement>(".composer-input")!.value, "Send it");
       assert.equal(
         host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.value,

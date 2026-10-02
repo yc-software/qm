@@ -181,6 +181,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   async function spawnExec(name: string, argv: string[], stdin: Buffer, deadlineMs: number): Promise<RawExec> {
     const cmd = sprite(name).spawn(argv[0]!, argv.slice(1));
+    let submissionStarted = false;
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     const collect = (stream: Readable, into: Buffer[]): Promise<void> =>
@@ -189,15 +190,31 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         stream.once("end", resolve);
       });
     const exited = new Promise<number>((resolve, reject) => {
-      cmd.on("error", (e) => reject(new Error(`sprites exec ${name}: ${errMessage(e)}`, { cause: e })));
-      cmd.once("exit", resolve);
-      cmd.once("spawn", () => cmd.stdin.end(stdin));
+      const fail = (detail: string): void => {
+        const phase = submissionStarted ? "script submission started; execution unknown" : "script not submitted";
+        reject(new Error(`sprites exec: WebSocket error (${phase}): ${detail}`));
+      };
+      cmd.on("error", (e) => {
+        const detail =
+          /^(?:WebSocket error: )?(TypeError|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|connection reset by peer|Received network error or non-101 status code|WebSocket closed before open)\b/.exec(
+            errMessage(e),
+          )?.[1] ?? "unknown transport error";
+        fail(detail);
+      });
+      cmd.once("exit", (code) => {
+        if (code < 0) fail("connection closed without an exit status");
+        else resolve(code);
+      });
+      cmd.once("spawn", () => {
+        submissionStarted = true;
+        cmd.stdin.end(stdin);
+      });
     });
     try {
       const [rc] = await withTimeout(
         () => Promise.all([exited, collect(cmd.stdout, out), collect(cmd.stderr, err)]),
         deadlineMs,
-        `sprites exec ${name}`,
+        "sprites exec",
       );
       return { rc, stdout: Buffer.concat(out), stderr: Buffer.concat(err) };
     } catch (e) {

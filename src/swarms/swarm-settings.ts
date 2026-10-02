@@ -14,7 +14,7 @@ export const SWARM_DEFAULTS = {
 export type SwarmSettings = typeof SWARM_DEFAULTS;
 
 export const SWARM_MAXIMUMS: Readonly<SwarmSettings> = {
-  agents: 64,
+  agents: 256,
   depth: 8,
   messages: 256,
   notifications: 1_024,

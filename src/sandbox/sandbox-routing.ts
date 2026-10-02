@@ -4,6 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
   CapabilityUnsupportedError,
+  SandboxProvisionCleanupError,
   supportsBlobStaging,
   supportsProcessSessions,
   type AgentComputerProfile,
@@ -21,8 +22,13 @@ export type SandboxBackendName =
 
 export type SandboxScopeDefaults = Partial<Record<ScopeKind, SandboxBackendName>>;
 
-const NO_DEFAULT_SANDBOX =
-  "this scope has no default sandbox; use sandbox list, create, set_default, then retry before reporting blocked";
+export class NoDefaultSandboxError extends Error {
+  constructor() {
+    super(
+      "this scope has no default sandbox; use sandbox list, create, set_default, then retry before reporting blocked",
+    );
+  }
+}
 
 export function sandboxDefaultForScope(
   scope: string | undefined,
@@ -96,7 +102,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
 
   async function computerTarget(scopeId: string): Promise<{ sandbox: Sandbox; scopeId: string; resourceId?: string }> {
     const resource = await opts.resources?.resolve(scopeId);
-    if (resource === null) throw new Error(NO_DEFAULT_SANDBOX);
+    if (resource === null) throw new NoDefaultSandboxError();
     if (resource) {
       const sandbox = backends[resource.backend];
       if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
@@ -166,7 +172,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       if (provOpts?.sandboxId) resource = await opts.resources?.get(provOpts.sandboxId);
       else if (!provOpts?.scratch) resource = await opts.resources?.resolve(scope);
       if (provOpts?.sandboxId && !resource) throw new Error("sandbox inventory unavailable");
-      if (resource === null) throw new Error(NO_DEFAULT_SANDBOX);
+      if (resource === null) throw new NoDefaultSandboxError();
       if (resource) {
         const sandbox = backends[resource.backend];
         if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
@@ -177,7 +183,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
       }
       const { name, sandbox } = await pick(scope);
-      const handle = await sandbox.provision(layers, provOpts);
+      let handle: SandboxHandle;
+      try {
+        handle = await sandbox.provision(layers, provOpts);
+      } catch (error) {
+        if (error instanceof SandboxProvisionCleanupError)
+          throw new SandboxProvisionCleanupError({ ...error.handle, backend: name });
+        throw error;
+      }
       const resourceId =
         !provOpts?.scratch && scope ? await opts.resources?.recordLegacy(scope, name, handle) : undefined;
       return { ...handle, backend: name, ...(scope ? { scopeId: scope } : {}), ...(resourceId ? { resourceId } : {}) };
@@ -219,7 +232,11 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const action = () => forHandle(handle).teardown(handle, tdOpts);
       return handle.resourceId && opts.resources
-        ? opts.resources.use(handle.resourceId, action, handle.backend !== "modal" || !!tdOpts?.destroy)
+        ? opts.resources.use(
+            handle.resourceId,
+            action,
+            !!tdOpts?.destroy || !!forHandle(handle).profile.parksOnTeardown,
+          )
         : action();
     },
 

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activityOf,
+  cronRowMeta,
   sidebarSessions,
   applySessionState,
   isAbandonedNewChat,
@@ -387,19 +388,44 @@ test("rowIndicators: awaitingInput maps through", () => {
 });
 
 test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken label", () => {
-  assert.deepEqual(backgroundLabel(1, 0, 0), { jobs: 1, watches: 0, crons: 0, label: "1 background job running" });
+  assert.deepEqual(backgroundLabel(1, 0, 0), {
+    jobs: 1,
+    watches: 0,
+    crons: 0,
+    subagents: 0,
+    goal: false,
+    label: "1 background job running",
+  });
   assert.deepEqual(backgroundLabel(2, 1, 0), {
     jobs: 2,
     watches: 1,
     crons: 0,
+    subagents: 0,
+    goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
-  assert.deepEqual(backgroundLabel(0, 2, 0), { jobs: 0, watches: 2, crons: 0, label: "2 watches armed" });
-  assert.deepEqual(backgroundLabel(0, 0, 1), { jobs: 0, watches: 0, crons: 1, label: "1 cron scheduled here" });
+  assert.deepEqual(backgroundLabel(0, 2, 0), {
+    jobs: 0,
+    watches: 2,
+    crons: 0,
+    subagents: 0,
+    goal: false,
+    label: "2 watches armed",
+  });
+  assert.deepEqual(backgroundLabel(0, 0, 1), {
+    jobs: 0,
+    watches: 0,
+    crons: 1,
+    subagents: 0,
+    goal: false,
+    label: "1 cron scheduled here",
+  });
   assert.deepEqual(backgroundLabel(0, 1, 2), {
     jobs: 0,
     watches: 1,
     crons: 2,
+    subagents: 0,
+    goal: false,
     label: "1 watch armed · 2 crons scheduled here",
   });
   assert.equal(backgroundLabel(0, 0, 0), null, "nothing running, nothing to say");
@@ -417,10 +443,19 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
     jobs: 2,
     watches: 1,
     crons: 0,
+    subagents: 0,
+    goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
   const cronOnly = rowIndicators({ ...saved("1", "web:u:x"), crons: 3 }, null);
-  assert.deepEqual(cronOnly.background, { jobs: 0, watches: 0, crons: 3, label: "3 crons scheduled here" });
+  assert.deepEqual(cronOnly.background, {
+    jobs: 0,
+    watches: 0,
+    crons: 3,
+    subagents: 0,
+    goal: false,
+    label: "3 crons scheduled here",
+  });
   assert.equal(
     rowIndicators({ ...saved("1", "web:u:x"), backgroundJobs: 0, watches: 0, crons: 0 }, null).background,
     null,
@@ -434,6 +469,8 @@ test("conversationBackground: resolves the mounted conversation by session id", 
     jobs: 2,
     watches: 1,
     crons: 0,
+    subagents: 0,
+    goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
 });
@@ -444,6 +481,8 @@ test("conversationBackground: falls back to threadRef while the conversation is 
     jobs: 0,
     watches: 1,
     crons: 0,
+    subagents: 0,
+    goal: false,
     label: "1 watch armed",
   });
 });
@@ -525,4 +564,33 @@ test("sidebar excludes attached subagents including pinned and orphaned children
   const orphan = { ...child, id: "orphan", parentSessionId: "missing" };
   const detached = saved("detached", "agent:main:subagent:detached");
   assert.deepEqual(sidebarSessions([parent, child, pinned, orphan, detached]), [parent, detached]);
+});
+
+test("cronRowMeta shows the next fire and the last result of a session's cron", () => {
+  const now = Date.now();
+  assert.equal(cronRowMeta({ id: "c", nextFireAt: now + 10 * 60_000 + 1_000 }), "next fire in 10m");
+  assert.equal(
+    cronRowMeta({
+      id: "c",
+      nextFireAt: now + 5 * 60_000 + 1_000,
+      lastFire: { firedAt: now - 3 * 60_000, status: "ok" },
+    }),
+    "next fire in 5m · last ok 3m ago",
+  );
+  assert.equal(cronRowMeta({ id: "c", lastFire: { firedAt: now - 1_000, status: "running" } }), "paused · running now");
+});
+
+test("a goal lights the background chip with time worked, then the floor", () => {
+  const row = backgroundLabel(
+    0,
+    0,
+    0,
+    0,
+    0,
+    { activeMs: 600_000, runningSince: 600_000, floor: { minMs: 1_200_000 } },
+    720_000,
+  );
+  assert.equal(row?.goal, true);
+  assert.equal(row?.label, "goal · 12m worked · 20m floor");
+  assert.equal(backgroundLabel(0, 0, 0, 0, 0, { activeMs: 60_000 }, 9_999_999)?.label, "goal · 1m worked");
 });

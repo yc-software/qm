@@ -34,7 +34,10 @@ function sign(body: string, ts = Math.floor(Date.now() / 1000)): { signature: st
 async function withReceiver(
   processEvent: (event: ReceiverEvent) => Promise<void>,
   run: (
-    post: (body: unknown, opts?: { badSig?: boolean; timestampOffsetSeconds?: number }) => Promise<Response>,
+    post: (
+      body: unknown,
+      opts?: { badSig?: boolean; timestampOffsetSeconds?: number; form?: boolean },
+    ) => Promise<Response>,
   ) => Promise<void>,
 ): Promise<void> {
   const receiver = createHttpEventsReceiver({ signingSecret: SECRET, port: 0, capMs: 500 });
@@ -44,14 +47,14 @@ async function withReceiver(
   const port = typeof address === "object" && address ? address.port : 0;
   const post = async (
     body: unknown,
-    opts: { badSig?: boolean; timestampOffsetSeconds?: number } = {},
+    opts: { badSig?: boolean; timestampOffsetSeconds?: number; form?: boolean } = {},
   ): Promise<Response> => {
-    const raw = JSON.stringify(body);
+    const raw = opts.form ? `payload=${encodeURIComponent(JSON.stringify(body))}` : JSON.stringify(body);
     const { signature, timestamp } = sign(raw, Math.floor(Date.now() / 1000) + (opts.timestampOffsetSeconds ?? 0));
     return fetch(`http://127.0.0.1:${port}${SLACK_EVENTS_PATH}`, {
       method: "POST",
       headers: {
-        "content-type": "application/json",
+        "content-type": opts.form ? "application/x-www-form-urlencoded" : "application/json",
         "x-slack-request-timestamp": timestamp,
         "x-slack-signature": opts.badSig ? "v0=deadbeef" : signature,
       },
@@ -95,6 +98,24 @@ test("answers url_verification with the challenge", async () => {
       assert.deepEqual(await res.json(), { challenge: "chal-123" });
     },
   );
+});
+
+test("form-encoded interactivity payloads (button clicks) reach the app", async () => {
+  const seen: unknown[] = [];
+  await withReceiver(
+    async (event) => {
+      seen.push(event.body);
+      await event.ack();
+    },
+    async (post) => {
+      const res = await post(
+        { type: "block_actions", actions: [{ action_id: "keychain_allow_always" }] },
+        { form: true },
+      );
+      assert.equal(res.status, 200);
+    },
+  );
+  assert.equal((seen[0] as { type?: string }).type, "block_actions");
 });
 
 test("gated message envelope: 200 is held until the handler persists", async () => {

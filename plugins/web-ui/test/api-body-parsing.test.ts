@@ -124,11 +124,16 @@ test("a steer claiming a thread the user does not own is refused before reaching
   assert.equal(calls.length, before, "nothing is forwarded to core");
 });
 
-test("a steer without a threadRef and an abort still forward the bare signal", async () => {
-  for (const body of [{ kind: "steer", text: "louder" }, { kind: "abort" }]) {
+test("ordinary steering without conversation context and abort preserve bare signal forwarding", async () => {
+  for (const body of [
+    { kind: "steer", text: "louder" },
+    { kind: "steer", text: "louder", threadRef: "" },
+    { kind: "steer", text: "louder", threadRef: "invalid" },
+    { kind: "abort" },
+  ]) {
     const r = await fetch(`${base}/api/runs/r1/signal`, { method: "POST", headers, body: JSON.stringify(body) });
     assert.equal(r.status, 200);
-    assert.deepEqual(calls.at(-1)?.body, body);
+    assert.deepEqual(calls.at(-1)?.body, { kind: body.kind, ...("text" in body ? { text: body.text } : {}) });
   }
 });
 

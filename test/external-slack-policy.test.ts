@@ -11,20 +11,26 @@ import { continueInPrivate, PRIVATE_CONTINUATION_ACK } from "../src/slack/privat
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { createDirectory } from "../src/slack/directory.ts";
+import { createTurnHandler } from "../src/slack/turn-handler.ts";
 
-const policy = { companyDomains: ["company.example"], serviceCredentials: ["public-search"] };
-const employee = { id: "UEMPLOYEE", team_id: "TPARTNER", profile: { email: " Employee@Company.Example " } };
+const policy = {
+  companyDomains: ["company.example"],
+  companyTeamIds: ["TCOMPANY"],
+  serviceCredentials: ["public-search"],
+};
+const employee = { id: "UEMPLOYEE", team_id: "TCOMPANY", profile: { email: " Employee@Company.Example " } };
 
-test("external workspace identity uses exact email domain, not Slack membership or guest status", () => {
+test("external workspace identity requires company workspace membership and an exact email domain", () => {
   assert.equal(companySlackActor(employee, policy).externalId, "employee@company.example");
-  assert.equal(
-    companySlackActor({ ...employee, is_restricted: true, is_stranger: true, team_id: "TOTHER" }, policy)
-      .isExternalGuest,
-    false,
-  );
+  assert.equal(companySlackActor({ ...employee, is_stranger: true }, policy).isExternalGuest, false);
   for (const user of [
     undefined,
     { id: "UNOEMAIL", team_id: "TPARTNER" },
+    { ...employee, team_id: "TPARTNER" },
+    { ...employee, team_id: undefined },
+    { ...employee, is_restricted: true },
+    { ...employee, is_ultra_restricted: true },
     { ...employee, deleted: true },
     { ...employee, is_bot: true },
     ...["founder@outside.example", "e@company.example.evil", "e@sub.company.example", "e@@company.example"].map(
@@ -32,6 +38,7 @@ test("external workspace identity uses exact email domain, not Slack membership 
     ),
   ])
     assert.equal(companySlackActor(user, policy).isExternalGuest, true);
+  assert.equal(companySlackActor(employee, { ...policy, companyTeamIds: [] }).isExternalGuest, true);
 });
 
 test("external access is opt-in per workspace and rejects malformed allowlists", () => {
@@ -63,13 +70,95 @@ test("external access is opt-in per workspace and rejects malformed allowlists",
     {},
     { companyDomains: [] },
     { companyDomains: ["*.company.example"] },
+    { companyDomains: policy.companyDomains },
+    { ...policy, companyTeamIds: [] },
+    { ...policy, companyTeamIds: "TCOMPANY" },
+    { ...policy, companyTeamIds: [""] },
+    { ...policy, companyTeamIds: [" company "] },
+    { ...policy, companyTeamIds: [42] },
     { ...policy, serviceCredentials: "all" },
   ])
     assert.throws(() => parseExternalSlackAccess(value));
-  assert.deepEqual(parseExternalSlackAccess({ companyDomains: ["COMPANY.EXAMPLE", "company.example"] }), {
-    companyDomains: ["company.example"],
-    serviceCredentials: [],
-  });
+  assert.deepEqual(
+    parseExternalSlackAccess({
+      companyDomains: ["COMPANY.EXAMPLE", "company.example"],
+      companyTeamIds: ["TCOMPANY", "TANOTHER", "TCOMPANY"],
+    }),
+    {
+      companyDomains: ["company.example"],
+      companyTeamIds: ["TANOTHER", "TCOMPANY"],
+      serviceCredentials: [],
+    },
+  );
+});
+
+test("external account directory lookups admit only company workspace DMs", async () => {
+  for (const [snapshot, teamId] of [
+    [false, "TPARTNER"],
+    [true, "TPARTNER"],
+    [false, "TCOMPANY"],
+    [true, "TCOMPANY"],
+  ] as const) {
+    const user = { ...employee, team_id: teamId };
+    const trusted = teamId === "TCOMPANY";
+    const turns: Omit<TurnRequest, "surface">[] = [];
+    const personalScopes: string[] = [];
+    const ids = {
+      ownTeamId: "TPARTNER",
+      botUserId: "BOT",
+      ownBotId: "B1",
+      botHandle: "bot",
+      ownWorkspaceUrl: "",
+      identityMode: "email" as const,
+    };
+    const client = {
+      async *paginate() {
+        yield { members: snapshot ? [user] : [] };
+      },
+      users: { info: async () => ({ user }) },
+    };
+    const directory = createDirectory({
+      core: {} as SlackCoreClient,
+      ids,
+      externalAccess: policy,
+      coreSingleton: false,
+    });
+    const actor = (await directory.classifyUserCached(client, user.id)).actor;
+    assert.equal(actor.isExternalGuest, !trusted);
+    assert.equal(actor.externalId, trusted ? "employee@company.example" : employee.id);
+    const handler = createTurnHandler({
+      externalAccess: policy,
+      directory,
+      ids,
+      core: {},
+      mirror: { mirrorMessageEvent: async () => {} },
+      flow: {
+        callCore: async (turn: Omit<TurnRequest, "surface">) => {
+          turns.push(turn);
+          return { status: "silent" };
+        },
+      },
+      ackEmoji: { requestAckEmoji: async () => undefined, ackPickCandidates: () => [] },
+      ensureHeader: (_client: unknown, _channel: string, scope: string) => personalScopes.push(scope),
+    } as unknown as Parameters<typeof createTurnHandler>[0]);
+    await handler.handleIncoming(
+      {
+        kind: "dm",
+        channel: "DPRIVATE",
+        userId: user.id,
+        rawText: "hello",
+        files: [],
+        ts: "1.0",
+      },
+      client,
+    );
+    assert.equal(turns.length, trusted ? 1 : 0);
+    assert.deepEqual(personalScopes, trusted ? ["personal:employee@company.example"] : []);
+    if (trusted) {
+      assert.equal(turns[0]?.slackSource?.externalPolicyNamespace, externalSlackNamespace("TPARTNER", policy));
+      assert.equal(turns[0]?.externalSlack, undefined);
+    }
+  }
 });
 
 test("scope namespace changes when workspace or authorization policy changes", () => {
@@ -77,6 +166,7 @@ test("scope namespace changes when workspace or authorization policy changes", (
   assert.match(original, /^external-slack:TPARTNER:/);
   assert.notEqual(original, externalSlackNamespace("TOTHER", policy));
   assert.notEqual(original, externalSlackNamespace("TPARTNER", { ...policy, serviceCredentials: [] }));
+  assert.notEqual(original, externalSlackNamespace("TPARTNER", { ...policy, companyTeamIds: ["TOTHER"] }));
 });
 
 test("private continuation directive is self-only and strips incomplete directives", () => {
@@ -155,6 +245,7 @@ test("handoff preserves request and participant list, runs in requester DM, and 
   assert.equal(request.actor.externalId, f.source.actor.externalId);
   assert.equal(request.conversation.kind, "dm");
   assert.equal(request.externalSlack, undefined);
+  assert.equal(request.slackSource?.externalPolicyNamespace, externalSlackNamespace("TPARTNER", policy));
   assert.equal(request.deliveryTarget, "DPRIVATE");
   assert.match(request.conversation.threadRef, /^slack-account:TPARTNER:/);
   assert.match(request.text, /Invite Alex and Morgan/);
@@ -167,10 +258,12 @@ test("handoff preserves request and participant list, runs in requester DM, and 
 });
 
 test("handoff fails closed on revoked identity, wrong workspace, and missing DM", async () => {
-  for (const scenario of ["revoked", "workspace", "no-dm"]) {
+  for (const scenario of ["revoked", "home-workspace", "workspace", "no-dm"]) {
     const f = handoffFixture();
     if (scenario === "revoked")
       f.client.users.info = async () => ({ user: { ...employee, profile: { email: "outside@outside.example" } } });
+    if (scenario === "home-workspace")
+      f.client.users.info = async () => ({ user: { ...employee, team_id: "TPARTNER" } });
     if (scenario === "no-dm") f.client.conversations.open = async () => ({ channel: { id: "CNOTADM" } });
     await assert.rejects(
       continueInPrivate(f.core, "source", "private task", () => ({
@@ -208,7 +301,12 @@ test("delivery recovery routes private result only through its originating accou
           idempotencyKey: "run:dm-run",
           text: "Synthetic private result",
           createdAt: Date.now() - 30_000,
-          destination: { type: "slack", target: "DPRIVATE", slackAccountId: "partner" },
+          destination: {
+            type: "slack",
+            target: "DPRIVATE",
+            slackAccountId: "partner",
+            slackPolicyNamespace: externalSlackNamespace("TPARTNER", policy),
+          },
         },
       ];
     },
@@ -227,6 +325,7 @@ test("delivery recovery routes private result only through its originating accou
       assert.equal(id, "partner");
       return client;
     },
+    externalNamespace: () => externalSlackNamespace("TPARTNER", policy),
   });
   await poller.pollDeliveries({
     chat: {
@@ -274,8 +373,13 @@ test("external workspace refuses legacy personal-agent approval before reading i
   assert.equal(acknowledged, true);
 });
 
-test("external account poller neither claims default identity nor releases pre-policy shared answers", async () => {
-  for (const hasDefault of [false, true]) {
+test("external account poller neither claims default identity nor releases pre-policy answers", async () => {
+  for (const [hasDefault, target, slackPolicyNamespace] of [
+    [false, "CSHARED", undefined],
+    [true, "CSHARED", undefined],
+    [true, "DPRIVATE", undefined],
+    [true, "DPRIVATE", externalSlackNamespace("TPARTNER", { ...policy, companyTeamIds: ["TOTHER"] })],
+  ] as const) {
     let pending = true;
     const acks: string[] = [];
     const core = {
@@ -289,7 +393,7 @@ test("external account poller neither claims default identity nor releases pre-p
             idempotencyKey: "run:legacy",
             text: "Synthetic pre-policy private answer",
             createdAt: 1,
-            destination: { type: "slack", target: "CSHARED" },
+            destination: { type: "slack", target, slackPolicyNamespace },
           },
         ];
       },
@@ -313,7 +417,7 @@ test("external account poller neither claims default identity nor releases pre-p
         assert.equal(id, "default");
         return hasDefault ? client : undefined;
       },
-      externalAccount: () => true,
+      externalNamespace: () => externalSlackNamespace("TPARTNER", policy),
     });
     await poller.pollDeliveries(client);
     assert.deepEqual(acks, hasDefault ? ["legacy"] : []);

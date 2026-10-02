@@ -151,6 +151,7 @@ export interface HarnessTurnInput {
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
+  verifyGoal?: import("./goal.ts").GoalVerifier;
 }
 
 export interface HarnessTurnResult {

@@ -11,7 +11,7 @@ test("the transcript renders rows through the settled-row cache", () => {
 test("live, approval-paused, subagent, and steered work rows bypass the cache (their render reads mutable state)", () => {
   assert.match(
     chat,
-    /const cacheable =\s*!isStreaming &&\s*!\(message as \{ subagentMail\?: SubagentMailRef \}\)\.subagentMail &&\s*!work\?\.activity\.some\(\s*\(activity\) =>\s*activity.type === "user" \|\|\s*\["session", "sessions"\]\.includes\(\(activity\.payload as ToolPayload \| null\)\?\.tool \?\? ""\),?\s*\) &&\s*\(!work \|\| \(\(work\.status === "complete" \|\| work\.status === "failed"\) && !work\.pendingApprovals\?\.length\)\)/,
+    /const cacheable =\s*!isStreaming &&\s*!\(message as \{ subagentMail\?: SubagentMailRef \}\)\.subagentMail &&\s*!work\?\.activity\.some\(\s*\(activity\) =>\s*activity.type === "user" \|\|\s*\["session", "sessions", "subagents"\]\.includes\(\(activity\.payload as ToolPayload \| null\)\?\.tool \?\? ""\),?\s*\) &&\s*\(!work \|\| \(\(work\.status === "complete" \|\| work\.status === "failed"\) && !work\.pendingApprovals\?\.length\)\)/,
   );
   assert.match(chat, /if \(!cacheable\) return chatMessage\(message, index, isStreaming\);/);
 });

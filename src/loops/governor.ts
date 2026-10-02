@@ -1,4 +1,5 @@
 import type { Loop, LoopGovernorConfig, LoopHealth } from "../types.ts";
+import { heldMembers } from "./triage.ts";
 import type { LoopItemLedger, LoopQueueStats } from "./item-ledger.ts";
 import { isDecided, unresolvedOutput, type LoopOutputStore } from "./output-store.ts";
 import { undeclaredShipActions } from "./ship-gate.ts";
@@ -132,7 +133,8 @@ export async function collectVitals(
   stores: { items: LoopItemLedger; outputs: LoopOutputStore },
   now: number,
 ): Promise<LoopVitals> {
-  const [queue, outputs] = await Promise.all([stores.items.stats(loop.id, now), stores.outputs.byLoop(loop.id)]);
+  const held = heldMembers(loop, await stores.items.byLoop(loop.id));
+  const [queue, outputs] = await Promise.all([stores.items.stats(loop.id, now, held), stores.outputs.byLoop(loop.id)]);
   const decided = outputs.filter(isDecided);
   const undeclared = undeclaredShipActions(
     loop,

@@ -1,6 +1,7 @@
 import { externalSlackNamespace } from "../src/slack/external-access.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
+import { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
@@ -10,7 +11,7 @@ import { externalTools } from "../src/core/orchestrator/external-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { TurnRequest } from "../src/types.ts";
 
-const policy = { companyDomains: ["example.com"], serviceCredentials: ["safe"] };
+const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
 const namespace = externalSlackNamespace("T1", policy);
 function request(text: string): TurnRequest {
@@ -23,6 +24,7 @@ function request(text: string): TurnRequest {
       teamId: "T1",
       userId: "U1",
       companyDomains: ["example.com"],
+      companyTeamIds: ["TCOMPANY"],
       serviceCredentials: ["safe"],
     },
     conversation: {
@@ -119,6 +121,13 @@ test("external Slack strips private and org preloads before the prompt, but keep
   const missing = request("!sysprompt");
   delete missing.externalSlack;
   assert.equal((await b.app.turn(missing)).status, "refused");
+  const privateRequest = {
+    ...missing,
+    slackSource: { accountId: "batch", teamId: "T1", userId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "slack-account:T1:dm:D1" },
+  };
+  assert.equal((await b.app.turn(privateRequest)).status, "refused");
+  assert.equal((await b.app.turn({ ...privateRequest, slackSource: undefined })).status, "refused");
 });
 
 test("external native tool ceiling cannot delegate, switch sandboxes, read confidential data or invoke MCP", async () => {
@@ -216,6 +225,7 @@ test("external policy changes invalidate retained requests while untouched works
   assert.equal(externalSlackRequestAllowed(req, externalSlackPolicies), true);
   assert.equal(externalSlackRequestAllowed(req, {}), false);
   assert.equal(externalSlackRequestAllowed(req, { batch: { ...policy, serviceCredentials: [] } }), false);
+  assert.equal(externalSlackRequestAllowed(req, { batch: { ...policy, companyTeamIds: ["TOTHER"] } }), false);
   const legacy = {
     ...req,
     externalSlack: undefined,
@@ -234,6 +244,26 @@ test("external policy changes invalidate retained requests while untouched works
     externalSlackRequestAllowed({ ...legacy, conversation: { kind: "dm", threadRef: "dm:U1" } }, externalSlackPolicies),
     true,
   );
+});
+
+test("external account DMs require admission under the current policy", async () => {
+  const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
+  const dm = {
+    surface: "slack",
+    conversation: { kind: "dm" as const, threadRef: "slack-account:T1:dm:D1" },
+    slackSource: { accountId: "batch", teamId: "T1", userId: "U1" },
+  };
+  assert.equal(externalSlackRequestAllowed(dm, externalSlackPolicies), false);
+  assert.equal(externalSlackRequestAllowed({ ...dm, slackSource: undefined }, externalSlackPolicies), false);
+  const current = { ...dm, slackSource: { ...dm.slackSource, externalPolicyNamespace: namespace } };
+  assert.equal(externalSlackRequestAllowed(current, externalSlackPolicies), true);
+  for (const changed of [
+    { ...policy, companyTeamIds: ["TOTHER"] },
+    { ...policy, companyDomains: ["other.example"] },
+    { ...policy, serviceCredentials: [] },
+  ])
+    assert.equal(externalSlackRequestAllowed(current, { batch: changed }), false);
+  assert.equal(externalSlackRequestAllowed(dm, {}), true);
 });
 
 test("external sandbox API token cannot reach private APIs, while its safe broker token works", async (t) => {
@@ -280,6 +310,10 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
       forwarded++;
       return { status: 200, contentType: "application/json", text: async () => '{"public":"ok"}' };
     },
+    gitHttpFetch: async () => {
+      forwarded++;
+      return { status: 200, headers: {}, body: Readable.from(["0000"]) };
+    },
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -309,14 +343,19 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
       headers: { "x-agent-capability": token, "content-type": "application/json" },
       body: JSON.stringify({ credential: "safe", url: "https://public.example/data", method: "GET" }),
     });
+  const git = (token: string) =>
+    fetch(`${base}/v1/credentials/git/safe/repo.git/info/refs`, { headers: { "x-agent-capability": token } });
   assert.equal((await call(control)).status, 403);
+  assert.equal((await git(control)).status, 403);
   const success = await call(broker);
   assert.equal(success.status, 200, await success.text());
-  assert.equal(forwarded, 1);
+  assert.equal((await git(broker)).status, 200);
+  assert.equal(forwarded, 2);
   externalSlackPolicies.batch = { ...policy, serviceCredentials: [] };
   try {
     assert.equal((await call(broker)).status, 403);
-    assert.equal(forwarded, 1);
+    assert.equal((await git(broker)).status, 403);
+    assert.equal(forwarded, 2);
   } finally {
     externalSlackPolicies.batch = policy;
   }

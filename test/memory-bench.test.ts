@@ -5,7 +5,7 @@ import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, MEMORY_FILE } from "../src/memory/memory-service.ts";
+import { createMemoryService, readMemory } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import {
@@ -50,7 +50,7 @@ test("replayConversation runs every turn through the strategy and writes the not
     ],
   };
   await replayConversation(strategy, "user:U1", conv);
-  const notebook = (await workspace.read("user:U1", MEMORY_FILE)) ?? "";
+  const notebook = (await readMemory(workspace, "user:U1")) ?? "";
   assert.match(notebook, /billing service/);
   assert.match(notebook, /terse replies/);
 });
@@ -61,7 +61,7 @@ test("replayConversation tolerates strategies with no automatic capture (agent-o
   const { strategy } = createMemoryStrategy("agent-only", { harness: createMockHarness().models, memory, workspace });
   const conv: BenchConversation = { id: "t", description: "test", turns: [{ input: "hi", reply: "yo" }] };
   await replayConversation(strategy, "user:U1", conv);
-  assert.equal(await workspace.read("user:U1", MEMORY_FILE), null);
+  assert.equal(await readMemory(workspace, "user:U1"), null);
 });
 
 test("renderJudgeInput includes the transcript and marks an empty notebook", () => {

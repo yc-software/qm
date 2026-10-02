@@ -20,7 +20,8 @@ export function configureFlags(options: any) {
 }
 function selector() {
   const choices = state.choices.filter(
-    (row) => state.feature !== "persistent_subagents" || row.scopeId.startsWith("personal:"),
+    (row) =>
+      !["persistent_subagents", "app_annotations"].includes(state.feature) || row.scopeId.startsWith("personal:"),
   );
   for (const id of state.selected) if (!choices.some((row) => row.scopeId === id)) state.selected.delete(id);
   state.selector = config.buildSelector(choices, state.selected, redraw);
@@ -134,7 +135,11 @@ function template() {
             }}
           >
             <option value="persistent_subagents">Persistent subagents</option>
+            <option value="app_annotations">App annotations</option>
             <option value="inbox_loops">Inbox Loops</option>
+            <option value="slack_loading_indicator">Slack loading indicator (experimental)</option>
+            <option value="external_app_sharing">External app sharing (public links, outside emails)</option>
+            <option value="loop_triage">Loop triage (prioritize and consolidate)</option>
           </select></label
         >
         <div>
@@ -142,7 +147,16 @@ function template() {
           <div id="feature-flag-scopes" aria-labelledby="feature-flag-scope-label" ?inert=${state.saving}>
             ${state.selector || "Loading people and scopes…"}
           </div>
-          <span class="hint">Persistent subagents are available for personal scopes only.</span>
+          <span class="hint"
+            >${
+              {
+                app_annotations:
+                  "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
+                slack_loading_indicator:
+                  "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
+              }[state.feature] ?? "Persistent subagents are available for personal scopes only."
+            }</span
+          >
         </div>
       </div>
     </div>

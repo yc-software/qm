@@ -74,13 +74,14 @@ export interface PersistedBaseModel {
   modelId?: string;
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
+  fallbackRuntime?: RuntimeSelection;
   harnessId?: string;
   orgRevision?: number;
   revision?: number;
   effortLevel?: string;
   fastMode?: boolean;
 }
-export type RuntimePurpose = "cron" | "subagent";
+export type RuntimePurpose = "cron" | "subagent" | "fallback";
 
 interface RuntimeSelection {
   harnessId: string;
@@ -403,6 +404,7 @@ export function createMemoryConfigStore(
       ? {
           ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
           ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
+          ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
         }
       : {};
   const clearRuntime = async (id: ScopeId, row?: PersistedBaseModel | null) => {

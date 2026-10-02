@@ -1,8 +1,10 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue, fetchWithRetry, sleep } from "../util/async.ts";
-import { httpFailure, swallowAs, errMessage } from "../util/errors.ts";
+import { withRequestId, swallowAs, errMessage } from "../util/errors.ts";
+import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
@@ -53,6 +55,39 @@ const DEFAULT_DISK_GB = 8;
 const STARTABLE_STATES = new Set(["stopped", "sleeping"]);
 const GONE_STATES = new Set(["deleting", "deleted"]);
 const DEAD_STATES = new Set(["failed", ...GONE_STATES]);
+const REFUSAL_CODES = new Set([
+  "insufficient_balance",
+  "instance_limit_reached",
+  "free_hours_exhausted",
+  "subscription_required",
+  "tier_limit",
+  "invalid_api_key",
+  "ip_not_allowed",
+  "forbidden",
+]);
+
+function refusalMessage(body: string): string | null {
+  let parsed: { error?: { code?: string; message?: string } };
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const { code, message } = parsed?.error ?? {};
+  return code && message && REFUSAL_CODES.has(code) ? message : null;
+}
+
+async function apiFailure(action: string, res: Response): Promise<{ detail: string; error: Error }> {
+  const body = await res.text().catch(() => "");
+  const detail = withRequestId(`http ${res.status} ${body.slice(0, 200)}`, res.headers);
+  const refused = refusalMessage(body);
+  return {
+    detail,
+    error: refused
+      ? new NonRetryableTurnError(`Agent37 refused this agent computer: ${refused}`)
+      : new Error(`agent37 ${action}: ${detail}`),
+  };
+}
 
 interface InstanceInfo {
   id: string;
@@ -137,7 +172,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   async function apiJson<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
     const res = await api(method, path, body, timeoutMs);
     if (!res.ok) {
-      throw new Error(`agent37 ${method} ${path}: ${await httpFailure(res)}`);
+      throw (await apiFailure(`${method} ${path}`, res)).error;
     }
     return (await res.json()) as T;
   }
@@ -159,7 +194,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
         const res = await api("POST", `/v1/instances/${encodeURIComponent(id)}/start`, undefined, START_TIMEOUT_MS);
         if (res.ok) continue;
         if (res.status !== 400 && res.status !== 409) {
-          throw new Error(`agent37 start ${id}: ${await httpFailure(res)}`);
+          throw (await apiFailure(`start ${id}`, res)).error;
         }
       }
       await sleep(READY_POLL_MS);
@@ -173,7 +208,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       "refused",
       { timeoutMs: CREATE_TIMEOUT_MS },
     );
-    if (!res.ok) throw new Error(`agent37 create ${name}: ${await httpFailure(res)}`);
+    if (!res.ok) throw (await apiFailure(`create ${name}`, res)).error;
     const info = (await res.json()) as InstanceInfo;
     await ensureRunning(info.id);
     return info;
@@ -196,7 +231,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     }
     const res = await api("DELETE", `/v1/instances/${encodeURIComponent(found)}`, undefined, 120_000);
     if (!res.ok && res.status !== 404) {
-      throw new Error(`agent37 delete ${name}: ${await httpFailure(res)}`);
+      throw (await apiFailure(`delete ${name}`, res)).error;
     }
     idByName.delete(name);
   }
@@ -208,18 +243,18 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     const first = await send("POST", `/v1/instances/${encodeURIComponent(id)}/exec`, body, timeoutMs);
     let res = first;
     if (!first.ok) {
-      const detail = await httpFailure(first);
+      const { detail, error } = await apiFailure(`exec ${name}`, first);
       if (first.status === 404) idByName.delete(name);
       const notRunning = first.status === 400 && /running instances/i.test(detail);
       const freezing = first.status === 409;
       if (first.status !== 404 && !notRunning && !freezing) {
-        throw new Error(`agent37 exec ${name}: ${detail}`);
+        throw error;
       }
       const retryId = await instanceIdFor(name);
       await ensureRunning(retryId);
       res = await send("POST", `/v1/instances/${encodeURIComponent(retryId)}/exec`, body, timeoutMs);
       if (!res.ok) {
-        throw new Error(`agent37 exec ${name}: ${await httpFailure(res)}`);
+        throw (await apiFailure(`exec ${name}`, res)).error;
       }
     }
     const parsed = (await res.json()) as InstanceExecResponse;
@@ -519,7 +554,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("agent37-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle);
         throw err;
       }
     },
@@ -582,6 +617,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
           activeScratch.delete(handle.id);
           if (tdOpts?.destroy) await deleteInstance(handle.id);
           else await deleteInstance(handle.id).catch(swallowAs("agent37-sandbox: scratch delete", undefined));
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (!tdOpts?.destroy) return;

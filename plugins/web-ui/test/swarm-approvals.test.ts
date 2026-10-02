@@ -58,7 +58,12 @@ test("worker transcripts allow approvals without enabling the composer", async (
     title: "Test",
   };
   const entries = [{ seq: 1, type: "user", createdAt: Date.now(), payload: { text: "run the command" } }];
-  let pending = [approval];
+  const credential: PendingApproval = {
+    requestId: "keychain:readonly-cache",
+    command: "aws",
+    reason: "credential access",
+  };
+  let pending = [approval, credential];
   const decision = deferred<Response>();
   const continuation = deferred<Response>();
   const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
@@ -77,6 +82,7 @@ test("worker transcripts allow approvals without enabling the composer", async (
         scopeOverride: null,
       });
     }
+    if (path === "/api/keychain/approvals/readonly-cache") return Response.json({ ask: { status: "approved" } });
     if (path.startsWith("/api/approvals/")) {
       return decision.promise;
     }
@@ -97,7 +103,7 @@ test("worker transcripts allow approvals without enabling the composer", async (
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const { createConversation } = await vite.ssrLoadModule("/src/conversations.ts");
-    const { entriesToMessages } = await vite.ssrLoadModule("/src/core-bridge.ts");
+    const { entriesToMessages, resolveApproval } = await vite.ssrLoadModule("/src/core-bridge.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
@@ -120,6 +126,12 @@ test("worker transcripts allow approvals without enabling the composer", async (
     chat.mountReadOnly(row, entriesToMessages(entries, transcriptModel()));
     await until(() => !!host.querySelector(".approval-btn"));
     assert.equal(host.querySelector("textarea"), null);
+    const before = host.querySelectorAll(".approval-btn").length;
+    await resolveApproval({ requestId: credential.requestId, approved: true, scope: "once" });
+    chat.revealEntry(9999);
+    assert.ok(host.querySelectorAll(".approval-btn").length < before);
+    assert.equal(host.textContent?.includes("credential access"), false);
+    assert.equal(host.textContent?.includes("requires approval"), true);
     const button = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
       (b) => b.textContent?.trim() === "Allow once",
     )!;

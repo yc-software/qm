@@ -192,11 +192,8 @@ export function createSandboxResources(opts: {
     return record;
   };
   const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
-    const record = await get(id);
-    const lock =
-      exclusive || record.backend !== "modal" || !opts.lock.withSharedLock
-        ? opts.lock.withLock
-        : opts.lock.withSharedLock;
+    await get(id);
+    const lock = exclusive || !opts.lock.withSharedLock ? opts.lock.withLock : opts.lock.withSharedLock;
     return lock(`sandbox-resource:${id}`, async () => {
       const current = await get(id);
       if (current.state === "retired") throw new Error("sandbox has been retired");

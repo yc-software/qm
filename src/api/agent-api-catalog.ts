@@ -22,6 +22,9 @@ interface AgentApiFamily {
 
 const onPath = (m: string, p: string) => (method: string, pathname: string) => method === m && pathname === p;
 
+const CONVERSATION_UPDATE =
+  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). These are per-person.";
+
 const FAMILIES: AgentApiFamily[] = [
   {
     match: (method, path) =>
@@ -60,7 +63,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (method, path) => path === "/v1/swarm" && (method === "GET" || method === "POST"),
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. An optional forumSandboxId names an existing shared computer, selected explicitly per command with execute's sandbox_id.",
+      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker.",
     routes: [
       {
         method: "GET",
@@ -72,7 +75,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/swarm",
         summary:
-          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?} sends to explicit peer ids or all. Retry the same requestId and payload for idempotency.",
+          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?} sends to explicit peer ids or all; {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
       },
     ],
   },
@@ -319,7 +322,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/crons",
         summary:
-          'schedule future or recurring work — a 2-5 word `title` naming what the cron is for (distinctive in a list, not the command) plus `task` (re-run at fire time) or exact `text`, optionally addressed by name to a teammate (`recipient`), a channel (`channel`), or a group DM (`participants`: its other members, which must already exist as a group DM — reach it once first, which opens it; same venue rule as /v1/reach — narrowest audience, a channel only when explicitly requested or genuinely room-wide), or run privately for whoever asked at their own scope (`scope:"personal"`, even from a channel); pass `unfurlLinks:false` to suppress Slack previews (to send now instead, use /v1/reach)',
+          'schedule future or recurring work — a 2-5 word `title` naming what the cron is for (distinctive in a list, not the command) plus `task` (re-run at fire time) or exact `text`, optionally addressed by name to a teammate (`recipient`), a channel (`channel`), or a group DM (`participants`: its other members, which must already exist as a group DM — reach it once first, which opens it; same venue rule as /v1/reach — narrowest audience, a channel only when explicitly requested or genuinely room-wide), or run privately for whoever asked at their own scope (`scope:"personal"`, even from a channel); pass `unfurlLinks:false` to suppress Slack previews; the cron is tied to this conversation so it shows as ongoing work here unless `session:false` (to send now instead, use /v1/reach)',
       },
       { method: "GET", path: "/v1/crons", summary: "list your crons" },
       {
@@ -388,9 +391,9 @@ const FAMILIES: AgentApiFamily[] = [
   {
     match: (m, p) =>
       (m === "GET" && (p === "/v1/conversations" || /^\/v1\/conversations\/[^/]+$/.test(p))) ||
-      (m === "POST" && (p === "/v1/conversations" || /^\/v1\/conversations\/[^/]+(?:\/fork)?$/.test(p))),
+      (m === "POST" && /^\/v1\/conversations\/[^/]+$/.test(p)),
     guidance:
-      "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving. When handing off a newly started conversation, share the exact webUrl returned by POST /v1/conversations; never guess or reconstruct its route.",
+      "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving.",
     routes: [
       {
         method: "GET",
@@ -399,28 +402,32 @@ const FAMILIES: AgentApiFamily[] = [
           "list the asking person's own conversations (id, title, status, archived, pinned, lastActivityAt) — the same list their web sidebar shows",
       },
       {
-        method: "POST",
-        path: "/v1/conversations/:id",
-        summary:
-          "update one of the asking person's conversations — body {archived?, pinned?, title?, color?, status?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). Title, archive, pin, and color are per-person. Status is shared by everyone in the session: {emoji: one Unicode emoji, text: 1–200 characters}, or null to clear. Use it for verified milestones, e.g. ✅ PR merged or 🚀 Live in production, and replace it as work progresses. 404 for a conversation not on their list",
-      },
-      {
         method: "GET",
         path: "/v1/conversations/:id?tailTurns=20",
         summary:
           "read the bounded transcript of one of the asking person's conversations; defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a conversation they cannot see",
       },
+    ],
+  },
+  {
+    match: () => false,
+    when: (v) => v.claims.surface === "slack",
+    routes: [
       {
         method: "POST",
-        path: "/v1/conversations",
-        summary:
-          "start a FRESH conversation in this scope (no inherited transcript) — body {text, title?}; text becomes its first message and a run begins there asynchronously. Returns {session, turn, webUrl?}; share webUrl verbatim when present (it is omitted without a valid configured public web URL). Unlike /fork, the new session starts with only what you put in text. Human-attended turns only — refused (403) from crons and other automations",
+        path: "/v1/conversations/:id",
+        summary: `${CONVERSATION_UPDATE} 404 for a conversation not on their list`,
       },
+    ],
+  },
+  {
+    match: () => false,
+    when: (v) => v.claims.surface !== "slack",
+    routes: [
       {
         method: "POST",
-        path: "/v1/conversations/:id/fork",
-        summary:
-          "fork one of the asking person's conversations into a new conversation — body optionally {upToSeq}; returns 404 for a conversation they cannot see",
+        path: "/v1/conversations/:id",
+        summary: `${CONVERSATION_UPDATE} Body status sets the web UI sidebar status shared by everyone in the session: {emoji: one Unicode emoji, text: 1–200 characters}, or null to clear. Use it for verified milestones, e.g. ✅ PR merged or 🚀 Live in production, and replace it as work progresses. 404 for a conversation not on their list`,
       },
     ],
   },
@@ -463,7 +470,7 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "POST" &&
         /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on|embed-ancestors)$/.test(p)),
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; external email grants are view-only and send an invitation with the app link. Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default and only the owner may change it. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
+      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
     routes: [
       {
         method: "GET",
@@ -607,13 +614,12 @@ const FAMILIES: AgentApiFamily[] = [
       (p === "/v1/keychain/credentials" && (m === "POST" || m === "GET")) ||
       (p === "/v1/keychain/overview" && m === "GET") ||
       (m === "DELETE" && p.startsWith("/v1/keychain/credentials/")) ||
-      (p === "/v1/keychain/grants" && (m === "POST" || m === "GET")) ||
+      (p === "/v1/keychain/grants" && m === "GET") ||
       (m === "POST" && p.startsWith("/v1/keychain/grants/") && p.endsWith("/revoke")) ||
       (p === "/v1/keychain/asks" && (m === "POST" || m === "GET")) ||
-      (m === "POST" && p.startsWith("/v1/keychain/asks/") && p.endsWith("/decline")) ||
       (m === "POST" && p === "/v1/keychain/drops") ||
       (m === "POST" && p === "/v1/keychain/use"),
-    guidance: "The keychain ask→approve→use protocol is documented in your keychain manifest when one renders.",
+    guidance: "The keychain ask→card approval→use protocol is documented in your keychain manifest when one renders.",
     routes: [
       {
         method: "POST|GET",
@@ -627,12 +633,7 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "list this user's credential metadata, grants, and pending asks (never secret values)",
       },
       { method: "DELETE", path: "/v1/keychain/credentials/:id", summary: "remove a registered login" },
-      {
-        method: "POST|GET",
-        path: "/v1/keychain/grants",
-        summary:
-          "request a purpose-bound grant to use someone's login here (when the owner authorized it mid-conversation rather than on their own turn, pass onBehalfOf with their id) / list grants",
-      },
+      { method: "GET", path: "/v1/keychain/grants", summary: "list grants for this conversation" },
       { method: "POST", path: "/v1/keychain/grants/:id/revoke", summary: "revoke a grant" },
       {
         method: "POST|GET",
@@ -640,7 +641,6 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "ask a credential's owner for access, including scheduled turns in personal or shared conversations for discoverable credentials (no access until owner approval) / list asks",
       },
-      { method: "POST", path: "/v1/keychain/asks/:id/decline", summary: "decline an ask" },
       {
         method: "POST",
         path: "/v1/keychain/drops",

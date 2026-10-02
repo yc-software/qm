@@ -2,6 +2,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import type { Pool } from "pg";
 import { mergeDirs, runMigration } from "../scripts/migrate-principals-to-email.mjs";
@@ -12,6 +13,8 @@ const skip = BASE_URL ? false : "set DATABASE_URL (a Postgres) to run the migrat
 const MAPPING = { U9MIGA: "alice@x.com", U9MIGB: "bob@x.com" };
 const silent = () => {};
 
+const parentDatabase = BASE_URL ? new URL(BASE_URL).pathname.slice(1) : "";
+const database = `${/^qmt_\w+$/.test(parentDatabase) ? parentDatabase : "qm"}_migtest_${randomBytes(4).toString("hex")}`;
 let testUrl = "";
 let pool: Pool | null = null;
 
@@ -19,11 +22,10 @@ before(async () => {
   if (!BASE_URL) return;
   const pg = (await import("pg")).default;
   const admin = new pg.Pool({ connectionString: BASE_URL });
-  await admin.query("DROP DATABASE IF EXISTS qm_migtest WITH (FORCE)");
-  await admin.query("CREATE DATABASE qm_migtest");
+  await admin.query(`CREATE DATABASE "${database}"`);
   await admin.end();
   const url = new URL(BASE_URL);
-  url.pathname = "/qm_migtest";
+  url.pathname = `/${database}`;
   testUrl = url.toString();
   pool = new pg.Pool({ connectionString: testUrl });
   await pool.query(`
@@ -34,6 +36,11 @@ before(async () => {
 
 after(async () => {
   await pool?.end();
+  if (!BASE_URL) return;
+  const pg = (await import("pg")).default;
+  const admin = new pg.Pool({ connectionString: BASE_URL });
+  await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+  await admin.end();
 });
 
 async function reset(): Promise<void> {

@@ -59,7 +59,8 @@ test("a user reads and curates their OWN personal memory (personal-scoped, bound
     );
 
     const onDisk = await s.built.workspace.read(scopeId("personal", "U1"), "memory/MEMORY.md");
-    assert.equal(onDisk, "# Memory\n\n- I work in PT\n");
+    assert.equal(JSON.parse(onDisk!).version, 1);
+    assert.equal(await s.built.memory.read(scopeId("personal", "U1")), "# Memory\n\n- I work in PT\n");
 
     const actions = (await s.built.auditLog.events()).filter((e) => e.principalId === "U1").map((e) => e.action);
     assert.ok(

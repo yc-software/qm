@@ -167,13 +167,21 @@ test("legacy routes work without discovery support, then discovery adds models a
   assert.deepEqual(f.catalog.transport.models, {});
 });
 
-test("discovery outage hides stale models; later successful refresh recovers", async () => {
-  const f = fixture();
+test("a transient discovery blip keeps last known routes; a prolonged outage hides them", async () => {
+  const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
   await f.catalog.refresh();
+  const native = resolveModel("claude-opus-5")!;
   f.tick();
   f.status(503);
   await f.catalog.refresh();
+  assert.ok(resolveModel("gateway/vendor/new-model"));
+  assert.ok(modelGatewayRequest(f.catalog.transport, native));
+  for (let i = 0; i < 3; i++) {
+    f.tick();
+    await f.catalog.refresh();
+  }
   assert.equal(resolveModel("gateway/vendor/new-model"), undefined);
+  assert.throws(() => modelGatewayRequest(f.catalog.transport, native), /unavailable/);
   f.tick();
   f.status(200);
   f.metadata([group("new")]);

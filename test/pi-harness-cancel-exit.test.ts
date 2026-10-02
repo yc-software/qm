@@ -240,7 +240,6 @@ test("Pi rehydrates a durable receipt and preserves its active goal when the wor
     objective: "resume after restart",
     floor: { minMs: 32_400_000 },
     capTokens: 50_000,
-    source: "tool",
   });
   goal.tokensUsed = 1234;
   try {
@@ -258,7 +257,9 @@ test("Pi rehydrates a durable receipt and preserves its active goal when the wor
     ];
     const result = await harness.turns.runTurn(turn);
     assert.equal(result.stopped, true);
-    assert.deepEqual(latestGoalRecord(sink.entries), goal);
+    const { activeMs, ...persisted } = latestGoalRecord(sink.entries)!;
+    assert.deepEqual(persisted, goal);
+    assert.ok(activeMs! >= 0 && activeMs! < 60_000, "the cancelled turn banks only its own running time");
   } finally {
     globalThis.fetch = realFetch;
   }

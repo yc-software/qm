@@ -19,10 +19,10 @@ PORTER_DEPLOY_CLUSTER_ID=<cluster id>
 PORTER_SANDBOX_IMAGE=ghcr.io/porter-dev/qm-sandbox:latest
 PORTER_DEPLOY_RUNNER_IMAGE=ghcr.io/porter-dev/qm-app-runner:latest
 # PORTER_DEPLOY_URL=            # only when the API host is not https://dashboard.porter.run
-# PORTER_DEPLOY_APPS_DOMAIN=    # optional; the cluster names apps itself (see below)
-# PORTER_DEPLOY_VISIBILITY=public  # public Porter ingress serves apps to ANYONE with the
-                                   # URL, bypassing qm's sign-in gate — leave private and
-                                   # use /d/<app>/ or DEPLOY_APPS_DOMAIN unless that is the intent
+# PORTER_DEPLOY_APPS_DOMAIN=    # optional; puts apps on sandbox ingress (see below)
+# PORTER_DEPLOY_VISIBILITY=internal  # default: no ingress host, core reaches apps in-cluster;
+                                     # private/public put apps on sandbox ingress, and public
+                                     # serves them to ANYONE with the URL, bypassing qm's gate
 ```
 
 ## Onboarding checklist
@@ -195,7 +195,15 @@ skips the gate. `PORTER_DEPLOY_APPS_DOMAIN` is the separate, ungated mechanism: 
 registers each app's domain on Porter's own sandbox ingress and is deliberately NOT
 defaulted from `DEPLOY_APPS_DOMAIN`.
 
-Published apps get their address from the cluster, not from qm. Declare the sandbox load
+By default published apps get no sandbox ingress host at all. Core reaches each app at the
+cluster-internal address the cluster reports, so `/d/<app>/` and `DEPLOY_APPS_DOMAIN` work,
+no Porter hostname skips qm's gate, and the cluster needs no sandbox ingress. This needs core
+running in the same cluster as the sandboxes and sandbox-api 0.1.58 or newer. Apps published
+before an upgrade keep their ingress host until they are redeployed. The rest of this section
+applies only when `PORTER_DEPLOY_VISIBILITY` is `private` or `public`, or
+`PORTER_DEPLOY_APPS_DOMAIN` is set (which implies `private`).
+
+With ingress, published apps get their address from the cluster, not from qm. Declare the sandbox load
 balancer with a root domain at cluster creation and **Porter names every published app
 itself**: `<app>.<root domain>`, served on a wildcard Let's Encrypt certificate that Porter
 also obtains. `PORTER_DEPLOY_APPS_DOMAIN` is then only for choosing a different name — leave
@@ -333,8 +341,8 @@ PORTER_DEPLOY_APPS_DOMAIN=apps.example.com   # optional; overrides the assigned 
 ```
 
 Set it only to choose the name yourself; the wildcard record it relies on is the one Porter
-already created. Deployments are **private** by default, matching the other providers;
-`PORTER_DEPLOY_VISIBILITY=public` opts a deployment's domain into public ingress. Note the
+already created. `PORTER_DEPLOY_VISIBILITY=private` serves apps on the private sandbox
+ingress, and `public` opts them into public ingress. Note the
 cluster-assigned hostname is Porter ingress only — qm's sign-on gate, request-access flow,
 and live editing need `DEPLOY_APPS_DOMAIN` (a domain you control, not a shared platform
 domain like `onporter.run`).
@@ -386,7 +394,7 @@ grep for that line rather than assuming the container's own metadata block is in
 | `PORTER_DEPLOY_RUNNER_IMAGE`                       | Image published apps boot from (defaults to the sandbox image)                                                 |
 | `PORTER_SANDBOX_EGRESS_PROXY_URL`                  | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see the constraints below) |
 | `PORTER_SANDBOX_NAME_PREFIX`                       | Prefix for sandbox and app names on the cluster                                                                |
-| `PORTER_DEPLOY_VISIBILITY`                         | `public` puts a published app on public ingress; default is private                                            |
+| `PORTER_DEPLOY_VISIBILITY`                         | `internal` (default) serves apps in-cluster only; `private`/`public` put them on sandbox ingress               |
 | `PORTER_DEPLOY_TTL_SEC` / `PORTER_SANDBOX_TTL_SEC` | Reap bodies after this long                                                                                    |
 
 To QA a branch against a real Porter cluster before deploying it, the dev instance takes

@@ -90,10 +90,10 @@ test("thinking titles become disclosure labels without repeating the heading", (
     });
   }
   assert.deepEqual(thinkingPresentation("A thought without a heading"), {
-    title: "Thought process",
+    title: "Thinking",
     body: "A thought without a heading",
   });
-  assert.equal(thinkingPresentation("**Bold** inside a sentence").title, "Thought process");
+  assert.equal(thinkingPresentation("**Bold** inside a sentence").title, "Thinking");
 });
 
 test("session actions identify their recipient and retain failure state", () => {
@@ -116,6 +116,11 @@ test("session actions identify their recipient and retain failure state", () => 
   assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
   tool.call!.payload = { tool: "sessions", action: "open", name: "worker" };
   assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
+  tool.call!.payload = { tool: "subagents", action: "open", name: "worker" };
+  assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
+  tool.call!.payload = { tool: "sessions", action: "list" };
+  tool.result!.payload = {};
+  assert.equal(sessionPresentation(tool, "complete")?.target, "sessions");
 });
 
 test("activity grouping preserves speech boundaries and chronological item identity", () => {

@@ -1,4 +1,12 @@
-import { sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge.ts";
+import {
+  sharedContextLabel,
+  type CoreContext,
+  type CoreProject,
+  type CoreSession,
+  type SessionBackgroundView,
+} from "./core-bridge.ts";
+import { subagentCounts } from "./subagent-activity.ts";
+import { goalFloorLabel, goalWorkedLabel } from "./goal-strip.ts";
 import { relTime } from "./ui.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
@@ -179,31 +187,65 @@ export function applySessionState(
 export interface RowIndicators {
   working: boolean;
   awaiting: boolean;
-  background: { jobs: number; watches: number; crons: number; label: string } | null;
+  background: BackgroundCounts | null;
+}
+
+export interface BackgroundCounts {
+  jobs: number;
+  watches: number;
+  crons: number;
+  subagents: number;
+  goal: boolean;
+  label: string;
 }
 
 export function backgroundLabel(
   jobs: number,
   watches: number,
   crons: number,
-): { jobs: number; watches: number; crons: number; label: string } | null {
+  subagents = 0,
+  subagentsWaiting = 0,
+  goal?: { activeMs: number; runningSince?: number; floor?: Record<string, number> },
+  now = Date.now(),
+): BackgroundCounts | null {
   const parts: string[] = [];
+  if (goal)
+    parts.push(
+      `goal · ${goalWorkedLabel(goal.activeMs + (goal.runningSince ? Math.max(0, now - goal.runningSince) : 0), goalFloorLabel(goal.floor ?? null))}`,
+    );
+  if (subagents > 0) parts.push(`${subagents} subagent${subagents === 1 ? "" : "s"} running`);
+  if (subagentsWaiting > 0)
+    parts.push(`${subagentsWaiting} subagent${subagentsWaiting === 1 ? " needs" : "s need"} you`);
   if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
   if (crons > 0) parts.push(`${crons} cron${crons === 1 ? "" : "s"} scheduled here`);
-  return parts.length ? { jobs, watches, crons, label: parts.join(" · ") } : null;
+  return parts.length
+    ? { jobs, watches, crons, subagents: subagents + subagentsWaiting, goal: Boolean(goal), label: parts.join(" · ") }
+    : null;
 }
 
 export function watchActivityLabel(w: { lastFiredAt?: number }): string {
   return w.lastFiredAt ? `still watching · last check ${relTime(w.lastFiredAt)}` : "still watching";
 }
 
-export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {
+export function rowIndicators(
+  s: CoreSession,
+  liveThreads: ReadonlySet<string> | string | null,
+  list: readonly CoreSession[] = [],
+): RowIndicators {
   const live = typeof liveThreads === "string" ? new Set([liveThreads]) : (liveThreads ?? new Set<string>());
+  const children = subagentCounts(list, s.id);
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
-    awaiting: Boolean(s.awaitingInput),
-    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0, s.crons ?? 0),
+    awaiting: Boolean(s.awaitingInput) || children.waiting > 0,
+    background: backgroundLabel(
+      s.backgroundJobs ?? 0,
+      s.watches ?? 0,
+      s.crons ?? 0,
+      children.running,
+      children.waiting,
+      s.goal,
+    ),
   };
 }
 
@@ -213,7 +255,7 @@ export function conversationBackground(
   threadRef: string | null,
 ): RowIndicators["background"] {
   const row = list.find((s) => (sessionId ? s.id === sessionId : Boolean(threadRef) && s.threadRef === threadRef));
-  return row ? rowIndicators(row, null).background : null;
+  return row ? rowIndicators(row, null, list).background : null;
 }
 
 export function shouldStartProactiveOpener(state: {
@@ -232,4 +274,19 @@ export function shouldStartProactiveOpener(state: {
     state.loaded &&
     !state.sessions.some((session) => session.id && !session.threadRef.startsWith("cron:"))
   );
+}
+
+export function cronRowMeta(c: SessionBackgroundView["crons"][number]): string {
+  const next = c.nextFireAt ? `next fire ${nextFireIn(c.nextFireAt)}` : "paused";
+  if (!c.lastFire) return next;
+  if (c.lastFire.status === "running") return `${next} · running now`;
+  return `${next} · last ${c.lastFire.status ?? "fired"} ${relTime(c.lastFire.firedAt)}`;
+}
+
+function nextFireIn(at: number): string {
+  const mins = Math.round((at - Date.now()) / 60_000);
+  if (mins <= 0) return "due now";
+  if (mins < 60) return `in ${mins}m`;
+  if (mins < 1440) return `in ${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+  return `in ${Math.floor(mins / 1440)}d`;
 }

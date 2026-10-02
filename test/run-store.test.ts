@@ -360,6 +360,9 @@ for (const backend of backends) {
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.002");
     assert.equal(await runs.setDeliveryState(r.id, claimed?.leaseToken ?? "", { editRef: "171.003" }), true);
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.003");
+    assert.equal(await runs.setDeliveryState(r.id, claimed?.leaseToken ?? "", { replying: true }), true);
+    await runs.setDeliveryState(r.id, null, { editRef: "171.003" });
+    assert.deepEqual((await runs.get(r.id))?.deliveryState, { editRef: "171.003", replying: true });
     const seen: string[] = [];
     runs.onTerminal((run) => seen.push(`${run.id}:${run.status}:${run.deliveryState?.editRef ?? ""}`));
     await runs.complete(r.id, claimed?.leaseToken ?? "", { status: "ok", reply: "done" });

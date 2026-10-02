@@ -42,6 +42,7 @@ function service(
     turnResult?: TurnResult;
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
+    triageEnabledFor?: (owner: string) => Promise<boolean>;
   },
 ) {
   const loops = createLoopStore();
@@ -56,6 +57,7 @@ function service(
     admittedWork: overrides?.admittedWork,
     crons,
     samePerson: overrides?.samePerson,
+    triageEnabledFor: overrides?.triageEnabledFor ?? (async () => true),
     loops,
     items,
     outputs,
@@ -979,4 +981,92 @@ test("a failed followup rejects so the composer can retain uploaded attachments"
   );
   assert.equal(s.turns[0]?.attachments?.[0]?.blobId, "test-blob");
   assert.equal((await s.items.get(item.id))?.thread?.at(-1)?.role, "system");
+});
+
+test("triage groups a flood read-only so only the representative is worked, with the rest as evidence", async () => {
+  const s = service((req) => {
+    const text = req.text ?? "";
+    if (text.startsWith("[Loop triage]")) {
+      const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
+      return `\`\`\`json\n${JSON.stringify({
+        items: ids.map((id, index) => ({
+          id,
+          priority: index === 0 ? "urgent" : "low",
+          reason: "checkout is down",
+          ...(index > 0 ? { groupWith: ids[0] } : {}),
+        })),
+      })}\n\`\`\``;
+    }
+    if (stage(req) === "intake")
+      return '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-2", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-3", "sourceSummary": "TypeError"}]\n```';
+    return HAPPY(req);
+  });
+  const loop = await makeLoop(s.loops);
+  await s.loops.update(loop.id, {
+    triage: {
+      prioritize: { enabled: true, instructions: "production incidents first" },
+      consolidate: { enabled: true },
+    },
+  });
+  await s.fire.fire(loop.id, "f1");
+  const triageTurn = s.turns.find((turn) => turn.text?.startsWith("[Loop triage]"));
+  assert.equal(triageTurn?.readOnly, true);
+  assert.match(triageTurn?.text ?? "", /production incidents first/);
+  const workTurns = s.turns.filter((turn) => stage(turn) === "work");
+  assert.equal(workTurns.length, 1);
+  assert.match(workTurns[0]!.text ?? "", /similarItems/);
+  const items = await s.items.byLoop(loop.id);
+  const representative = items.find((item) => item.status === "ready")!;
+  assert.equal(representative.triage?.priority, "urgent");
+  assert.deepEqual(
+    items.filter((item) => item.id !== representative.id).map((item) => [item.status, item.triage?.groupId]),
+    [
+      ["queued", representative.id],
+      ["queued", representative.id],
+    ],
+  );
+});
+
+test("triage does not run for a loop whose owner lacks the loop_triage flag", async () => {
+  const s = service(HAPPY, { triageEnabledFor: async () => false });
+  const loop = await makeLoop(s.loops);
+  await s.loops.update(loop.id, { triage: { prioritize: { enabled: true }, consolidate: { enabled: true } } });
+  await s.fire.fire(loop.id, "f1");
+  assert.equal(
+    s.turns.some((turn) => turn.text?.startsWith("[Loop triage]")),
+    false,
+  );
+});
+
+test("a triage dry run regroups every open item with draft instructions and writes nothing", async () => {
+  const s = service((req) => {
+    const text = req.text ?? "";
+    if (text.startsWith("[Loop triage]")) {
+      const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
+      return `\`\`\`json\n${JSON.stringify({
+        items: ids.map((id, index) => ({
+          id,
+          priority: "high",
+          reason: "draft",
+          ...(index > 0 ? { groupWith: ids[0] } : {}),
+        })),
+      })}\n\`\`\``;
+    }
+    if (stage(req) === "intake")
+      return '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-2", "sourceSummary": "TypeError"}]\n```';
+    return HAPPY(req);
+  });
+  const loop = await makeLoop(s.loops);
+  await s.fire.fire(loop.id, "f1");
+  const before = await s.items.byLoop(loop.id);
+  const preview = await s.fire.previewTriage(loop, {
+    prioritize: { enabled: true, instructions: "outages first" },
+    consolidate: { enabled: true },
+  });
+  const turn = s.turns.findLast((t) => t.text?.startsWith("[Loop triage]"));
+  assert.equal(turn?.readOnly, true);
+  assert.match(turn?.text ?? "", /outages first/);
+  assert.equal(preview.length, 2);
+  assert.ok(preview.every((entry) => entry.priority === "high" && entry.groupId));
+  assert.deepEqual(await s.items.byLoop(loop.id), before);
 });

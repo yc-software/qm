@@ -17,6 +17,9 @@ import { portalSession } from "../src/deploy/viewer-session.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
+import type { FeatureFlagStore } from "../src/feature-flags.ts";
+
+const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
 const secret = "app-only-gateway-test-secret-long-enough";
 const guest = "guest@partner.test";
@@ -42,6 +45,7 @@ test("app-only gateway checks exact current personal read grants without inherit
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const acl = createAclStore();
   const deploy = createDeployService({
+    externalSharingAllowed: async () => true,
     deployStore: createDeployStore({ git: { repoRoot: join(dir, "repos") } }),
     provider: {
       profile: { managedScaleToZero: false },
@@ -82,6 +86,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     throw new Error("app-only must not consult inherited permission");
   };
   const server = createApiServer(app, {
+    featureFlags: externalSharingOn,
     identity,
     signingSecret: secret,
     deployAppsDomain: "apps.example.test",

@@ -1,4 +1,4 @@
-import { escapeHtml } from "../api/http.ts";
+import { escapeHtml } from "../../plugins/chassis/src/http.ts";
 
 export interface InviteMailer {
   send(message: { to: string; subject: string; text: string; html: string }): Promise<string>;

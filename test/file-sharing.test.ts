@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
 import type { GrantedHandle, IncomingAttachment } from "../src/types.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -219,7 +220,12 @@ test("sharedManifest caps the listing at MAX_SHARED_FILES_LISTED with a '…and 
   assert.equal((m.match(/^- shared\//gm) ?? []).length, MAX_SHARED_FILES_LISTED, "only the cap is listed");
   assert.match(m, /…and 7 more \(read shared\/<name> to fetch\)/);
   assert.match(m, new RegExp(`^${total} files shared with you`));
-  assert.doesNotMatch(m, new RegExp(`shared/file-${total - 1}\\.txt`));
+  const sortedPaths = handles.map((h) => h.handlePath).sort();
+  assert.deepEqual(
+    m.split("\n").filter((line) => line.startsWith("- ")),
+    sortedPaths.slice(0, MAX_SHARED_FILES_LISTED).map((path) => `- ${path}`),
+  );
+  assert.equal(sharedManifest(handles.toReversed()), m);
 });
 
 test("sharedManifest at exactly the cap lists every file with no '…and N more' tail", () => {
@@ -626,4 +632,51 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   await sandbox.writeFileBytes(handle, "keep.bin", raw);
   const read = await sandbox.readFileBytes(handle, "keep.bin");
   assert.deepEqual(new Uint8Array(read!), raw);
+});
+
+test("materializeInbound keeps uploads registered when the scope has no default sandbox", async () => {
+  const { sandbox, files } = fakeSandbox();
+  const transfer = createMemoryBlobTransferStore();
+  const put = async () => ({ created: true });
+  const register = { seed: "s", ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+  const noComputer = () => Promise.reject(new NoDefaultSandboxError());
+  const got = await materializeInbound(
+    sandbox,
+    noComputer,
+    [await inFile(transfer, "a b.txt", "hi")],
+    transfer,
+    register,
+  );
+  assert.equal(files.size, 0);
+  assert.equal(got.metas.length, 1);
+  assert.ok(got.unstaged?.has("a b.txt"));
+  const manifest = inboundManifest(got.metas, "inbox", got.unstaged);
+  assert.match(manifest, new RegExp(`/v1/files/${got.metas[0]!.artifactId}/content`));
+  assert.doesNotMatch(manifest, /available in/);
+});
+
+test("materializeInbound drops an unstaged upload it could not register, and rethrows other provision failures", async () => {
+  const { sandbox } = fakeSandbox();
+  const transfer = createMemoryBlobTransferStore();
+  const put = async () => {
+    throw new Error("store down");
+  };
+  const register = { seed: "s", ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+  const got = await materializeInbound(
+    sandbox,
+    () => Promise.reject(new NoDefaultSandboxError()),
+    [await inFile(transfer, "a.txt", "hi")],
+    transfer,
+    register,
+  );
+  assert.deepEqual([got.metas.length, got.unavailable], [0, ["a.txt"]]);
+  await assert.rejects(
+    materializeInbound(
+      sandbox,
+      () => Promise.reject(new Error("provider down")),
+      [await inFile(transfer, "b.txt", "x")],
+      transfer,
+    ),
+    /provider down/,
+  );
 });

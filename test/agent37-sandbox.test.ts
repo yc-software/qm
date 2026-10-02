@@ -12,6 +12,7 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./support/fake-agent37.ts";
+import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 let fake: FakeAgent37;
@@ -323,4 +324,45 @@ test("instance listing retries 429 with Retry-After; exec is never retried and n
   fake.failNext(502, { headers: { "x-request-id": "req-exec" }, match: (c) => c.path.endsWith("/exec") });
   await assert.rejects(sandbox.run(h, "echo hi"), /agent37 exec .*: http 502 .*\[request id req-exec\]/);
   assert.equal(fake.calls.filter((c) => c.path.endsWith("/exec")).length, before + 1);
+});
+
+test("a workspace refusal reaches the user; an unrecognised failure stays retryable", async () => {
+  const message =
+    "This instance costs $0.0070 per hour, metered per minute; creating it requires at least one day of " +
+    "balance ($0.17). Add balance to your workspace (a new workspace can add a card to unlock $5 of free " +
+    "credit) and try again.";
+  fake.failNext(402, {
+    body: JSON.stringify({ error: { code: "insufficient_balance", message } }),
+    match: (c) => c.method === "POST" && c.path === "/v1/instances",
+  });
+  await assert.rejects(sandbox.provision(layers), (e: Error) => {
+    assert.ok(e instanceof NonRetryableTurnError);
+    assert.match(e.message, /add a card to unlock \$5 of free credit/);
+    return true;
+  });
+
+  fake.failNext(402, {
+    body: JSON.stringify({ error: { code: "provisioning_failed", message: "Failed to create the instance." } }),
+    match: (c) => c.method === "POST" && c.path === "/v1/instances",
+  });
+  await assert.rejects(sandbox.provision(layers), (e: Error) => {
+    assert.ok(!(e instanceof NonRetryableTurnError));
+    assert.match(e.message, /agent37 create .*: http 402 /);
+    return true;
+  });
+});
+
+test("a refusal on exec parks the turn instead of failing it generically", async () => {
+  const h = await sandbox.provision(layers);
+  fake.failNext(402, {
+    body: JSON.stringify({
+      error: { code: "insufficient_balance", message: "This instance is suspended for non-payment." },
+    }),
+    match: (c) => c.path.endsWith("/exec"),
+  });
+  await assert.rejects(sandbox.run(h, "echo hi"), (e: Error) => {
+    assert.ok(e instanceof NonRetryableTurnError);
+    assert.match(e.message, /suspended for non-payment/);
+    return true;
+  });
 });

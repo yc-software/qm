@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -79,7 +80,19 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     return provisionQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
-      if (active === 0 && !deps.isProvisioned(name)) await deps.recreateScratch(name);
+      if (active === 0 && !deps.isProvisioned(name)) {
+        try {
+          await deps.recreateScratch(name);
+        } catch (error) {
+          deps.forgetInstance?.(name);
+          await cleanupFailedProvision(
+            { teardown: () => deps.deleteInstance(name) },
+            { id: name, rootDir: workspaceDir, scratch: true, backend: label },
+          );
+          scratchKeyByName.delete(name);
+          throw error;
+        }
+      }
       activeScratch.set(name, active + 1);
       return { name, coldStart: active === 0 };
     });
@@ -115,6 +128,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
         deps.forgetInstance?.(handle.id);
         if (tdOpts?.destroy) await deps.deleteInstance(handle.id);
         else await deps.deleteInstance(handle.id).catch(swallowAs(`${label}-sandbox: scratch delete`, undefined));
+        scratchKeyByName.delete(handle.id);
       });
     }
     if (!tdOpts?.destroy) return;
@@ -192,7 +206,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
 
       return handle;
     } catch (err) {
-      await teardown(handle).catch(swallowAs(`${label}-sandbox: teardown after failed provision`, undefined));
+      await cleanupFailedProvision({ teardown }, handle);
       throw err;
     }
   }

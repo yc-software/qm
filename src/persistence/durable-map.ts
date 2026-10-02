@@ -3,6 +3,7 @@ import { pgTextSafe } from "../util/text.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
+  pickNested?: Partial<Record<Extract<keyof T, string>, readonly string[]>>;
   where?: { field: Extract<keyof T, string>; anyOfFold: readonly string[] };
   limit?: number;
   afterId?: string;
@@ -70,6 +71,11 @@ export function selectValues<T, K extends Extract<keyof T, string>>(
       if (text === null || !(folded.has(text.toLowerCase()) || !isAscii(text))) continue;
     }
     const projected = structuredClone(value) as Record<string, unknown>;
+    for (const [field, keys] of Object.entries(query.pickNested ?? {}) as Array<[string, readonly string[]]>) {
+      const nested = projected[field];
+      if (nested && typeof nested === "object" && !Array.isArray(nested))
+        projected[field] = Object.fromEntries(Object.entries(nested).filter(([key]) => keys.includes(key)));
+    }
     for (const key of query.omit ?? []) delete projected[key];
     out.push(projected as Omit<T, K>);
   }
@@ -252,16 +258,27 @@ export function createPostgresMap<T>(
     async select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>) {
       await ready();
       const params: unknown[] = [[...(query.omit ?? [])]];
-      let sql = `SELECT json - $1::text[] AS json FROM ${table}`;
+      let projection = "json";
+      for (const [field, keys] of Object.entries(query.pickNested ?? {})) {
+        params.push(field, keys);
+        const fieldParam = `$${params.length - 1}`;
+        const keysParam = `$${params.length}`;
+        const nested = `CASE WHEN jsonb_typeof(json->${fieldParam}) = 'object' THEN
+          COALESCE((SELECT jsonb_object_agg(key, value) FROM jsonb_each(json->${fieldParam})
+            WHERE key = ANY(${keysParam}::text[])), '{}'::jsonb) ELSE json->${fieldParam} END`;
+        projection = `(${projection} || CASE WHEN json ? ${fieldParam} THEN
+          jsonb_build_object(${fieldParam}::text, ${nested}) ELSE '{}'::jsonb END)`;
+      }
+      let sql = `SELECT ${projection} - $1::text[] AS json FROM ${table}`;
       if (query.where) {
         params.push(
           query.where.field,
           query.where.anyOfFold.map((v) => v.toLowerCase()),
         );
         sql += ` WHERE id IN (
-          SELECT id FROM ${table} WHERE lower(json->>$2) = ANY($3::text[])
+          SELECT id FROM ${table} WHERE lower(json->>$${params.length - 1}) = ANY($${params.length}::text[])
           UNION
-          SELECT id FROM ${table} WHERE json->>$2 ~ '[^\\x01-\\x7f]')`;
+          SELECT id FROM ${table} WHERE json->>$${params.length - 1} ~ '[^\\x01-\\x7f]')`;
       }
       if (query.afterId !== undefined) {
         params.push(query.afterId);

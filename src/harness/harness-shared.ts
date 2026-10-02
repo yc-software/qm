@@ -25,6 +25,7 @@ export interface HarnessToolPlumbing {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
+  sandboxCapabilityTtlMs?: number;
 }
 
 export type BridgedTool = {
@@ -115,6 +116,7 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,
     screenToolResult: turn.screenToolResult,
+    verifyGoal: turn.verifyGoal,
     toolApprovalGate: turn.toolApprovalGate,
   };
 }
@@ -131,6 +133,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
+    sandboxCapabilityTtlMs: opts.sandboxCapabilityTtlMs,
     ...(turn
       ? {
           readOnly: turn.readOnly,

@@ -1,3 +1,4 @@
+import { EXTERNAL_APP_SHARING_OFF, externalAppSharingAllowed } from "../../feature-flags.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -12,7 +13,9 @@ import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
-import { canonicalPayload, escapeHtml, sendJson, verifyOrReject } from "../http.ts";
+import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
+import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
+import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
@@ -20,6 +23,7 @@ import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
+import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
@@ -835,7 +839,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     return true;
   }
   const deployment = await app.getDeployment(slug).catch(() => null);
-  const isPublic = deployment?.public === true;
+  const externalAllowed = deployment
+    ? await externalAppSharingAllowed(deps.featureFlags, deployment.ownerScopeId)
+    : false;
+  const isPublic = deployment?.public === true && externalAllowed;
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
@@ -882,6 +889,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     if (session?.appOnly) {
       await deps.identity?.refresh();
       if (
+        externalAllowed &&
         deps.identity?.deactivationSource(sub) !== "manual" &&
         (await app.deploymentGrantees(deployment.id)).some(
           (grant) => grant.scope === scopeId("personal", sub.trim().toLowerCase()) && grant.permission === "read",
@@ -893,6 +901,8 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
   }
   if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
+    const annotationsEnabled =
+      !!sub && (await deps.featureFlags?.enabled("app_annotations", scopeId("personal", sub))) === true;
     if (signInAttempted) {
       cleanUrlRedirect();
       return true;
@@ -900,12 +910,21 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment)
         sendJson(res, 200, { version: deployment.appliedVersion ?? deployment.currentVersion });
-      else sendJson(res, 404, { error: "not_found" });
+      else if (annotationsEnabled && (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")) {
+        const kind = pathname.endsWith(".js") ? "js" : "css";
+        res.writeHead(200, {
+          "content-type": kind === "js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",
+          "cache-control": "no-cache",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(appAnnotationAsset(kind));
+      } else sendJson(res, 404, { error: "not_found" });
       return true;
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     res.end(
       appShellHtml({
+        annotationsEnabled,
         slug,
         name: deployment?.displayName ?? slug,
         portalUrl: loginUrl,
@@ -1531,8 +1550,10 @@ export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   if (deployment.ownerScopeId !== `personal:${capability.actorId}`)
     return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
+  const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId);
   return sendJson(res, 200, {
-    public: deployment.public === true,
+    public: deployment.public === true && externalSharing,
+    externalSharing,
     grantees: await app.deploymentGrantees(deployment.id),
   });
 }
@@ -1574,6 +1595,9 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       } else if (/only the owner/.test(msg)) {
         status = 403;
         error = "forbidden";
+      } else if (msg === EXTERNAL_APP_SHARING_OFF) {
+        status = 403;
+        error = "external_sharing_disabled";
       }
       return sendJson(res, status, { error, message: msg });
     }
@@ -1625,16 +1649,19 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       access,
       reach,
       ...(invite ? { invitation: invite.invitation } : {}),
-      public: deployment?.public === true,
+      public:
+        deployment?.public === true &&
+        (await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId)),
       grantees,
     });
   } catch (e) {
     const msg = errMessage(e);
     let status = 400;
     if (/no such app/.test(msg)) status = 404;
-    else if (/only the owner/.test(msg)) status = 403;
+    else if (/only the owner/.test(msg) || msg === EXTERNAL_APP_SHARING_OFF) status = 403;
     let error = "share_failed";
     if (status === 404) error = "not_found";
+    else if (msg === EXTERNAL_APP_SHARING_OFF) error = "external_sharing_disabled";
     else if (status === 403) error = "forbidden";
     return sendJson(res, status, { error, message: msg });
   }

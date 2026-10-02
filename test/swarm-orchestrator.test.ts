@@ -8,7 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createServer } from "../src/api/server.ts";
-import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { startSignalPoll } from "../src/runs/run-signal-store.ts";
 import { withTimeout } from "../src/util/async.ts";
@@ -47,7 +47,13 @@ mock.module("../src/harness/mock-harness.ts", {
     },
   },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const wiring = await import("../src/wiring.ts");
+const { orgId } = await import("../src/config.ts");
+const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
+  const built = wiring.buildApp(...args);
+  void built.featureFlags.setEnabled("swarms", `org:${orgId()}`, true, "test");
+  return built;
+};
 test.after(() => fake.cleanup());
 
 for (const kind of ["command", "security-screen"] as const) {
@@ -570,6 +576,19 @@ test("disabled swarms park queued notifications once without running the model o
     }
   } finally {
     exerciseTurn = undefined;
+    await built.runtime.stop();
+  }
+});
+
+test("swarms stay off for a person until the swarms flag names their personal scope", async () => {
+  const built = wiring.buildApp(testConfig());
+  try {
+    assert.ok(built.app.swarms);
+    assert.equal(await built.app.swarms.enabledFor("U1"), false);
+    await built.featureFlags.setEnabled("swarms", "personal:U1", true, "test");
+    assert.equal(await built.app.swarms.enabledFor("U1"), true);
+    assert.equal(await built.app.swarms.enabledFor("U2"), false);
+  } finally {
     await built.runtime.stop();
   }
 });

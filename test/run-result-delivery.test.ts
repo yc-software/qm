@@ -69,6 +69,25 @@ test("runResultDelivery carries the reply's attachments so recovery can replay t
   assert.equal(d?.text, "here's the file");
 });
 
+test("runResultDelivery retains the Slack policy used for private admission", () => {
+  const request = {
+    ...turn("hi", "DPRIVATE"),
+    slackSource: {
+      accountId: "partner",
+      teamId: "TPARTNER",
+      userId: "U1",
+      externalPolicyNamespace: "external-slack:TPARTNER:policy",
+    },
+  };
+  assert.deepEqual(runResultDelivery(run({ request }))?.destination, {
+    type: "slack",
+    target: "DPRIVATE",
+    slackAccountId: "partner",
+    slackTeamId: "TPARTNER",
+    slackPolicyNamespace: request.slackSource.externalPolicyNamespace,
+  });
+});
+
 test("runResultDelivery recovers an attachments-only reply (empty text, files still land)", () => {
   const atts = [{ name: "report.csv", mimetype: "text/csv", sizeBytes: 42, blobId: "blob-1" }];
   const d = runResultDelivery(run({ result: { status: "ok", attachments: atts } }));

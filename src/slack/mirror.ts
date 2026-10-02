@@ -1,3 +1,4 @@
+import { isOwnStatusCard } from "./message-gating.ts";
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionsBot } from "./lib.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
@@ -117,6 +118,7 @@ export function createMirror(deps: {
       kind?: "channel" | "dm" | "group";
     } = {},
   ): Promise<void> {
+    if (isOwnStatusCard(m, ids.botUserId, ids.ownBotId)) return;
     const container = m.channel;
     const ts = m.ts;
     if (!container || !ts) return;

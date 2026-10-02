@@ -280,3 +280,17 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
     `[${org}] (2026-05-31) deploys are frozen in December`,
   ]);
 });
+
+test("explicit capture uses the conversation origin rather than the notebook destination", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memory-origin-")));
+  const memory = createMemoryService(workspace);
+  const capture = memory.capture;
+  let context: Parameters<typeof capture>[4];
+  memory.capture = async (scope, facts, at, author, metadata) => {
+    context = metadata;
+    return capture(scope, facts, at, author, metadata);
+  };
+  const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", workspace, memory });
+  assert.equal(await tool.memoryRemember(["synthetic fact"]), 1);
+  assert.equal(context?.conversationScopeId, "group:origin");
+});

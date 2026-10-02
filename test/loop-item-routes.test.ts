@@ -21,6 +21,7 @@ function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
   return {
     res: {
+      getHeader() {},
       writeHead(status: number) {
         out.status = status;
         return this;
@@ -69,6 +70,7 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       shipOutput: async () => null,
       returnOutput: async () => null,
       sweepStale: async () => {},
+      previewTriage: async () => [],
       followUp: async (loop: Loop, item: LoopItem, message: string, actorId: string) => {
         w.followUps.push({ itemId: item.id, message, actorId });
         await w.loops.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
@@ -105,6 +107,7 @@ async function call(
     capability?: Record<string, unknown> | null;
     actor?: string;
     sessionForThread?: string;
+    flagEnabled?: (flag: string, scope: string) => Promise<boolean>;
   },
 ): Promise<{ status: number; body: unknown }> {
   const url = new URL(`http://x${over.path}`);
@@ -142,7 +145,7 @@ async function call(
     params: found.params,
     capability: over.capability === undefined ? CAP : over.capability,
     deps: {
-      featureFlags: { enabled: async () => true },
+      featureFlags: { enabled: over.flagEnabled ?? (async () => true) },
       loops: w.loops,
       ...(w.sourceRefresh ? { inboxSourceRefresh: w.sourceRefresh } : {}),
       sessions: {
@@ -1034,4 +1037,129 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     assert.equal(bad.status, 400, JSON.stringify(invalid));
     assert.equal(received, undefined);
   }
+});
+
+test("email classification is scoped to the owner's flagged personal inbox", async () => {
+  for (const surface of [undefined, "inbox", "inbox:gmail", "inbox:slack"]) {
+    for (const enabled of [false, true]) {
+      for (const source of ["gmail", "slack"]) {
+        const w = world();
+        const { loop } = await w.loops.store.create({
+          owner: "josh",
+          createdBy: "josh",
+          ownerScopeId: "personal:josh",
+          name: "Classification test",
+          playbook: "Read messages",
+          successCondition: "Messages reviewed",
+          surface,
+        });
+        const classified = enabled && source === "gmail" && (surface === "inbox" || surface === "inbox:gmail");
+        const flagEnabled = async (flag: string, scope: string) => {
+          assert.equal(flag, "inbox_loops");
+          assert.equal(scope, "personal:josh");
+          return enabled;
+        };
+        for (const automated of [true, false]) {
+          const receivedAt = automated ? 1234 : 2345;
+          const item =
+            source === "slack"
+              ? ITEM
+              : {
+                  ...ITEM,
+                  source: "gmail",
+                  sourceKey: "thread-1",
+                  gmail: { threadId: "thread-1" },
+                };
+          const response = await call(w, {
+            method: "POST",
+            path: `/v1/loops/${loop.id}/items`,
+            flagEnabled,
+            body: { items: [{ ...item, receivedAt, automated, probablyResolved: false }] },
+          });
+          assert.equal(response.status, 200);
+          const [stored] = await w.loops.items.byLoop(loop.id);
+          assert.equal(stored!.sourcePayload!.automated, classified ? automated : undefined);
+          assert.equal(stored!.sourcePayload!.probablyResolved, classified ? false : undefined);
+          assert.equal(stored!.status, "ready");
+          assert.equal(stored!.proposal!.data.body, ITEM.draft.body);
+          const [summary] = await w.loops.items.summaries([loop.id]);
+          assert.equal(summary!.inboxPreview!.automated, undefined);
+        }
+      }
+    }
+  }
+});
+
+test("a company loop cannot opt into personal inbox classification", async () => {
+  const w = world();
+  const { loop } = await w.loops.store.create({
+    owner: "josh",
+    createdBy: "josh",
+    ownerScopeId: "company:org",
+    name: "Company mail",
+    surface: "inbox:gmail",
+    playbook: "Read messages",
+    successCondition: "Messages reviewed",
+  });
+  const response = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    flagEnabled: async () => {
+      assert.fail("company loop must not read a personal flag");
+    },
+    body: {
+      items: [
+        {
+          ...ITEM,
+          source: "gmail",
+          sourceKey: "mail",
+          gmail: { threadId: "mail" },
+          automated: true,
+          probablyResolved: false,
+        },
+      ],
+    },
+  });
+  assert.equal(response.status, 200);
+  const [item] = await w.loops.items.byLoop(loop.id);
+  assert.equal(item!.sourcePayload!.automated, undefined);
+  assert.equal(item!.sourcePayload!.probablyResolved, undefined);
+});
+
+test("only a person overrides triage, and archiving a whole group resolves its members", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    body: { items: [{ ...ITEM, sourceKey: "C2:1.3", slack: { channelId: "C2", ts: "1.3" } }] },
+  });
+  await w.loops.store.update(loop.id, {
+    triage: { prioritize: { enabled: true }, consolidate: { enabled: true } },
+  });
+  const member = (await w.loops.items.byLoop(loop.id)).find((other) => other.id !== item.id)!;
+  await w.loops.items.setTriage(item.id, { groupId: item.id }, "agent");
+  await w.loops.items.setTriage(member.id, { groupId: item.id }, "agent");
+  const path = `/v1/loops/${loop.id}/items/${item.id}/action`;
+  const byAgent = await call(w, { method: "POST", path, body: { kind: "prioritize", args: { priority: "urgent" } } });
+  assert.equal(byAgent.status, 403);
+  const byPerson = await call(w, {
+    method: "POST",
+    path: `${path}?principalId=josh`,
+    body: { kind: "prioritize", args: { priority: "urgent" } },
+    capability: PORTAL,
+  });
+  assert.deepEqual((byPerson.body as { item: LedgerItemView }).item.triage?.pinned, ["priority"]);
+  await call(w, { method: "POST", path, body: { kind: "dismiss", args: { group: true } } });
+  assert.equal((await w.loops.items.get(member.id))?.status, "ready");
+  await call(w, { method: "POST", path, body: { kind: "reopen" } });
+  await call(w, {
+    method: "POST",
+    path: `${path}?principalId=josh`,
+    body: { kind: "dismiss", args: { group: true } },
+    capability: PORTAL,
+  });
+  const settled = (await w.loops.items.get(member.id))!;
+  assert.equal(settled.actionKind, "consolidated");
+  assert.deepEqual(settled.sourcePayload, member.sourcePayload);
 });

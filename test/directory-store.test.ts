@@ -383,3 +383,8 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     assert.deepEqual(await d.listChannelsFor("U-member"), []);
   });
 });
+
+it("live channel observations survive older snapshots but yield to later removal", async () => {
+  const { directoryObservationCases } = await import("./support/directory-observation-cases.ts");
+  await directoryObservationCases(createDirectoryStore());
+});

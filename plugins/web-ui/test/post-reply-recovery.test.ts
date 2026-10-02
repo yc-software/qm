@@ -242,6 +242,127 @@ test("post replies remain visible in new and continuing conversations", async (t
       await settle();
       return text;
     }
+    for (const timing of ["during streaming", "stream starts during fetch", "stream ends during fetch"]) {
+      await t.test(`earlier history loads when ${timing}`, async () => {
+        const older: SessionEntry = { ...user, seq: 0, payload: { text: "Older history checkpoint" } };
+        const current: SessionEntry = { ...user, seq: 10, payload: { text: "Current checkpoint" } };
+        await mount([current]);
+        conv!.setTranscriptWindow(10, 1);
+        const agent = conv!.state.agent!;
+        let releasePage!: (response: Response) => void;
+        intercept = (path) => {
+          if (path.includes("beforeSeq=10"))
+            return new Promise<Response>((resolve) => {
+              releasePage = resolve;
+            });
+          if (path.startsWith("/api/sessions/s1?"))
+            return Promise.resolve(
+              Response.json({ session: row, entries, earlierEntries: entries[0]?.seq === 0 ? 0 : 1 }),
+            );
+          return undefined;
+        };
+        const clickHistory = () => {
+          const button = host.querySelector<HTMLButtonElement>(".earlier-messages-btn")!;
+          assert.equal(button.disabled, false, "history remains available during a live turn");
+          button.click();
+        };
+        if (timing === "stream starts during fetch") {
+          clickHistory();
+          await until(() => Boolean(releasePage));
+        }
+        const before = FakeEventSource.instances.length;
+        const turn = agent.prompt("Live pagination QA");
+        await until(() => FakeEventSource.instances.length > before);
+        const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+        try {
+          await settle();
+          if (timing !== "stream starts during fetch") clickHistory();
+          await until(() => Boolean(releasePage));
+          const retained = [...agent.state.messages];
+          const streaming = agent.state.streamingMessage;
+          const liveReply: SessionEntry = {
+            seq: 12,
+            type: "assistant",
+            createdAt: Date.now(),
+            payload: { text: "Live reply survives pagination" },
+          };
+          entries = [current, liveReply];
+          if (timing === "stream ends during fetch") {
+            run.emit("done", {
+              status: "done",
+              result: { status: "ok", reply: "Live reply survives pagination", sessionId: row.id },
+              activity: [],
+            });
+            await turn;
+            await settle();
+          }
+          releasePage(Response.json({ session: row, entries: [older], earlierEntries: 0 }));
+          await until(() => !conv!.state.loadingEarlier);
+          assert.ok(host.textContent?.includes("Older history checkpoint"));
+          assert.ok(host.textContent?.includes("Current checkpoint"));
+          if (timing !== "stream ends during fetch") {
+            for (const message of retained) assert.ok(agent.state.messages.includes(message));
+            assert.equal(agent.state.streamingMessage, streaming);
+            assert.equal(agent.state.isStreaming, true);
+            entries = [older, current, liveReply];
+            run.emit("done", {
+              status: "done",
+              result: { status: "ok", reply: "Live reply survives pagination", sessionId: row.id },
+              activity: [],
+            });
+            await turn;
+            await settle();
+          }
+          assert.equal(agent.state.isStreaming, false);
+          assert.ok(host.textContent?.includes("Live reply survives pagination"));
+          assert.equal(
+            agent.state.messages.filter((message) => (message as { entrySeq?: number }).entrySeq === 0).length,
+            1,
+          );
+        } finally {
+          intercept = undefined;
+          run.emit("done", { status: "done", result: { status: "silent", sessionId: row.id }, activity: [] });
+          await turn;
+        }
+      });
+    }
+    await t.test(
+      "an old history request cannot alter a remounted conversation or clear its loading state",
+      async () => {
+        const current: SessionEntry = { ...user, seq: 10 };
+        await mount([current]);
+        conv!.setTranscriptWindow(10, 1);
+        const pending: Array<(response: Response) => void> = [];
+        intercept = (path) =>
+          path.includes("beforeSeq=10") ? new Promise<Response>((resolve) => pending.push(resolve)) : undefined;
+        host.querySelector<HTMLButtonElement>(".earlier-messages-btn")!.click();
+        await until(() => pending.length === 1);
+        conv!.mountContinuable(
+          row.threadRef,
+          row.id,
+          row.scopeId,
+          entriesToMessages([current], transcriptModel()),
+          null,
+          row as never,
+        );
+        await settle();
+        conv!.setTranscriptWindow(10, 1);
+        host.querySelector<HTMLButtonElement>(".earlier-messages-btn")!.click();
+        await until(() => pending.length === 2);
+        pending[0]!(
+          Response.json({ session: row, entries: [{ ...user, payload: { text: "Stale page" } }], earlierEntries: 0 }),
+        );
+        await settle();
+        assert.equal(conv!.state.loadingEarlier, true);
+        assert.equal(host.textContent?.includes("Stale page"), false);
+        pending[1]!(
+          Response.json({ session: row, entries: [{ ...user, payload: { text: "Current page" } }], earlierEntries: 0 }),
+        );
+        await until(() => !conv!.state.loadingEarlier);
+        assert.ok(host.textContent?.includes("Current page"));
+        intercept = undefined;
+      },
+    );
     await t.test("mounted core agent skips history conversion but sends the latest text and attachment", async () => {
       await mount(completed);
       const agent = conv!.state.agent!;

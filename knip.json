@@ -5,7 +5,6 @@
   "ignoreDependencies": ["opencode-ai"],
   "ignoreIssues": {
     "scripts/migrate-principals-to-email.d.mts": ["files"],
-    "plugins/chassis/src/source-auth-sign.ts": ["exports"],
     "src/slack/lib.ts": ["exports", "types"]
   },
   "workspaces": {
@@ -34,7 +33,8 @@
         "scripts/slack-user-token.ts",
         "superserve/templates/qm-agent.ts",
         "superserve/templates/verify-qm-agent.ts",
-        "docs/qa/resource-search-demo.mjs"
+        "docs/qa/resource-search-demo.mjs",
+        "src/deploy/vendor/devbar.js"
       ]
     },
     "desktop": {
@@ -50,7 +50,8 @@
         "src/lazy-katex.ts",
         "src/lazy-hljs.ts",
         "src/hljs-lang-stub.ts",
-        "test/**/*.test.ts"
+        "test/**/*.test.ts",
+        "src/app-devbar.ts"
       ],
       "ignoreDependencies": [
         "katex-real",

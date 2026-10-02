@@ -22,6 +22,7 @@ test("the dropdown keeps the accessible name, focus key and disabled state its c
   for (const attr of [
     /id=\$\{props\.id \?\? nothing\}/,
     /aria-label=\$\{props\.ariaLabel \?\? nothing\}/,
+    /aria-description=\$\{props\.ariaDescription \?\? nothing\}/,
     /aria-describedby=\$\{props\.describedBy \?\? nothing\}/,
     /data-focus-key=\$\{props\.focusKey \?\? nothing\}/,
     /\?disabled=\$\{props\.disabled \?\? false\}/,

@@ -191,7 +191,7 @@ test("owner credentials cannot be requested on scoped or scratch workspaces", as
   const selected = { ...credential(events, "owner"), scope: "owner" as const };
   const { ctx, runs } = context(events, [selected], { provisionOwnerAuth: async () => handle });
   await assert.rejects(ctx.execute("true", { credentials: ["owner"] }), /requires scope:owner/);
-  await assert.rejects(ctx.execute("true", { credentials: ["owner"], scratch: true }), /only on the scoped/);
+  await assert.rejects(ctx.execute("true", { credentials: ["owner"], scratch: true }), /requires scope:owner/);
   assert.deepEqual(events, []);
   await ctx.execute("true", { credentials: ["owner"], ownerAuth: true });
   assert.equal(runs.length, 1);

@@ -645,10 +645,10 @@ test("AWS routes security screen proxy configuration and its token only to core"
   const screened: QmConfig = {
     ...config,
     securityScreen: {
-      backend: "proxy",
+      mode: "enforce",
+      classifier: "proxy",
       provider: "example-screen",
       endpoint: "https://screen.example.test/classify",
-      rollout: "enforce",
     },
     secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "EXAMPLE_SCREEN_TOKEN" } },
   };
@@ -657,10 +657,9 @@ test("AWS routes security screen proxy configuration and its token only to core"
       Object.entries(serviceEnvironment(screened, "core")).filter(([name]) => name.startsWith("SECURITY_SCREEN_")),
     ),
     {
-      SECURITY_SCREEN_BACKEND: "proxy",
+      SECURITY_SCREEN_CLASSIFIER: "proxy",
       SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
       SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-      SECURITY_SCREEN_PROXY_ROLLOUT: "enforce",
     },
   );
   assert.deepEqual(
@@ -1069,6 +1068,7 @@ test("AWS deploy can prepare an exact candidate on the inactive production stack
         core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`,
       },
       imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      architectures: { core: "amd64" },
     }),
   );
   const single = oneServiceConfig();
@@ -1992,7 +1992,7 @@ else console.log("");`,
 test("AWS task definitions are digest-pinned and route only computed secrets", () => {
   const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
   const task = renderTaskDefinition(config, "core", image);
-  assert.equal(task.runtimePlatform.cpuArchitecture, "ARM64");
+  assert.equal(task.runtimePlatform.cpuArchitecture, "X86_64");
   assert.equal(task.executionRoleArn, "arn:aws:iam::123456789012:role/acme-qm-task-execution");
   assert.equal(task.taskRoleArn, "arn:aws:iam::123456789012:role/acme-qm-core-task");
   const container = task.containerDefinitions[0]!;
@@ -2025,6 +2025,8 @@ test("AWS task architecture allows per-workload overrides", () => {
   };
   const coreImage = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
   assert.equal(renderTaskDefinition(amd64Core, "core", coreImage).runtimePlatform.cpuArchitecture, "X86_64");
+  amd64Core.aws!.services.core!.architecture = "arm64";
+  assert.equal(renderTaskDefinition(amd64Core, "core", coreImage).runtimePlatform.cpuArchitecture, "ARM64");
 });
 
 test("AWS task parity ignores only ECS response defaults and catches live-only fields", () => {
@@ -2586,6 +2588,45 @@ test("AWS secret upload rejects active services when no deployment manifest exis
   }
 });
 
+test("AWS secret rotation rejects architecture changes before uploading or restarting", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secret-architecture-"));
+  const secretsConfig: QmConfig = { ...structuredClone(oneServiceConfig()), env: {} };
+  const operator = computedSecrets(secretsConfig).filter(
+    (secret) => secret.managedBy === "operator" && secret.required,
+  );
+  writeFileSync(join(dir, ".env"), operator.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`).join("\n"));
+  const fake = statefulAws(dir, secretsConfig);
+  const state = JSON.parse(readFileSync(fake.state, "utf8"));
+  const taskArn = state.services["acme-core"].taskDefinition;
+  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
+  state.definitions[taskArn] = renderTaskDefinition(secretsConfig, "core", image);
+  state.definitions[taskArn].runtimePlatform.cpuArchitecture = "ARM64";
+  state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks: { core: taskArn } }], "current");
+  writeFileSync(fake.state, JSON.stringify(state));
+  try {
+    for (const architecture of [undefined, "amd64"] as const) {
+      secretsConfig.aws!.services.core!.architecture = architecture;
+      await assert.rejects(
+        () => awsSecretsPush(secretsConfig, dir),
+        /core uses ARM64 but its configuration selects X86_64/,
+      );
+      assert.doesNotMatch(
+        readFileSync(fake.log, "utf8"),
+        /secretsmanager put-secret-value|ecs (?:register-task-definition|update-service)/,
+      );
+    }
+    secretsConfig.aws!.services.core!.architecture = "arm64";
+    await awsSecretsPush(secretsConfig, dir);
+    const rotated = JSON.parse(readFileSync(fake.state, "utf8"));
+    const task = rotated.definitions[rotated.services["acme-core"].taskDefinition];
+    assert.equal(task.runtimePlatform.cpuArchitecture, "ARM64");
+    assert.equal(task.containerDefinitions[0].image, image);
+  } finally {
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS secret rotation holds the deploy lease across the complete write set", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-secret-lease-"));
   const secretsConfig: QmConfig = { ...oneServiceConfig(), env: {} };
@@ -2790,6 +2831,7 @@ test("AWS migration runs the exact candidate core image inside the service VPC",
       label: "candidate-deadbeef",
       images: { core: image },
       imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      architectures: { core: "amd64" },
     }),
   );
   const single = oneServiceConfig();
@@ -2850,6 +2892,7 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
     );
     assert.equal(candidate.imageProvenance.core.kind, "source-build");
     assert.equal(candidate.imageProvenance.core.source, "checkout");
+    assert.deepEqual(candidate.architectures, { core: "amd64" });
     assert.match(readFileSync(dockerLog, "utf8"), /buildx build .*candidate-deadbeef/);
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
 
@@ -3067,6 +3110,7 @@ test("AWS candidate deploy fails closed on account, repository, or missing-workl
       core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`,
     },
     imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+    architectures: { core: "amd64" },
   };
   const fake = fakeAws(dir, "");
   try {
@@ -3086,11 +3130,70 @@ test("AWS candidate deploy fails closed on account, repository, or missing-workl
       () => awsUp(oneServiceConfig(), dir, { dryRun: true, candidate: candidatePath }),
       /invalid core image/,
     );
-    writeFileSync(candidatePath, JSON.stringify({ ...base, images: {}, imageProvenance: {} }));
+    writeFileSync(candidatePath, JSON.stringify({ ...base, images: {}, imageProvenance: {}, architectures: {} }));
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { dryRun: true, candidate: candidatePath }),
       /does not contain core/,
     );
+  } finally {
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS candidate consumption rejects unknown or mismatched source image architectures before AWS access", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-architecture-"));
+  const candidatePath = join(dir, "candidate.json");
+  const single = structuredClone(oneServiceConfig());
+  const candidate = {
+    contract: 1,
+    accountId: "123456789012",
+    region: "us-west-2",
+    label: "legacy-arm64",
+    images: { core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}` },
+    imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+  };
+  const fake = statefulAws(dir, single);
+  try {
+    for (const architectures of [
+      undefined,
+      null,
+      [],
+      "amd64",
+      {},
+      { core: "arm64" },
+      { core: "invalid" },
+      { core: "amd64", unknown: "amd64" },
+    ]) {
+      writeFileSync(candidatePath, JSON.stringify({ ...candidate, architectures }));
+      await assert.rejects(
+        () => awsUp(single, dir, { yes: true, candidate: candidatePath }),
+        /architecture|invalid contract/,
+      );
+      await assert.rejects(() => awsMigrateCandidate(single, dir, candidatePath), /architecture|invalid contract/);
+      assert.equal(readFileSync(fake.log, "utf8"), "");
+    }
+    single.aws!.services.core!.architecture = "arm64";
+    writeFileSync(candidatePath, JSON.stringify(candidate));
+    await awsMigrateCandidate(single, dir, candidatePath);
+    const state = JSON.parse(readFileSync(fake.state, "utf8"));
+    const registered = Object.values(state.definitions) as Array<{
+      runtimePlatform?: { cpuArchitecture?: string };
+      containerDefinitions: Array<{ image: string }>;
+    }>;
+    assert.equal(registered.at(-1)?.runtimePlatform?.cpuArchitecture, "ARM64");
+    assert.equal(registered.at(-1)?.containerDefinitions[0]?.image, candidate.images.core);
+    delete single.aws!.services.core!.architecture;
+    writeFileSync(
+      candidatePath,
+      JSON.stringify({ ...candidate, imageProvenance: { core: { kind: "configured", source: manifestRef("core") } } }),
+    );
+    await awsMigrateCandidate(single, dir, candidatePath);
+    const configured = JSON.parse(readFileSync(fake.state, "utf8"));
+    const configuredTasks = Object.values(configured.definitions) as Array<{
+      runtimePlatform?: { cpuArchitecture?: string };
+    }>;
+    assert.equal(configuredTasks.at(-1)?.runtimePlatform?.cpuArchitecture, "X86_64");
   } finally {
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
@@ -3111,6 +3214,7 @@ test("AWS migration failure deregisters the candidate task and releases the depl
         core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`,
       },
       imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      architectures: { core: "amd64" },
     }),
   );
   const fake = statefulAws(dir, oneServiceConfig(), {}, { migrationExitCode: 1 });
@@ -3139,6 +3243,7 @@ test("AWS candidate deploy migration failure preserves the runtime and releases 
         core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`,
       },
       imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      architectures: { core: "amd64" },
     }),
   );
   const fake = statefulAws(dir, oneServiceConfig(), {}, { migrationExitCode: 1 });
@@ -3909,6 +4014,17 @@ test("AWS live check uses the package-pinned source image without consulting mut
   process.env.PATH = `${dir}:${priorPath}`;
   try {
     await assert.doesNotReject(() => awsCheckLive(single, { report: false }));
+    await assert.rejects(
+      () =>
+        awsCheckLive(
+          {
+            ...single,
+            aws: { ...single.aws!, services: { core: { ...single.aws!.services.core!, architecture: "arm64" } } },
+          },
+          { report: false },
+        ),
+      /task-definition drift.*runtimePlatform.cpuArchitecture/,
+    );
     process.env.AWS_FAKE_SECRET_VALUE = "short";
     await assert.rejects(() => awsCheckLive(single, { report: false }), /secret CORE_SIGNING_SECRET/);
     if (priorSecretValue === undefined) delete process.env.AWS_FAKE_SECRET_VALUE;
@@ -3918,7 +4034,7 @@ test("AWS live check uses the package-pinned source image without consulting mut
     const overridden: QmConfig = {
       ...single,
       imageOverrides: { core: `ghcr.io/acme/core@sha256:${"b".repeat(64)}` },
-      aws: { ...single.aws!, services: { core: { ...single.aws!.services.core!, architecture: "arm64" } } },
+      aws: { ...single.aws!, services: { core: { ...single.aws!.services.core!, architecture: "amd64" } } },
     };
     await assert.rejects(
       () => awsCheckLive(overridden, { report: false }),
@@ -5392,6 +5508,7 @@ test("shared deployment state isolates company manifests and leases without muta
         core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`,
       },
       imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      architectures: { core: "amd64" },
     }),
   );
   const single = oneServiceConfig();
@@ -5558,6 +5675,7 @@ for (const mode of ["success", "migration-failure", "update-failure", "write-fai
         imageProvenance: Object.fromEntries(
           single.services.map((name) => [name, { kind: "source-build", source: "checkout" }]),
         ),
+        architectures: Object.fromEntries(single.services.map((name) => [name, "amd64"])),
       }),
     );
     const fake = statefulAws(

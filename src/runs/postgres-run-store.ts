@@ -135,7 +135,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `DO $$
       BEGIN
         IF to_regclass('tool_calls') IS NOT NULL THEN
-          ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;
+          IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                         WHERE attrelid = 'tool_calls'::regclass AND attname = 'attempt' AND NOT attisdropped) THEN
+            ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;
+          END IF;
           IF EXISTS (
             SELECT 1 FROM pg_constraint c
             WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
@@ -363,12 +366,14 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
       const { rowCount } =
         leaseToken === null
-          ? await q("UPDATE runs SET delivery_state=$1 WHERE id=$2", [JSON.stringify(state), runId])
-          : await q("UPDATE runs SET delivery_state=$1 WHERE id=$2 AND lease_token=$3", [
-              JSON.stringify(state),
-              runId,
-              leaseToken,
-            ]);
+          ? await q(
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2",
+              [JSON.stringify(state), runId],
+            )
+          : await q(
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3",
+              [JSON.stringify(state), runId, leaseToken],
+            );
       return rowCount > 0;
     },
 

@@ -51,10 +51,10 @@ test("the fly target routes security screen proxy configuration only to core", (
   const screened: QmConfig = {
     ...config,
     securityScreen: {
-      backend: "proxy",
+      mode: "observe",
+      classifier: "proxy",
       provider: "example-screen",
       endpoint: "https://screen.example.test/classify",
-      rollout: "shadow",
     },
   };
   assert.deepEqual(
@@ -64,10 +64,9 @@ test("the fly target routes security screen proxy configuration only to core", (
       ),
     ),
     {
-      SECURITY_SCREEN_BACKEND: "proxy",
+      SECURITY_SCREEN_CLASSIFIER: "proxy",
       SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
       SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-      SECURITY_SCREEN_PROXY_ROLLOUT: "shadow",
     },
   );
   assert.deepEqual(

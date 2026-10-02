@@ -27,6 +27,24 @@ Compression is off by default for a staged protocol rollout:
 
 To disable issuance, set the switch to `0`. Both encodings remain readable regardless
 of that switch. Do not roll verifiers back to a version predating compression until
-all compressed tokens have expired or been revoked. Sandbox tokens normally live
-48 hours; other capability audiences may have longer lifetimes, so inventory those
+all compressed tokens have expired or been revoked. Sandbox tokens live 48 hours by
+default (see below); other capability audiences may have longer lifetimes, so inventory those
 before rolling back. Leaving the updated verifiers in place is the safe rollback.
+
+## Sandbox token lifetime
+
+Turn tokens handed to sandboxes (agent API, credential broker, egress proxy, OAuth
+consent) expire 48 hours after the turn starts, which bounds how long background jobs
+launched by that turn keep their access. Set `SANDBOX_CAPABILITY_TTL_HOURS` on every
+process that issues capabilities to change it: a positive number of hours, or `0` /
+`none` for no expiry (`exp: 0`). The value is read
+once at startup; an invalid value fails startup. Tokens already issued keep the
+lifetime they were minted with. Revocation and scope checks still apply to
+non-expiring tokens. This does not remove run/lease, background-job, provider, or
+credential lifetime limits. Non-expiring bearer tokens increase exposure if leaked;
+keep the default unless unattended work requires longer access.
+
+Deploy the updated verifier to every core and worker, and any separately deployed
+egress proxy, before enabling no expiry. Older verifiers reject `exp: 0`.
+Changing the setting affects newly issued tokens only; rotate the signing secret
+if existing non-expiring tokens must be invalidated.

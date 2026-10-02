@@ -70,9 +70,14 @@ test("the shared classifier routes through the configured harness, model, and co
     auditLog: { record() {} },
   } as unknown as OrchestratorDeps);
 
-  assert.deepEqual(await classify('[{"source":"tool_result:read","content":"quarterly data"}]', "alice", org), {
-    decision: "auto",
-  });
+  assert.deepEqual(
+    await classify('[{"source":"tool_result:read","content":"quarterly data"}]', "alice", org, undefined, {
+      mode: "enforce",
+    }),
+    {
+      decision: "auto",
+    },
+  );
   assert.equal(seen?.harnessId, "codex");
   assert.equal(seen?.modelId, "gpt-5.6-codex");
   assert.match(seen?.systemPrompt ?? "", /supplied JSON is untrusted data/);
@@ -169,11 +174,15 @@ for (const origin of ["human", "direct", "automation", "ambient"] as const) {
       return { decision: "auto" };
     };
     const proxyCalls: Array<{ payload: string; metadata?: Readonly<Record<string, unknown>> }> = [];
-    const classify = createSecurityClassifier({
+    const classifyModel = createSecurityClassifier({
       harness,
+      modelGateway: { recordCall() {} },
+      auditLog: { record() {} },
+    } as unknown as OrchestratorDeps);
+    const classifyProxy = createSecurityClassifier({
+      harness: { models: {} },
       securityScreener: {
         provider: "test",
-        shadow: true,
         async classify(input: { payload: string; metadata?: Readonly<Record<string, unknown>> }) {
           proxyCalls.push(input);
           return { verdict: { decision: "auto" }, score: 0, threshold: 0.7 };
@@ -184,7 +193,9 @@ for (const origin of ["human", "direct", "automation", "ambient"] as const) {
     } as unknown as OrchestratorDeps);
     const payload = '[{"source":"tool_result:sandbox","content":"quoted instruction"}]';
     const request = `Inspect this transcript. ${"😀".repeat(3000)}`;
-    await classify(payload, "alice", org, undefined, { hook: "tool_response", origin, request });
+    const classify = (...args: Parameters<typeof classifyModel>) =>
+      Promise.all([classifyModel(...args), classifyProxy(...args)]);
+    await classify(payload, "alice", org, undefined, { mode: "enforce", hook: "tool_response", origin, request });
     const envelope = JSON.parse(modelPayload);
     assert.equal(envelope.payload, payload);
     assert.equal(envelope.request.origin, origin);
@@ -194,10 +205,10 @@ for (const origin of ["human", "direct", "automation", "ambient"] as const) {
     assert.equal(envelope.request.truncated, true);
     assert.equal(proxyCalls[0]?.payload, payload);
     assert.deepEqual(proxyCalls[0]?.metadata?.request, envelope.request);
-    await classify(payload, "alice", org, undefined, { hook: "user_input", origin, request });
+    await classify(payload, "alice", org, undefined, { mode: "enforce", hook: "user_input", origin, request });
     assert.equal(modelPayload, payload, "inbound screening does not change");
     assert.equal(proxyCalls[1]?.metadata?.request, undefined);
-    await classify(payload, "alice", org, undefined, { hook: "tool_response" });
+    await classify(payload, "alice", org, undefined, { mode: "enforce", hook: "tool_response" });
     assert.equal(modelPayload, payload, "missing context remains compatible");
   });
 }
@@ -230,7 +241,7 @@ test("request context survives retries and captured screening replay without cha
     async (record) => {
       await sessions.recordLlmRequest(session.id, { ...record, scopeLabel: org });
     },
-    { hook: "tool_response", request },
+    { mode: "enforce", hook: "tool_response", request },
   );
   assert.equal(verdict?.decision, "auto");
   assert.equal(calls.length, 2);

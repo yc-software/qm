@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, MEMORY_FILE, ccCaptureToPersonal } from "../src/memory/memory-service.ts";
+import { createMemoryService, readMemory, ccCaptureToPersonal } from "../src/memory/memory-service.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createConsolidatingMemory } from "../src/memory/strategies/consolidation.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
@@ -30,8 +30,8 @@ test("channel turn cc's the actor's captured facts into their personal scope, an
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR });
 
-  const channelBody = (await workspace.read(CHANNEL, MEMORY_FILE)) ?? "";
-  const personalBody = (await workspace.read(PERSONAL, MEMORY_FILE)) ?? "";
+  const channelBody = (await readMemory(workspace, CHANNEL)) ?? "";
+  const personalBody = (await readMemory(workspace, PERSONAL)) ?? "";
   assert.match(channelBody, /task list is ship the launch/, "channel (origin) scope still receives the fact");
   assert.match(personalBody, /task list is ship the launch/, "fact was cc'd into the actor's personal scope");
 });
@@ -41,8 +41,8 @@ test("group turn also cc's into the speaker's personal scope", async () => {
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: GROUP, input: INPUT, reply: REPLY, actorId: ACTOR });
 
-  assert.match((await workspace.read(GROUP, MEMORY_FILE)) ?? "", /task list is ship the launch/);
-  assert.match((await workspace.read(PERSONAL, MEMORY_FILE)) ?? "", /task list is ship the launch/);
+  assert.match((await readMemory(workspace, GROUP)) ?? "", /task list is ship the launch/);
+  assert.match((await readMemory(workspace, PERSONAL)) ?? "", /task list is ship the launch/);
 });
 
 test("DM/personal turn does NOT cc — only the one drawer is written", async () => {
@@ -50,7 +50,7 @@ test("DM/personal turn does NOT cc — only the one drawer is written", async ()
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: DM, input: INPUT, reply: REPLY, actorId: ACTOR });
 
-  const body = (await workspace.read(DM, MEMORY_FILE)) ?? "";
+  const body = (await readMemory(workspace, DM)) ?? "";
   const occurrences = body.split("task list is ship the launch").length - 1;
   assert.equal(occurrences, 1, "the fact appears exactly once — no duplicate cc write");
 });
@@ -60,8 +60,8 @@ test("a channel turn with no actorId does not cc", async () => {
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY });
 
-  assert.match((await workspace.read(CHANNEL, MEMORY_FILE)) ?? "", /task list is ship the launch/);
-  assert.equal(await workspace.read(PERSONAL, MEMORY_FILE), null, "no personal-scope write without an actor");
+  assert.match((await readMemory(workspace, CHANNEL)) ?? "", /task list is ship the launch/);
+  assert.equal(await readMemory(workspace, PERSONAL), null, "no personal-scope write without an actor");
 });
 
 test("cc gates on the conversation scope, not the (environment-redirected) write scope", async () => {
@@ -77,12 +77,12 @@ test("cc gates on the conversation scope, not the (environment-redirected) write
   });
 
   assert.match(
-    (await workspace.read(REDIRECTED_WRITE, MEMORY_FILE)) ?? "",
+    (await readMemory(workspace, REDIRECTED_WRITE)) ?? "",
     /task list is ship the launch/,
     "facts captured into the redirected write scope",
   );
   assert.match(
-    (await workspace.read(PERSONAL, MEMORY_FILE)) ?? "",
+    (await readMemory(workspace, PERSONAL)) ?? "",
     /task list is ship the launch/,
     "cc still fired because the conversation is a channel",
   );
@@ -102,8 +102,8 @@ test("the cc'd copy is tagged with where it was said; the channel's own copy sta
     conversationLabel: "#eng-dev",
   });
 
-  const channelBody = (await workspace.read(CHANNEL, MEMORY_FILE)) ?? "";
-  const personalBody = (await workspace.read(PERSONAL, MEMORY_FILE)) ?? "";
+  const channelBody = (await readMemory(workspace, CHANNEL)) ?? "";
+  const personalBody = (await readMemory(workspace, PERSONAL)) ?? "";
   assert.match(channelBody, /Prefers all lowercase replies$/m, "channel drawer keeps the fact untagged");
   assert.match(
     personalBody,
@@ -116,6 +116,7 @@ test("cc falls back to a generic source label when no conversation label is give
   const { memory } = freshMemory();
   const calls: string[] = [];
   const recorder = {
+    readHead: async () => ({ content: "", revision: "", records: { version: 1 as const, records: [] } }),
     recall: async () => "",
     capture: async (_s: string, facts: string[]) => (calls.push(...facts), facts.length),
     query: async () => [],
@@ -130,6 +131,7 @@ test("cc falls back to a generic source label when no conversation label is give
 test("cc sanitizes a crafted channel label so it can't inject the tag grammar or extra lines", async () => {
   const calls: string[] = [];
   const recorder = {
+    readHead: async () => ({ content: "", revision: "", records: { version: 1 as const, records: [] } }),
     recall: async () => "",
     capture: async (_s: string, facts: string[]) => (calls.push(...facts), facts.length),
     query: async () => [],
@@ -150,6 +152,7 @@ test("cc sanitizes a crafted channel label so it can't inject the tag grammar or
 test("ccCaptureToPersonal records source-channel provenance via the author param", async () => {
   const calls: Array<{ scopeId: string; facts: string[]; author?: string }> = [];
   const recorder = {
+    readHead: async () => ({ content: "", revision: "", records: { version: 1 as const, records: [] } }),
     recall: async () => "",
     capture: async (sId: string, facts: string[], _at: number, author?: string) => {
       calls.push({ scopeId: sId, facts, ...(author !== undefined ? { author } : {}) });
@@ -204,9 +207,9 @@ test("burst debounce: turns within the quiet window flush as one extraction afte
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
-  assert.equal((await workspace.read(DM, MEMORY_FILE)) ?? "", "", "nothing captured before the quiet window elapses");
+  assert.equal((await readMemory(workspace, DM)) ?? "", "", "nothing captured before the quiet window elapses");
   await new Promise((r) => setTimeout(r, 120));
-  const body = (await workspace.read(DM, MEMORY_FILE)) ?? "";
+  const body = (await readMemory(workspace, DM)) ?? "";
   assert.match(body, /fact one is alpha/);
   assert.match(body, /fact two is beta/);
 });
@@ -222,7 +225,7 @@ test("burst debounce: a full burst flushes immediately at captureMaxTurns", asyn
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
-  const body = (await workspace.read(DM, MEMORY_FILE)) ?? "";
+  const body = (await readMemory(workspace, DM)) ?? "";
   assert.match(body, /fact one is alpha/, "cap reached — no waiting on the quiet window");
   assert.match(body, /fact two is beta/);
 });
@@ -244,9 +247,9 @@ test("burst debounce: different speakers in one channel keep separate bursts (cc
   });
   await new Promise((r) => setTimeout(r, 120));
 
-  assert.match((await workspace.read(PERSONAL, MEMORY_FILE)) ?? "", /ship the launch/);
-  assert.doesNotMatch((await workspace.read(PERSONAL, MEMORY_FILE)) ?? "", /write the memo/);
-  assert.match((await workspace.read(scopeId("personal", "U2"), MEMORY_FILE)) ?? "", /write the memo/);
+  assert.match((await readMemory(workspace, PERSONAL)) ?? "", /ship the launch/);
+  assert.doesNotMatch((await readMemory(workspace, PERSONAL)) ?? "", /write the memo/);
+  assert.match((await readMemory(workspace, scopeId("personal", "U2"))) ?? "", /write the memo/);
 });
 
 test("every capture path runs the after-N consolidation trigger on the scope it wrote to (cc target included)", async () => {
@@ -270,9 +273,9 @@ test("a channel turn by a system actor captures nothing anywhere", async () => {
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: "system:ambient:acme" });
 
-  assert.equal(await workspace.read(CHANNEL, MEMORY_FILE), null, "origin scope receives nothing");
+  assert.equal(await readMemory(workspace, CHANNEL), null, "origin scope receives nothing");
   assert.equal(
-    await workspace.read(scopeId("personal", "system:ambient:acme"), MEMORY_FILE),
+    await readMemory(workspace, scopeId("personal", "system:ambient:acme")),
     null,
     "no personal drawer for the platform actor",
   );
@@ -283,6 +286,6 @@ test("an autonomous (triggered) channel turn captures nothing, even for a human 
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR, autonomous: true });
 
-  assert.equal(await workspace.read(CHANNEL, MEMORY_FILE), null, "origin scope receives nothing on a triggered wake");
-  assert.equal(await workspace.read(PERSONAL, MEMORY_FILE), null, "no cc into the owner's drawer on a triggered wake");
+  assert.equal(await readMemory(workspace, CHANNEL), null, "origin scope receives nothing on a triggered wake");
+  assert.equal(await readMemory(workspace, PERSONAL), null, "no cc into the owner's drawer on a triggered wake");
 });

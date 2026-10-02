@@ -72,3 +72,45 @@ test("computerStatus never provisions when the backend reports no machine", asyn
   assert.deepEqual(await ctx.computerStatus(), none);
   assert.equal(provisions, 0, "a status check must not cold-start a box");
 });
+
+test("a probe that hangs on the real exec path reports NOT answering within the probe bound", async () => {
+  const ctx = ctxFor(
+    {
+      computerStatus: async () => healthy,
+      run: () => new Promise(() => {}),
+    },
+    async () => handle,
+  );
+  const started = Date.now();
+  const status = await ctx.computerStatus();
+  assert.equal(status.guestResponsive, false);
+  assert.match(status.probeError ?? "", /timed out/);
+  assert.ok(Date.now() - started < 30_000);
+});
+
+test("status for an explicit sandbox probes its exec path instead of trusting the provider", async () => {
+  const scope = scopeId("channel", "C1");
+  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
+  const access = { resource: { id: "sb1", ownerScopeId: scope }, crossScope: false } as never;
+  const ctx = createToolContext({
+    sandbox: {
+      profile: { backend: "sprites" },
+      run: () => new Promise(() => {}),
+    } as unknown as Sandbox,
+    provision: async () => handle,
+    provisionResource: async () => handle,
+    accessSandboxResource: async () => access,
+    sandboxResources: { status: async () => healthy } as never,
+    layers,
+    commandPolicy: () => ({ mode: "denylist", rules: [] }),
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    workspace: {} as never,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: "U1",
+  });
+  const status = await ctx.computerStatus("sb1");
+  assert.equal(status.guestResponsive, false);
+  assert.match(status.probeError ?? "", /timed out/);
+});

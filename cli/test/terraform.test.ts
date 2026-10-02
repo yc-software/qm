@@ -433,6 +433,11 @@ test("MicroVM build and runtime roles can write only their stack-owned log group
   }
 });
 
+test("terraform defaults built-in workloads to the published image architecture", () => {
+  const rendered = terraformVars(config, "", declared);
+  assert.match(rendered, /"core": \{[\s\S]*?"architecture": "amd64"/);
+});
+
 test("terraform propagates workload architecture to bootstrap task definitions", () => {
   const rendered = terraformVars(
     {

@@ -139,7 +139,7 @@ function fmtDate(ms?: number): string {
 }
 
 function accessModeLabel(mode?: "once" | "standing"): string {
-  return mode === "standing" ? "standing" : "one-time";
+  return mode === "once" ? "one-time" : "standing";
 }
 
 function credentialCard(c: KeychainCredential): TemplateResult {

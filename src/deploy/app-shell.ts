@@ -1,10 +1,18 @@
+import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./app-annotate.ts";
+
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
 
 function escAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-export function appShellHtml(opts: { slug: string; name?: string; portalUrl: string; path: string }): string {
+export function appShellHtml(opts: {
+  slug: string;
+  name?: string;
+  portalUrl: string;
+  path: string;
+  annotationsEnabled?: boolean;
+}): string {
   const slug = escAttr(opts.slug);
   const path = escAttr(opts.path);
   const name = escAttr(opts.name ?? opts.slug);
@@ -68,7 +76,7 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
     .drag { display: none; }
   }
   body.bare header, body.bare aside { display: none; }
-</style>
+${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
 </head>
 <body>
 <header>
@@ -76,11 +84,13 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
   <span class="ver" id="ver"></span>
   <span class="grow"></span>
   <button type="button" class="upd" id="upd">Updated &#8635; Reload</button>
+  ${opts.annotationsEnabled ? ANNOTATE_BUTTON : ""}
   <button type="button" class="chat-btn" id="chat-toggle" aria-expanded="false" aria-controls="panel"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H8l-5 3V4a1 1 0 0 1 1-1Z"/></svg><span>Chat</span></button>
   <button type="button" class="hide-btn" id="hide" title="Open app without bar" aria-label="Open app without bar">&#10005;</button>
 </header>
 <main>
   <iframe id="app" src="${path}" title="${slug}"></iframe>
+  ${opts.annotationsEnabled ? ANNOTATE_MARKUP : ""}
   <aside id="panel"><div class="drag" id="drag" role="separator" tabindex="0" aria-label="Resize chat" aria-orientation="vertical"></div><iframe id="chat" title="Chat about ${slug}"></iframe></aside>
 </main>
 <script>
@@ -124,6 +134,7 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
     panel.classList.toggle("open", on);
     toggle.dataset.on = on ? "1" : "0";
     toggle.setAttribute("aria-expanded", String(on));
+    window.dispatchEvent(new CustomEvent("qm:chat-open", { detail: on }));
     try { localStorage.setItem(openKey, on ? "1" : "0"); } catch {}
   };
   toggle.addEventListener("click", () => setOpen(!panel.classList.contains("open")));
@@ -195,6 +206,7 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
   };
   void poll();
   setInterval(poll, 5000);
+${opts.annotationsEnabled ? ANNOTATE_JS : ""}
   upd.addEventListener("click", () => {
     void fetch("/__claw__/version", { cache: "no-store" })
       .then((r) => r.json())

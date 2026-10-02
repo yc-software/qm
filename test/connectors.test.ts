@@ -424,6 +424,7 @@ test("oauthRevoke: a capability token disconnects its own connector, but not a n
   const call = (capability: unknown, body: unknown) => {
     const out: { status?: number; body?: any } = {};
     const res = {
+      getHeader() {},
       writeHead(s: number) {
         out.status = s;
       },
