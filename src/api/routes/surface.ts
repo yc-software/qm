@@ -19,7 +19,7 @@ import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalo
 import { errMessage } from "../../util/errors.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
+import { contentTypeWithUtf8Charset, pipeToResponse, requestMeasurements, sendBuffered, sendJson } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import {
@@ -158,9 +158,15 @@ async function getSession(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
+  const timings: Record<string, number> = {};
+  const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined, timings);
   if (!found) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, found);
+  const serializeStart = performance.now();
+  const body = JSON.stringify(found);
+  timings.serialize = performance.now() - serializeStart;
+  timings.response_kb = Buffer.byteLength(body) / 1024;
+  requestMeasurements.set(ctx.req, timings);
+  sendBuffered(res, 200, { "content-type": "application/json" }, body);
 }
 
 async function getAgentConversation(ctx: ApiCtx): Promise<void> {

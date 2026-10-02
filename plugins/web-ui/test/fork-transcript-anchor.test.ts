@@ -23,7 +23,7 @@ test("the refresh anchor derives from raw earlier entries, not the fork-adjusted
     chat,
     /setTranscriptWindow\(anchorSeq: number \| null, earlierCount: number, hasEarlier = earlierCount > 0\)/,
   );
-  assert.match(sessions, /conv\.setTranscriptWindow\(anchorSeq, earlier, \(entriesRes\.earlierEntries \?\? 0\) > 0\);/);
+  assert.match(sessions, /conv\.setTranscriptWindow\(anchorSeq, earlier, \(page\.earlierEntries \?\? 0\) > 0\);/);
 });
 
 // Badge navigation must probe access itself: a listed-but-unreadable origin

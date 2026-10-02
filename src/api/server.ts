@@ -32,6 +32,7 @@ import {
   readRawBody,
   sendJson,
   verifyOrReject,
+  requestMeasurements,
 } from "./http.ts";
 import { findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
@@ -548,6 +549,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
           name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
           status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
           data: { http_status: res.writableFinished ? String(res.statusCode) : undefined },
+          measurements: requestMeasurements.get(req),
         }),
       );
     req.on("error", () => res.destroy());

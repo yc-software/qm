@@ -135,6 +135,7 @@ import {
 import "./slack-setup";
 import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
+import { loadTranscript } from "./transcript-cache";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
@@ -271,7 +272,7 @@ export function createChatSurface(
   const transcriptViewport = createTranscriptViewport();
   let preserveConnectionScroll = isConnectionReturn();
   let connectionReturnMessageCount: number | null = null;
-  const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
+  const transcriptFetcher = dependencies.fetchTranscript ?? loadTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
 
   const chatState = {
@@ -696,7 +697,7 @@ export function createChatSurface(
   function onDelivery(threadRef: string): void {
     const ro = readOnlyView;
     if (ro && threadRef === ro.threadRef) {
-      void fetchTranscript(ro.id, ro.anchorSeq !== null ? { sinceSeq: ro.anchorSeq } : { tailTurns: TAIL_TURNS })
+      void loadTranscript(ro.id, ro.anchorSeq !== null ? { sinceSeq: ro.anchorSeq } : { tailTurns: TAIL_TURNS })
         .then((page) => {
           if (readOnlyView?.id !== ro.id) return;
           const split = inheritedTranscript(ro.session, page.entries ?? []);
@@ -864,7 +865,7 @@ export function createChatSurface(
           return drawActiveChat(agent);
       }
       const anchor = chatState.transcriptAnchorSeq;
-      const page = await transcriptFetcher(sessionId, anchor !== null ? { sinceSeq: anchor } : undefined);
+      const page = await transcriptFetcher(sessionId, { sinceSeq: anchor ?? 0 });
       if (!isCurrent()) return;
       if (last?.stopReason === "error" && !hasRecordedRunReply(page.entries ?? [], last.interruptedRunId!))
         return drawActiveChat(agent);

@@ -186,7 +186,7 @@ test("canonical transcripts retain foreign harness tool detail and exact bounded
   }
 });
 
-test("earlier pages bound canonical reads, widen for dense turns, and match full-read windows", async () => {
+test("earlier pages read exactly the rows of the requested turns in one bounded query, dense turns included", async () => {
   const built = freshApp();
   try {
     const { session } = await coarseForeignSession(built.sessions, 100);
@@ -208,7 +208,9 @@ test("earlier pages bound canonical reads, widen for dense turns, and match full
         assert.deepEqual(page!.entries, expected.entries);
         assert.equal(page!.earlierEntries ?? 0, expected.earlier);
       }
-      assert.ok(calls.every((opts) => opts?.beforeSeq === beforeSeq && opts.limit === 80));
+      const rows = Math.max(1, await built.sessions.tailTurnRows(session.id, 2, 2000, beforeSeq));
+      assert.equal(calls.length, 2, "one canonical read per page, no widening retries");
+      assert.ok(calls.every((opts) => opts?.beforeSeq === beforeSeq && opts.limit === rows));
     }
     const { lease } = await built.sessions.acquireLease(session.id);
     for (let i = 0; i < 180; i++)
@@ -223,7 +225,7 @@ test("earlier pages bound canonical reads, widen for dense turns, and match full
     assert.equal(page!.entries[0]!.seq, 495);
     assert.deepEqual(
       calls.map((opts) => opts?.limit),
-      [40, 80, 160, 320],
+      [185],
     );
   } finally {
     await built.runtime.stop();
@@ -279,7 +281,7 @@ test("incremental transcript reads bound canonical storage and preserve windows 
     const { session, narration } = await coarseForeignSession(built.sessions, 100);
     await built.app.pinConversationItem(session.threadRef, "U1", { entrySeq: narration.seq });
     const canonical = built.sessions.getTranscriptEntries.bind(built.sessions);
-    const calls: Array<{ sinceSeq?: number; beforeSeq?: number } | undefined> = [];
+    const calls: Array<{ sinceSeq?: number; beforeSeq?: number; limit?: number } | undefined> = [];
     let loadedRows = 0;
     built.sessions.getTranscriptEntries = async (id, opts) => {
       calls.push(opts);
@@ -297,7 +299,7 @@ test("incremental transcript reads bound canonical storage and preserve windows 
       assert.equal(page.entries.length, 10);
       assert.equal(page.earlierEntries, 490);
       assert.equal(loadedRows, 10);
-      assert.ok(calls.every((opts) => opts?.sinceSeq === 490));
+      assert.ok(calls.every((opts) => opts?.sinceSeq === 490 && opts.limit === 2000));
     }
     await built.sessions.addParticipant(session.id, "late");
     const { lease } = await built.sessions.acquireLease(session.id);

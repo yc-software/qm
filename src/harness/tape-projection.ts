@@ -441,8 +441,10 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
         }
       }
       if (beforeSeq !== undefined) {
-        const full = await projected(sessionId);
-        return full ? { ...full, entries: full.entries.filter((entry) => entry.seq < beforeSeq) } : null;
+        const prefix = await projected(sessionId, SUFFIX_ROW_CAP_MAX);
+        const entries = prefix?.entries.filter((entry) => entry.seq < beforeSeq) ?? [];
+        if (!prefix || (prefix.anchored && entries.length < (limit ?? Infinity))) return null;
+        return { ...prefix, entries };
       }
       let rows: TapeRecord[];
       let anchored = false;
@@ -506,8 +508,13 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
       if (read === null) return fallback();
       let filtered = read.entries.filter((e) => entryWithinTenure(e, window));
       if (opts?.beforeSeq !== undefined && !read.anchored) return { entries: filtered, earlier: 0 };
-      if (limit !== undefined && filtered.length < limit && (read.entries[0]?.seq ?? 0) > window.validFromSeq) {
-        read = await projected(sessionId, undefined, opts?.beforeSeq);
+      if (
+        limit !== undefined &&
+        opts?.sinceSeq === undefined &&
+        filtered.length < limit &&
+        (read.entries[0]?.seq ?? 0) > window.validFromSeq
+      ) {
+        read = await projected(sessionId, SUFFIX_ROW_CAP_MAX, opts?.beforeSeq);
         if (read === null) return fallback();
         filtered = read.entries.filter((e) => entryWithinTenure(e, window));
       }

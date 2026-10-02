@@ -37,23 +37,7 @@ import type { AppHelpers } from "./app-helpers.ts";
 const MAX_SESSION_PINS = 50;
 const MAX_PIN_TEXT_CHARS = 2000;
 const PIN_PREVIEW_CHARS = 240;
-const ENTRIES_PER_TURN_ESTIMATE = 40;
-const TAIL_WINDOW_ENTRY_CAP = 2000;
-
-interface TranscriptWindow {
-  tailTurns?: number;
-  sinceSeq?: number;
-  beforeSeq?: number;
-}
-
-function tailWindowLimit(window?: TranscriptWindow): number | undefined {
-  if (window?.tailTurns === undefined || window.sinceSeq !== undefined) return undefined;
-  return Math.min(window.tailTurns * ENTRIES_PER_TURN_ESTIMATE, TAIL_WINDOW_ENTRY_CAP);
-}
-
-function coversTailWindow(entries: readonly { type: string }[], tailTurns: number): boolean {
-  return entries.filter((e) => e.type === "user").length >= tailTurns;
-}
+const TRANSCRIPT_PAGE_ROWS = 2000;
 
 const GOAL_LOOKBACK_ENTRIES = 2000;
 
@@ -130,6 +114,17 @@ export function createSessionMethods(
     artifactAuthor,
   } = h;
   const transcripts = createTranscriptSource(deps.sessions);
+  const pageRows = async (
+    sessionId: string,
+    window?: { tailTurns?: number; sinceSeq?: number; beforeSeq?: number },
+  ): Promise<number | undefined> => {
+    if (window?.sinceSeq !== undefined) return TRANSCRIPT_PAGE_ROWS;
+    if (window?.tailTurns === undefined) return undefined;
+    return Math.max(
+      1,
+      await deps.sessions.tailTurnRows(sessionId, window.tailTurns, TRANSCRIPT_PAGE_ROWS, window.beforeSeq),
+    );
+  };
   const pinView = (
     rec: { id: string; text?: string; entrySeq?: number; addedBy: string; createdAt: number },
     entry?: { payload: unknown },
@@ -221,18 +216,12 @@ export function createSessionMethods(
     async getSession(sessionId, window) {
       const session = await deps.sessions.get(sessionId);
       if (!session) return null;
-      let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords] = await Promise.all([
+      const limit = await pageRows(sessionId, window);
+      const [read, pinRecords] = await Promise.all([
         transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq, sinceSeq: window?.sinceSeq }),
         deps.sessions.listPins(sessionId),
       ]);
-      let read = initialRead;
-      let all = transcriptEntries(read.entries);
-      while (limit !== undefined && read.earlier > 0 && !coversTailWindow(all, window!.tailTurns!)) {
-        limit *= 2;
-        read = await transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq });
-        all = transcriptEntries(read.entries);
-      }
+      const all = transcriptEntries(read.entries);
       const w = windowedTranscript(all, window);
       const earlier = w.earlier + read.earlier;
       const pins = await decoratedPins(pinRecords, all, (seq) => storedEntryAt(sessionId, seq));
@@ -263,11 +252,13 @@ export function createSessionMethods(
       );
     },
 
-    async getSessionForViewer(sessionId, principalId, window) {
+    async getSessionForViewer(sessionId, principalId, window, timings) {
+      const visibilityStart = performance.now();
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return null;
-      let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords] = await Promise.all([
+      const transcriptStart = performance.now();
+      const limit = await pageRows(sessionId, window);
+      const [read, pinRecords] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
@@ -275,13 +266,11 @@ export function createSessionMethods(
         }),
         deps.sessions.listPins(sessionId),
       ]);
-      let read = initialRead;
-      let visible = transcriptEntries(read.entries);
-      while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
-        limit *= 2;
-        read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
-        visible = transcriptEntries(read.entries);
+      if (timings) {
+        timings.db_visibility = transcriptStart - visibilityStart;
+        timings.db_transcript = performance.now() - transcriptStart;
       }
+      const visible = transcriptEntries(read.entries);
       const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
       const pins = await decoratedPins(pinRecords, visible, (seq) => viewerStoredEntryAt(sessionId, principalId, seq));

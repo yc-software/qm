@@ -166,7 +166,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       assert.equal(requests.filter((r) => r.path === "/api/approvals/a1").length, 1);
       assert.equal(host.querySelector<HTMLTextAreaElement>("textarea")?.disabled, true);
       decision.resolve(Response.json({ runId: "r1" }, { status: 202 }));
-      await until(() => requests.some((r) => r.path === "/api/sessions/s1"));
+      await until(() => requests.some((r) => r.path === "/api/sessions/s1?sinceSeq=0"));
       assert.equal(chat.state.resolvingApprovals.size, 1);
       assert.equal(host.querySelector(".approval-btn"), null);
       handoff.resolve();

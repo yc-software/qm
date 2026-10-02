@@ -1072,7 +1072,7 @@ test("an earlier-page tape fallback keeps its full prefix without repeated dense
     const page = await read();
     assert.deepEqual(page.entries, expected);
     assert.equal(page.earlier, 0);
-    assert.deepEqual(calls, [undefined]);
+    assert.deepEqual(calls, [{ limit: 5_000 }]);
   }
 });
 

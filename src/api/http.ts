@@ -4,6 +4,8 @@ import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "
 
 const COMPRESS_MIN_BYTES = 1024;
 
+export const requestMeasurements = new WeakMap<IncomingMessage, Record<string, number>>();
+
 export function gzipAccepted(req: IncomingMessage | undefined): boolean {
   const header = req?.headers["accept-encoding"];
   if (header === undefined) return false;

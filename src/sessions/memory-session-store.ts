@@ -316,6 +316,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return opts?.limit === undefined ? filtered : filtered.slice(-opts.limit);
     },
 
+    async tailTurnRows(sessionId, turns, maxRows, beforeSeq = Infinity) {
+      const rows = (entries.get(sessionId) ?? []).filter((e) => e.seq < beforeSeq);
+      const users = rows.filter((e) => e.type === "user").map((e) => e.seq);
+      const floor = (rows.at(-1)?.seq ?? -1) + 1 - maxRows;
+      const nth = users.at(-turns) ?? 0;
+      const start = nth >= floor ? nth : (users.find((seq) => seq >= floor) ?? floor);
+      return rows.filter((e) => e.seq >= start).length;
+    },
+
     async canReadTranscriptSuffix(sessionId, beforeSeq) {
       const prefix = new Map<number, string>();
       for (const row of tape.get(sessionId) ?? []) {

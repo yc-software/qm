@@ -36,7 +36,6 @@ import {
   api,
   attachPendingApprovals,
   fetchSessionApprovals,
-  fetchTranscript,
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
@@ -70,6 +69,7 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
+import { cachedTranscript, forgetTranscript, loadTranscript, prefetchTranscript } from "./transcript-cache";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, icon, menuSelect, relTime, workingWave } from "./ui";
 import { listPageTpl } from "./list-page";
@@ -994,6 +994,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         draggable=${saved ? "true" : "false"}
         @dragstart=${(e: DragEvent) => onSessionDragStart(e, s)}
         @dragend=${() => endSessionDrag()}
+        @pointerenter=${() => saved && intendPrefetch(s.id)}
+        @pointerleave=${() => clearTimeout(prefetchIntent)}
         @mousedown=${(e: MouseEvent) => {
           if (saved && e.shiftKey) e.preventDefault();
         }}
@@ -1574,6 +1576,7 @@ async function persistSessionPatch(id: string, patch: SessionPatch): Promise<voi
 }
 
 function queueSessionPatch(id: string, patch: SessionPatch): Promise<CoreSession> {
+  if (patch.archived !== undefined) forgetTranscript(id);
   sessionPatchEpoch++;
   const version = (sessionPatchVersions.get(id) ?? 0) + 1;
   const generation = sessionPatchGeneration;
@@ -1627,25 +1630,7 @@ let latestSessionsRefresh: Promise<boolean> | null = null;
 let queuedSessionsRefresh: SessionsRefreshOptions | null = null;
 let sessionsRefreshRunning = false;
 let listRequestedAt = 0;
-let listDiscards = 0;
 const LIST_STALL_MS = 10_000;
-
-export function refreshSessionsOnOpen(): void {
-  const joinable =
-    sessionsRefreshRunning && Date.now() - listRequestedAt < LIST_STALL_MS ? latestSessionsRefresh : null;
-  if (!joinable) {
-    void refreshSessions({ silent: true });
-    return;
-  }
-  const discards = listDiscards;
-  void joinable.then(
-    (applied) => {
-      if (applied || listDiscards === discards || latestSessionsRefresh !== joinable) return;
-      void refreshSessions({ silent: true });
-    },
-    () => void 0,
-  );
-}
 
 export function refreshSessions(opts: SessionsRefreshOptions = {}): Promise<boolean> {
   if (sessionsRefreshRunning && Date.now() - listRequestedAt < LIST_STALL_MS && latestSessionsRefresh) {
@@ -1694,10 +1679,7 @@ async function runSessionsRefresh(
   try {
     const r = await api<{ sessions: CoreSession[] }>("/api/sessions");
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
-    if (patchEpoch !== sessionPatchEpoch) {
-      listDiscards++;
-      return false;
-    }
+    if (patchEpoch !== sessionPatchEpoch) return false;
     sessionsState.list = reconcileSessions(r.sessions ?? [], sessionsState.list, openConversationIds());
     sessionsState.loaded = true;
     sessionsNotice = "";
@@ -1751,9 +1733,15 @@ export async function openSessionInto(
     }
     return;
   }
-  if (s.id === conv.state.sessionId && !entriesPrefetch) return;
-
-  refreshSessionsOnOpen();
+  const generation = (openGenerations.get(conv) ?? 0) + 1;
+  openGenerations.set(conv, generation);
+  if (s.id === conv.state.sessionId && !entriesPrefetch) {
+    if (tracked && sessionsState.openingKey) {
+      sessionsState.openingKey = null;
+      renderList();
+    }
+    return;
+  }
 
   const opening = s.id;
   if (tracked) {
@@ -1761,15 +1749,39 @@ export async function openSessionInto(
     renderList();
   }
   if (!isLiveConversation(conv)) return;
-  const isCurrent = conv.mountLoadingPane();
-
-  const fetchEntries = (): Promise<TranscriptPage | null> =>
-    fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
+  const shown = { threadRef: conv.state.threadRef, sessionId: conv.state.sessionId };
+  let loading: (() => boolean) | null = null;
+  const isCurrent = (): boolean =>
+    openGenerations.get(conv) === generation &&
+    (loading ? loading() : conv.state.threadRef === shown.threadRef && conv.state.sessionId === shown.sessionId);
   const continuable = isContinuable(s, appState.me?.user ?? "");
+
+  const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
+  if (cached) {
+    if (tracked) sessionsState.openingKey = null;
+    mountTranscript(conv, s, cached, [], continuable);
+    conv.onDelivery(s.threadRef);
+    renderList();
+    if (tracked) prefetchNeighbors(s.id);
+    if (continuable)
+      void fetchSessionApprovals(s.id).then((r) => {
+        if (!r?.approvals.length || openGenerations.get(conv) !== generation || conv.state.sessionId !== s.id) return;
+        if (!isLiveConversation(conv) || conv.activePendingApprovals().length) return;
+        mountTranscript(conv, s, cachedTranscript(s.id) ?? cached, r.approvals, true);
+        conv.onDelivery(s.threadRef);
+      });
+    return;
+  }
+
+  const spinner = setTimeout(() => {
+    if (isLiveConversation(conv) && isCurrent()) loading = conv.mountLoadingPane();
+  }, SPINNER_DELAY_MS);
+  const fetchEntries = (): Promise<TranscriptPage | null> =>
+    loadTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
   const [entriesRes, approvalsRes] = await Promise.all([
     entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
     continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),
-  ]);
+  ]).finally(() => clearTimeout(spinner));
   if (!isLiveConversation(conv) || !isCurrent()) return;
 
   if (tracked) {
@@ -1782,23 +1794,53 @@ export async function openSessionInto(
   }
 
   if (!entriesRes) {
+    conv.mountLoadingPane();
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     return;
   }
+  mountTranscript(conv, s, entriesRes, approvalsRes?.approvals ?? [], continuable);
+  renderList();
+  if (tracked) prefetchNeighbors(s.id);
+}
 
-  const split = inheritedTranscript(s, entriesRes.entries ?? []);
+function mountTranscript(
+  conv: Conversation,
+  s: CoreSession,
+  page: TranscriptPage,
+  approvals: PendingApproval[],
+  continuable: boolean,
+): void {
+  conv.mountLoadingPane();
+  const split = inheritedTranscript(s, page.entries ?? []);
   const messages = entriesToMessages(split.current, transcriptModel());
   const inheritedMessages = entriesToMessages(split.inherited, transcriptModel());
-  const earlier = currentEarlierCount(s, entriesRes.earlierEntries ?? 0);
-  const anchorSeq = entriesRes.entries?.[0]?.seq ?? null;
+  const earlier = currentEarlierCount(s, page.earlierEntries ?? 0);
+  const anchorSeq = page.entries?.[0]?.seq ?? null;
   if (continuable) {
-    attachPendingApprovals(messages, approvalsRes?.approvals ?? [], transcriptModel());
+    attachPendingApprovals(messages, approvals, transcriptModel());
     conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
-    conv.setTranscriptWindow(anchorSeq, earlier, (entriesRes.earlierEntries ?? 0) > 0);
+    conv.setTranscriptWindow(anchorSeq, earlier, (page.earlierEntries ?? 0) > 0);
   } else {
     conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);
   }
-  conv.setPins(entriesRes.pins ?? []);
-  renderList();
+  conv.setPins(page.pins ?? []);
+}
+
+const SPINNER_DELAY_MS = 150;
+const PREFETCH_INTENT_MS = 100;
+const openGenerations = new WeakMap<Conversation, number>();
+let prefetchIntent: ReturnType<typeof setTimeout> | undefined;
+
+function intendPrefetch(id: string): void {
+  clearTimeout(prefetchIntent);
+  prefetchIntent = setTimeout(() => prefetchTranscript(id), PREFETCH_INTENT_MS);
+}
+
+function prefetchNeighbors(id: string): void {
+  const order = visibleRowOrder();
+  const at = order.indexOf(id);
+  if (at < 0) return;
+  prefetchTranscript(order[at + 1]);
+  prefetchTranscript(order[at - 1]);
 }

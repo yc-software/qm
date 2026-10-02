@@ -204,7 +204,12 @@ test("transaction allowlist keeps timing shape only and rejects unsafe names", (
         { span_id: "1", trace_id: "2", description: "SELECT private", start_timestamp: 10, timestamp: 10.1, data: {} },
       ],
       tags: { service: "core", http_status: "private", private: "private-tag", surface: "private-tag" },
-      measurements: { queue_wait: { value: 5, unit: "millisecond" }, private: { value: 1, unit: "millisecond" } },
+      measurements: {
+        queue_wait: { value: 5, unit: "millisecond" },
+        db_transcript: { value: 7, unit: "millisecond" },
+        response_kb: { value: 9, unit: "millisecond" },
+        private: { value: 1, unit: "millisecond" },
+      },
       contexts: {
         trace: {
           trace_id: "a".repeat(32),
@@ -224,7 +229,10 @@ test("transaction allowlist keeps timing shape only and rejects unsafe names", (
   assert.equal(clean?.transaction, "GET /v1/sessions/:id");
   assert.deepEqual(clean?.transaction_info, { source: "route" });
   assert.deepEqual(clean?.tags, { service: "core", http_status: "200", surface: "web", page: "other" });
-  assert.deepEqual(clean?.measurements, { queue_wait: { value: 5, unit: "millisecond" } });
+  assert.deepEqual(clean?.measurements, {
+    queue_wait: { value: 5, unit: "millisecond" },
+    db_transcript: { value: 7, unit: "millisecond" },
+  });
   assert.deepEqual(clean?.spans, []);
   assert.deepEqual(clean?.contexts?.trace, {
     trace_id: "a".repeat(32),
@@ -302,7 +310,8 @@ test("real SDK sends sanitized sampled transactions only when a sample rate is c
       data: { surface: 'web', origin: 'human', private: 'private-tag', page: 'private-page' },
       measurements: { queue_wait: 20, private: 5 } });
     const finish = startTiming('http.server', 'GET /*');
-    finish?.({ name: 'GET /v1/sessions/:id', status: 'not_found', data: { http_status: '404' } });
+    finish?.({ name: 'GET /v1/sessions/:id', status: 'not_found', data: { http_status: '404' },
+      measurements: { db_transcript: 42.4, db_visibility: 3, serialize: 2, response_kb: 12.6, private: 1 } });
     reportBackendError(new Error('private-error'));
     await fetch('http://127.0.0.1:' + process.env.COLLECTOR_PORT + '/private-outbound').catch(() => {});
     await flushErrorReporting();
@@ -333,6 +342,12 @@ test("real SDK sends sanitized sampled transactions only when a sample rate is c
   assert.equal(run!.release, "test-release");
   assert.equal(run!.environment, "verification");
   assert.equal(request!.transaction, "GET /v1/sessions/:id");
+  assert.deepEqual(request!.measurements, {
+    db_transcript: { value: 42, unit: "millisecond" },
+    db_visibility: { value: 3, unit: "millisecond" },
+    serialize: { value: 2, unit: "millisecond" },
+    response_kb: { value: 13, unit: "kilobyte" },
+  });
   assert.equal(request!.contexts.trace.status, "not_found");
   assert.equal(request!.tags.http_status, "404");
   assert.deepEqual(Object.keys(run!).sort(), [

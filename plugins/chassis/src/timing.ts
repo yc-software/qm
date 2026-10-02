@@ -79,7 +79,20 @@ const BUCKETS: Record<string, (value: string) => boolean> = {
   ]),
   http_status: (value) => HTTP_STATUS.test(value),
 };
-const MEASUREMENTS = new Set(["queue_wait", "ttfb", "dom_content_loaded", "load", "fcp", "lcp"]);
+const MEASUREMENT_UNITS = new Map([
+  ...[
+    "queue_wait",
+    "ttfb",
+    "dom_content_loaded",
+    "load",
+    "fcp",
+    "lcp",
+    "db_transcript",
+    "db_visibility",
+    "serialize",
+  ].map((key) => [key, "millisecond"] as const),
+  ["response_kb", "kilobyte"] as const,
+]);
 const HEX = /^[a-f0-9]+$/;
 
 export function parseSampleRate(value: string | undefined): number {
@@ -107,7 +120,7 @@ export function finishTiming(sdk: TimingSdk, span: Sentry.Span, result: TimingRe
       if (value !== undefined) span.setAttribute(key, value);
     for (const [key, value] of Object.entries(result.measurements ?? {}))
       if (value !== undefined && Number.isFinite(value) && value >= 0)
-        sdk.setMeasurement(key, Math.round(value), "millisecond", span);
+        sdk.setMeasurement(key, Math.round(value), MEASUREMENT_UNITS.get(key) ?? "millisecond", span);
     span.end(result.endMs ?? Date.now());
   } catch (error) {
     swallow("timing", error);
@@ -168,8 +181,7 @@ export function sanitizeTransactionEvent(
     },
     measurements: Object.fromEntries(
       Object.entries(measurements).filter(
-        ([key, measurement]) =>
-          MEASUREMENTS.has(key) && Number.isFinite(measurement.value) && measurement.unit === "millisecond",
+        ([key, measurement]) => MEASUREMENT_UNITS.get(key) === measurement.unit && Number.isFinite(measurement.value),
       ),
     ),
     spans: [],
