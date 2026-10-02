@@ -219,13 +219,13 @@ test("agent transcript retains viewer-visible history across memory checkpoints"
     await f.append("assistant", { text: "SAFE_REPLY" });
     const response = await f.get();
     assert.equal(response.status, 200);
-    const text = await response.text();
-    assert.match(text, /SAFE_REPLY/);
-    assert.match(text, /PRIVATE_SENTINEL/);
-    assert.doesNotMatch(text, /memory_context/);
+    const body = (await response.json()) as { entries: unknown[] };
+    assert.match(JSON.stringify(body.entries), /SAFE_REPLY/);
+    assert.match(JSON.stringify(body.entries), /PRIVATE_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(body.entries), /memory_context/);
     const oldPage = await f.get(`?beforeSeq=${old.seq + 1}`);
     assert.equal(oldPage.status, 200);
-    assert.match(await oldPage.text(), /PRIVATE_SENTINEL/);
+    assert.match(JSON.stringify(((await oldPage.json()) as { entries: unknown[] }).entries), /PRIVATE_SENTINEL/);
     assert.match(await (await f.human()).text(), /PRIVATE_SENTINEL/);
   } finally {
     await f.close();
