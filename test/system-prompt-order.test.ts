@@ -27,7 +27,6 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { LivenessCache } from "../src/credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
@@ -69,11 +68,6 @@ function readSandbox(): Sandbox {
     teardown: async () => {},
   };
 }
-
-const livenessCache: LivenessCache = {
-  get: async () => ({ scopeId: "x", checkedAt: Date.now(), connectors: { gh: "active" } }),
-  put: async () => {},
-};
 
 const connectorStatusCache: ConnectorStatusCache = {
   get: async () => ({ principalId: actor.id, checkedAt: Date.now(), providers: { google: { connected: true } } }),
@@ -136,7 +130,6 @@ function buildOrchestrator(
     acl,
     config,
     skills,
-    livenessCache,
     connectorTokens,
     connectorStatusCache,
     resolveConnectorClient: async (provider) => {
@@ -198,7 +191,6 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
     "Sandbox environment profile",
     "What you remember",
   ];
-  assert.doesNotMatch(prompt, /\n## Your logins\n/);
   const positions = ordered.map((title) => ({ title, at: headingAt(title) }));
   positions.reduce((prev, cur) => {
     assert.ok(cur.at > prev.at, `"## ${cur.title}" must come AFTER "## ${prev.title}" (got ${cur.at} vs ${prev.at})`);
@@ -473,7 +465,7 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
   for (const title of ["Skills", "Where you are", "Where scheduled tasks post", "Connected apps"]) {
     assert.ok(systemOf(first.reply ?? "").includes(`\n## ${title}\n`), `expected "## ${title}" in the system prompt`);
   }
-  for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
+  for (const title of ["Sandbox environment profile", "The user's local time", "What you remember"]) {
     assert.ok(
       !systemOf(first.reply ?? "").includes(`\n## ${title}\n`),
       `"## ${title}" must not be in the system prompt`,

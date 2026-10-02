@@ -22,32 +22,16 @@
   </head>
   <body>
     <main>
-      <nav><button id="theme">Toggle theme</button><button id="stream">Toggle streaming</button></nav>
+      <nav><button id="theme">Toggle theme</button></nav>
       <article class="assistant-body" id="response"></article>
     </main>
     <script type="module">
       import "../../src/shell.css";
-      import { html, render } from "lit";
+      import { render } from "lit";
       import { markdown } from "../../src/message-markdown";
-      import { splitStreamingMarkdown } from "../../src/streaming-markdown";
       import text from "./markdown.md?raw";
-      let streaming = false;
-      const response = document.querySelector("#response");
-      function draw() {
-        const parts = streaming ? splitStreamingMarkdown(text, 240) : null;
-        render(
-          parts
-            ? html`<div class="streaming-text">${parts.segments.map(markdown)}${markdown(parts.tail)}</div>`
-            : markdown(text),
-          response,
-        );
-      }
+      render(markdown(text), document.querySelector("#response"));
       document.querySelector("#theme").onclick = () => document.documentElement.classList.toggle("dark");
-      document.querySelector("#stream").onclick = () => {
-        streaming = !streaming;
-        draw();
-      };
-      draw();
     </script>
   </body>
 </html>

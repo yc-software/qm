@@ -4643,39 +4643,6 @@ export function assertAwsDeploymentStorage(config: QmConfig): void {
   ]);
 }
 
-export function probeAwsSecretStore(
-  secrets: ComputedSecret[],
-  read: (name: string) => string,
-  checkPublicApiUrl: () => void,
-): { values: Map<string, string>; pending: string[]; failures: string[] } {
-  const values = new Map<string, string>();
-  const pending: string[] = [];
-  const failures: string[] = [];
-  for (const secret of secrets) {
-    const label = secret.required ? `secret ${secret.name}` : `optional secret ${secret.name}`;
-    try {
-      const value = read(secret.name);
-      if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
-      values.set(secret.name, value);
-      if (secret.required && secret.name === "PUBLIC_API_URL") checkPublicApiUrl();
-      step(secret.required ? `${label}: ok` : `${label}: configured`);
-    } catch (error) {
-      if (/ResourceNotFoundException/.test(errMessage(error))) {
-        if (secret.required) {
-          pending.push(secret.name);
-          step(`${label}: not pushed yet — run \`qm secrets push\` before the first deploy`);
-        } else {
-          warn(`${label}: not configured`);
-        }
-      } else {
-        failures.push(`${label}: ${errMessage(error)}`);
-        warn(`${label}: failed`);
-      }
-    }
-  }
-  return { values, pending, failures };
-}
-
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
   const { aws } = awsTopology(config, configDir);
   header(`qm doctor — ${config.orgId} (aws)`);

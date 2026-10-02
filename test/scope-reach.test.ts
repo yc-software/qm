@@ -380,7 +380,6 @@ test("reach preserves a durable workspace even without a login-probe cache", asy
 test("reach teardown keeps (does not destroy) a room with its own computer", async () => {
   const built = freshApp({ reachExecEnabled: true });
   await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
-  await built.livenessCache.put({ scopeId: scopeId("channel", "C-ph"), checkedAt: 1, connectors: {} });
   await built.app.turn(dm("!reach #project-alpha echo hi"));
   assert.ok(
     fakeSprites.names().some((n) => n.startsWith("qm-channel-c-ph-")),

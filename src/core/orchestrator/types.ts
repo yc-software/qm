@@ -34,7 +34,6 @@ import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../.
 import type { DeviceFlowCutoverStore } from "../../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../../feature-flags.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
-import type { LivenessCache } from "../../credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../../credentials/connector-status.ts";
 import type { ModelGateway } from "../../model/model-gateway.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
@@ -187,7 +186,6 @@ export interface OrchestratorDeps {
     choice: import("../../harness/harness.ts").RuntimeChoice,
     purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
   ) => Promise<string | null>;
-  livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;

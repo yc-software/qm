@@ -1,11 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  renderComputerBlock,
-  renderResidentLoginsBlock,
-  renderConnectedAppsBlock,
-} from "../src/core/environment-facts.ts";
-import { RESIDENT_AUTH_CONNECTORS, type ScopeLivenessRecord } from "../src/credentials/resident-auth.ts";
+import { renderComputerBlock, renderConnectedAppsBlock } from "../src/core/environment-facts.ts";
 import type { ConnectorStatusRecord } from "../src/credentials/connector-status.ts";
 import type { AgentComputerSpec } from "../src/sandbox/sandbox.ts";
 
@@ -55,33 +50,6 @@ test("computer block: partial spec omits the fields it lacks (no empty fragments
   assert.doesNotMatch(out, /vCPU/);
   assert.doesNotMatch(out, /Runtimes:/);
   assert.doesNotMatch(out, /NOT installed/);
-});
-
-test("logins block: null record renders nothing (first turn, no probe yet)", () => {
-  assert.equal(renderResidentLoginsBlock(null, RESIDENT_AUTH_CONNECTORS), "");
-});
-
-test("logins block: all-absent record renders nothing (no tools present)", () => {
-  const record: ScopeLivenessRecord = {
-    scopeId: "personal:U1",
-    checkedAt: 1,
-    connectors: Object.fromEntries(RESIDENT_AUTH_CONNECTORS.map((c) => [c.id, "absent" as const])),
-  };
-  assert.equal(renderResidentLoginsBlock(record, RESIDENT_AUTH_CONNECTORS), "");
-});
-
-test("logins block: shows active with a check, inactive with its exact reauth command, omits absent", () => {
-  const record: ScopeLivenessRecord = {
-    scopeId: "personal:U1",
-    checkedAt: 1,
-    connectors: { gh: "active", glab: "inactive", gcloud: "absent" },
-  };
-  const out = renderResidentLoginsBlock(record, RESIDENT_AUTH_CONNECTORS);
-  assert.match(out, /## Your logins/);
-  assert.match(out, /GitHub — ✓ signed in/);
-  assert.match(out, /GitLab — ✗ not signed in.*`glab auth login`/);
-  assert.doesNotMatch(out, /Google Cloud/);
-  assert.doesNotMatch(out, /AWS/);
 });
 
 test("connected-apps block: lists only admin-configured providers and the exact connection URL", () => {

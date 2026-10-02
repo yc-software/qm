@@ -266,7 +266,6 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import { createLivenessCache, type LivenessCache, type ScopeLivenessRecord } from "./credentials/resident-auth.ts";
 import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
 import {
   createDeviceFlowCutoverStore,
@@ -545,7 +544,6 @@ export interface BuiltApp {
   blobTransfer: BlobTransferStore;
   files: FileArtifactStore;
   fileUploads?: DirectFileUploads;
-  livenessCache: LivenessCache;
   deviceFlowCutover: DeviceFlowCutoverStore;
   featureFlags: FeatureFlagStore;
   replayDedupe?: ReplayDedupe;
@@ -707,7 +705,6 @@ export function buildApp(
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const livenessCache = createLivenessCache(artifactMap<ScopeLivenessRecord>("credential_liveness"));
   const deviceFlowCutover = createDeviceFlowCutoverStore(artifactMap<DeviceFlowCutoverPolicy>("device_flow_cutover"), {
     resets: artifactMap<DeviceFlowCutoverReset>("device_flow_cutover_resets"),
   });
@@ -1988,7 +1985,6 @@ export function buildApp(
     runs,
     tasks,
     blobTransfer,
-    livenessCache,
     deviceFlowCutover,
     featureFlags,
     credentialUsage,
@@ -2876,7 +2872,6 @@ export function buildApp(
     blobTransfer,
     files,
     ...(fileUploads ? { fileUploads } : {}),
-    livenessCache,
     deviceFlowCutover,
     featureFlags,
     ...(replayDedupe ? { replayDedupe } : {}),

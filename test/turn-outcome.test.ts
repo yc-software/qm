@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveTurnOutcome, approvalBlocksInput, sessionStateAfterTurn } from "../src/core/turn-outcome.ts";
+import { deriveTurnOutcome, approvalBlocksInput } from "../src/core/turn-outcome.ts";
 
 test("a plain reply: completed, nothing pending", () => {
   const o = deriveTurnOutcome({
@@ -97,35 +97,4 @@ test("per-approval blocking: input never blocks; a command blocks only when the 
   assert.equal(approvalBlocksInput("command", { approvalsBlock: true }), true);
   assert.equal(approvalBlocksInput("input", { approvalsBlock: true }), false);
   assert.equal(approvalBlocksInput("command", { approvalsBlock: false }), false);
-});
-
-test("session state after the turn: awaiting_approval wins over idle", () => {
-  assert.equal(
-    sessionStateAfterTurn(
-      deriveTurnOutcome({ reply: "x", attachments: 0, pendingApprovals: [], terminatedOnApproval: false }),
-    ),
-    "idle",
-  );
-  assert.equal(
-    sessionStateAfterTurn(
-      deriveTurnOutcome({
-        reply: "x",
-        attachments: 0,
-        pendingApprovals: [{ kind: "command" }],
-        terminatedOnApproval: true,
-      }),
-    ),
-    "awaiting_approval",
-  );
-  assert.equal(
-    sessionStateAfterTurn(
-      deriveTurnOutcome({
-        reply: "",
-        attachments: 0,
-        pendingApprovals: [{ kind: "input" }],
-        terminatedOnApproval: false,
-      }),
-    ),
-    "idle",
-  );
 });

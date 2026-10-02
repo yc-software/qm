@@ -21,7 +21,6 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { LivenessCache } from "../src/credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
@@ -53,11 +52,6 @@ function fakeSandbox(): Sandbox {
     teardown: unreached as never,
   };
 }
-
-const livenessCache: LivenessCache = {
-  get: async () => ({ scopeId: "x", checkedAt: Date.now(), connectors: {} }),
-  put: async () => {},
-};
 
 const connectorStatusCache: ConnectorStatusCache = {
   get: async () => ({ principalId: actor.id, checkedAt: Date.now(), providers: {} }),
@@ -123,7 +117,6 @@ function buildOrchestrator(
     config,
     ...(opts.brandingDefault ? { brandingDefault: opts.brandingDefault } : {}),
     skills,
-    livenessCache,
     connectorTokens,
     connectorStatusCache,
     signingSecret: "test-signing-secret",
