@@ -24,11 +24,12 @@ export function createGrindMeter(startedAt = Date.now()): GrindMeter {
   return { turns: 0, tokens: 0, usd: 0, startedAt };
 }
 
-export function meterGrindUsage(meter: GrindMeter, usage: LlmCallUsage | null | undefined): number {
-  const tokens = Math.max(0, (usage?.input ?? 0) + (usage?.output ?? 0));
+export function meterGrindUsage(meter: GrindMeter | undefined, usage: LlmCallUsage | null | undefined): void {
+  if (!meter || !usage) return;
+  const tokens = Math.max(0, usage.input + usage.output);
+  meter.turns++;
   meter.tokens += tokens;
-  meter.usd += usage?.costUsd || estimateCostUsd(tokens);
-  return tokens;
+  meter.usd += usage.costUsd || estimateCostUsd(tokens);
 }
 
 export function grindState(grind: GrindBudget, meter: GrindMeter, now = Date.now()): GrindState {

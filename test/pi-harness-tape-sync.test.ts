@@ -593,10 +593,12 @@ test("Pi goals run through the router loop and meter the recorded usage until th
   const sink: Sink = { entries: [], tape: [] };
   const goal = createGoalRecord({ objective: "ship it", capTokens: 10 });
   const prompts: string[] = [];
+  const contexts: string[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content: unknown }> };
     prompts.push(JSON.stringify(body.messages?.at(-1)?.content ?? ""));
+    contexts.push(JSON.stringify(body.messages ?? []));
     return sse(textReplyEvents(`round ${prompts.length}`));
   }) as typeof globalThis.fetch;
   try {
@@ -614,12 +616,15 @@ test("Pi goals run through the router loop and meter the recorded usage until th
           },
         ],
         recordLlmRequest: () => {},
+        tapeRows: [],
+        tapeMode: "serve",
       }),
     );
     assert.equal(result.reply, "round 3");
     assert.equal(prompts.length, 3);
     assert.match(prompts[1]!, /The active goal is not marked complete/);
     assert.match(prompts[2]!, /token cap is exhausted/);
+    assert.match(contexts[2]!, /round 1[\s\S]*round 2/, "each round is served the tape the earlier rounds wrote");
     const persisted = latestGoalRecord(sink.entries)!;
     assert.equal(persisted.status, "active");
     assert.equal(persisted.tokensUsed, 24);

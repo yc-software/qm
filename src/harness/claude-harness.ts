@@ -1,4 +1,5 @@
 import { documentBlocks } from "./document-inputs.ts";
+import { meterGrindUsage } from "./grind.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chownSync, mkdtempSync, rmSync } from "node:fs";
@@ -580,6 +581,17 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       const costUsd = Math.max(0, totalCostUsd - lastTotalCostUsd);
       if (sawCalls) lastTotalCostUsd = Math.max(lastTotalCostUsd, totalCostUsd);
       const step = recordedSteps++;
+      const usage = sawCalls
+        ? {
+            input: stepUsage.input,
+            output: stepUsage.output,
+            cacheRead: stepUsage.cacheRead,
+            cacheWrite: stepUsage.cacheWrite,
+            totalTokens: stepUsage.input + stepUsage.output + stepUsage.cacheRead + stepUsage.cacheWrite,
+            costUsd,
+          }
+        : null;
+      meterGrindUsage(turn.goalMeter, usage);
       try {
         await turn.recordLlmRequest?.({
           turnSeq: userEntry.seq,
@@ -590,16 +602,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           transport: { modelId: model },
           ttftMs: message.subtype === "success" ? (message.ttft_ms ?? null) : null,
           durationMs: message.duration_ms ?? null,
-          usage: sawCalls
-            ? {
-                input: stepUsage.input,
-                output: stepUsage.output,
-                cacheRead: stepUsage.cacheRead,
-                cacheWrite: stepUsage.cacheWrite,
-                totalTokens: stepUsage.input + stepUsage.output + stepUsage.cacheRead + stepUsage.cacheWrite,
-                costUsd,
-              }
-            : null,
+          usage,
         });
       } catch (error) {
         swallow("claude: llm request record", error);

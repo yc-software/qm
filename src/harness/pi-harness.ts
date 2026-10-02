@@ -110,7 +110,7 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
-import { createGrindMeter } from "./grind.ts";
+import { createGrindMeter, meterGrindUsage } from "./grind.ts";
 import { createFloorCapPolicy, goalPausedNote, goalSteeringNote, rehydrateOpenGoal } from "./goal.ts";
 
 export interface PiHarnessOptions {
@@ -2017,6 +2017,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               const u = (event.message as { usage?: Partial<Usage> }).usage;
               const stepModel = entry.agentSession.model;
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
+              meterGrindUsage(grindMeter, usage);
               callStats.push({
                 ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
                 durationMs: curStart !== undefined ? end - curStart : null,

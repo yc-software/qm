@@ -13,9 +13,11 @@ import {
 import type { ScopeId, SessionEntry } from "../types.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
 import { withTapedEntryMirrors } from "./harness-shared.ts";
+import { foldTape } from "./tape-fold.ts";
+import type { NewTapeRecord, TapeRecord } from "../sessions/session-store.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import { createGrindMeter, meterGrindUsage } from "./grind.ts";
+import { createGrindMeter } from "./grind.ts";
 import {
   bankGoalTurn,
   createFloorCapPolicy,
@@ -42,7 +44,8 @@ async function runTurnEnforcingGoal(
   const emitted: SessionEntry[] = [];
   const startedAt = Date.now();
   const meter = createGrindMeter(startedAt);
-  let roundTokens = 0;
+  const taped: TapeRecord[] = [];
+  const tape = input.tape;
   const dispatched: HarnessTurnInput = {
     ...input,
     goalMeter: meter,
@@ -51,18 +54,22 @@ async function runTurnEnforcingGoal(
       emitted.push(stored);
       return stored;
     },
-    recordLlmRequest: (rec, signal) => {
-      roundTokens += meterGrindUsage(meter, rec.usage);
-      return input.recordLlmRequest?.(rec, signal);
-    },
+    ...(tape
+      ? {
+          tape: async (rec: NewTapeRecord) => {
+            taped.push({ ...rec, sessionId: input.session.id, seq: taped.length, createdAt: Date.now() });
+            return tape(rec);
+          },
+        }
+      : {}),
   };
+  let roundStartTokens = 0;
   let result = await adapter.turns.runTurn(dispatched);
   const goal: GoalRecord | null = latestGoalRecord(emitted) ?? rehydrateOpenGoal(input.history);
   if (!goal) return result;
   const account = () => {
-    meter.turns += result.modelCalls ?? 1;
-    if (goal.status === "active") goal.tokensUsed += roundTokens;
-    roundTokens = 0;
+    if (goal.status !== "paused") goal.tokensUsed += meter.tokens - roundStartTokens;
+    roundStartTokens = meter.tokens;
   };
   account();
   const floorCap = createFloorCapPolicy({
@@ -91,10 +98,11 @@ async function runTurnEnforcingGoal(
       console.error(`[goal] continuation session=${input.session.id} harness=${harnessId} turns=${meter.turns}`);
     },
     prompt: async (note) => {
-      const remaining = goalFloorUnmet(goal, meter) ? input.turnWallClockMs : remainingWallMs();
-      const { tapeRows: _tapeRows, tapeMode: _tapeMode, tapeFold: _tapeFold, ...fresh } = dispatched;
+      const remaining = goalFloorUnmet(goal, meter) ? undefined : remainingWallMs();
       result = await adapter.turns.runTurn({
-        ...fresh,
+        ...dispatched,
+        ...(input.tapeRows ? { tapeRows: [...input.tapeRows, ...taped] } : {}),
+        ...(input.tapeFold ? { tapeFold: [...input.tapeFold, ...foldTape(taped)] } : {}),
         input: note,
         history: [...input.history, ...emitted],
         goal,
