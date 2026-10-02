@@ -25,14 +25,8 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import {
-  armBodyDeadline,
-  canonicalPayload,
-  PayloadTooLargeError,
-  readRawBody,
-  sendJson,
-  verifyOrReject,
-} from "./http.ts";
+import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import { findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";

@@ -50,6 +50,7 @@ function fixture() {
     const url = new URL(path, "http://localhost");
     const res = {
       setHeader() {},
+      getHeader() {},
       writeHead(code: number) {
         status = code;
       },

@@ -4,6 +4,12 @@ import { readFileSync } from "node:fs";
 import { VirtualConsole } from "jsdom";
 import { createInboxFixture, until } from "./inbox-composer-fixture.ts";
 
+const filterNames: Record<string, string> = {
+  all: "All emails",
+  human: "Light filtering — exclude notifications",
+  triaged: "Heavy filtering — only emails that need your attention",
+};
+
 async function inboxUi(t: TestContext) {
   const errors: Error[] = [];
   const virtualConsole = new VirtualConsole();
@@ -42,6 +48,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
     mount,
     inbox: { inboxState, resetInboxState, refreshInbox, itemsFor, toInboxItem },
   } = await inboxUi(t);
+  assert.equal(inboxState.filter, "human");
   let saved = "triaged";
   let failSave = false;
   let rejectSave = false;
@@ -93,11 +100,19 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   };
   mount();
   const settled = () => until(() => !inboxState.loading && !inboxState.filterBusy);
-  const filterSelect = () => host.querySelector<HTMLSelectElement>('select[aria-label="Email filter"]')!;
+  const filterSelect = () => host.querySelector<HTMLButtonElement>('button[aria-label="Email filter"]')!;
+  const filterMenu = () => host.querySelector<HTMLElement>(".inbox-email-filter-control .menu-popover")!;
+  const selectedFilter = () => {
+    const label = host.querySelector('.inbox-email-filter-control [aria-checked="true"]')!.textContent!.trim();
+    return Object.keys(filterNames).find((value) => filterNames[value] === label);
+  };
   const chooseFilter = (value: string) => {
-    const select = filterSelect();
-    select.value = value;
-    select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    filterSelect().click();
+    assert.equal(filterMenu().hidden, false);
+    [...filterMenu().querySelectorAll<HTMLButtonElement>(".menu-option")]
+      .find((option) => option.textContent!.trim() === filterNames[value])!
+      .click();
+    assert.equal(filterMenu().hidden, true);
   };
   const titles = () => [...host.querySelectorAll(".inbox-item-sub")].map((item) => item.textContent?.trim());
   const assertTabCounts = () => {
@@ -109,10 +124,22 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   await settled();
   assertTabCounts();
   assert.deepEqual(
-    [...host.querySelectorAll(".inbox-filter option")].map((element) => element.textContent?.trim()),
-    ["Needs attention", "From people", "All emails"],
+    [...host.querySelectorAll(".inbox-email-filter-control .menu-option-label")].map((element) =>
+      element.textContent?.trim(),
+    ),
+    ["All emails", "Light filtering — exclude notifications", "Heavy filtering — only emails that need your attention"],
   );
-  assert.equal(filterSelect().value, "triaged");
+  assert.equal(selectedFilter(), "triaged");
+  assert.equal(filterSelect().getAttribute("aria-description"), "Emails identified as needing a reply or review");
+  filterSelect().focus();
+  filterSelect().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  assert.equal(filterSelect().getAttribute("aria-expanded"), "true");
+  assert.equal(filterMenu().hidden, false);
+  assert.equal(document.activeElement, filterMenu().querySelector("button"));
+  document.activeElement!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(filterMenu().hidden, true);
+  assert.equal(filterSelect().getAttribute("aria-expanded"), "false");
+  assert.equal(document.activeElement, filterSelect());
   assert.deepEqual(titles(), ["Please review the launch plan"]);
   const fetchInbox = globalThis.fetch;
   let resumeRefresh!: () => void;
@@ -125,6 +152,10 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   };
   const backgroundRefresh = refreshInbox({ silent: true });
   assert.equal(filterSelect().disabled, true);
+  filterSelect().click();
+  filterSelect().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  assert.equal(filterMenu().hidden, true);
+  assert.ok([...filterMenu().querySelectorAll<HTMLButtonElement>("button")].every((option) => option.disabled));
   resumeRefresh();
   await backgroundRefresh;
   globalThis.fetch = fetchInbox;
@@ -137,11 +168,12 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   await settled();
   assertTabCounts();
   assert.equal(titles().length, 4);
-  assert.equal(filterSelect().value, "all");
+  assert.equal(selectedFilter(), "all");
   assert.deepEqual(writes, ["human", "all"]);
   resetInboxState();
+  assert.equal(inboxState.filter, "human");
   await refreshInbox();
-  assert.equal(filterSelect().value, "all");
+  assert.equal(selectedFilter(), "all");
   assert.equal(titles().length, 4);
   race = "preference";
   requests = [];
@@ -174,14 +206,14 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   failSave = true;
   chooseFilter("triaged");
   await settled();
-  assert.equal(filterSelect().value, "all");
+  assert.equal(selectedFilter(), "all");
   assert.equal(inboxState.notice, "Offline");
   failSave = false;
   rejectSave = true;
   saved = "human";
   chooseFilter("triaged");
   await settled();
-  assert.equal(filterSelect().value, "human");
+  assert.equal(selectedFilter(), "human");
   assert.deepEqual(titles(), ["Please review the launch plan", "Thanks, all set", "Quick question"]);
   assert.deepEqual(writes, ["human", "all"]);
   assert.equal(
@@ -191,7 +223,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   rejectSave = false;
   chooseFilter("triaged");
   await settled();
-  assert.equal(filterSelect().value, "triaged");
+  assert.equal(selectedFilter(), "triaged");
   assert.deepEqual(titles(), ["Please review the launch plan"]);
   assert.deepEqual(writes, ["human", "all", "triaged"]);
   inboxState.items.push(
@@ -252,7 +284,10 @@ test("email filters appear only on email views and leave other sources unchanged
     for (const viewId of ["all", "gmail", "email", "empty-email", "mixed"]) {
       mount({ viewId });
       assert.equal(host.querySelector(".inbox-filter > span")?.textContent, "Emails");
-      assert.equal(host.querySelector<HTMLSelectElement>('select[aria-label="Email filter"]')?.value, filter);
+      assert.equal(
+        host.querySelector('.inbox-email-filter-control [aria-checked="true"]')?.textContent?.trim(),
+        filterNames[filter],
+      );
     }
     for (const viewId of ["slack", "chat", "custom", "sent"]) {
       mount({ viewId });
@@ -262,7 +297,58 @@ test("email filters appear only on email views and leave other sources unchanged
         assert.match(host.querySelector(".inbox-resolved-head")!.textContent!, /Probably resolved/);
         assert.equal(host.querySelectorAll(".inbox-list:not(.inbox-resolved-list) .inbox-item").length, 2);
       }
-      assert.doesNotMatch(host.querySelector(".inbox-zero")?.textContent ?? "", /Choose From people/);
+      assert.doesNotMatch(host.querySelector(".inbox-zero")?.textContent ?? "", /Choose Light filtering/);
     }
   }
+});
+
+test("email filters default to Light filtering when the feed omits a preference", async (t) => {
+  const {
+    host,
+    mount,
+    inbox: { inboxState, refreshInbox },
+  } = await inboxUi(t);
+  const items = [
+    { id: "pending", state: "pending", sourcePayload: { title: "Quick question" } },
+    { id: "resolved", state: "held", sourcePayload: { title: "Thanks, all set", probablyResolved: true } },
+    { id: "automated", state: "pending", sourcePayload: { title: "Your receipt", automated: true } },
+  ].map((item) => ({ loopId: "email", source: "gmail", thread: [], ...item }));
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input), "http://localhost");
+    if (!url.pathname.endsWith("/api/inbox")) return Response.json({});
+    return Response.json({
+      selected: [{ id: "email", name: "Email", sources: ["gmail"], count: items.length }],
+      available: [],
+      items: url.searchParams.has("view") ? [] : items,
+      total: items.length,
+      nextCursor: null,
+    });
+  };
+  inboxState.filter = "triaged";
+  await refreshInbox();
+  mount();
+  assert.equal(inboxState.filter, "human");
+  assert.equal(
+    host.querySelector('.inbox-email-filter-control [aria-checked="true"]')?.textContent?.trim(),
+    filterNames.human,
+  );
+  assert.deepEqual(
+    [...host.querySelectorAll(".inbox-item-sub")].map((item) => item.textContent?.trim()),
+    ["Quick question", "Thanks, all set"],
+  );
+});
+
+test("the inbox filter is unavailable without Inbox access", async (t) => {
+  const { host, mount, vite, inbox } = await inboxUi(t);
+  const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
+  appState.me.permissions = [];
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    requests.push(String(input));
+    return Response.json({});
+  };
+  mount();
+  await inbox.refreshInbox();
+  assert.equal(host.querySelector(".inbox-email-filter-control"), null);
+  assert.deepEqual(requests, []);
 });

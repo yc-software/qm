@@ -6,6 +6,7 @@ export default tseslint.config(
   {
     ignores: [
       "**/node_modules/",
+      "src/deploy/vendor/",
       "**/dist/",
       "**/dist-web/",
       "data/",

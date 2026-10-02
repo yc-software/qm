@@ -136,7 +136,18 @@ disposable test deployment: the test redeems real links for its configured admin
 - **Non-admin users need no per-id config.** `PORTAL_EXPECTED_TEAM_ID` pins the workspace, so any
   verified member is a valid user (`WEB_UI_PRINCIPALS` empty = any verified principal).
 - **CSRF / open-redirect.** Every non-GET requires a same-origin `Origin`; `returnTo` is reduced
-  to a same-origin path (rejects `//evil`, `/\evil`, `https:/evil`, `%2f%2f`/`%5c`).
+  to a same-origin path (rejects `//evil`, `/\evil`, `https:/evil`, `%2f%2f`/`%5c`). The one
+  exception is an origin listed in `PORTAL_API_ALLOWED_ORIGINS`, and only on the chat API (below).
+- **Embedding the chat from another app.** `PORTAL_API_ALLOWED_ORIGINS` lists the exact
+  origins (comma-separated, bare `https://host[:port]`, no wildcards) that may call the web
+  surface's chat API from their own pages with the user's portal session: `/me`, sending a turn,
+  following, cancelling and withdrawing runs, listing and reading sessions and their approvals,
+  deciding an approval, uploading attachment blobs, and downloading files. Those routes answer CORS preflights
+  for listed origins and grant them credentialed reads and writes. Every other route keeps the
+  same-origin rule, and unlisted origins get nothing. The session cookie is `SameSite=Lax`, so a
+  browser only sends it on these calls when the embedding app is on the same site as the portal
+  (for example `internal.example.com` beside `qm.example.com`). Listing an origin trusts every
+  page on it to act as any signed-in user who visits it, so list only first-party apps.
 - **Secret hygiene.** In production the portal refuses to boot unless `PORTAL_SESSION_SECRET`,
   `PORTAL_IDENTITY_SECRET`, and `OIDC_CLIENT_SECRET` are set and distinct from core ingress auth.
   Public and OIDC endpoints must use HTTPS. Session and temporary cookies use domain-separated keys.
@@ -226,6 +237,8 @@ Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CO
 `PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of 30 days and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.
 There is no `PORTAL_ADMIN_PRINCIPALS` — admin
 access is derived from the core (see the security model above).
+`PORTAL_API_ALLOWED_ORIGINS` (default empty) opens the chat API to other first-party origins;
+see the security model. Boot fails on an entry that is not a bare https origin (plain http only for localhost).
 For local development only, `PORTAL_LOCAL_AUTH_BYPASS=1` mints a local session as
 `PORTAL_DEV_PRINCIPAL` without contacting OIDC. The portal refuses this in production
 and only accepts it when `PORTAL_PUBLIC_URL` is loopback.

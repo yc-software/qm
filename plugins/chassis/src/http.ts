@@ -28,8 +28,16 @@ export function gzipAccepted(req: IncomingMessage | undefined): boolean {
   return explicit ?? wildcard ?? false;
 }
 
+export function withVary(res: ServerResponse, value: string): string {
+  const existing = res.getHeader("vary");
+  const tokens = [...(existing === undefined ? [] : String(existing).split(",")), ...value.split(",")]
+    .map((token) => token.trim())
+    .filter(Boolean);
+  return [...new Map(tokens.map((token) => [token.toLowerCase(), token])).values()].join(", ");
+}
+
 export function sendBuffered(res: ServerResponse, status: number, headers: Record<string, string>, body: string): void {
-  const out = { ...headers, vary: "accept-encoding" };
+  const out = { ...headers, vary: withVary(res, "accept-encoding") };
   if (Buffer.byteLength(body) < COMPRESS_MIN_BYTES || !gzipAccepted(res.req)) {
     res.writeHead(status, out);
     res.end(body);

@@ -48,6 +48,7 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
           managesScope: async () => false,
         },
         res: {
+          getHeader: () => undefined,
           writeHead: (value: number) => {
             status = value;
           },
@@ -458,7 +459,10 @@ test("email filters leave Slack unchanged while source counts include all open c
     })),
   ]);
   const keys = (feed: any) => feed.items.map((item: any) => item.dedupeKey).sort();
-  const triaged = (await w.call()).data;
+  const initial = (await w.call()).data;
+  assert.equal(initial.filter, "human");
+  assert.deepEqual(keys(initial), ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]);
+  const triaged = (await w.call("GET", null, "filter=triaged")).data;
   assert.equal(triaged.filter, "triaged");
   assert.deepEqual(keys(triaged), ["question", "slack-bot", "slack-question", "slack-resolved"]);
   assert.equal(triaged.total, 8);
@@ -468,6 +472,7 @@ test("email filters leave Slack unchanged while source counts include all open c
     [slack!.id, 4],
   ]);
   for (const [filter, expected] of [
+    ["triaged", ["question", "slack-bot", "slack-question", "slack-resolved"]],
     ["human", ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
     ["all", ["pending", "question", "receipt", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
   ] as const) {
@@ -491,14 +496,14 @@ test("email filters leave Slack unchanged while source counts include all open c
       keys((await w.call("GET", null, `loopId=${email!.id}`)).data),
       expected.filter((key) => !key.startsWith("slack-")),
     );
-    assert.equal((await w.call("GET", null, "", "mallory")).data.filter, "triaged");
+    assert.equal((await w.call("GET", null, "", "mallory")).data.filter, "human");
   }
   const receipt = (await w.call()).data.items.find((item: any) => item.dedupeKey === "receipt");
   assert.equal(receipt.sourcePayload.automated, true);
   assert.equal(receipt.state, "held");
   assert.equal(receipt.proposal, undefined);
   await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "invalid", updatedAt: Date.now() });
-  assert.equal((await w.call()).data.filter, "triaged");
+  assert.equal((await w.call()).data.filter, "human");
   const question = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "question")!;
   await w.deps.items.recordAction(question.id, { kind: "dismiss", outcome: "dismissed" });
   const afterDismiss = (await w.call()).data;
@@ -523,7 +528,7 @@ test("inbox filters apply before pagination even when automated messages fill mu
       },
     ]);
   }
-  const triaged = (await w.call()).data;
+  const triaged = (await w.call("GET", null, "filter=triaged")).data;
   assert.equal(triaged.total, 85);
   assert.equal(triaged.items.length, 5);
   assert.equal(triaged.nextCursor, null);

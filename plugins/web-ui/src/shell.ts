@@ -104,6 +104,7 @@ import {
   routeInboxHistory,
 } from "./inbox";
 import { openSkillById, renderSkills, resetActiveSkill, routeSkillsHistory } from "./skills";
+import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
@@ -1203,6 +1204,10 @@ export async function boot(): Promise<void> {
     const slug = (params.get("slug") ?? "").toLowerCase();
     if (/^[a-z0-9-]{1,63}$/.test(slug)) {
       openAppEditChat(slug);
+      if (params.get("embed") === "1")
+        watchAppAnnotations(slug, (text, files, id, remove) =>
+          mainConversation().composer.addAnnotations(text, files, id, remove),
+        );
       return;
     }
     showMainEmpty("This edit link is missing a valid app name.");

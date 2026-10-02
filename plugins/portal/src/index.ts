@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
+import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
   deriveKey,
   seal,
@@ -72,6 +73,7 @@ import {
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
+  isMissingOrPlaceholder,
   portFromEnv,
 } from "../../chassis/src/env.ts";
 
@@ -94,6 +96,7 @@ const ORIGIN = (() => {
     return "";
   }
 })();
+const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
 const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPortalUrl(PUBLIC_URL);
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
@@ -999,6 +1002,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return proxyToAppHost(req, res, CORE);
   }
 
+  const crossOrigin = prepareCors(req, res, pathname, API_ALLOWED_ORIGINS.origins);
+  if (crossOrigin && method === "OPTIONS") return answerPreflight(res);
+
   const brokerPath = brokerRouteFor(method, pathname);
   const reauthentication =
     (method === "GET" &&
@@ -1314,7 +1320,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  if (method !== "GET" && method !== "HEAD" && !sameOriginRequest(req)) {
+  if (method !== "GET" && method !== "HEAD" && !crossOrigin && !sameOriginRequest(req)) {
     return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
   }
 
@@ -1365,7 +1371,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let principal = session.sub;
   let impersonator: string | undefined;
-  if (key === "web-ui") {
+  if (key === "web-ui" && !crossOrigin) {
     const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
     if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
       principal = imp.target;
@@ -1740,7 +1746,19 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
 }
 
 export function bootChecks(): void {
-  const problems: string[] = [];
+  const problems: string[] = [...API_ALLOWED_ORIGINS.problems];
+  for (const origin of API_ALLOWED_ORIGINS.origins) {
+    const host = hostOf(origin);
+    if (IS_PROD && !origin.startsWith("https://")) {
+      problems.push(`PORTAL_API_ALLOWED_ORIGINS entry "${origin}" must use https in production`);
+    }
+    if (APPS_DOMAIN && hostIsWithinDomain(host, APPS_DOMAIN)) {
+      problems.push(
+        `PORTAL_API_ALLOWED_ORIGINS entry "${origin}" is under the apps domain (${APPS_DOMAIN}), which serves user-deployed apps`,
+      );
+    }
+    if (origin === ORIGIN) problems.push(`PORTAL_API_ALLOWED_ORIGINS must not list the portal's own origin`);
+  }
   if (!AUTH_BROKER_UPSTREAM && originOf(OIDC.authEndpoint) && originOf(OIDC.authEndpoint) === originOf(PUBLIC_URL)) {
     problems.push(
       "OIDC_AUTH_ENDPOINT is on the portal's own origin but AUTH_BROKER_UPSTREAM is unset — every sign-in would redirect from /auth/login back into the portal forever; wire AUTH_BROKER_UPSTREAM to the auth service or point OIDC_AUTH_ENDPOINT at a real identity provider",
@@ -1875,11 +1893,6 @@ export function bootChecks(): void {
     for (const p of problems) console.error(`[portal] FATAL: ${p}`);
     throw new Error(`portal refusing to start: ${problems.length} misconfiguration(s)`);
   }
-}
-
-function isMissingOrPlaceholder(value: string | undefined): boolean {
-  const candidate = value?.trim();
-  return !candidate || /^(replace-me|placeholder|changeme|todo)$/i.test(candidate);
 }
 
 function validEmailDomain(value: string): boolean {

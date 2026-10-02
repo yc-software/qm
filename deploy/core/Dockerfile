@@ -24,6 +24,7 @@ RUN npm ci --omit=dev && npm audit --omit=dev --audit-level=moderate \
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
 COPY src ./src
+COPY cli/src/credential-paths.ts cli/src/tool-descriptor.ts ./cli/src/
 COPY scripts/migrate-transcript-tape.ts ./scripts/migrate-transcript-tape.ts
 COPY scripts/lib/transcript-tape-migration.ts ./scripts/lib/transcript-tape-migration.ts
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json

@@ -87,7 +87,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
     return sendJson(ctx.res, 400, { error: "invalid_filter" });
   const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(acting.actorId, "inbox-filter")))?.value;
-  const inboxFilter = savedFilter === "all" || savedFilter === "human" ? savedFilter : "triaged";
+  const inboxFilter = savedFilter === "all" || savedFilter === "triaged" ? savedFilter : "human";
   const handled = ctx.url.searchParams.get("view") === "handled";
   const sent = ctx.url.searchParams.get("view") === "sent";
   const filter = ctx.url.searchParams.get("loopId");

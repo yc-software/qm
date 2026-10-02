@@ -58,7 +58,8 @@
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
     "lint:knip": "knip",
-    "migrate:transcript-tape": "node scripts/migrate-transcript-tape.ts"
+    "migrate:transcript-tape": "node scripts/migrate-transcript-tape.ts",
+    "build:app-annotations": "node scripts/build-app-devbar.mjs"
   },
   "lint-staged": {
     "*": "prettier --write --ignore-unknown"
@@ -126,6 +127,7 @@
     "@types/pg": "^8.11.10",
     "@types/tar-stream": "^3.1.4",
     "@yc-software/qm": "file:./cli",
+    "devbar.sh": "1.1.0",
     "esbuild": "0.28.1",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",

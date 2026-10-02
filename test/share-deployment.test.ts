@@ -76,6 +76,7 @@ function callShare(
 ) {
   const out: { status?: number; body?: any } = {};
   const res = {
+    getHeader() {},
     writeHead(s: number) {
       out.status = s;
     },
@@ -102,6 +103,7 @@ function callManage(
 ) {
   const out: { status?: number; body?: any } = {};
   const res = {
+    getHeader() {},
     writeHead(s: number) {
       out.status = s;
     },
@@ -116,6 +118,7 @@ function callManage(
 function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityClaims, id: string) {
   const out: { status?: number; body?: any } = {};
   const res = {
+    getHeader() {},
     writeHead(s: number) {
       out.status = s;
     },
@@ -735,6 +738,7 @@ test("exact email read grants admit app-only login and guest reach without membe
       deps: { identity, acl, featureFlags },
       url: new URL(`http://core/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`),
       res: {
+        getHeader() {},
         writeHead(s: number) {
           status = s;
         },

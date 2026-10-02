@@ -48,7 +48,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, icon, initials, relTime, sheenLabel, workingWave } from "./ui";
+import { brandName, fieldSelect, menuSelect, icon, initials, relTime, sheenLabel, workingWave } from "./ui";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 
@@ -179,15 +179,23 @@ function inboxViewSegment(viewId: string): string {
 }
 
 const INBOX_FILTERS = [
-  { id: "triaged", label: "Needs attention", description: "Emails identified as needing a reply or review" },
-  { id: "human", label: "From people", description: "Emails from people, including conversations that need no reply" },
   { id: "all", label: "All emails", description: "All synced emails, including newsletters and automated mail" },
+  {
+    id: "human",
+    label: "Light filtering — exclude notifications",
+    description: "Emails from people, including conversations that need no reply",
+  },
+  {
+    id: "triaged",
+    label: "Heavy filtering — only emails that need your attention",
+    description: "Emails identified as needing a reply or review",
+  },
 ] as const;
 
 type InboxFilter = (typeof INBOX_FILTERS)[number]["id"];
 
 export const inboxState = {
-  filter: "triaged" as InboxFilter,
+  filter: "human" as InboxFilter,
   filterBusy: false,
   items: [] as InboxItem[],
   selected: [] as Array<{
@@ -323,7 +331,7 @@ export function resetInboxState(): void {
   inboxState.selected = [];
   inboxState.available = [];
   inboxState.total = 0;
-  inboxState.filter = "triaged";
+  inboxState.filter = "human";
   inboxState.filterBusy = false;
   inboxState.nextCursor = null;
   feedWindows.clear();
@@ -502,7 +510,7 @@ export async function refreshInbox(
     const fetchFeed = async (qs: URLSearchParams): Promise<Feed> => {
       if (refreshFilter) qs.set("filter", refreshFilter);
       const feed = await api<Feed>(`/api/inbox?${qs}`);
-      const filter = feed.filter ?? "triaged";
+      const filter = feed.filter ?? "human";
       if (refreshFilter && filter !== refreshFilter) throw new Error("Inbox filter changed during refresh. Try again.");
       refreshFilter = filter;
       return feed;
@@ -1765,7 +1773,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     selectedLoop?.sources?.includes("gmail");
   let emptyMessage = "No messages in this view yet. Sync to check for new messages.";
   if (showEmailFilter && inboxState.filter === "triaged")
-    emptyMessage = "Nothing is waiting on you. Choose From people or All emails to see more emails.";
+    emptyMessage = "Nothing is waiting on you. Choose Light filtering or All emails to see more emails.";
   if (surface.viewId === "sent") emptyMessage = "No sent messages yet. Sent Email and Slack replies will appear here.";
   const handledItems = itemsFor(surface.viewId, "handled");
   const hasMore = !!feedWindows.get(surface.viewId)?.nextCursor;
@@ -1896,23 +1904,19 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
               <div class="inbox-filter-bar">
                 ${
                   showEmailFilter
-                    ? html`<label class="inbox-filter">
+                    ? html`<div class="inbox-filter">
                         <span>Emails</span>
-                        ${fieldSelect({
-                          className: "inbox-filter-control",
+                        ${menuSelect({
+                          className: "inbox-email-filter-control",
                           ariaLabel: "Email filter",
                           ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
                           value: inboxState.filter,
                           disabled: inboxState.filterBusy || inboxState.loading,
-                          onChange: (value) => void selectInboxFilter(value as InboxFilter),
-                          options: INBOX_FILTERS.map(
-                            (filter) =>
-                              html`<option value=${filter.id} ?selected=${filter.id === inboxState.filter}>
-                                ${filter.label}
-                              </option>`,
-                          ),
+                          keyboardNavigation: true,
+                          onSelect: (value) => void selectInboxFilter(value as InboxFilter),
+                          options: INBOX_FILTERS.map((filter) => ({ value: filter.id, label: filter.label })),
                         })}
-                      </label>`
+                      </div>`
                     : nothing
                 }
                 ${
