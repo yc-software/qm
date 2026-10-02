@@ -19,7 +19,7 @@ export function effortLabel(level: EffortLevel): string {
 }
 
 export function harnessSupportsEffort(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "codex" || harnessId === "claude";
+  return harnessId === "pi" || harnessId === "codex" || harnessId === "claude" || harnessId === "muse";
 }
 
 export function harnessSupportsFastMode(harnessId: string): boolean {

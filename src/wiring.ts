@@ -251,6 +251,7 @@ import {
 } from "./credentials/secret-source.ts";
 import {
   createKeychain,
+  isBackendCredential,
   type ConnectorTokenStore,
   type OAuthToken,
   type Keychain,
@@ -314,6 +315,7 @@ import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-h
 import { keychainCodexAuthStore, fileCodexAuthStore, type CodexAuthStore } from "./harness/codex-auth-store.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
+import { createMuseHarness, museHarnessConfigOptions, MUSE_API_ENV_KEY } from "./harness/muse-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
@@ -1431,6 +1433,48 @@ export function buildApp(
                 "CLAUDE_CODE_OAUTH_TOKEN",
                 "ANTHROPIC_AUTH_TOKEN",
               ]),
+            }
+          : {}),
+        signals: runSignals,
+        tasks,
+        mcpTools,
+      }),
+    ],
+    [
+      "muse",
+      createMuseHarness({
+        ...museHarnessConfigOptions(config),
+        env: config.museProcessEnv,
+        ...(config.museAuthCredential && keychain
+          ? {
+              apiKeyResolver: async () => {
+                try {
+                  const slug = config.museAuthCredential!;
+                  const listed = await keychain.listServiceCredentials(orgScope);
+                  const record = listed.find((candidate) => candidate.slug === slug);
+                  if (
+                    !record ||
+                    !record.enabled ||
+                    !record.hasSecret ||
+                    record.delivery !== "env" ||
+                    record.envKey !== MUSE_API_ENV_KEY ||
+                    isBackendCredential(record)
+                  )
+                    return undefined;
+                  const current = await keychain.getServiceCredentialSecret(orgScope, slug);
+                  if (
+                    !current ||
+                    !current.enabled ||
+                    current.delivery !== "env" ||
+                    current.envKey !== MUSE_API_ENV_KEY ||
+                    !current.secret.trim()
+                  )
+                    return undefined;
+                  return current.secret;
+                } catch {
+                  return undefined;
+                }
+              },
             }
           : {}),
         signals: runSignals,

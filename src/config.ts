@@ -69,7 +69,7 @@ export interface Config {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  harness: "mock" | "pi" | "opencode" | "codex" | "claude";
+  harness: "mock" | "pi" | "opencode" | "codex" | "claude" | "muse";
   securityPosture: SecurityPosture;
   sandboxResourcesEnabled: boolean;
   sharingPosture: SharingPosture;
@@ -93,6 +93,12 @@ export interface Config {
   claudeModel?: string;
   claudeBinPath?: string;
   claudeProcessEnv: NodeJS.ProcessEnv;
+  museModel?: string;
+  museBinPath?: string;
+  museAuthCredential?: string;
+  musePermissionProfile?: string;
+  museMaxModelSteps?: number;
+  museProcessEnv: NodeJS.ProcessEnv;
   detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
@@ -219,6 +225,7 @@ export interface Config {
 export function configuredModelForHarness(config: Config, harness: string): string | undefined {
   if (harness === "codex") return config.codexModel;
   if (harness === "claude") return config.claudeModel;
+  if (harness === "muse") return config.museModel;
   if (harness === "opencode") return config.opencodeModel;
   return config.modelId;
 }
@@ -987,10 +994,17 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
 function harnessEnvStrict(value: string | undefined): Config["harness"] {
   if (value === undefined || value.trim() === "") return "mock";
   const harness = value.trim();
-  if (harness === "mock" || harness === "pi" || harness === "opencode" || harness === "codex" || harness === "claude")
+  if (
+    harness === "mock" ||
+    harness === "pi" ||
+    harness === "opencode" ||
+    harness === "codex" ||
+    harness === "claude" ||
+    harness === "muse"
+  )
     return harness;
   throw new Error(
-    `HARNESS=${JSON.stringify(value)} is not recognized — use mock, pi, opencode, codex, or claude, or unset it.`,
+    `HARNESS=${JSON.stringify(value)} is not recognized — use mock, pi, opencode, codex, claude, or muse, or unset it.`,
   );
 }
 
@@ -1425,6 +1439,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   ) as NodeJS.ProcessEnv;
   if (providerBaseUrls.openai) codexProcessEnv.OPENAI_BASE_URL = providerBaseUrls.openai;
   if (providerBaseUrls.anthropic) claudeProcessEnv.ANTHROPIC_BASE_URL = providerBaseUrls.anthropic;
+  const museProcessEnv = Object.fromEntries(
+    [
+      "PATH",
+      "TMPDIR",
+      "LANG",
+      "LC_ALL",
+      "SSL_CERT_FILE",
+      "SSL_CERT_DIR",
+      "NODE_EXTRA_CA_CERTS",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "NO_PROXY",
+      "ALL_PROXY",
+    ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
+  ) as NodeJS.ProcessEnv;
   const turnWallClockMs =
     (numEnvStrict("TURN_WALL_CLOCK_SEC", env.TURN_WALL_CLOCK_SEC) ?? CONFIG_DEFAULTS.turnWallClockSec) * 1000;
   const runMaxAgeMs =
@@ -1499,6 +1528,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.CLAUDE_MODEL ? { claudeModel: env.CLAUDE_MODEL } : {}),
     ...(env.CLAUDE_BIN ? { claudeBinPath: env.CLAUDE_BIN } : {}),
     claudeProcessEnv,
+    ...(env.MUSE_MODEL ? { museModel: env.MUSE_MODEL } : {}),
+    ...(env.MUSE_BIN ? { museBinPath: env.MUSE_BIN } : {}),
+    ...(env.MUSE_AUTH_CREDENTIAL?.trim() ? { museAuthCredential: env.MUSE_AUTH_CREDENTIAL.trim() } : {}),
+    ...(env.MUSE_PERMISSION_PROFILE?.trim() ? { musePermissionProfile: env.MUSE_PERMISSION_PROFILE.trim() } : {}),
+    ...(env.MUSE_MAX_MODEL_STEPS?.trim()
+      ? { museMaxModelSteps: numEnvStrict("MUSE_MAX_MODEL_STEPS", env.MUSE_MAX_MODEL_STEPS) }
+      : {}),
+    museProcessEnv,
     ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
     ...(env.PI_TITLE_MODEL ? { titleModelId: env.PI_TITLE_MODEL } : {}),
     ...(env.PI_JUDGE_MODEL ? { judgeModelId: env.PI_JUDGE_MODEL } : {}),

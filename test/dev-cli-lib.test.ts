@@ -485,8 +485,8 @@ test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
     /OPENAI_API_KEY/,
   );
   rmSync(source, { recursive: true, force: true });
-  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, opencode, codex, or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, opencode, codex, or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, opencode, codex, claude, or muse/);
+  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, opencode, codex, claude, or muse/);
 });
 
 test("envSha is order-independent and value-sensitive", () => {

@@ -99,7 +99,7 @@ export function effortLevelsForHarness(
     if (advertised) return advertised.includes(value);
     if (value === "adaptive" || value === "default") return false;
     if (harnessId === "pi") return true;
-    if (harnessId === "claude") return value !== "ultracode";
+    if (harnessId === "claude" || harnessId === "muse") return value !== "ultracode";
     if (harnessId === "codex") return value !== "max" && value !== "ultracode";
     return false;
   });

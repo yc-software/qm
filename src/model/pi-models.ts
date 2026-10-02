@@ -9,6 +9,7 @@ const getModel = getBuiltinModel as unknown as (provider: string, id: string) =>
 
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-5.6-sol";
+export const DEFAULT_MUSE_MODEL_ID = "muse-spark-1.3";
 /**
  * pi-ai's ChatGPT-subscription provider: the same model ids as "openai",
  * served from the Codex backend and authenticated with a ChatGPT OAuth
@@ -35,7 +36,7 @@ export const THINKING_LEVELS = [
   "max",
   "ultracode",
 ] as const;
-export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
+export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "muse", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
 export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
@@ -64,6 +65,15 @@ export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string)
     if (harnessId === "pi") return true;
     if (harnessId === "claude") return level !== "ultracode";
     if (harnessId === "codex") return level !== "max" && level !== "ultracode";
+    if (harnessId === "muse")
+      return (
+        level === "auto" ||
+        level === "low" ||
+        level === "medium" ||
+        level === "high" ||
+        level === "xhigh" ||
+        level === "max"
+      );
     return level === "auto";
   });
 }
@@ -619,6 +629,7 @@ export function modelSupportedByHarness(id: string | undefined, harness: string)
   if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id))
     return harness === "pi" || harness === "opencode" || harness === "mock";
   if (harness === "pi" || harness === "opencode" || harness === "mock") return Boolean(resolveModel(id));
+  if (harness === "muse") return /^muse-/i.test(id ?? "");
   const provider = resolveModel(id)?.provider;
   if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
   if (harness === "codex") return provider === "openai" || /^(?:gpt-|o\d|codex|openai\/)/i.test(id);
@@ -632,7 +643,9 @@ export function defaultModelForHarness(
 ): string {
   if (configured && (modelUnavailableReason(configured) || modelSupportedByHarness(configured, harness)))
     return configured;
-  const preferred = harness === "codex" ? DEFAULT_CODEX_MODEL_ID : DEFAULT_AGENT_MODEL_ID;
+  let preferred = DEFAULT_AGENT_MODEL_ID;
+  if (harness === "codex") preferred = DEFAULT_CODEX_MODEL_ID;
+  if (harness === "muse") preferred = DEFAULT_MUSE_MODEL_ID;
   if (!providers || modelServiceable(preferred, providers)) return preferred;
   const servable = selectableBaseModels(true).find(
     (model) => modelSupportedByHarness(model.id, harness) && modelServiceable(model.id, providers),
@@ -654,6 +667,7 @@ function providerFlags(value: ModelProviderAvailability): ModelProviderAvailabil
 
 export function modelServiceable(id: string, providers: ModelProviderAvailability): boolean {
   if (isGatewayModelId(id)) return Boolean(resolveGatewayModel(id) && providers.modelIds?.has(id));
+  if (/^muse-/i.test(id)) return true;
   const provider = resolveModel(id)?.provider;
   if (!provider) return false;
   if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return true;

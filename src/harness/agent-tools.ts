@@ -2520,6 +2520,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 Type.Literal("opencode"),
                 Type.Literal("codex"),
                 Type.Literal("claude"),
+                Type.Literal("muse"),
               ]),
               modelId: Type.String(),
               effortLevel: Type.Optional(
