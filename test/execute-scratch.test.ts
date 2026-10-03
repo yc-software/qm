@@ -611,7 +611,7 @@ test("scratch destruction failures keep their cause and retain the handle for re
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.released").length, 0);
   assert.equal(
     JSON.parse(events.find((event) => event.action === "sandbox.scratch.release_failed")!.detail!).error,
-    "Disposable sandbox destruction failed",
+    "Disposable sandbox destruction failed <- Error: teardown-boom-1 <- Error: teardown-boom-2 <- Error: teardown-boom-3",
   );
   assert.equal(errors.length, 1);
   fail = false;

@@ -194,3 +194,15 @@ test("error fields tolerate circular data, bigint, failing serializers and malfo
   assert.ok(detail.includes("broken=[Unserializable]"));
   assert.equal(asError(body).cause, body);
 });
+
+test("field enumeration failures preserve the message and stack", () => {
+  const error = Object.assign(new Error("failure"), { cause: new Error("root") });
+  assert.ok(!errDetail(error).includes("cause="));
+  Object.defineProperty(error, "stack", { value: "Error: failure\n    at test.ts:1:1" });
+  const hostile = new Proxy(error, {
+    ownKeys() {
+      throw new Error("enumeration failed");
+    },
+  });
+  assert.equal(errDetail(hostile), errDetail(error));
+});

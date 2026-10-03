@@ -22,7 +22,7 @@ export function initializeErrorReporting(
     integrations: [
       sdk.onUncaughtExceptionIntegration(),
       sdk.linkedErrorsIntegration(),
-      sdk.extraErrorDataIntegration({ depth: 10, captureErrorCause: true }),
+      sdk.extraErrorDataIntegration(),
     ],
     skipOpenTelemetrySetup: tracesSampleRate === 0,
     ...(tracesSampleRate > 0 ? { tracesSampleRate } : {}),

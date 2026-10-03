@@ -4,8 +4,6 @@ export function errMessage(e: unknown, fallback?: string): string {
   return errorText(e);
 }
 
-const CAUSE_DEPTH = 5;
-
 function errorText(value: unknown): string {
   if (typeof value === "string") return value;
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return String(value);
@@ -23,44 +21,50 @@ function describeCause(cause: unknown): string {
 export function errChain(e: unknown): string {
   if (!(e instanceof Error)) return errorText(e);
   const parts = [e.message];
-  const seen = new Set<unknown>([e]);
+  const seen = new Set<unknown>();
   const messages = new Set([e.message]);
-  let cause: unknown = e.cause;
-  while (cause !== undefined && cause !== null && !seen.has(cause) && parts.length <= CAUSE_DEPTH) {
+  const pending: unknown[] = [e];
+  for (const cause of pending) {
+    if (cause == null || seen.has(cause)) continue;
     seen.add(cause);
     const causeMessage = cause instanceof Error ? cause.message : errorText(cause);
     if (!messages.has(causeMessage)) parts.push(describeCause(cause));
     messages.add(causeMessage);
-    cause = cause instanceof Error ? cause.cause : undefined;
+    if (cause instanceof Error) pending.push(cause.cause);
+    if (cause instanceof AggregateError && Array.isArray(cause.errors)) pending.push(...cause.errors);
   }
   return parts.join(" <- ");
 }
 
 function errorFields(e: unknown): string {
-  if (typeof e !== "object" || e === null) return "";
-  const fields = Object.entries(Object.getOwnPropertyDescriptors(e))
-    .filter(([, descriptor]) => descriptor.enumerable)
-    .map(([key, descriptor]) => {
-      try {
-        const seen = new Set<object>();
-        const value = descriptor.value;
-        const text =
-          typeof value === "object" && value !== null
-            ? JSON.stringify(value, (_key, item) => {
-                if (typeof item === "bigint") return String(item);
-                if (typeof item === "object" && item !== null) {
-                  if (seen.has(item)) return "[Circular]";
-                  seen.add(item);
-                }
-                return item;
-              })
-            : String(value);
-        return `${key}=${descriptor.get ? "[Getter]" : text}`;
-      } catch {
-        return `${key}=[Unserializable]`;
-      }
-    });
-  return fields.length ? ` [${fields.join(" ")}]` : "";
+  try {
+    if (typeof e !== "object" || e === null) return "";
+    const fields = Object.entries(Object.getOwnPropertyDescriptors(e))
+      .filter(([key, descriptor]) => key !== "cause" && descriptor.enumerable)
+      .map(([key, descriptor]) => {
+        try {
+          const seen = new Set<object>();
+          const value = descriptor.value;
+          const text =
+            typeof value === "object" && value !== null
+              ? JSON.stringify(value, (_key, item) => {
+                  if (typeof item === "bigint") return String(item);
+                  if (typeof item === "object" && item !== null) {
+                    if (seen.has(item)) return "[Circular]";
+                    seen.add(item);
+                  }
+                  return item;
+                })
+              : String(value);
+          return `${key}=${descriptor.get ? "[Getter]" : text}`;
+        } catch {
+          return `${key}=[Unserializable]`;
+        }
+      });
+    return fields.length ? ` [${fields.join(" ")}]` : "";
+  } catch {
+    return "";
+  }
 }
 
 export function errDetail(e: unknown, seen = new Set<unknown>()): string {

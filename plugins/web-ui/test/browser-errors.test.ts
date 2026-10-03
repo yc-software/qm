@@ -59,7 +59,7 @@ test("browser errors keep HTTP failures and their context while dropping network
     }
     reportHandledError("web:network", new DOMException("request cancelled", "AbortError"));
     sdk.captureException(new DOMException("request cancelled", "AbortError"));
-    const body = { error: { details: { reason: "db down" } } };
+    const body = { error: { reason: "db down" } };
     reportHandledError(
       "web:approvals_fetch",
       Object.assign(new ApiError("approvals 500", 500, body), { cause: new Error("db down") }),
