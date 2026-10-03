@@ -1828,3 +1828,45 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
     await f.stop();
   }
 });
+
+for (const [evt, payload] of [
+  ["channel_archive", { channel: "C1", user: "U1", event_ts: "100.3" }],
+  ["channel_deleted", { channel: "C1", event_ts: "100.4" }],
+  ["channel_left", { channel: "C1", actor_id: "U1", event_ts: "100.5" }],
+  ["group_archive", { channel: "C1", event_ts: "100.6" }],
+] as const) {
+  test(`${evt} drops the channel and its members from the core directory`, async () => {
+    const f = await fixture();
+    try {
+      assert.ok(f.core.directories.at(-1).channels.some((c: any) => c.channelId === "C1"));
+      if (evt === "channel_left")
+        f.client.channelsById.set("C1", { ...f.client.channelsById.get("C1"), is_member: false });
+      else f.client.channelsById.delete("C1");
+      const pushes = f.core.directories.length;
+      await f.app.emitEvent(evt, payload, `Ev-${evt}`);
+      await waitFor(() => f.core.directories.length > pushes);
+      const last = f.core.directories.at(-1);
+      assert.ok(!last.channels.some((c: any) => c.channelId === "C1"), "the channel is gone from the directory");
+      assert.ok(!last.channelMembers.some((m: any) => m.channelId === "C1"), "no one keeps access through it");
+    } finally {
+      await f.stop();
+    }
+  });
+}
+
+test("the Slack manifests subscribe to channel archive/delete/leave and private-channel lifecycle events", async () => {
+  const { readFileSync } = await import("node:fs");
+  for (const path of ["src/slack/manifest.json", "cli/templates/slack-manifest.json"]) {
+    const events = JSON.parse(readFileSync(path, "utf8")).settings.event_subscriptions.bot_events as string[];
+    for (const e of [
+      "channel_archive",
+      "channel_deleted",
+      "channel_left",
+      "group_archive",
+      "group_unarchive",
+      "group_rename",
+      "group_left",
+    ])
+      assert.ok(events.includes(e), `${path} subscribes ${e}`);
+  }
+});
