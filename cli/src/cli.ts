@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { CliError, bold, dim, errMessage, note, ok, red } from "./log.ts";
 import {
@@ -196,6 +196,12 @@ function deployContext(flags: Flags, dir?: string): DeployContext {
   };
 }
 
+function requireExistingEnvFile(path: string | undefined, flag: string): void {
+  if (path !== undefined && !existsSync(resolve(path))) {
+    throw new CliError(`${flag} not found: ${path}`, { clause: "cli.invocation" });
+  }
+}
+
 function rejectUnknownFlags(flags: Flags, allowed: readonly string[]): void {
   const unknown = Object.keys(flags).filter((name) => !allowed.includes(name));
   if (unknown.length)
@@ -329,6 +335,7 @@ async function dispatch(argv: string[]): Promise<void> {
           rejectUnknownFlags(flags, ["json", "live", "config", "env-file", "sandbox-dir", "target"]);
           rejectExtraPositionals(positionals, 0);
           const ctx = deployContext(flags);
+          requireExistingEnvFile(ctx.envFile, "--env-file");
           const result = await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile, false);
           if (boolFlag(flags, "live")) {
             const checkLive = deploymentBackend(ctx).checkLive;
@@ -385,6 +392,7 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectUnknownFlags(flags, ["json", "live", "config", "env-file", "sandbox-dir", "target"]);
       rejectExtraPositionals(positionals, 0);
       const ctx = deployContext(flags);
+      requireExistingEnvFile(ctx.envFile, "--env-file");
       if (boolFlag(flags, "live")) {
         const checkLive = deploymentBackend(ctx).checkLive;
         if (!checkLive)
@@ -623,6 +631,7 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from"]);
       const ctx = deployContext(flags);
       const from = strFlag(flags, "from") ?? ctx.envFile;
+      requireExistingEnvFile(from, strFlag(flags, "from") !== undefined ? "--from" : "--env-file");
       return deploymentBackend(ctx).secretsPush(from);
     }
 
