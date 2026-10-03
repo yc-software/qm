@@ -304,6 +304,8 @@ function effort(level: string | undefined): "low" | "medium" | "high" | "xhigh" 
     : undefined;
 }
 
+const SIGNAL_CLEANUP_BOUND_MS = 5_000;
+
 export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
   const configuredModel = opts.modelId;
   const judgeModelId = opts.judgeModelId ?? "claude-haiku-4-5";
@@ -605,9 +607,24 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         swallow("claude: llm request record", error);
       }
     };
+    const deadline =
+      wallMs > 0
+        ? new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              void interrupt(false);
+              reject(new NonRetryableTurnError(`Claude turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
+            }, wallMs);
+          })
+        : null;
+    deadline?.catch(() => undefined);
+    const withinDeadline = <T>(work: Promise<T>): Promise<T> => (deadline ? Promise.race([work, deadline]) : work);
     try {
-      await sdkQuery.initializationResult();
-      await appendTape(stripClaudeImageBytes(userMessage(text, turn.images)), true);
+      await withinDeadline(
+        (async () => {
+          await sdkQuery.initializationResult();
+          await appendTape(stripClaudeImageBytes(userMessage(text, turn.images)), true);
+        })(),
+      );
       queue.push(initial);
       const consume = (async () => {
         for await (const message of sdkQuery) {
@@ -765,17 +782,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         }
       })();
       try {
-        await (wallMs > 0
-          ? Promise.race([
-              consume,
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(() => {
-                  void interrupt(false);
-                  reject(new NonRetryableTurnError(`Claude turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
-                }, wallMs);
-              }),
-            ])
-          : consume);
+        await withinDeadline(consume);
       } catch (error) {
         if ((!interrupted && !controller.signal.aborted) || error instanceof NonRetryableTurnError) throw error;
       }
@@ -873,7 +880,16 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         }
       }
       queue.close();
-      if (!signalsStopped) await stopSignals?.();
+      if (!signalsStopped && stopSignals) {
+        let cleanupTimer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          stopSignals().catch((error: unknown) => swallow("claude signal poll stop", error)),
+          new Promise<void>((resolve) => {
+            cleanupTimer = setTimeout(resolve, SIGNAL_CLEANUP_BOUND_MS);
+          }),
+        ]);
+        clearTimeout(cleanupTimer);
+      }
       turn.cancel?.removeEventListener("abort", onCancel);
       for (const [taskId, task] of taskStates) {
         if (task.status === "pending" || task.status === "in_progress") {

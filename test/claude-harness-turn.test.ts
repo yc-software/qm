@@ -14,6 +14,7 @@ const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
 let capturedOptions: Record<string, unknown> = {};
 
 let currentScript: Script = async function* () {};
+let initHook: (() => Promise<unknown>) | undefined;
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
@@ -28,6 +29,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
       const generator = currentScript(prompt);
       return {
         async initializationResult() {
+          if (initHook) return initHook();
           return {};
         },
         async interrupt() {
@@ -152,6 +154,25 @@ test("a steered turn persists every reply, not only the last result's", async ()
     .filter((entry) => entry.type === "user")
     .map((entry) => (entry.payload as { text: string }).text);
   assert.deepEqual(userTexts, ["what is the capital of france?", "now do the other three"]);
+});
+
+test("the wall clock covers SDK initialization", async (t) => {
+  initHook = () => new Promise(() => {});
+  t.after(() => {
+    initHook = undefined;
+  });
+  currentScript = async function* () {};
+  const harness = createClaudeHarness({ turnWallClockMs: 30 });
+  const { turn } = harnessTurn();
+  const outcome = await Promise.race([
+    harness.turns.runTurn(turn).then(
+      () => "settled",
+      (error: Error) => error.message,
+    ),
+    new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 1_000).unref()),
+  ]);
+  assert.match(outcome, /wall clock/);
+  assert.equal((capturedOptions.abortController as AbortController).signal.aborted, true);
 });
 
 for (const shutdown of [false, true]) {
