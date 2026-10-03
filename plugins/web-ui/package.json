@@ -33,7 +33,7 @@
     "@tanstack/ai-client": "0.31.1",
     "date-fns": "^4.4.0",
     "dockview-core": "^7.0.4",
-    "dompurify": "^3.4.13",
+    "dompurify": "^3.4.16",
     "jszip": "^3.10.1",
     "lit": "^3.3.1",
     "lru-cache": "^11.5.2",
