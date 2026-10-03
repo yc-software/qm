@@ -329,8 +329,9 @@ export function writeEnvValue(path: string, key: string, value: string): void {
   const matches = (line: string): boolean => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) return false;
-    const eq = trimmed.indexOf("=");
-    return eq > 0 && trimmed.slice(0, eq).trim() === key;
+    const assignment = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trimStart() : trimmed;
+    const eq = assignment.indexOf("=");
+    return eq > 0 && assignment.slice(0, eq).trim() === key;
   };
   const entry = `${key}=${value}`;
   const next: string[] = [];
