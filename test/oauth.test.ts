@@ -123,10 +123,17 @@ test("refresh dispatches by host (calendar host → google provider)", async () 
 test("google company-slot exchange verifies the id_token hosted domain server-side", async () => {
   const r = createSecretClientResolver(createEnvSecretSource({ ...env, GOOGLE_WORKSPACE_DOMAIN: "example.com" }));
   const client = await r("google", { accountType: "company" });
-  const idToken = (hd?: string) =>
-    ["h", Buffer.from(JSON.stringify({ sub: "1", ...(hd ? { hd } : {}) }), "utf8").toString("base64url"), "s"].join(
-      ".",
-    );
+  const idToken = (hd?: string, overrides: Record<string, unknown> = {}) => {
+    const claims = {
+      sub: "1",
+      aud: client.id,
+      iss: "https://accounts.google.com",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      ...(hd ? { hd } : {}),
+      ...overrides,
+    };
+    return ["h", Buffer.from(JSON.stringify(claims), "utf8").toString("base64url"), "s"].join(".");
+  };
   const respondWith =
     (body: Record<string, unknown>): FetchLike =>
     async () => ({ ok: true, status: 200, json: async () => body });
@@ -165,6 +172,34 @@ test("google company-slot exchange verifies the id_token hosted domain server-si
       }),
     /not in the example\.com workspace/,
   );
+
+  const bareIssuer = await exchangeCode("google", "c", "https://app/cb", {
+    client,
+    accountType: "company",
+    fetchImpl: respondWith({
+      access_token: "at",
+      id_token: idToken("example.com", { iss: "accounts.google.com", aud: ["other", client.id], azp: client.id }),
+    }),
+  });
+  assert.equal(bareIssuer.token.accessToken, "at");
+
+  for (const bad of [
+    { aud: "someone-else" },
+    { aud: ["other", client.id], azp: "other" },
+    { iss: "https://evil.example" },
+    { exp: Math.floor(Date.now() / 1000) - 3600 },
+    { exp: undefined },
+  ]) {
+    await assert.rejects(
+      () =>
+        exchangeCode("google", "c", "https://app/cb", {
+          client,
+          accountType: "company",
+          fetchImpl: respondWith({ access_token: "at", id_token: idToken("example.com", bad) }),
+        }),
+      /failed audience, issuer, or expiry checks/,
+    );
+  }
 
   const personal = await exchangeCode("google", "c", "https://app/cb", {
     client: await r("google", { accountType: "personal" }),

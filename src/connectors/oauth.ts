@@ -1,9 +1,8 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
 import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
-import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { swallow } from "../util/errors.ts";
+import { jwtClaims } from "../util/jwt.ts";
 
 export type AccountType = "default" | "personal" | "company";
 
@@ -152,16 +151,25 @@ function makeTokenAdapters(opts: {
 
 const { exchange: defaultExchange, refresh: defaultRefresh } = makeTokenAdapters({});
 
+const GOOGLE_ID_TOKEN_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
+const ID_TOKEN_CLOCK_SKEW_S = 60;
+
 const googleExchange: OAuthExchangeAdapter = async (args) => {
-  const { client, accountType } = args;
+  const { client, accountType, now } = args;
   const { hosts, token, raw } = await defaultExchange(args);
   if (accountType === "company" && client.hostedDomain) {
-    const idToken = typeof raw?.id_token === "string" ? raw.id_token : "";
-    let claims: Record<string, unknown> | undefined;
-    try {
-      if (idToken) claims = decodeJwt(idToken);
-    } catch (e) {
-      swallow("google id_token decode", e);
+    const claims = jwtClaims(raw?.id_token);
+    if (claims) {
+      const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+      const exp = typeof claims.exp === "number" ? claims.exp : 0;
+      if (
+        !aud.includes(client.id) ||
+        (aud.length > 1 && claims.azp !== client.id) ||
+        !GOOGLE_ID_TOKEN_ISSUERS.has(String(claims.iss)) ||
+        exp + ID_TOKEN_CLOCK_SKEW_S <= now / 1000
+      ) {
+        throw new Error("google id_token failed audience, issuer, or expiry checks");
+      }
     }
     const hd = typeof claims?.hd === "string" ? claims.hd : "";
     if (hd.toLowerCase() !== client.hostedDomain.toLowerCase()) {
