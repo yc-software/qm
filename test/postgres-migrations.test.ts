@@ -232,3 +232,48 @@ test("pre-migration maintenance can repair schema before a released migration", 
     await admin.end();
   }
 });
+
+test(
+  "a migrator waiting for the schema lock does not deadlock a concurrent index build by the lock holder",
+  { skip },
+  async () => {
+    const holder = new pg.Client({ connectionString: databaseUrl });
+    const waiter = new pg.Pool({ connectionString: databaseUrl });
+    const { id, table } = names();
+    await holder.connect();
+    try {
+      await holder.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
+      await holder.query(`CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
+      id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+      await holder.query("SELECT pg_advisory_lock(hashtext('qm:schema-migrations'))");
+      const waiting = applyPgMigrations(waiter, [definePgMigration(id, [`SELECT 1`])]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await holder.query(`CREATE INDEX CONCURRENTLY ${table}_idx ON ${table}(value)`);
+      await holder.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
+      await waiting;
+    } finally {
+      await holder.query(`DROP TABLE IF EXISTS ${table}`);
+      await holder.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
+      await holder.end();
+      await waiter.end();
+    }
+  },
+);
+
+test("a migrator gives up with a clear error when the schema lock is held past its wait cap", { skip }, async () => {
+  const holder = new pg.Client({ connectionString: databaseUrl });
+  const waiter = new pg.Pool({ connectionString: databaseUrl });
+  const { id } = names();
+  await holder.connect();
+  try {
+    await holder.query("SELECT pg_advisory_lock(hashtext('qm:schema-migrations'))");
+    await assert.rejects(
+      applyPgMigrations(waiter, [definePgMigration(id, ["SELECT 1"])], { lockWaitMs: 600 }),
+      /timed out after \d+s waiting for advisory lock qm:schema-migrations/,
+    );
+  } finally {
+    await holder.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
+    await holder.end();
+    await waiter.end();
+  }
+});

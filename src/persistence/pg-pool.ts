@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
-import { createKeyedQueue } from "../util/async.ts";
+import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
@@ -96,6 +96,8 @@ function pooledDatabaseUrl(connectionString: string): string {
 }
 
 export const PG_MIGRATIONS_TABLE = "qm_schema_migrations";
+const MIGRATION_LOCK_POLL_MS = 250;
+const MIGRATION_LOCK_MAX_WAIT_MS = 30 * 60_000;
 
 export interface PgMigrationDefinition {
   id: string;
@@ -204,11 +206,35 @@ export function definePgMigration(
   return { id, statements: normalized, checksum, ...(legacyId ? { legacyId } : {}) };
 }
 
-export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
+async function waitForAdvisoryLock(
+  client: PoolClient,
+  key: string,
+  maxWaitMs = MIGRATION_LOCK_MAX_WAIT_MS,
+): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  for (;;) {
+    const { rows } = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock(hashtext($1)) AS locked", [
+      key,
+    ]);
+    if (rows[0]?.locked) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `pg-pool: timed out after ${Math.round(maxWaitMs / 1000)}s waiting for advisory lock ${key}; another process is still migrating this database`,
+      );
+    }
+    await sleep(MIGRATION_LOCK_POLL_MS);
+  }
+}
+
+export async function applyPgMigrations(
+  pool: Pool,
+  migrations: readonly PgMigration[],
+  opts: { lockWaitMs?: number } = {},
+): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext('qm:schema-migrations'))");
+    await waitForAdvisoryLock(client, "qm:schema-migrations", opts.lockWaitMs);
     await client.query(
       `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,
