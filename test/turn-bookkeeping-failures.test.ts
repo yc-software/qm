@@ -203,6 +203,22 @@ test("a cancel-stopped turn still persists and surfaces its pending approvals", 
   assert.equal(result.pendingApprovals?.[0]?.command, "rm -rf /srv/data");
 });
 
+test("a turn cancelled by the system carries the cancel cause on its stopped result", async () => {
+  const { orchestrator, input } = buildScenario({ reply: "(stopped)", stopped: true });
+  const controller = new AbortController();
+  controller.abort(new Error("the worker shut down mid-run"));
+  const result = await orchestrator.handleTurn(input("nightly digest", { cancel: controller.signal }));
+  assert.equal(result.stopped, true);
+  assert.equal(result.reason, "the worker shut down mid-run");
+});
+
+test("a stop the system did not cause carries no cause", async () => {
+  const { orchestrator, input } = buildScenario({ reply: "(stopped)", stopped: true });
+  const result = await orchestrator.handleTurn(input("nightly digest"));
+  assert.equal(result.stopped, true);
+  assert.equal(result.reason, undefined, "a stop the system did not cause carries no system cause");
+});
+
 test("an overheard import failure aborts the batch instead of skipping one message", async () => {
   const { orchestrator, sessions, input } = buildScenario();
   await orchestrator.handleTurn(input("prime"));

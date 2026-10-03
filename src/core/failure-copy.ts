@@ -28,3 +28,7 @@ export function userFacingFailureClause(result: FailureShape): string {
   if (result.status === "failed" || !result.reason) return GENERIC_FAILURE_CLAUSE;
   return result.reason;
 }
+
+export function turnFailureNotice(clause: string, adminUrl?: string): string {
+  return `⚠️ I couldn't finish that turn: ${clause}${adminUrl ? ` — full error: ${adminUrl}` : ""}`;
+}

@@ -5,7 +5,7 @@ import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts"
 import type { Task, TaskStore } from "../tasks/task-store.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
-import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
+import { standaloneFailureText, turnFailureNotice, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import {
   acquireLeaseWithin,
@@ -87,8 +87,7 @@ export function runResultDelivery(
     if (origin.kind === "ambient") return null;
     const clause = userFacingFailureClause(run.result ?? { status: "failed" });
     const adminUrl = run.result?.sessionId ? adminUrlFor?.(run.result.sessionId) : undefined;
-    const detail = adminUrl ? ` — full error: ${adminUrl}` : "";
-    return { destination, text: `⚠️ I couldn't finish that turn: ${clause}${detail}`, provenance, idempotencyKey };
+    return { destination, text: turnFailureNotice(clause, adminUrl), provenance, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
     return {
