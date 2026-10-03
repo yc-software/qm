@@ -101,12 +101,27 @@ test("missing any email credential disables delivery without preventing startup"
   for (const transport of ["resend", "smtp"]) {
     const complete = { ...settings, AUTH_EMAIL_TRANSPORT: transport };
     assert.equal(problemsFor(complete), "");
-    const credentials = transport === "resend" ? ["RESEND_API_KEY"] : ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"];
+    const credentials = transport === "resend" ? ["RESEND_API_KEY"] : ["SMTP_HOST"];
     for (const name of ["AUTH_EMAIL_FROM", ...credentials]) {
       for (const value of [undefined, "", "  "]) {
         assert.equal(problemsFor({ ...complete, [name]: value }), "", `${transport}: ${name}=${JSON.stringify(value)}`);
       }
     }
+  }
+});
+
+test("an IP-authenticated relay needs no SMTP credentials, but a half pair is refused", () => {
+  const relay = {
+    AUTH_EMAIL_TRANSPORT: "smtp",
+    SMTP_HOST: "smtp.example.com",
+    SMTP_USERNAME: undefined,
+    SMTP_PASSWORD: undefined,
+    CORE_SIGNING_SECRET: "a".repeat(48),
+  };
+  assert.equal(problemsFor(relay), "");
+  assert.equal(problemsFor({ ...relay, SMTP_USERNAME: "u", SMTP_PASSWORD: "p" }), "");
+  for (const half of [{ SMTP_USERNAME: "u" }, { SMTP_PASSWORD: "p" }, { SMTP_USERNAME: "u", SMTP_PASSWORD: "TODO" }]) {
+    assert.match(problemsFor({ ...relay, ...half }), /SMTP_USERNAME and SMTP_PASSWORD must be set together/);
   }
 });
 

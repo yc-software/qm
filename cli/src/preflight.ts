@@ -249,15 +249,17 @@ export async function smtpVerify(options: SmtpVerifyOptions): Promise<void> {
       ehlo = await probe.command(`EHLO qm-check`);
       expect(ehlo, [250], "EHLO");
     }
-    const steps = /\bPLAIN\b/.test(ehlo.text)
-      ? [`AUTH PLAIN ${Buffer.from(`\0${options.username}\0${options.password}`, "utf8").toString("base64")}`]
-      : [
-          "AUTH LOGIN",
-          Buffer.from(options.username, "utf8").toString("base64"),
-          Buffer.from(options.password, "utf8").toString("base64"),
-        ];
-    for (const [index, line] of steps.entries()) {
-      expect(await probe.command(line), index === steps.length - 1 ? [235] : [334], "AUTH");
+    if (options.username || options.password) {
+      const steps = /\bPLAIN\b/.test(ehlo.text)
+        ? [`AUTH PLAIN ${Buffer.from(`\0${options.username}\0${options.password}`, "utf8").toString("base64")}`]
+        : [
+            "AUTH LOGIN",
+            Buffer.from(options.username, "utf8").toString("base64"),
+            Buffer.from(options.password, "utf8").toString("base64"),
+          ];
+      for (const [index, line] of steps.entries()) {
+        expect(await probe.command(line), index === steps.length - 1 ? [235] : [334], "AUTH");
+      }
     }
     await probe.command("QUIT").catch(() => undefined);
   } finally {
@@ -266,7 +268,7 @@ export async function smtpVerify(options: SmtpVerifyOptions): Promise<void> {
 }
 
 export function emailTransportConfigured(config: QmConfig, secrets: ReadonlyMap<string, string>): boolean {
-  const names = emailSecretNames(config);
+  const names = emailSecretNames(config).filter((name) => name !== "SMTP_USERNAME" && name !== "SMTP_PASSWORD");
   return names.length > 0 && names.every((name) => Boolean(serviceSecretValue(config, "auth", name, secrets)?.trim()));
 }
 
@@ -299,9 +301,15 @@ export async function emailTransportPreflight(
   }
   if (!configured) return;
   const host = value("SMTP_HOST");
-  const username = value("SMTP_USERNAME");
-  const password = value("SMTP_PASSWORD");
-  if (!host || !username || !password) return;
+  const username = value("SMTP_USERNAME") ?? "";
+  const password = value("SMTP_PASSWORD") ?? "";
+  if (!host) return;
+  if (Boolean(username) !== Boolean(password)) {
+    throw new CliError(
+      "SMTP_USERNAME and SMTP_PASSWORD must be set together, or both left unset for a relay that authorizes by source IP",
+      { clause: "auth.smtp-credentials" },
+    );
+  }
   const port = Number(config.env.auth?.SMTP_PORT ?? 587);
   const tls = smtpTlsMode(config.env.auth?.SMTP_TLS, port);
   try {
@@ -309,13 +317,14 @@ export async function emailTransportPreflight(
   } catch (e) {
     if (e instanceof SmtpRejectedError) {
       throw new CliError(
-        `${errMessage(e)} — ${host}:${port} refused the SMTP_USERNAME/SMTP_PASSWORD credentials; ` +
-          `sign-in links cannot be sent until they are fixed`,
+        `${errMessage(e)} — ${host}:${port} refused the ${username ? "SMTP_USERNAME/SMTP_PASSWORD credentials" : "unauthenticated session"}; ` +
+          `sign-in links cannot be sent until this is fixed`,
         { clause: "auth.smtp-credentials" },
       );
     }
     warn(`could not verify the SMTP credentials against ${host}:${port}: ${errMessage(e)} — continuing`);
     return;
   }
-  if (report) step(`SMTP relay ${host}:${port}: credentials accepted`);
+  if (report)
+    step(`SMTP relay ${host}:${port}: ${username ? "credentials accepted" : "reachable without credentials"}`);
 }
