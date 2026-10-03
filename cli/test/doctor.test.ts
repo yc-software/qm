@@ -705,3 +705,38 @@ test("doctor without required local values warns-and-skips the live Slack check 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("doctor accepts a sending-only Resend key and still rejects an invalid one", async () => {
+  const brokerConfig: QmConfig = {
+    ...config,
+    sandbox: undefined,
+    services: ["core", "portal", "auth"],
+    env: {
+      core: { HARNESS: "mock" },
+      auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" },
+    },
+  };
+  const priorFetch = globalThis.fetch;
+  const log = console.log;
+  console.log = (): void => undefined;
+  const respond = (body: object): void => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input) === "https://api.resend.com/domains")
+        return new Response(JSON.stringify(body), { status: 401 });
+      throw new Error(`unexpected fetch ${String(input)}`);
+    }) as typeof fetch;
+  };
+  const secrets = new Map([
+    ["RESEND_API_KEY", "re_test"],
+    ["AUTH_EMAIL_FROM", "noreply@example.com"],
+  ]);
+  try {
+    respond({ statusCode: 401, name: "restricted_api_key", message: "This API key is restricted to only send emails" });
+    await assert.doesNotReject(doctorCommon(brokerConfig, secrets));
+    respond({ statusCode: 401, name: "validation_error", message: "API key is invalid" });
+    await assert.rejects(doctorCommon(brokerConfig, secrets), /Resend rejected RESEND_API_KEY/);
+  } finally {
+    globalThis.fetch = priorFetch;
+    console.log = log;
+  }
+});
