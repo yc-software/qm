@@ -1779,3 +1779,27 @@ test("manifest inventories are canonical across discovery order without mutating
   reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
   assert.notEqual(renderKeychainManifest(reversed, 1000), first);
 });
+
+it("disconnecting during an in-flight refresh does not bring the connection back", async () => {
+  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const k = createKeychain({
+    creds: createMemoryMap<Rec>(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+    refreshConnector: async () => {
+      await gate;
+      return { accessToken: "ya29.fresh", expiresAt: Date.now() + 3_600_000 };
+    },
+  });
+  const host = "gmail.googleapis.com";
+  await k.setConnectorToken(host, "alex@x", { accessToken: "ya29.old", refreshToken: "rt", expiresAt: Date.now() - 1 });
+  const read = k.connectorAccessToken(host, "alex@x");
+  await new Promise((resolve) => setImmediate(resolve));
+  await k.deleteConnectorToken(host, "alex@x");
+  release();
+  assert.equal(await read, null);
+  assert.equal((await k.connectorTokenStatus(host, "alex@x")).connected, false);
+});

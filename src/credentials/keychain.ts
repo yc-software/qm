@@ -801,7 +801,9 @@ export function createKeychain(deps: {
       // Compare-and-set: if another flight already rotated this credential,
       // keep its result rather than clobbering a newer refresh token.
       const current = await deps.creds.get(rec.id);
-      if (current && (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint)) {
+      // Disconnected while the refresh was in flight: the person's removal wins.
+      if (!current) return null;
+      if (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint) {
         const latest = tryDecrypt(current, recToOAuthToken);
         return latest?.accessToken ?? null;
       }
