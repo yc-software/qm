@@ -962,7 +962,10 @@ function formatPiAssistantError(raw: string | undefined): string {
 
 const TRANSIENT_PROVIDER_ERROR_TYPES = new Set(["overloaded_error", "api_error", "rate_limit_error", "timeout_error"]);
 
+const GARBLED_STREAM_CHUNK = /\bin JSON at position \d+|^Unexpected end of JSON input$|is not valid JSON$/;
+
 function piErrorRetryable(failed: AssistantMessage): boolean {
+  if (GARBLED_STREAM_CHUNK.test(failed.errorMessage ?? "")) return true;
   const providerType = failed.errorMessage ? parseProviderError(failed.errorMessage)?.type : undefined;
   if (providerType && !TRANSIENT_PROVIDER_ERROR_TYPES.has(providerType)) return false;
   return isRetryableAssistantError(failed) && !isContextOverflow(failed);
