@@ -119,6 +119,16 @@ test("unhandled rejection flushes a fatal unhandled event and exits", async () =
   assert.equal(events[0]!.exception.values[0].mechanism.handled, false);
 });
 
+test("fatal worker shutdown flushes diagnostics and exits without a graceful handback", async () => {
+  const { events, code } = await runReporting(`
+    const { shutdownOnUncaught } = await import('./src/util/process-guard.ts');
+    shutdownOnUncaught('qm');
+    setTimeout(() => { throw new TypeError('private-fatal'); }, 0);
+  `);
+  assert.equal(code, 1);
+  assert.equal(events.length, 1);
+});
+
 test("fatal reporting preserves the core drain handler and avoids duplicate console events", async () => {
   const { events, code, output } = await runReporting(`
     const { shutdownOnUncaught } = await import('./src/util/process-guard.ts');

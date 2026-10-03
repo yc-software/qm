@@ -377,20 +377,23 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : [...filtered];
     },
 
-    async tapeCoverage(sessionId) {
-      const log = tape.get(sessionId) ?? [];
-      return log.reduce(
-        (m, r) =>
-          Math.max(
-            m,
-            r.kind === "annotation" && (r.payload as { turnEnd?: unknown } | null)?.turnEnd === true
-              ? (r.entrySeq ?? -1)
-              : -1,
-            r.kind === "context_event" && (r.payload as { event?: unknown } | null)?.event === "legacy_import"
-              ? (r.coversEntrySeq ?? -1)
-              : -1,
-          ),
-        -1,
+    async stopMarks(sessionId) {
+      const marks: number[] = [];
+      let lastEntry: number | undefined;
+      for (const row of tape.get(sessionId) ?? []) {
+        if (row.entrySeq !== undefined) lastEntry = Math.max(lastEntry ?? -1, row.entrySeq);
+        if (row.kind === "stop" && lastEntry !== undefined) {
+          const runId = (row.payload as { runId?: string }).runId;
+          const user = runId ? await this.getRunUserEntry(sessionId, runId) : undefined;
+          if (!runId || (user && user.seq <= lastEntry)) marks.push(lastEntry);
+        }
+      }
+      return marks;
+    },
+
+    async getRunUserEntry(sessionId, runId) {
+      return (await this.getEntries(sessionId)).find(
+        (entry) => entry.type === "user" && (entry.payload as { runId?: string })?.runId === runId,
       );
     },
 

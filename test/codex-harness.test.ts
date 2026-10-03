@@ -1142,7 +1142,7 @@ test("cancelling an OAuth startup after spawn closes the provider", async (t) =>
   for (let attempt = 0; attempt < 50 && !existsSync(join(dir, "starts")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(existsSync(join(dir, "starts")), true);
-  cancel.abort();
+  cancel.abort("user");
   assert.deepEqual(await turn, { reply: "", stopped: true });
   for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1211,7 +1211,7 @@ test("cancelling a pending Codex thread/start is not relabeled as a startup time
   for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "thread-started")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(existsSync(join(dir, "thread-started")), true);
-  cancel.abort();
+  cancel.abort("user");
   assert.deepEqual(await turn, { reply: "", stopped: true });
   for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1247,8 +1247,8 @@ test("cancelling a pending Codex turn/start stops and closes the runtime", async
   for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "turn-started")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(existsSync(join(dir, "turn-started")), true);
-  cancel.abort();
-  assert.deepEqual(await turn, { reply: "", stopped: true });
+  cancel.abort("user");
+  assert.deepEqual(await turn, { reply: "", stopped: true, modelCalls: 0 });
   for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
@@ -1422,7 +1422,7 @@ test("cancelling one Codex setup does not kill another active turn", async (t) =
   await new Promise((resolve) => setTimeout(resolve, 50));
   const controller = new AbortController();
   const second = harness.turns.runTurn(makeTurn("second", controller.signal));
-  setTimeout(() => controller.abort(), 50);
+  setTimeout(() => controller.abort("user"), 50);
 
   assert.deepEqual(await second, { reply: "", stopped: true });
   assert.equal((await first).reply, "FIRST-OK");
@@ -1952,14 +1952,13 @@ for (const final of [true, false]) {
         },
       });
       await received.promise;
-      if (mechanism === "cancel") cancel.abort();
+      if (mechanism === "cancel") cancel.abort("user");
       else {
         await signals.send("partial-stop-run", { kind: "abort" });
-        if (mechanism === "both") cancel.abort();
+        if (mechanism === "both") cancel.abort("user");
       }
       const result = await running;
       assert.equal(result.stopped, true);
-      assert.equal(result.stoppedByUser, mechanism === "cancel" ? undefined : true);
       assert.deepEqual(
         entries.filter((entry) => entry.type === "text").map((entry) => entry.payload),
         [{ text: "Checking.", phase: "commentary" }],
@@ -1968,7 +1967,7 @@ for (const final of [true, false]) {
       assert.deepEqual(deltas, final ? ["Checking.", "Partial answer"] : ["Checking."]);
       assert.deepEqual(
         entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
-        [{ text: final ? "Partial answer" : "", stopped: true }],
+        final ? [{ text: "Partial answer", stopped: true }] : [],
       );
     });
   }

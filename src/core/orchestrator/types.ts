@@ -103,6 +103,8 @@ export interface OrchestratorInput extends Omit<
   finalAttempt?: boolean;
   background?: boolean;
   cancel?: AbortSignal;
+  handoff?: AbortSignal;
+  handoffDeadline?: AbortSignal;
   queueMs?: number;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
@@ -164,6 +166,7 @@ export interface OrchestratorDeps {
   skillsReady?: Promise<void>;
   advisoryLock?: AdvisoryLock;
   approvals?: DurableMap<PendingApprovalRecord>;
+  sandboxScrubs?: DurableMap<import("./sandboxes.ts").PendingSandboxScrub>;
   approvalGrants?: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
   metrics?: MetricsSink;
@@ -238,6 +241,7 @@ interface SurfaceSearchStoreHit {
 
 export interface Orchestrator {
   handleTurn(input: OrchestratorInput): Promise<TurnResult>;
+  cleanupsDrained?(): Promise<void>;
   screenSecuritySteer(input: {
     payload: string;
     actor: Principal;

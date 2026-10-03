@@ -3904,7 +3904,8 @@ test("EAGER_PROVISION warms the box on a tool-using session's next turn and stil
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /You said: hello there/);
   assert.equal(boxes.provisioned, 2, "the box is provisioned eagerly even though no tool ran this turn");
-  assert.equal(boxes.live, 0, "an eagerly provisioned box is still reclaimed at turn end");
+  for (let i = 0; i < 200 && boxes.live; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(boxes.live, 0, "an eagerly provisioned box is still reclaimed once it finishes booting");
 });
 
 test("EAGER_PROVISION never grows a computer for a chat-only session", async () => {

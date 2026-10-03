@@ -16,7 +16,7 @@ async function scenario() {
   return { store, session, lease };
 }
 
-test("exact tape annotations retain tool fields without advancing model coverage", async () => {
+test("exact tape annotations retain tool fields without changing model history", async () => {
   const { store, session, lease } = await scenario();
   const entry = await store.append(lease, {
     type: "tool_result",
@@ -32,7 +32,6 @@ test("exact tape annotations retain tool fields without advancing model coverage
     },
   });
   assert.deepEqual(await store.getTranscriptEntries(session.id), [entry]);
-  assert.equal(await store.tapeCoverage(session.id), -1);
   assert.deepEqual(foldTape(await store.getTape(session.id)), []);
   const source = createTranscriptSource({
     ...store,
@@ -52,7 +51,6 @@ test("taint release supersedes the exact annotation without changing identity or
   assert.deepEqual(await store.getTranscriptEntries(session.id), await store.getEntries(session.id));
   assert.deepEqual(await store.getTranscriptEntries(session.id), [{ ...before[0]!, payload: { text: "reviewed" } }]);
   assert.equal((await store.getTape(session.id)).length, beforeRows.length + 1);
-  assert.equal(await store.tapeCoverage(session.id), -1);
   assert.deepEqual(foldTape(await store.getTape(session.id)), []);
   assert.equal(await store.clearSecurityTaint(session.id), true);
   assert.equal((await store.getTape(session.id)).length, beforeRows.length + 1);

@@ -1,3 +1,5 @@
+import { TurnHandedOff } from "../core/turn-error.ts";
+import { toolReplayPolicy } from "./tool-replay.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -68,6 +70,7 @@ export interface ToolContextRef {
     grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
+  handoffRequested?: boolean;
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
@@ -365,7 +368,7 @@ const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may have b
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
 
 export function pauseStampAfterToolCall(
-  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
+  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff" | "handoffRequested">,
   prior?: (
     info: unknown,
     signal?: unknown,
@@ -373,7 +376,8 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async (info, signal) => {
     const upstream = prior ? await prior(info, signal) : undefined;
-    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff) return { ...upstream, terminate: true };
+    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff || ref.handoffRequested)
+      return { ...upstream, terminate: true };
     return upstream;
   };
 }
@@ -429,11 +433,24 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const callId = (payload as { callId?: unknown } | null)?.callId;
       if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
+    if (type === "tool_result" && ref.abortSignal?.aborted && isObj(payload))
+      payload = { ...payload, outcomeUnknown: true };
     await ref.emit({ type, payload, scopeLabel });
   };
 
-  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...sandboxLog(payload), callId });
+  const recordCall = async (callId: string, payload: Record<string, unknown>): Promise<void> => {
+    await log("tool_call", { ...sandboxLog(payload), callId, replay: toolReplayPolicy(payload) });
+    ref.abortSignal?.throwIfAborted();
+    if (ref.handoffRequested) {
+      await log("tool_result", {
+        tool: payload.tool,
+        callId,
+        notExecuted: true,
+        result: "Deployment handoff: this tool call was not executed.",
+      });
+      throw new TurnHandedOff();
+    }
+  };
 
   const resultQueue = createKeyedQueue();
   const quarantinedMessages = new Set<string>();
@@ -448,6 +465,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     screenAs?: { provenance: ToolResultProvenance; source?: string },
   ): Promise<T> =>
     resultQueue("result", async () => {
+      ref.abortSignal?.throwIfAborted();
       const originalTool = String(summary.tool ?? "");
       summary = sandboxLog(summary);
       const t = ret.content
@@ -533,7 +551,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
       }
       const delivered: string[] = [];
+      ref.abortSignal?.throwIfAborted();
       const mailbox = await ref.current?.sessionSyscalls?.receive?.().catch(() => []);
+      ref.abortSignal?.throwIfAborted();
       for (const message of mailbox ?? []) {
         if (quarantinedMessages.has(message.id)) continue;
         const messageTool = `session_message_${message.id}`;
@@ -560,6 +580,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         result += `\n\n${text}`;
         delivered.push(message.id);
       }
+      if (summary.outcomeUnknown === true) persistedSummary = { ...persistedSummary, outcomeUnknown: true };
       await log(
         "tool_result",
         {
@@ -572,6 +593,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
         delivered.length ? ref.scopeLabel : sourceScopeId,
       );
+      ref.abortSignal?.throwIfAborted();
       if (delivered.length) await ref.current?.sessionSyscalls?.acknowledge?.(delivered).catch(() => undefined);
       return ret;
     });
@@ -727,7 +749,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       );
     } catch (e) {
       if (e instanceof MaskedExecutionError) {
-        return recordResult(callId, { tool: "execute", ...scopeNote }, text(e.message), true);
+        return recordResult(callId, { tool: "execute", ...scopeNote, outcomeUnknown: true }, text(e.message), true);
       }
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
       if (e instanceof CommandDenied) {
@@ -743,6 +765,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         callId,
         isError: true,
         result: `Command execution failed: ${redactSecrets(errMessage(e))}`,
+        outcomeUnknown: true,
       });
       throw e;
     }
@@ -1062,6 +1085,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           found: content !== null,
           ...(content !== null ? { bytes: content.length, sourceScopeId } : {}),
           ...(dir ? { dir } : {}),
+          ...(p.sandbox_id ? { sandboxId: p.sandbox_id } : {}),
         },
         text(content === null ? `[no such skill file: ${p.name}/${p.path ?? "SKILL.md"}]` : `${where}${content}`),
         content === null,
@@ -4448,6 +4472,14 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
   return {
     ...tool,
     async execute(...args) {
+      ref.abortSignal?.throwIfAborted();
+      if (ref.handoffRequested) {
+        return {
+          content: [{ type: "text" as const, text: "Deployment handoff: this tool call was not executed." }],
+          details: {},
+          terminate: true,
+        };
+      }
       const [, params] = args;
       if (ref.runtimeHandoff || ref.runtimeMutationPending)
         return {
@@ -4466,7 +4498,7 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
         ref.runtimeMutationPending = true;
         try {
           await Promise.allSettled(ref.runtimeInFlight ?? []);
-          if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
+          if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested || ref.handoffRequested)
             return {
               content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],
               details: {},
@@ -4478,7 +4510,17 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
         }
       }
       const inFlight = (ref.runtimeInFlight ??= new Set());
-      const result = Promise.resolve().then(() => tool.execute(...args));
+      const result = Promise.resolve().then(() => {
+        ref.abortSignal?.throwIfAborted();
+        if (ref.handoffRequested) {
+          return {
+            content: [{ type: "text" as const, text: "Deployment handoff: this tool call was not executed." }],
+            details: {},
+            terminate: true,
+          };
+        }
+        return tool.execute(...args);
+      });
       inFlight.add(result);
       try {
         return await result;

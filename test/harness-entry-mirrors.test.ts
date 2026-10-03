@@ -86,6 +86,8 @@ test("the harness router mirrors for foreign adapters and leaves native-tape ada
       profile: { id, capabilities: new Set(capabilities) },
       turns: {
         async runTurn(input: HarnessTurnInput) {
+          assert.equal(input.continueTurn, id === "pi");
+          assert.equal(input.input, "Resume the recorded request");
           await input.emit({ type: "user", payload: { text: "hi" }, scopeLabel: scope });
           return { reply: "ok" };
         },
@@ -108,6 +110,8 @@ test("the harness router mirrors for foreign adapters and leaves native-tape ada
       session: { id: `s-${harnessId}` },
       runtime: { harnessId },
       history: [],
+      continueTurn: true,
+      input: "Resume the recorded request",
     } as unknown as HarnessTurnInput);
     seen[harnessId] = taped.length;
   }

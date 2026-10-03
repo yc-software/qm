@@ -6,8 +6,6 @@ import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
-import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
-
 const scope = "personal:goal@example.com" as ScopeId;
 
 type Round = (turn: HarnessTurnInput, round: number) => Promise<HarnessTurnResult>;
@@ -163,7 +161,7 @@ test("rounds without progress never waive the goal; only a user stop ends it", a
   const emitted: SessionEntry[] = [];
   const { harness, calls } = fakeAdapter(async (turn, round) => {
     if (round === 0) await emitGoalCreate(turn, "spin forever");
-    return round === 20 ? { reply: "stopped", stopped: true, stoppedByUser: true } : { reply: `round ${round}` };
+    return round === 20 ? { reply: "stopped", stopped: true } : { reply: `round ${round}` };
   });
   const result = await router(harness).turns.runTurn(stubTurn(emitted));
   assert.equal(calls.length, 21);
@@ -177,8 +175,8 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
     const cancel = new AbortController();
     const stopped = fakeAdapter(async (turn) => {
       await emitGoalCreate(turn, "survive shutdown");
-      cancel.abort();
-      return { reply: "", stopped: true };
+      cancel.abort("shutdown");
+      return { reply: "", handedOff: true };
     });
     const routed = (harness: Harness) =>
       createHarnessRouter(new Map([[harnessId, harness]]), createMockHarness(), async () => ({
@@ -200,26 +198,13 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
 }
 
 for (const harnessId of ["codex", "claude", "opencode"] as const) {
-  test(`${harnessId} persists user Stop when shutdown races with the real run signal`, async () => {
-    const signals = createMemoryRunSignalStore();
+  test(`${harnessId} pauses the goal when a user Stop wins over a racing shutdown`, async () => {
     const cancel = new AbortController();
     const emitted: SessionEntry[] = [];
     const { harness, calls } = fakeAdapter(async (turn) => {
       await emitGoalCreate(turn, "stop despite shutdown");
-      const observed = Promise.withResolvers<void>();
-      let stoppedByUser: true | undefined;
-      const stop = startSignalPoll(signals, "run", {
-        onSteer: async () => {},
-        onAbort: async () => {
-          stoppedByUser = true;
-          observed.resolve();
-        },
-      });
-      await signals.send("run", { kind: "abort" });
-      await observed.promise;
-      cancel.abort();
-      await stop();
-      return { reply: "", stopped: true, stoppedByUser };
+      cancel.abort("user");
+      return { reply: "", stopped: true };
     });
     const routed = createHarnessRouter(new Map([[harnessId, harness]]), createMockHarness(), async () => ({
       harnessId,

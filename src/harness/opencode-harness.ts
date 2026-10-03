@@ -28,8 +28,10 @@ import type { ScopeId } from "../types.ts";
 import type { TaskStore } from "../tasks/task-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, TurnHandedOff } from "../core/turn-error.ts";
+import { isUserStop } from "../runs/handoff.ts";
 import {
+  abortedResult,
   defineHarness,
   promptEnvelopeWithoutHistory,
   type Harness,
@@ -45,6 +47,7 @@ import {
   oneShotRunner,
   tapeReplyCheckpoint,
   recordSteerIntake,
+  acknowledgeSteer,
   type SteerIntake,
   type BridgedTool,
   type HarnessToolPlumbing,
@@ -122,7 +125,7 @@ type ActiveTurn = {
   seenText: Map<string, string>;
   seenTasks: Map<string, string>;
   eventTail: Promise<void>;
-  stopped: boolean;
+  handedOff: boolean;
   child: boolean;
 };
 
@@ -644,6 +647,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                   const steer = state.steers.find((steer) => !steer.stamp && steer.messageId === id);
                   if (steer) {
                     steer.stamp = await recordSteerIntake(state.turn, steer.intake);
+                    if (!state.turn.tape) await acknowledgeSteer(steer.intake);
                   }
                 }
               }
@@ -680,13 +684,18 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                 output,
                 terminate: Boolean(
                   result.terminate ||
+                  state.ref.handoffRequested ||
                   state.ref.runtimeHandoff ||
                   state.ref.pausedOnApproval ||
                   state.ref.silentRequested,
                 ),
               });
             } catch (error) {
-              return json(res, 200, { output: `[tool failed] ${errMessage(error)}` });
+              if (error instanceof TurnHandedOff) state.handedOff = true;
+              return json(res, 200, {
+                output: `[tool failed] ${errMessage(error)}`,
+                ...(error instanceof TurnHandedOff ? { terminate: true } : {}),
+              });
             }
           }
           return json(res, 404, { error: "not found" });
@@ -881,9 +890,9 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
   };
 
   const runPrompt = async (turn: HarnessTurnInput): Promise<HarnessTurnResult> => {
-    if (turn.cancel?.aborted) return { reply: "", stopped: true };
+    if (turn.cancel?.aborted) return abortedResult(turn);
     const rt = await ensureRuntime();
-    if (turn.cancel?.aborted) return { reply: "", stopped: true };
+    if (turn.cancel?.aborted) return abortedResult(turn);
     const selectedModel = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
     const model = modelRef(selectedModel);
     const created = await rt.client.session.create({ body: { title: `qm:${turn.session.id}` } });
@@ -893,7 +902,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     if (turn.cancel?.aborted) {
       await rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
       await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
-      return { reply: "", stopped: true };
+      return abortedResult(turn);
     }
     const ref = harnessToolContext(turn);
     const controller = new AbortController();
@@ -925,28 +934,33 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       seenText: new Map(),
       seenTasks: new Map(),
       eventTail: Promise.resolve(),
-      stopped: false,
+      handedOff: false,
       child: false,
     };
     active.set(sessionId, state);
-    const abort = async (stopped: boolean) => {
-      state.stopped ||= stopped;
+    const abort = async () => {
       controller.abort();
       await rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
     };
     const onCancel = () => {
-      void abort(false);
+      void abort();
     };
+    const onHandoffRequested = () => {
+      ref.handoffRequested = true;
+    };
+    if (turn.handoff?.aborted) onHandoffRequested();
+    else turn.handoff?.addEventListener("abort", onHandoffRequested, { once: true });
     if (turn.cancel) {
       if (turn.cancel.aborted) onCancel();
       else turn.cancel.addEventListener("abort", onCancel, { once: true });
     }
     if (turn.cancel?.aborted) {
-      await abort(false);
+      await abort();
       active.delete(sessionId);
       turn.cancel.removeEventListener("abort", onCancel);
+      turn.handoff?.removeEventListener("abort", onHandoffRequested);
       await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
-      return { reply: "", stopped: true };
+      return abortedResult(turn);
     }
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
     const queuedSignals = new Set<Promise<void>>();
@@ -1020,9 +1034,10 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             opts.signals,
             turn.runId,
             {
-              onAbort: async () => abort(true),
+              onAbort: async () => turn.stop?.(),
               onSteer: async (text, ts, request, acknowledge) => {
-                if (ts && recordedMessageTimestamps(turn.history).has(ts)) return;
+                if (ts && recordedMessageTimestamps(turn.history, turn.tapeRows).has(ts)) return;
+                if (turn.handoff?.aborted) return false;
                 const prepared = await turn.prepareSteer?.(text, request);
                 const prompt = prepared?.text ?? text;
                 await queueSignal(prompt, prepared?.images, prepared?.documents, {
@@ -1114,16 +1129,23 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               request,
               new Promise<never>((_, reject) => {
                 timer = setTimeout(() => {
-                  void abort(false);
+                  void abort();
                   reject(new NonRetryableTurnError(`OpenCode turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
                 }, wallMs);
               }),
             ])
           : await request;
-      if (!response.data) throw new Error(`OpenCode prompt failed: ${JSON.stringify(response.error)}`);
-      throwAssistantFailure((response.data as { info?: AssistantMessageInfo }).info);
+      if (!response.data) {
+        if (turn.cancel?.aborted) return abortedResult(turn);
+        throw new Error(`OpenCode prompt failed: ${JSON.stringify(response.error)}`);
+      }
+      if (!turn.cancel?.aborted) throwAssistantFailure((response.data as { info?: AssistantMessageInfo }).info);
       await stopSignals?.();
       signalsStopped = true;
+      const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
+      if ((turn.cancel?.aborted && !isUserStop(turn.cancel)) || (!turn.cancel?.aborted && state.handedOff && !terminal))
+        return { reply: "", handedOff: true, modelCalls: state.captures.length };
+      const stopped = isUserStop(turn.cancel);
       const hadQueuedSignals = queuedSignals.size > 0;
       await Promise.allSettled(queuedSignals);
       const parts = hadQueuedSignals
@@ -1162,6 +1184,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                 }
               : {}),
           });
+          await acknowledgeSteer(steered?.intake);
         }
       }
       for (const thinking of reasoningFromParts(parts))
@@ -1170,14 +1193,14 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       if (reply) {
         const finalEntry = await turn.emit({
           type: "assistant",
-          payload: { text: reply, ...(state.stopped ? { stopped: true } : {}) },
+          payload: { text: reply, ...(stopped ? { stopped: true } : {}) },
           scopeLabel: turn.scopeLabel,
         });
         await tapeReplyCheckpoint(turn, finalEntry);
       }
       return {
         reply,
-        ...(state.stopped ? { stopped: true as const, stoppedByUser: true as const } : {}),
+        ...(stopped ? { stopped: true as const } : {}),
         ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
         ...(ref.silentRequested ? { silent: true } : {}),
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
@@ -1189,6 +1212,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       if (!signalsStopped) await stopSignals?.();
       await Promise.allSettled(queuedSignals);
       turn.cancel?.removeEventListener("abort", onCancel);
+      turn.handoff?.removeEventListener("abort", onHandoffRequested);
       if (opts.tasks) {
         const taskIds = [...state.seenTasks.keys()];
         await Promise.all(

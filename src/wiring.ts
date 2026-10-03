@@ -5,6 +5,7 @@ import { createKeychainApprovals, type KeychainApprovals } from "./credentials/k
 import { asObject } from "./harness/codex-auth-file.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
+import { createHandoff } from "./runs/handoff.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { resolveTurnOrigin } from "./core/turn-origin.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
@@ -322,6 +323,7 @@ import { createPostgresTaskStore } from "./tasks/postgres-task-store.ts";
 import type { TaskStore } from "./tasks/task-store.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
+import { finishPendingScrubs, type PendingSandboxScrub } from "./core/orchestrator/sandboxes.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -428,7 +430,7 @@ import { createSlackInstallationStore, type SlackInstallationStore } from "./sur
 export interface Runtime {
   start(): void;
   startBackground(): void;
-  stopBackgroundClaims(): Promise<void>;
+  stopBackgroundClaims(requestedAt?: number): Promise<void>;
   setBackgroundAdmission(check: () => boolean): void;
   stopBackground(): Promise<void>;
   backgroundDrained(): Promise<void>;
@@ -575,6 +577,7 @@ export function buildApp(
     modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
+  const handoff = createHandoff();
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let noteAdmitted = () => {};
   const admittedWork = createAdmittedWork({
@@ -1165,8 +1168,10 @@ export function buildApp(
     },
     canUseScope: (actorId, scopeId) => membership.canUseSandboxScope!(actorId, scopeId),
   });
+  const sandboxScrubs = artifactMap<PendingSandboxScrub>("sandbox_scrubs");
   const sandbox: Sandbox = createSandboxRouter({
     resources: sandboxResources,
+    pauses: sandboxScrubs,
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     onError: sandboxOnError,
@@ -1456,9 +1461,7 @@ export function buildApp(
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
   const runStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
-      : createMemoryRunStore({ maxClaims: config.maxClaims });
+    runStoreKind === "postgres" ? createPostgresRunStore(requireDbUrl("RUN_STORE")) : createMemoryRunStore();
   const blockingApprovalSessions = async (): Promise<Set<string>> =>
     new Set(
       (await approvals.entries())
@@ -1976,6 +1979,7 @@ export function buildApp(
     deliveries,
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants"),
+    sandboxScrubs,
     ...(processes ? { processes } : {}),
     monitors,
     crons,
@@ -2314,6 +2318,13 @@ export function buildApp(
     1_000,
     { label: "session-returns", immediate: true },
   );
+  const pendingScrubSweeper = createSweeper(
+    () => finishPendingScrubs(sandbox, sandboxScrubs),
+    config.reaperIntervalMs,
+    {
+      label: "pending-sandbox-scrubs",
+    },
+  );
   const orphanedSignalSweeper = createSweeper(
     async () => {
       for (const runId of await runSignals.pendingRunIds()) {
@@ -2434,9 +2445,9 @@ export function buildApp(
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   let ingressMaintenance: Promise<void> | undefined;
   const scheduler = createScheduler({
+    lock: advisoryLock,
     admittedWork,
     requireQueueStart: Boolean(config.backgroundDeploymentId),
-    lock: advisoryLock,
     crons,
     deliveries,
     idempotency,
@@ -2583,6 +2594,7 @@ export function buildApp(
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
       admittedWork,
+      handoff,
       runs,
       orchestrator,
       leaseTtlMs,
@@ -2658,6 +2670,7 @@ export function buildApp(
   function startBackground(): void {
     if (backgroundRunning) return;
     backgroundRunning = true;
+    handoff.reset();
     admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
@@ -2692,6 +2705,7 @@ export function buildApp(
       wakeSweep.start();
       swarms?.start();
       orphanedSignalSweeper.start();
+      pendingScrubSweeper.start();
       sessionReturnSweeper.start();
       approvalDeliverySweeper.start();
     };
@@ -2721,6 +2735,7 @@ export function buildApp(
       wakeSweep.stop(),
       swarms?.stop(),
       orphanedSignalSweeper.stop(),
+      pendingScrubSweeper.stop(),
       sessionReturnSweeper.stop(),
       approvalDeliverySweeper.stop(),
       ...workers.map((worker) => worker.stopClaims()),
@@ -2744,23 +2759,36 @@ export function buildApp(
     setBackgroundAdmission(check) {
       backgroundAdmission = check;
     },
-    async stopBackgroundClaims() {
+    async stopBackgroundClaims(requestedAt) {
+      if (requestedAt !== undefined)
+        handoff.request(Math.max(0, requestedAt + config.backgroundHandoffGraceMs - Date.now()));
+      for (const worker of workers) void worker.stopClaims();
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
       await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
     },
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
+      await Promise.all([
+        admittedWork.drained(),
+        orchestrator.cleanupsDrained?.(),
+        ...workers.map((worker) => worker.drained()),
+      ]);
     },
     async releaseInFlightRuns() {
       await Promise.all(workers.map((w) => w.releaseInFlight()));
     },
     async stop() {
+      handoff.request(Math.min(config.backgroundHandoffGraceMs, Math.max(0, config.shutdownDrainMs - 1_000)));
+      for (const worker of workers)
+        worker.requestHandoff(Math.min(config.backgroundHandoffGraceMs, Math.max(0, config.shutdownDrainMs - 1_000)));
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
           swallowAs("wiring: admitted work drain failed", undefined),
+        ),
+        withTimeout(async () => orchestrator.cleanupsDrained?.(), config.shutdownDrainMs, "turn cleanup drain").catch(
+          swallowAs("wiring: turn cleanup drain failed", undefined),
         ),
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));

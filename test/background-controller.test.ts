@@ -316,3 +316,101 @@ for (const outcome of ["complete", "transition", "read-failure", "read-stall", "
     assert.equal(stops, 1);
   });
 }
+
+test("retiring replicas receive one durable handoff time even across delayed observation and rollback", async () => {
+  const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
+  const seen: number[] = [];
+  const replicas = ["a1", "a2", "b"].map((instanceId) =>
+    createBackgroundController({
+      store,
+      identity: { instanceId, deploymentId: instanceId.startsWith("a") ? "a" : "b", taskArn: instanceId },
+      legacyEnabled: instanceId.startsWith("a"),
+      start: async () => {},
+      fence() {},
+      relinquish: async (at) => {
+        if (at !== undefined) seen.push(at);
+      },
+      drained: async () => {},
+      onError: (e) => {
+        throw e;
+      },
+      pollMs: 60_000,
+    }),
+  );
+  try {
+    for (const replica of replicas) {
+      replica.start();
+      await replica.reconcile();
+    }
+    await store.transition({
+      expectedGeneration: 0,
+      requestId: "one",
+      desiredDeploymentId: "b",
+      bootstrapTaskArns: ["a1", "a2", "b"],
+    });
+    const at = (await store.get()).members[0]!.handoffRequestedAt;
+    assert.equal(typeof at, "number");
+    await replicas[0]!.reconcile();
+    await store.transition({ expectedGeneration: 1, requestId: "two", desiredDeploymentId: "a" });
+    await replicas[1]!.reconcile();
+    assert.deepEqual(seen, [at, at]);
+  } finally {
+    await Promise.all(replicas.map((replica) => replica.stop()));
+  }
+});
+
+for (const alreadyFenced of [false, true]) {
+  test(`a transition observed during ${alreadyFenced ? "watchdog-fenced" : "live"} startup requests the shared deadline before cleanup settles`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"], now: 2_000 });
+    const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const fences: unknown[][] = [];
+    const released: Array<number | undefined> = [];
+    const controller = createBackgroundController({
+      store,
+      identity: { instanceId: "startup-a", deploymentId: "a", taskArn: "task:startup-a" },
+      legacyEnabled: true,
+      start: async () => {
+        started.resolve();
+        await finish.promise;
+      },
+      fence: (...args: unknown[]) => {
+        fences.push(args);
+      },
+      relinquish: async (at) => {
+        released.push(at);
+      },
+      drained: async () => {},
+      onError: (error) => {
+        throw error;
+      },
+      pollMs: 600_000,
+      validityMs: alreadyFenced ? 10_000 : 300_000,
+      startupTimeoutMs: 300_000,
+    });
+    controller.start();
+    await started.promise;
+    try {
+      await store.transition({
+        expectedGeneration: 0,
+        requestId: "startup-switch",
+        desiredDeploymentId: null,
+        bootstrapTaskArns: ["task:startup-a"],
+      });
+      const requestedAt = (await store.get()).members[0]!.handoffRequestedAt;
+      t.mock.timers.tick(60_000);
+      const reconciled = controller.reconcile();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(controller.canClaim(), false);
+      assert.equal(released.length, 0);
+      assert.equal(fences.at(-1)?.[0], requestedAt);
+      finish.resolve();
+      await reconciled;
+      assert.deepEqual(released, [requestedAt]);
+    } finally {
+      finish.resolve();
+      await controller.stop();
+    }
+  });
+}

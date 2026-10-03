@@ -21,7 +21,8 @@ import { fromJSONSchema, type ZodObject } from "zod";
 import { contentText, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { isDeliveryNote } from "../core/attachments.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, TurnHandedOff } from "../core/turn-error.ts";
+import { isUserStop } from "../runs/handoff.ts";
 import {
   contextTokenBudgetForModel,
   getRequiredModel,
@@ -34,7 +35,13 @@ import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { summarizeHistory } from "./history-summary.ts";
-import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
+import {
+  abortedResult,
+  defineHarness,
+  type Harness,
+  type HarnessTurnInput,
+  type HarnessTurnResult,
+} from "./harness.ts";
 import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "./pi-harness.ts";
 import { coreToolOptions } from "./agent-tools.ts";
 import {
@@ -47,6 +54,7 @@ import {
   oneShotRunner,
   tapeReplyCheckpoint,
   recordSteerIntake,
+  acknowledgeSteer,
   type SteerIntake,
   transitionTask,
   type HarnessToolPlumbing,
@@ -317,7 +325,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
   const active = new Set<Query>();
 
   const runPrompt = async (turn: HarnessTurnInput, toolsEnabled = true): Promise<HarnessTurnResult> => {
-    if (turn.cancel?.aborted) return { reply: "", stopped: true };
+    if (turn.cancel?.aborted) return abortedResult(turn);
     const documentTextBudget = { remaining: 100_000 };
     const preparedDocuments = await documentBlocks(
       turn.documents ?? [],
@@ -367,6 +375,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           if (result.terminate || ref.pausedOnApproval || ref.silentRequested) setImmediate(terminateProvider);
           return { content: [{ type: "text", text: bridgedToolText(result) }] };
         } catch (error) {
+          if (error instanceof TurnHandedOff) setImmediate(terminateProvider);
           return {
             content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
             isError: true,
@@ -393,8 +402,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       initial.message.content.push(...(preparedDocuments as unknown as typeof initial.message.content));
     }
     let pendingPrompts = 1;
-    let stopped = false;
     let interrupted = false;
+    let committed: SDKResultMessage | undefined;
     let result: SDKResultMessage | null = null;
     const thinking: string[] = [];
     const flushThinking = async () => {
@@ -497,19 +506,23 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       },
     });
     active.add(sdkQuery);
-    const interrupt = async (fromUser: boolean) => {
-      stopped ||= fromUser;
+    const interrupt = async () => {
       interrupted = true;
       queue.close();
       await sdkQuery.interrupt().catch(() => undefined);
       controller.abort();
     };
     terminateProvider = () => {
-      void interrupt(false);
+      void interrupt();
     };
     const onCancel = () => {
-      void interrupt(false);
+      void interrupt();
     };
+    const onHandoffRequested = () => {
+      ref.handoffRequested = true;
+    };
+    if (turn.handoff?.aborted) onHandoffRequested();
+    else turn.handoff?.addEventListener("abort", onHandoffRequested, { once: true });
     if (turn.cancel) {
       if (turn.cancel.aborted) onCancel();
       else turn.cancel.addEventListener("abort", onCancel, { once: true });
@@ -521,9 +534,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             opts.signals,
             turn.runId,
             {
-              onAbort: async () => interrupt(true),
+              onAbort: async () => turn.stop?.(),
               onSteer: async (steer, ts, request, acknowledge) => {
-                if (ts && recordedMessageTimestamps(turn.history).has(ts)) return;
+                if (ts && recordedMessageTimestamps(turn.history, turn.tapeRows).has(ts)) return;
+                if (turn.handoff?.aborted) return false;
                 const prepared = await turn.prepareSteer?.(steer, request);
                 if (settled || interrupted) return false;
                 const prompt = prepared?.text ?? steer;
@@ -643,6 +657,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           if (message.type === "assistant" || message.type === "user") {
             let tapeMessage: SDKMessage = message;
             let stamp: Awaited<ReturnType<typeof recordSteerIntake>> | undefined;
+            let intake: SteerIntake | undefined;
             if (message.type === "user" && !message.parent_tool_use_id) {
               if (message.uuid && seenUserMessages.has(message.uuid)) continue;
               if (message.uuid) seenUserMessages.add(message.uuid);
@@ -666,11 +681,13 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               if (index >= 0) {
                 const [steer] = steerPrompts.splice(index, 1);
                 await flushThinking();
-                stamp = await recordSteerIntake(turn, steer!.intake);
+                intake = steer!.intake;
+                stamp = await recordSteerIntake(turn, intake);
                 tapeMessage = { ...message, message: { ...message.message, content: steer!.message.message.content } };
               }
             }
             await appendTape(stripClaudeImageBytes(tapeMessage), false, stamp);
+            await acknowledgeSteer(intake);
           }
           if (message.type === "system" && message.subtype === "task_started") {
             const callId = message.tool_use_id ?? message.task_id;
@@ -749,9 +766,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           if (text) {
             const finalEntry = await turn.emit({
               type: "assistant",
-              payload: { text, ...(stopped ? { stopped: true } : {}) },
+              payload: { text },
               scopeLabel: turn.scopeLabel,
             });
+            committed = message;
             await tapeReplyCheckpoint(turn, finalEntry);
           }
           streamedText = "";
@@ -770,7 +788,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               consume,
               new Promise<never>((_, reject) => {
                 timer = setTimeout(() => {
-                  void interrupt(false);
+                  void interrupt();
                   reject(new NonRetryableTurnError(`Claude turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
                 }, wallMs);
               }),
@@ -780,11 +798,12 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         if ((!interrupted && !controller.signal.aborted) || error instanceof NonRetryableTurnError) throw error;
       }
       const finalResult = result as SDKResultMessage | null;
-      const stoppedPartial = async (): Promise<HarnessTurnResult> => {
-        const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
-        const reply = terminal ? "" : streamedText.trim();
+      const modelCalls = Math.max(1, callUsage.size);
+      if (turn.cancel?.aborted && committed !== finalResult) {
+        if (!isUserStop(turn.cancel)) return { reply: "", handedOff: true, modelCalls };
         await flushThinking();
-        if (reply && !terminal) {
+        const reply = streamedText.trim();
+        if (reply) {
           const finalEntry = await turn.emit({
             type: "assistant",
             payload: { text: reply, stopped: true },
@@ -792,24 +811,22 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           });
           await tapeReplyCheckpoint(turn, finalEntry);
         }
-        return {
-          reply,
-          ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),
-          ...(stopped ? { stoppedByUser: true as const } : {}),
-          ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
-          ...(ref.silentRequested ? { silent: true } : {}),
-          ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
-          ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
-          modelCalls: Math.max(1, callUsage.size),
-        };
-      };
-      if (interrupted && (pendingPrompts > 0 || finalResult?.subtype !== "success")) return stoppedPartial();
-      if (!finalResult) {
-        if (controller.signal.aborted) return stoppedPartial();
-        throw new Error("Claude Agent SDK ended without a result");
+        return { reply, stopped: true, modelCalls };
       }
+      const ending = {
+        ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
+        ...(ref.silentRequested ? { silent: true } : {}),
+        ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
+        ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
+      };
+      if (interrupted && (pendingPrompts > 0 || finalResult?.subtype !== "success")) {
+        await flushThinking();
+        if (ref.handoffRequested && !Object.keys(ending).length) return { reply: "", handedOff: true, modelCalls };
+        return { reply: "", ...ending, modelCalls };
+      }
+      if (!finalResult) throw new Error("Claude Agent SDK ended without a result");
       if (finalResult.subtype !== "success") {
-        if (stopped || ref.runtimeHandoff) return stoppedPartial();
+        if (ref.runtimeHandoff) return { reply: "", ...ending, modelCalls };
         throw new Error(finalResult.errors.join("; ") || `Claude Agent SDK failed: ${finalResult.subtype}`);
       }
       if (
@@ -831,7 +848,6 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       );
       return {
         reply,
-        ...(stopped ? { stopped: true as const, stoppedByUser: true as const } : {}),
         ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
         ...(ref.silentRequested ? { silent: true } : {}),
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
@@ -875,6 +891,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       queue.close();
       if (!signalsStopped) await stopSignals?.();
       turn.cancel?.removeEventListener("abort", onCancel);
+      turn.handoff?.removeEventListener("abort", onHandoffRequested);
       for (const [taskId, task] of taskStates) {
         if (task.status === "pending" || task.status === "in_progress") {
           await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id);
@@ -922,7 +939,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         const model = getRequiredModel(resolveModelId());
         const summarize = oneShotRunner(async (turn) => {
           const result = await runPrompt(turn, false);
-          if (result.stopped) throw new Error("Compaction was interrupted before completion");
+          if (result.stopped || result.handedOff) throw new Error("Compaction was interrupted before completion");
           return result;
         });
         return summarizeHistory(input.history, model, async (_model, context, options) => {

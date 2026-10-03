@@ -1,5 +1,11 @@
 import type { EntryType, ScopeId, SessionEntry } from "../types.ts";
-import type { GetEntriesOptions, NewSearchEntry, SessionStore, TapeRecord } from "../sessions/session-store.ts";
+import type {
+  GetEntriesOptions,
+  NewSearchEntry,
+  SessionStore,
+  TapeRecord,
+  TranscriptEntry,
+} from "../sessions/session-store.ts";
 import { entryWithinTenure, TAPE_RENDER_VERSION } from "../sessions/session-store.ts";
 import { entrySearchAuthor, entrySearchText, SEARCHABLE_ENTRY_TYPES } from "../sessions/entry-search.ts";
 import { deliveryNoteManifest, legacyDeliveryNoteManifest } from "../core/attachments.ts";
@@ -223,6 +229,7 @@ export function projectTapeEntries(
   let sawTrigger = false;
   let coarseReplyMirrorPending = false;
   for (const row of rows) {
+    if (row.kind === "stop") continue;
     const eventName = contextEventName(row);
     if (eventName === "legacy_import" || eventName === "legacy_patch") return null;
 
@@ -398,10 +405,10 @@ type TranscriptStore = Pick<
   SessionStore,
   "getEntries" | "visibleEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
 > &
-  Partial<Pick<SessionStore, "getTranscriptEntries" | "canReadTranscriptSuffix">>;
+  Partial<Pick<SessionStore, "getTranscriptEntries" | "canReadTranscriptSuffix" | "stopMarks">>;
 
 interface TranscriptRead {
-  entries: SessionEntry[];
+  entries: TranscriptEntry[];
   earlier: number;
 }
 
@@ -466,7 +473,20 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
     }
   };
 
-  return {
+  const withStops = async (sessionId: string, read: TranscriptRead): Promise<TranscriptRead> => {
+    if (!sessions.stopMarks || !read.entries.length) return read;
+    let marks: Set<number>;
+    try {
+      marks = new Set(await sessions.stopMarks(sessionId));
+    } catch (err) {
+      swallow("tape-projection: stop marks", err);
+      return read;
+    }
+    if (!marks.size) return read;
+    return { ...read, entries: read.entries.map((e) => (marks.has(e.seq) ? { ...e, stopped: true as const } : e)) };
+  };
+
+  const reads: TranscriptSource = {
     async forRender(sessionId, opts?): Promise<TranscriptRead> {
       const read = await projected(sessionId, opts?.limit, opts?.beforeSeq, opts?.sinceSeq);
       if (read === null) {
@@ -517,6 +537,11 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
       if (limit === undefined) return { entries: filtered, earlier: below };
       return { entries: filtered.slice(-limit), earlier: Math.max(0, filtered.length - limit) + below };
     },
+  };
+  return {
+    forRender: async (sessionId, opts) => withStops(sessionId, await reads.forRender(sessionId, opts)),
+    forViewer: async (sessionId, principalId, opts) =>
+      withStops(sessionId, await reads.forViewer(sessionId, principalId, opts)),
   };
 }
 

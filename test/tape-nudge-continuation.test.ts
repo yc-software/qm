@@ -61,7 +61,6 @@ async function runScenario(
     omitPrimaryCheckpoint?: boolean;
     staleNudgeRead?: boolean;
     stoppedPartial?: boolean;
-    stoppedTapeComplete?: boolean;
   } = {},
 ) {
   const modes: Array<"shadow" | "serve" | undefined> = [];
@@ -96,7 +95,7 @@ async function runScenario(
             const reply = "Interrupted nudge partial";
             await turn.emit({
               type: "assistant",
-              payload: { text: reply, stopped: true },
+              payload: { text: reply },
               scopeLabel: turn.scopeLabel,
             });
             return { reply, stopped: true, modelCalls: 1 };
@@ -168,31 +167,11 @@ async function runScenario(
               scopeLabel: turn.scopeLabel,
             });
           }
-          const stoppedEntry = await turn.emit({
+          await turn.emit({
             type: "assistant",
             payload: { text: reply },
             scopeLabel: turn.scopeLabel,
           });
-          if (options.stoppedTapeComplete) {
-            await turn.tape?.({
-              kind: "message",
-              harness: "pi",
-              payload: {
-                role: "assistant",
-                content: [{ type: "text", text: reply }],
-                timestamp: stoppedEntry.createdAt,
-                stopReason: "stop",
-              },
-              scopeLabel: turn.scopeLabel,
-            });
-            await turn.tape?.({
-              kind: "annotation",
-              payload: { subturnEnd: true },
-              scopeLabel: turn.scopeLabel,
-              entrySeq: stoppedEntry.seq,
-            });
-            return { reply, stopped: true, stoppedTapeComplete: true, modelCalls: 1 };
-          }
           return { reply, stopped: true, modelCalls: 1 };
         }
         if (options.failPrimaryTapeMessage && turn.input === "needs nudge") {
@@ -217,8 +196,6 @@ async function runScenario(
             entrySeq: finalEntry.seq,
           });
         }
-        // A "needs nudge" turn ends with NO final reply text (like a real turn ending on
-        // tool calls) — a text-bearing ending is now delivered directly, without a nudge.
         return {
           reply: turn.input === "needs nudge" ? "" : reply,
           modelCalls: 1,
@@ -308,173 +285,41 @@ async function runScenario(
 }
 
 test("an exact first sub-turn continues its reply-or-decline nudge from the refreshed tape", async () => {
-  const { modes, folds, deliveries, sessions, session, entries } = await runScenario();
+  const { modes, folds, deliveries } = await runScenario();
   assert.deepEqual(modes, ["shadow", "serve", "serve"]);
   assert.ok(folds[2]!.some((message) => JSON.stringify(message).includes("worklog without a post")));
   assert.equal(
     (await deliveries.pending("slack")).some((delivery) => delivery.text === "nudged from tape"),
     true,
   );
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
 });
 
-test("a missing primary checkpoint forces the nudge back to reconstruction; complete writes still watermark", async () => {
-  const { modes, sessions, session, entries } = await runScenario({ omitPrimaryCheckpoint: true });
+test("a missing primary checkpoint forces the nudge back to reconstruction", async () => {
+  const { modes } = await runScenario({ omitPrimaryCheckpoint: true });
   assert.deepEqual(modes, ["shadow", "serve", "shadow"]);
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
 });
 
-test("a stale nudge tape reread cannot certify the primary sub-turn; complete writes still watermark", async () => {
-  const { modes, sessions, session, entries } = await runScenario({ staleNudgeRead: true });
+test("a stale nudge tape reread forces the nudge back to reconstruction", async () => {
+  const { modes } = await runScenario({ staleNudgeRead: true });
   assert.deepEqual(modes, ["shadow", "serve", "shadow"]);
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
 });
 
-test("a pre-scopes legacy_import is superseded by the read-time heal and serves again", async () => {
-  const { modes, folds, sessions, session, orchestrator, input } = await runScenario();
-  const { lease: unscoped } = await sessions.acquireLease(session.id);
-  assert.ok(unscoped);
-  await sessions.appendTape(unscoped, {
-    kind: "context_event",
-    payload: {
-      event: "legacy_import",
-      messages: [{ role: "user", content: [{ type: "text", text: "pre-scopes import" }], timestamp: 1 }],
-    },
-    scopeLabel: scope,
-  });
-  await sessions.releaseLease(unscoped);
-  await orchestrator.handleTurn(input("after unscoped import"));
-  const rows = await sessions.getTape(session.id);
-  const imports = rows.filter(
-    (r) => r.kind === "context_event" && (r.payload as { event?: unknown }).event === "legacy_import",
-  );
-  assert.equal(imports.length, 2, "the heal re-imported over the scopeless import");
-  assert.ok(Array.isArray((imports.at(-1)!.payload as { scopes?: unknown }).scopes), "the fresh import records scopes");
-  assert.equal(modes.at(-1), "serve", "the session serves the same turn — no manual backfill run needed");
-  assert.ok(
-    !JSON.stringify(folds.at(-1)).includes("pre-scopes import"),
-    "the healed fold supersedes the old import's content",
-  );
-  const entries = await sessions.getEntries(session.id);
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
-
-  await orchestrator.handleTurn(input("next turn"));
-  const importsAfter = (await sessions.getTape(session.id)).filter(
-    (r) => r.kind === "context_event" && (r.payload as { event?: unknown }).event === "legacy_import",
-  );
-  assert.equal(importsAfter.length, 2, "the heal converges — no re-import once scopes are recorded");
-});
-
-test("a coverage gap self-heals at the next read: one legacy_import, served the same turn, watermark advances", async () => {
-  const { modes, folds, sessions, session, orchestrator, input } = await runScenario();
-  const { lease: breaker } = await sessions.acquireLease(session.id);
-  assert.ok(breaker);
-  const orphan = await sessions.append(breaker, {
-    type: "user",
-    payload: { text: "orphaned mid-deploy message" },
-    scopeLabel: scope,
-  });
-  await sessions.releaseLease(breaker);
-  assert.ok((await sessions.tapeCoverage(session.id)) < orphan.seq, "the orphan entry breaks coverage");
-
-  await orchestrator.handleTurn(input("after the gap"));
-  const rows = await sessions.getTape(session.id);
-  const imports = rows.filter(
-    (r) => r.kind === "context_event" && (r.payload as { event?: unknown }).event === "legacy_import",
-  );
-  assert.equal(imports.length, 1, "the read-time heal wrote exactly one import");
-  assert.equal(imports[0]!.coversEntrySeq, orphan.seq, "the import covers through the orphan entry");
-  assert.ok(Array.isArray((imports[0]!.payload as { scopes?: unknown }).scopes), "the heal records source scopes");
-  assert.equal(modes.at(-1), "serve", "the healed tape serves the SAME turn");
-  assert.ok(
-    JSON.stringify(folds.at(-1)).includes("orphaned mid-deploy message"),
-    "the served fold contains the orphaned entry",
-  );
-  const entries = await sessions.getEntries(session.id);
-  assert.equal(
-    await sessions.tapeCoverage(session.id),
-    entries.at(-1)!.seq,
-    "the watermark advances again — the latch is gone",
-  );
-});
-
-test("a stopped partial withholds coverage until its saved text is imported for replay", async () => {
-  const { modes, folds, sessions, session, entries, orchestrator, input } = await runScenario({ stoppedPartial: true });
-  const partial = entries.find(
-    (entry) =>
-      entry.type === "assistant" && (entry.payload as { text?: unknown } | null)?.text === "worklog without a post",
-  );
-  assert.ok(partial);
-  assert.ok((await sessions.tapeCoverage(session.id)) < partial.seq);
-
-  await orchestrator.handleTurn(input("continue after stop"));
-  assert.equal(modes.at(-1), "serve");
-  assert.ok(JSON.stringify(folds.at(-1)).includes("worklog without a post"));
-  const imports = (await sessions.getTape(session.id)).filter(
-    (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
-  );
-  assert.equal(imports.length, 1);
-});
-
-test("consecutive stopped turns heal one import each and converge once a turn completes", async () => {
-  const { modes, folds, sessions, session, orchestrator, input } = await runScenario({ stoppedPartial: true });
-  await orchestrator.handleTurn(input("keep stopping one"));
-  await orchestrator.handleTurn(input("keep stopping two"));
-  await orchestrator.handleTurn(input("continue after stops"));
-  const countImports = async () =>
-    (await sessions.getTape(session.id)).filter(
-      (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
-    ).length;
-  assert.equal(await countImports(), 3, "one heal per stopped predecessor — no compounding within a turn");
-  assert.equal(modes.at(-1), "serve");
-  const foldText = JSON.stringify(folds.at(-1));
-  assert.ok(foldText.includes("worklog without a post"));
-  assert.ok(foldText.includes("partial: keep stopping two"), "every stopped partial reaches the final fold");
-  const entries = await sessions.getEntries(session.id);
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq, "the completed turn re-arms coverage");
-
-  await orchestrator.handleTurn(input("one more"));
-  assert.equal(await countImports(), 3, "no further imports once coverage is restored");
-});
-
-test("a user-stopped turn skips direct delivery and the reply nudge while preserving replay coverage", async () => {
-  const { modes, deliveries, sessions, session, entries, orchestrator, input } = await runScenario({
+test("a user-stopped turn skips direct delivery and the reply nudge", async () => {
+  const { modes, deliveries, sessions, session, entries } = await runScenario({
     stoppedPartial: true,
     failDirectDelivery: true,
   });
-  assert.deepEqual(modes, ["shadow", "serve"], "Stop must not invoke the harness again");
-  assert.deepEqual(await deliveries.pending("slack"), [], "Stop must not enqueue a reply");
-  const partial = entries.find(
-    (entry) =>
-      entry.type === "assistant" && (entry.payload as { text?: unknown } | null)?.text === "worklog without a post",
-  );
-  assert.ok(partial);
+  assert.deepEqual(modes, ["shadow", "serve"]);
+  assert.deepEqual(await deliveries.pending("slack"), []);
   assert.ok(
-    (await sessions.tapeCoverage(session.id)) < partial.seq,
-    "the stopped primary must not advance the watermark",
+    entries.some(
+      (entry) => entry.type === "assistant" && (entry.payload as { text?: string }).text === "worklog without a post",
+    ),
   );
-
-  await orchestrator.handleTurn(input("continue after stop"));
-  const imports = (await sessions.getTape(session.id)).filter(
-    (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
-  );
-  assert.equal(imports.length, 1, "the stopped partial still reaches the replay via the heal");
+  assert.ok((await sessions.getTape(session.id)).some((row) => row.kind === "stop"));
 });
 
-test("a stopped turn that never taped its partial still reaches the replay via the heal", async () => {
-  const { modes, folds, orchestrator, input } = await runScenario({
-    stoppedPartial: true,
-    failPrimaryTapeMessage: true,
-  });
-  await orchestrator.handleTurn(input("continue after stop"));
-  assert.equal(modes.at(-1), "serve");
-  assert.ok(
-    JSON.stringify(folds.at(-1)).includes("worklog without a post"),
-    "the saved session entry supplies the partial even though its tape mirror never landed",
-  );
-});
-
-test("overheard imports are this turn's own witnessed appends: served, watermarked, no heal import", async () => {
+test("overheard messages are mirrored and served on the same turn", async () => {
   const { modes, folds, sessions, session, orchestrator, input } = await runScenario();
   await orchestrator.handleTurn(
     input("what did I miss?", {
@@ -484,31 +329,22 @@ test("overheard imports are this turn's own witnessed appends: served, watermark
       ],
     }),
   );
-  const rows = await sessions.getTape(session.id);
+  assert.equal(modes.at(-1), "serve");
+  assert.ok(JSON.stringify(folds.at(-1)).includes("intervening channel chatter"));
   assert.equal(
-    rows.some((r) => r.kind === "context_event" && (r.payload as { event?: unknown }).event === "legacy_import"),
+    (await sessions.getTape(session.id)).some(
+      (row) => row.kind === "context_event" && (row.payload as { event?: string }).event === "legacy_import",
+    ),
     false,
-    "no heal import — the pre-appends were mirrored, not a gap",
-  );
-  assert.equal(modes.at(-1), "serve", "the turn serves despite entries appended before the coverage read");
-  assert.ok(
-    JSON.stringify(folds.at(-1)).includes("intervening channel chatter"),
-    "the fold includes the just-mirrored overheard rows",
-  );
-  const entries = await sessions.getEntries(session.id);
-  assert.equal(
-    await sessions.tapeCoverage(session.id),
-    entries.at(-1)!.seq,
-    "the watermark covers the overheard entries",
   );
 });
 
-test("a failed overheard mirror fails the turn loudly; the next turn's read heals the gap", async () => {
-  const { modes, folds, sessions, session, orchestrator, input } = await runScenario();
-  const realAppendTape = sessions.appendTape.bind(sessions);
+test("a failed overheard mirror fails the turn loudly", async () => {
+  const { sessions, orchestrator, input } = await runScenario();
+  const appendTape = sessions.appendTape.bind(sessions);
   sessions.appendTape = async (lease, rec) => {
     if (rec.kind === "message" && rec.meta?.overheard) throw new Error("mirror down");
-    return realAppendTape(lease, rec);
+    return appendTape(lease, rec);
   };
   await assert.rejects(
     orchestrator.handleTurn(
@@ -518,28 +354,9 @@ test("a failed overheard mirror fails the turn loudly; the next turn's read heal
     ),
     /mirror down/,
   );
-  sessions.appendTape = realAppendTape;
-  const withheld = await sessions.getEntries(session.id);
-  assert.ok(
-    (await sessions.tapeCoverage(session.id)) < withheld.at(-1)!.seq,
-    "the failed turn never watermarks past the unmirrored entry",
-  );
-  await orchestrator.handleTurn(input("what did I miss?"));
-  const rows = await sessions.getTape(session.id);
-  const imports = rows.filter(
-    (r) => r.kind === "context_event" && (r.payload as { event?: unknown }).event === "legacy_import",
-  );
-  assert.equal(imports.length, 1, "the gap left by the failed turn is re-imported at the next read");
-  assert.equal(modes.at(-1), "serve", "the healed tape serves the next turn");
-  assert.ok(
-    JSON.stringify(folds.at(-1)).includes("unmirrored chatter"),
-    "the import preserved the unmirrored overheard content",
-  );
-  const entries = await sessions.getEntries(session.id);
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
 });
 
-test("a tainted session gets no tape read, no heal import, and no watermark", async () => {
+test("a tainted session cannot serve native tape history", async () => {
   const { modes, sessions, session, orchestrator, input } = await runScenario();
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);
@@ -549,22 +366,13 @@ test("a tainted session gets no tape read, no heal import, and no watermark", as
     scopeLabel: scope,
   });
   await sessions.releaseLease(lease);
-
   await orchestrator.handleTurn(input("after the quarantine"));
-  assert.equal(modes.at(-1), undefined, "taint disables the tape path entirely — not even shadow");
-  const rows = await sessions.getTape(session.id);
-  assert.equal(
-    rows.some((r) => r.kind === "context_event" && (r.payload as { event?: unknown }).event === "legacy_import"),
-    false,
-    "the heal never writes an import for a tainted session",
-  );
-  const entries = await sessions.getEntries(session.id);
-  assert.ok((await sessions.tapeCoverage(session.id)) < entries.at(-1)!.seq, "the watermark stays withheld");
+  assert.equal(modes.at(-1), undefined);
 });
 
-test("a failed primary message append fails the turn: no nudge, no checkpoint, no watermark", async () => {
+test("a failed primary message append fails the turn before any nudge or checkpoint", async () => {
   const { modes, sessions, session, entries } = await runScenario({ failPrimaryTapeMessage: true });
-  assert.deepEqual(modes, ["shadow", "serve"], "the turn dies at the failed append before any nudge sub-turn");
+  assert.deepEqual(modes, ["shadow", "serve"]);
   const turnUserSeq = entries.find(
     (entry) => (entry.payload as { text?: unknown } | null)?.text === "needs nudge",
   )!.seq;
@@ -577,63 +385,13 @@ test("a failed primary message append fails the turn: no nudge, no checkpoint, n
     ),
     false,
   );
-  assert.ok((await sessions.tapeCoverage(session.id)) < entries.at(-1)!.seq);
 });
 
-test("a stopped turn that attests a replay-safe tape latches coverage without a heal import", async () => {
-  const { modes, folds, sessions, session, entries, orchestrator, input } = await runScenario({
-    stoppedPartial: true,
-    stoppedTapeComplete: true,
-  });
-  const partial = entries.find(
-    (entry) =>
-      entry.type === "assistant" && (entry.payload as { text?: unknown } | null)?.text === "worklog without a post",
-  );
-  assert.ok(partial);
-  assert.ok((await sessions.tapeCoverage(session.id)) >= partial.seq, "the stopped turn latched its own coverage");
-
-  await orchestrator.handleTurn(input("continue after stop"));
-  assert.equal(modes.at(-1), "serve");
-  const fold = folds.at(-1) as Array<{ role?: string; stopReason?: string; content?: unknown }>;
-  assert.ok(
-    fold.some(
-      (m) =>
-        m.role === "assistant" &&
-        m.stopReason !== "aborted" &&
-        JSON.stringify(m.content).includes("worklog without a post"),
-    ),
-    "the stopped partial replays as a live assistant message, not an aborted one",
-  );
-  const imports = (await sessions.getTape(session.id)).filter(
-    (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
-  );
-  assert.equal(imports.length, 0, "no heal import was needed");
-});
-
-test("a crash after the checkpointed primary sub-turn keeps the coverage it already latched", async () => {
-  const { modes, sessions, session, entries, orchestrator, input } = await runScenario({ nudgeCrash: true });
-  assert.equal(
-    await sessions.tapeCoverage(session.id),
-    entries.at(-1)!.seq,
-    "the primary sub-turn's coverage survived the crash",
-  );
-
+test("a nudge crash preserves the completed primary sub-turn on tape", async () => {
+  const { modes, folds, orchestrator, input } = await runScenario({ nudgeCrash: true });
   await orchestrator.handleTurn(input("after the crash"));
   assert.equal(modes.at(-1), "serve");
-  const imports = (await sessions.getTape(session.id)).filter(
-    (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
-  );
-  assert.equal(imports.length, 0, "the next turn served straight from the tape without a heal import");
-});
-
-test("each turn stamps exactly one watermark per covered position — no duplicate turnEnd rows", async () => {
-  const { sessions, session } = await runScenario();
-  const turnEnds = (await sessions.getTape(session.id)).filter(
-    (row) => row.kind === "annotation" && (row.payload as { turnEnd?: unknown } | null)?.turnEnd === true,
-  );
-  assert.equal(turnEnds.length, 3, "one for the prime turn, one after the primary sub-turn, one after the nudge");
-  const seqs = turnEnds.map((row) => row.entrySeq);
-  assert.equal(new Set(seqs).size, seqs.length, "no two turnEnd rows stamp the same entry seq");
+  assert.ok(JSON.stringify(folds.at(-1)).includes("worklog without a post"));
 });
 
 test("a cancel-stopped turn delivers nothing anywhere and returns silent", async () => {
@@ -645,7 +403,7 @@ test("a cancel-stopped turn delivers nothing anywhere and returns silent", async
     return enqueue(delivery);
   };
   const controller = new AbortController();
-  controller.abort();
+  controller.abort("user");
   const result = await orchestrator.handleTurn(
     input("keep stopping this run", {
       addressed: true,
@@ -659,8 +417,8 @@ test("a cancel-stopped turn delivers nothing anywhere and returns silent", async
 });
 
 test("Stop during the reply nudge suppresses its fallback delivery", async () => {
-  const { modes, deliveries, entries } = await runScenario({ nudgeStopped: true });
+  const { modes, deliveries, sessions, session } = await runScenario({ nudgeStopped: true });
   assert.deepEqual(modes, ["shadow", "serve", "serve"]);
   assert.deepEqual(await deliveries.pending("slack"), []);
-  assert.ok(entries.some((entry) => entry.type === "assistant" && (entry.payload as { stopped?: boolean }).stopped));
+  assert.ok((await sessions.getTape(session.id)).some((row) => row.kind === "stop"));
 });

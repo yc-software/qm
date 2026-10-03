@@ -48,7 +48,9 @@ test("a run's tool entries are read from the session tape, bounded by its turn a
       ["tool_call", "tool_result"],
     );
     assert.equal((entries[0]!.payload as { command?: string }).command, "echo hi");
-    assert.ok(entries.every((e) => e.seq > run.turnUserSeq!));
+    const session = (await built.sessions.getByThread(run.sessionId))!;
+    const user = (await built.sessions.getRunUserEntry(session.id, run.id))!;
+    assert.ok(entries.every((e) => e.seq > user.seq));
     assert.deepEqual(await built.app.getRunToolEntries(second.runId!, owner), []);
     assert.deepEqual(await built.app.getRunToolEntries(first.runId!, "internal:someone-else"), []);
     assert.deepEqual(await built.app.getRunToolEntries("missing-run", owner), []);

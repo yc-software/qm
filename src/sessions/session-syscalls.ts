@@ -473,7 +473,7 @@ export async function stopSessionTree(
     if (session.scopeId !== root.scopeId) continue;
     for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
       await deps.signals.send(run.id, { kind: "abort" });
-      if (run.status === "pending") await deps.runs.withdraw(run.id);
+      if (run.status === "pending") await deps.runs.withdraw(run.id, { unstartedOnly: true });
       stopped = true;
     }
   }
@@ -1037,7 +1037,10 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
+  sessions: Pick<
+    SessionStore,
+    "get" | "getByThread" | "getEntries" | "getRunUserEntry" | "latestEntrySeq" | "visibleEntries"
+  >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
     Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
@@ -1159,7 +1162,10 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (!originalParent) request.addressed = false;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(run.request, prepared);
-  const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
+  const outputSeq =
+    run.result?.sourceAssistantEntrySeq ??
+    (await deps.sessions.getRunUserEntry(child.id, run.id))?.seq ??
+    run.result?.sourceUserSeq;
   if (outputSeq !== undefined && outputSeq !== null) {
     for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
       const visible = await deps.sessions.visibleEntries(child.id, id);

@@ -7,7 +7,6 @@ import {
   contextSummaryPayload,
   createContextSummaryPayload,
   entrySecurityTainted,
-  tapeCheckpointPayload,
   tapeEntryMirrorRecord,
 } from "../../sessions/session-store.ts";
 import {
@@ -181,8 +180,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       },
       scopeLabel: summaryLabel,
     });
-    const covered = (await deps.sessions.tapeCoverage(input.session.id)) === (goalEntry?.seq ?? summary.seq) - 1;
-    const recoveredCoverage = covered ? summary.seq : undefined;
     await deps.sessions.appendTape(input.lease, {
       kind: "context_event",
       payload: mode
@@ -190,20 +187,12 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         : { event: "compaction", text },
       scopeLabel: summaryLabel as ScopeId,
       entrySeq: summary.seq,
-      coversEntrySeq: mode ? recoveredCoverage : throughSeq,
+      coversEntrySeq: mode ? summary.seq : throughSeq,
       meta: {
         entryCreatedAt: summary.createdAt,
         ...(securityTainted ? { securityTainted: true } : {}),
       },
     });
-    if (covered) {
-      await deps.sessions.appendTape(input.lease, {
-        kind: "annotation",
-        payload: tapeCheckpointPayload("turnEnd"),
-        scopeLabel: summaryLabel as ScopeId,
-        entrySeq: summary.seq,
-      });
-    }
     await deps.harness.turns.resetSession?.(input.session.id);
     return { summary, goalEntry };
   }

@@ -167,3 +167,14 @@ test("waitRun signals replying only once the run has passed detection and begun 
   });
   assert.equal(replying, 1);
 });
+
+for (const [reply, expected] of [
+  ["", "Stopped."],
+  ["Partial answer", "Partial answer"],
+] as const) {
+  test(`a user-stopped turn posts ${expected === "Stopped." ? "the stop status" : "only real partial text"}`, async () => {
+    const h = harness(async () => ({ status: "ok", reply, stopped: true }));
+    await h.handler.handleIncoming(h.followup, h.client);
+    assert.deepEqual(h.posts, [expected]);
+  });
+}

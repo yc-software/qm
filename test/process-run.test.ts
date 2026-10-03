@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { processRun, LEASE_LOST_CONSECUTIVE } from "../src/runs/worker.ts";
-import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { NonRetryableTurnError, TurnHandedOff } from "../src/core/turn-error.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
@@ -246,25 +246,6 @@ test("finalAttempt marks the attempt whose error would park the run, from the cl
   assert.equal((await runs.get(first!.id))?.status, "failed", "and the store indeed parks on its error");
 });
 
-test("finalAttempt also marks the claim-cap park — an error on an over-claimed run is terminal", async () => {
-  const { runs } = createMemoryRunStore({ maxClaims: 3 });
-  const seen: OrchestratorInput[] = [];
-  const orchestrator = fakeOrchestrator(async (input) => {
-    seen.push(input);
-    throw new Error("provider hiccup");
-  });
-
-  await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 5 });
-  for (let i = 0; i < 2; i++) {
-    const r = await runs.claim("w1", 5_000);
-    await runs.releaseLease(r!.id, r!.leaseToken!);
-  }
-  const third = await runs.claim("w1", 5_000);
-  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, third!), /hiccup/);
-  assert.equal(seen[0]?.finalAttempt, true, "claim cap reached — an error is terminal despite error budget left");
-  assert.equal((await runs.get(third!.id))?.status, "failed");
-});
-
 function scriptedHeartbeat(runs: RunStore, script: Array<boolean | Error>): RunStore {
   return {
     ...runs,
@@ -349,6 +330,38 @@ test("a single definitive lease-lost beat does not cancel, but N consecutive do"
   await pending;
 });
 
+test("a failed lease renewal cannot endlessly hand back a still-owned run", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const store = createMemoryRunStore();
+  const runs = scriptedHeartbeat(
+    store.runs,
+    Array.from({ length: LEASE_LOST_CONSECUTIVE }, () => false),
+  );
+  let reason: unknown;
+  const orchestrator = fakeOrchestrator(
+    (input) =>
+      new Promise<TurnResult>((_, reject) => {
+        input.cancel!.addEventListener("abort", () => {
+          reason = input.cancel!.reason;
+          reject(new TurnHandedOff());
+        });
+      }),
+  );
+  const { run: enq } = await store.runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 });
+  const run = await store.runs.claim("w1", 9_000);
+  const pending = assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!), /run lease lost/);
+  for (let i = 0; i < LEASE_LOST_CONSECUTIVE; i++) {
+    t.mock.timers.tick(3_000);
+    await microtasks();
+  }
+  await pending;
+  assert.equal(reason, "lease-lost");
+  const after = (await store.runs.get(enq.id))!;
+  assert.equal(after.status, "failed");
+  assert.equal(after.errorAttempts, 1);
+  assert.equal(after.result?.status, "failed");
+});
+
 test("the heartbeat stops before complete(), so a late tick cannot spuriously abort", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const store = createMemoryRunStore();
@@ -427,8 +440,8 @@ test("a NonRetryableTurnError keeps its human-readable reason on the stored resu
   assert.equal((await runs.get(run!.id))?.result?.reason, "Codex turn exceeded 300s wall clock");
 });
 
-for (const rejects of [false, true]) {
-  test(`shutdown requeues without spending the error budget when cancellation ${rejects ? "throws" : "returns"}`, async () => {
+{
+  test("shutdown requeues without spending the error budget when the turn hands off", async () => {
     const { runs } = createMemoryRunStore();
     const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
     const run = await runs.claim("old", 5_000);
@@ -437,11 +450,11 @@ for (const rejects of [false, true]) {
     const orchestrator = fakeOrchestrator(async (input) => {
       entered.resolve();
       await new Promise<void>((resolve) => input.cancel!.addEventListener("abort", () => resolve(), { once: true }));
-      if (rejects) throw new Error("cancelled operation");
-      return { status: "silent", stopped: true };
+      assert.equal(input.cancel!.reason, "shutdown");
+      throw new TurnHandedOff();
     });
     const work = processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!, { shutdown: shutdown.signal });
-    const settled = rejects ? assert.rejects(work, /cancelled operation/) : work;
+    const settled = assert.rejects(work, TurnHandedOff);
     await entered.promise;
     shutdown.abort();
     await settled;
@@ -469,6 +482,23 @@ test("explicit user Stop still completes instead of retrying", async () => {
   assert.equal(await runs.claim("replacement", 5_000), null);
 });
 
+test("a turn that returns as shutdown lands completes instead of handing back", async () => {
+  const { runs } = createMemoryRunStore();
+  const enq = (await runs.enqueue({ sessionId: "s1", request: turn })).run;
+  const run = await runs.claim("w1", 5_000);
+  const shutdown = new AbortController();
+  const orchestrator = fakeOrchestrator(async () => {
+    shutdown.abort();
+    return { status: "ok", reply: "finished" };
+  });
+  await processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!, { shutdown: shutdown.signal });
+  assert.equal(
+    (await runs.get(enq.id))?.status,
+    "done",
+    "a returned turn is complete; replaying it would duplicate effects",
+  );
+});
+
 test("failed shutdown handback retains the lease for expiry without charging an error", async () => {
   const { runs } = createMemoryRunStore();
   const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
@@ -480,9 +510,12 @@ test("failed shutdown handback retains the lease for expiry without charging an 
   };
   const orchestrator = fakeOrchestrator(async () => {
     shutdown.abort();
-    return { status: "silent", stopped: true };
+    throw new TurnHandedOff();
   });
-  await processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!, { shutdown: shutdown.signal });
+  await assert.rejects(
+    processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!, { shutdown: shutdown.signal }),
+    TurnHandedOff,
+  );
   const retained = (await runs.get(enq.id))!;
   assert.equal(retained.status, "running");
   assert.equal(retained.leaseToken, originalToken);

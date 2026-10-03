@@ -98,7 +98,6 @@ test("an edit of a recorded DM message appends one marker entry and mirrors it o
     return row.kind === "annotation" && p?.turnEnd === true && p.entry?.payload?.kind === "message_revision";
   });
   assert.ok(bound, "a turnEnd annotation keeps the tape projection covering the marker entry");
-  assert.equal(await sessions.tapeCoverage(session.id), await sessions.latestEntrySeq(session.id));
 
   const projection = projectTapeEntries(session.id, tape);
   assert.ok(projection, "the tape stays projectable after the marker lands");
@@ -201,7 +200,7 @@ test("a channel thread reply's edit reaches the thread session via the sub root"
   assert.equal(marks[0]!.name, "Josh");
 });
 
-test("when model tape is not contiguous the revision is mirrored without advancing model coverage", async () => {
+test("a revision is mirrored even when earlier entries have no native model records", async () => {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread(`dm:${DM}`, "dm", SCOPE, undefined, "slack");
   const { lease } = await sessions.acquireLease(session.id, "turn");
@@ -212,10 +211,9 @@ test("when model tape is not contiguous the revision is mirrored without advanci
 
   assert.equal(revisions(await sessions.getEntries(session.id)).length, 1);
   assert.deepEqual(await sessions.getTranscriptEntries(session.id), await sessions.getEntries(session.id));
-  assert.equal(await sessions.tapeCoverage(session.id), -1);
   assert.ok(
-    (await sessions.getTape(session.id)).every(
-      (row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry",
+    (await sessions.getTape(session.id)).some(
+      (row) => row.kind === "message" && JSON.stringify(row.payload).includes("message-edited"),
     ),
   );
 });
@@ -319,7 +317,6 @@ test("while a turn holds the lease the ingest-time marker is skipped, and the tu
       ["deleted", "51.0", null],
     ],
   );
-  assert.equal(await sessions.tapeCoverage(session.id), await sessions.latestEntrySeq(session.id));
 
   const again = await reconcileMessageRevisions({
     sessions,

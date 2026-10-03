@@ -320,14 +320,14 @@ for (const backend of backends) {
     const parked = await runs.get(r.id);
     assert.equal(parked?.status, "failed", "parked run is terminal failed (loud)");
     assert.match(parked?.result?.reason ?? "", /max age/);
-    assert.equal(parked?.errorAttempts, 0, "age-cap park does not burn the error budget");
+    assert.equal(parked?.errorAttempts, 1, "an expired lease is a failed attempt");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.outcome, "parked");
     assert.equal(events[0]?.runId, r.id);
     assert.equal(events[0]?.sessionId, "s1");
     assert.equal(events[0]?.workerId, "w1");
     assert.equal(events[0]?.attempts, 1);
-    assert.equal(events[0]?.errorAttempts, 0);
+    assert.equal(events[0]?.errorAttempts, 1);
   });
 
   test(`[${backend.name}] reaper requeues (not parks) a run younger than the age cap, and reports it`, async () => {
@@ -345,7 +345,7 @@ for (const backend of backends) {
     assert.equal(events[0]?.outcome, "requeued");
     assert.equal(events[0]?.runId, r.id);
     assert.equal(events[0]?.attempts, 1);
-    assert.equal(events[0]?.errorAttempts, 0);
+    assert.equal(events[0]?.errorAttempts, 1);
   });
 
   test(`[${backend.name}] delivery state round-trips and survives to the terminal run`, async () => {
@@ -409,16 +409,6 @@ for (const backend of backends) {
     assert.deepEqual(JSON.parse(replay.output ?? "null"), { cmd: "attempt-2" });
     const a1 = await ledger.begin("run1", 1, 0);
     assert.deepEqual(JSON.parse(a1.output ?? "null"), { cmd: "attempt-1" });
-  });
-  test(`[${backend.name}] noteTurnUserSeq records the turn boundary once and never overwrites it`, async () => {
-    const { runs } = backend.make();
-    const run = (await runs.enqueue({ sessionId: "sSeq", request: turn("go") })).run;
-    assert.equal(run.turnUserSeq, null);
-    assert.equal(await runs.noteTurnUserSeq(run.id, 7), true);
-    assert.equal((await runs.get(run.id))?.turnUserSeq, 7);
-    assert.equal(await runs.noteTurnUserSeq(run.id, 99), false, "a later attempt must not move the boundary");
-    assert.equal((await runs.get(run.id))?.turnUserSeq, 7);
-    assert.equal(await runs.noteTurnUserSeq("missing-run", 1), false);
   });
 }
 

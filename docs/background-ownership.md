@@ -48,6 +48,18 @@ A process records `admitted` before starting background resources. The desired d
 
 `drained` means the process's admitted background work has finished. Releasing ownership and making a deployment safe to replace are separate gates. Do not terminate a relinquished but undrained process merely to meet a rollout time target.
 
+Relinquishing requests a handoff from background workers. Admitted synchronous turns drain normally. The current tool can finish and commit its result, after which the harness yields instead of starting another model step. The run lease returns to the queue without recording a tool or provider failure. `BACKGROUND_HANDOFF_GRACE_MS` defaults to 120 seconds. The ownership transition stores the retirement time on each admitted member, so every retiring replica uses the same deadline even when it observes the transition later. A rollback does not extend a retiring generation’s deadline. At the deadline, the harness aborts remaining provider work and refuses new tool dispatch. A later shutdown may shorten that deadline; returning leadership creates fresh signals without cancelling the retiring generation's deadline.
+
+Pi resumes a clean native tape with `continue()`, without another user message or interruption note. Incomplete replay-safe reads may use the existing hidden recovery note. Started tool calls record a replay policy before execution; automatic recovery requires both the recorded policy and current fixed tool semantics to allow replay. Writes, arbitrary shell commands, client tools, MCP calls, and unknown operations default to unsafe. An unsafe call with no known result stops recovery with an explicit uncertain-outcome error instead of dispatching it again. Committed skill loads re-materialize the currently authorized files at their recorded paths before continuation. Revoked skills fail closed. Claude, Codex, and OpenCode also yield at tool boundaries and stop provider work at the deadline; they resume through their existing history reconstruction. A tool that exceeds the grace may keep running remotely after the local turn exits. Late local callbacks are fenced; an uncertain unsafe outcome is not automatically replayed. Reattaching foreground sandbox executions by durable process ID is not implemented; this change does not claim exactly-once execution for uncommitted external effects.
+
+Interrupted cron and Loop fires are marked stranded and run again on their next scheduled tick; they do not resume mid-fire.
+
+A user Stop is distinct from shutdown or lease loss. Only a user Stop records a typed stop event on the tape; no synthetic assistant reply is written. Real partial model text remains intact. Shutdown and lease loss return unfinished runs to the queue. Steering received while handoff is pending is persisted before acknowledgment, or remains in the durable signal queue for the next worker if the old lease cannot write.
+
+Sandbox cleanup is bounded by the same deadline. Credential scrubs or teardowns still running at the deadline are recorded as pending, the session lease is released, and the next worker finishes them before the box is reused.
+
+The two-minute window belongs to the ownership handoff before infrastructure termination. A direct OS shutdown can shorten it to the configured shutdown drain budget; it does not extend the container platform’s stop timeout. Deploy controllers must request ownership handoff before terminating tasks.
+
 Database errors or an expired local validity watchdog fence new local work. They do not establish durable relinquishment or authorize another deployment to bypass an outstanding member.
 
 ## Terminated processes
@@ -117,7 +129,7 @@ to resume their existing claim loop.
 Synchronous turns and manually started cron callbacks are admitted work too. A
 paused deployment refuses new synchronous execution while still accepting durable
 asynchronous submissions for the active workers. Accepted turns, scheduled
-callbacks, and their nested work keep running with their existing leases; their
-completion is part of the deployment's drain acknowledgment. Resuming ownership
-restores synchronous admission without restarting or canceling those calls.
+callbacks, and their nested work retain their leases until completion or handoff;
+that settlement is part of the deployment's drain acknowledgment. Resuming ownership
+restores synchronous admission.
 Task protection also counts admitted foreground work while the process drains.

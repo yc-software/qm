@@ -243,7 +243,7 @@ export interface Sandbox {
   signalProcess?(handle: SandboxHandle, processId: string, signal: string): Promise<void>;
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
   persistHomeSnapshot?(scopeId: string): Promise<void>;
-  computerStatus?(scopeId: string): Promise<ComputerStatus>;
+  computerStatus?(scopeId: string, opts?: { passive?: boolean }): Promise<ComputerStatus>;
   restartComputer?(scopeId: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;

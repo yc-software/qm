@@ -136,14 +136,14 @@ if (built.backgroundOwnership) {
   };
   let periodicStop: Promise<void> = Promise.resolve();
   let activationEpoch = 0;
-  const stopPeriodic = () => {
+  const stopPeriodic = (requestedAt?: number) => {
     activationEpoch++;
     periodicStop = Promise.all([built.scheduler.stopClaims(), built.suggestedActivityMaintenance.stop()]).then(
       () => {},
     );
     void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
     void built.runtime
-      .stopBackgroundClaims()
+      .stopBackgroundClaims(requestedAt)
       .catch((error) => console.error("[qm] background claim stop failed:", errMessage(error)));
     for (const runtime of [slackRuntime, ...slackAccountRuntimes])
       void runtime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
@@ -169,9 +169,9 @@ if (built.backgroundOwnership) {
       }
     },
     fence: stopPeriodic,
-    async relinquish() {
+    async relinquish(requestedAt) {
       await Promise.all([
-        built.runtime.stopBackgroundClaims(),
+        built.runtime.stopBackgroundClaims(requestedAt),
         built.scheduler.stopClaims(),
         ...[slackRuntime, ...slackAccountRuntimes].map((runtime) => runtime.stop()),
       ]);
@@ -213,4 +213,4 @@ function shutdown(signal: string): void {
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
-shutdownOnUncaught("qm", shutdown);
+shutdownOnUncaught("qm");

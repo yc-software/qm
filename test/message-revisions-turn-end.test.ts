@@ -51,7 +51,6 @@ test("an edit the ingest path could not record is caught up at the end of the ne
       marks.map((m) => [m.action, m.ts, m.text]),
       [["edited", "t1", "hello there, edited"]],
     );
-    assert.equal(await built.sessions.tapeCoverage(session!.id), await built.sessions.latestEntrySeq(session!.id));
 
     await sleep(60);
     const asked: number[] = [];

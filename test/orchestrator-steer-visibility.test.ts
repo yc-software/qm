@@ -26,7 +26,7 @@ const { buildApp } = await import("../src/wiring.ts");
 
 for (const mode of ["retry", "handoff"] as const) {
   test(`a ${mode} hides its synthetic trigger but not real steer intake in entries, tape, or activity`, async () => {
-    const built = buildApp(testConfig());
+    const built = buildApp(testConfig({ sessionTapeMode: "shadow" }));
     const request: TurnRequest = {
       surface: "test",
       actor: { externalId: "U1" },
@@ -106,3 +106,81 @@ for (const mode of ["retry", "handoff"] as const) {
     }
   });
 }
+
+for (const partial of ["", "The provider produced this partial sentence"]) {
+  test(`a user stop persists a tape event without invented assistant text: ${partial.length}`, async () => {
+    const built = buildApp(testConfig({ sessionTapeMode: "serve" }));
+    exercise = async (turn) => {
+      const user = await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      await turn.tape!({
+        kind: "message",
+        harness: "pi",
+        payload: { role: "user", content: turn.input },
+        scopeLabel: turn.scopeLabel,
+        entrySeq: user.seq,
+      });
+      if (partial) {
+        const entry = await turn.emit({ type: "assistant", payload: { text: partial }, scopeLabel: turn.scopeLabel });
+        await turn.tape!({
+          kind: "message",
+          harness: "pi",
+          payload: { role: "assistant", content: [{ type: "text", text: partial }] },
+          scopeLabel: turn.scopeLabel,
+          entrySeq: entry.seq,
+        });
+      }
+      return { reply: partial, stopped: true };
+    };
+    try {
+      const result = await built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: `stop-${partial.length}` },
+        text: "Begin the work",
+      });
+      assert.equal(result.stopped, true);
+      assert.equal(result.status, "silent");
+      const rows = await built.sessions.getTape(result.sessionId!);
+      assert.equal(rows.filter((row) => row.kind === "stop").length, 1);
+      const entries = await built.sessions.getEntries(result.sessionId!);
+      assert.deepEqual(
+        entries.filter((entry) => entry.type === "assistant").map((entry) => (entry.payload as { text: string }).text),
+        partial ? [partial] : [],
+      );
+    } finally {
+      exercise = undefined;
+    }
+  });
+}
+
+test("Stop on a handed-off queued run records its event before another model call", async () => {
+  const built = buildApp(testConfig());
+  const request: TurnRequest = {
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "queued-handoff-stop" },
+    text: "Begin the work",
+    idempotencyKey: "queued-handoff-stop",
+  };
+  let calls = 0;
+  exercise = async (turn) => {
+    calls++;
+    await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+    return { reply: "", handedOff: true };
+  };
+  try {
+    await assert.rejects(built.app.turn(request), { name: "TurnHandedOff" });
+    assert.equal(await built.app.stopConversation(request.conversation.threadRef), true);
+    const result = await built.app.turn(request);
+    assert.equal(result.stopped, true);
+    assert.equal(calls, 1);
+    const rows = await built.sessions.getTape(result.sessionId!);
+    assert.equal(rows.filter((row) => row.kind === "stop").length, 1);
+    assert.equal(
+      (await built.sessions.getEntries(result.sessionId!)).filter((entry) => entry.type === "assistant").length,
+      0,
+    );
+  } finally {
+    exercise = undefined;
+  }
+});

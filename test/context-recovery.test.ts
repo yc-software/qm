@@ -292,7 +292,7 @@ test("recent recovery replaces the replay prefix even when the exclusion ends in
     assert.ok(lintFold(folded).ok);
     assert.deepEqual(latestGoalRecord(history), goal);
     assert.ok(history.at(-1)!.seq > last.seq);
-    assert.equal(await f.sessions.tapeCoverage(f.input.session.id), history[0]!.seq);
+    assert.equal(tape.find((row) => row.kind === "context_event")!.coversEntrySeq, history[0]!.seq);
     assert.equal(
       tapeEventsEntitled(tape, [{ id: "test", type: "internal", teamIds: ["eng"] }], "personal:test", "org:test"),
       true,
@@ -303,7 +303,7 @@ test("recent recovery replaces the replay prefix even when the exclusion ends in
   }
 });
 
-test("a failed recent replay replacement cannot advance tape coverage", async () => {
+test("a failed recent replay replacement cannot reset the native session", async () => {
   const f = await fixture();
   try {
     await f.sessions.appendTape(f.input.lease, {
@@ -318,38 +318,16 @@ test("a failed recent replay replacement cannot advance tape coverage", async ()
       return appendTape(lease, record);
     };
     await assert.rejects(f.compaction.compactRecent(f.input), /import unavailable/);
-    assert.equal(await f.sessions.tapeCoverage(f.input.session.id), 11);
+    assert.equal(
+      (await f.sessions.getTape(f.input.session.id)).filter((row) => row.kind === "context_event").length,
+      0,
+    );
     assert.equal(f.resets(), 0);
     assert.ok((await f.sessions.latestEntrySeq(f.input.session.id)) > 11);
   } finally {
     await f.sessions.releaseLease(f.input.lease);
   }
 });
-
-for (const covered of [false, true]) {
-  test(`recent recovery ${covered ? "advances" : "does not manufacture"} tape coverage`, async () => {
-    const f = await fixture();
-    try {
-      if (covered)
-        await f.sessions.appendTape(f.input.lease, {
-          kind: "annotation",
-          payload: tapeCheckpointPayload("turnEnd"),
-          scopeLabel: "personal:test",
-          entrySeq: 11,
-        });
-      const before = await f.sessions.tapeCoverage(f.input.session.id);
-      const history = await f.compaction.compactRecent(f.input);
-      assert.equal(await f.sessions.tapeCoverage(f.input.session.id), covered ? history[0]!.seq : before);
-      const tape = await f.sessions.getTape(f.input.session.id);
-      const recovery = tape.find((row) => row.kind === "context_event")!;
-      assert.equal((recovery.payload as { mode: string }).mode, "recent");
-      assert.equal((recovery.payload as { event: string }).event, "legacy_import");
-      assert.equal(recovery.coversEntrySeq, covered ? history[0]!.seq : undefined);
-    } finally {
-      await f.sessions.releaseLease(f.input.lease);
-    }
-  });
-}
 
 test("an incomplete recent replacement cannot label retained messages with an older replay boundary", async () => {
   const f = await fixture();
@@ -367,7 +345,6 @@ test("an incomplete recent replacement cannot label retained messages with an ol
     });
     await refresh(f);
     await f.compaction.compactRecent(f.input);
-    assert.equal(await f.sessions.tapeCoverage(f.input.session.id), 5);
     await f.sessions.appendTape(f.input.lease, {
       kind: "context_event",
       payload: { event: "compaction", text: "A later summary." },

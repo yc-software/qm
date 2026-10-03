@@ -731,3 +731,30 @@ test("a queued steer remains durable until its native intake acknowledges it", a
   await stop();
   assert.deepEqual(await store.pending("intake"), []);
 });
+
+test("a new poller immediately consumes a steer deferred by the retiring worker", async () => {
+  const store = createMemoryRunSignalStore();
+  await store.send("handoff", { kind: "steer", text: "keep this" });
+  let deferred = false;
+  const stop = startSignalPoll(store, "handoff", {
+    onSteer: async () => {
+      deferred = true;
+      return false;
+    },
+    onAbort: async () => {},
+  });
+  await until(() => deferred);
+  await stop();
+  assert.equal((await store.pending("handoff")).length, 1);
+  let received = "";
+  const resumed = startSignalPoll(store, "handoff", {
+    onSteer: async (text) => {
+      received = text;
+    },
+    onAbort: async () => {},
+  });
+  await until(() => received !== "");
+  await resumed();
+  assert.equal(received, "keep this");
+  assert.equal((await store.pending("handoff")).length, 0);
+});

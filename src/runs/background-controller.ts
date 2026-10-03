@@ -6,8 +6,8 @@ export interface BackgroundControllerDeps {
   identity: Pick<BackgroundMember, "instanceId" | "deploymentId" | "taskArn">;
   legacyEnabled: boolean;
   start(signal: AbortSignal): Promise<void>;
-  fence(): void;
-  relinquish(): Promise<void>;
+  fence(requestedAt?: number): void;
+  relinquish(requestedAt?: number): Promise<void>;
   drained(): Promise<void>;
   onError(error: unknown): void;
   validityMs?: number;
@@ -22,6 +22,7 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
   let admissionEpoch = 0;
   let activation: AbortController | null = null;
   let validUntil = 0;
+  let retirementAt: number | undefined;
   let watchdog: ReturnType<typeof setTimeout> | null = null;
   let poller: ReturnType<typeof setInterval> | null = null;
   let pending: Promise<void> | null = null;
@@ -29,17 +30,18 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
   let refreshing: Promise<void> | null = null;
   let draining: Promise<void> = Promise.resolve();
   const validityMs = deps.validityMs ?? 10_000;
-  const fence = (): void => {
+  const fence = (requestedAt = retirementAt): void => {
+    retirementAt ??= requestedAt;
     validUntil = 0;
     activation?.abort();
-    deps.fence();
+    deps.fence(requestedAt);
     if (watchdog) clearTimeout(watchdog);
     watchdog = null;
   };
-  const release = async (): Promise<void> => {
-    fence();
+  const release = async (requestedAt = retirementAt): Promise<void> => {
+    fence(requestedAt);
     if (admission === null) return;
-    await deps.relinquish();
+    await deps.relinquish(requestedAt);
     const generation = admission;
     const epoch = admissionEpoch;
     await deps.store.acknowledge(deps.identity.instanceId, generation, "relinquished");
@@ -58,16 +60,18 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
     watchdog.unref?.();
   };
   const refreshStartup = (): Promise<void> => {
-    if (!starting || !running || !activation || activation.signal.aborted) return Promise.resolve();
+    if (!starting || !running || !activation) return Promise.resolve();
     if (refreshing) return refreshing;
     const currentActivation = activation;
     const generation = admission;
     refreshing = (async () => {
       try {
         const state = await deps.store.get();
-        if (!starting || !running || activation !== currentActivation || currentActivation?.signal.aborted) return;
+        if (!starting || !running || activation !== currentActivation) return;
         const member = state.members.find((entry) => entry.instanceId === deps.identity.instanceId);
+        retirementAt ??= member?.handoffRequestedAt;
         if (
+          currentActivation.signal.aborted ||
           state.generation !== generation ||
           !member ||
           member.retired ||
@@ -81,8 +85,9 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
         renew();
       } catch (error) {
         if (starting && activation === currentActivation) {
+          const report = !currentActivation.signal.aborted;
           fence();
-          deps.onError(error);
+          if (report) deps.onError(error);
         }
       }
     })().finally(() => {
@@ -109,11 +114,12 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
           !member.retired &&
           (state.enabled ? state.desiredDeploymentId === deps.identity.deploymentId : deps.legacyEnabled);
         if (admission !== null && (!desired || state.generation !== admission || activation?.signal.aborted))
-          await release();
+          await release(member?.handoffRequestedAt);
         if (!desired) return;
         if (admission === null) {
           await deps.store.admit(deps.identity.instanceId, state.generation, deps.legacyEnabled);
           admission = state.generation;
+          retirementAt = undefined;
           admissionEpoch++;
           activation = new AbortController();
           renew();

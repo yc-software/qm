@@ -1,5 +1,5 @@
 import type { Principal, ScopeId } from "../types.ts";
-import type { TapeRecord } from "../sessions/session-store.ts";
+import { transcriptEntryFromTape, type TapeRecord } from "../sessions/session-store.ts";
 import { deliveryNote, legacyDeliveryNoteManifest } from "../core/attachments.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
@@ -222,7 +222,24 @@ function withoutThinking(messages: readonly unknown[]): unknown[] {
 
 export function foldTape(rows: readonly TapeRecord[]): unknown[] {
   const f: Foldable = { out: [], boundaries: [] };
+  const runs = new Set<string>();
   for (const row of rows) {
+    const entry = transcriptEntryFromTape(row);
+    const runId = (entry?.payload as { runId?: string } | null)?.runId;
+    if (entry?.type === "user" && runId) runs.add(runId);
+    if (row.kind === "stop") {
+      const stoppedRun = (row.payload as { runId?: string }).runId;
+      if (stoppedRun && !runs.has(stoppedRun)) continue;
+      healDanglingCalls(f.out, row.createdAt);
+      f.out.push({
+        role: "user",
+        content: [{ type: "text", text: "[Request interrupted by user]" }],
+        timestamp: row.createdAt,
+      });
+      const boundary = f.boundaries.at(-1);
+      if (boundary) f.boundaries.push({ pos: f.out.length, entrySeq: boundary.entrySeq });
+      continue;
+    }
     if (row.kind === "annotation") {
       if ((row.payload as { turnEnd?: unknown } | null)?.turnEnd === true && row.entrySeq !== undefined) {
         f.boundaries.push({ pos: f.out.length, entrySeq: row.entrySeq });
@@ -314,20 +331,23 @@ export function planTapeSeed(
   if (rows.some((r) => r.kind === "message" && r.harness !== undefined && r.harness !== harness)) {
     return { seed: null, skip: "foreign-harness" };
   }
-  const fold = folded ? [...folded] : foldTape(rows);
+  const fold = (folded ? [...folded] : foldTape(rows)).filter((message) => !assistantDroppedAtReplay(message));
   const lint = lintFold(fold);
   return { seed: mode === "serve" && lint.ok && fold.length ? fold : null, lint, fold };
 }
 
-export function tapeNeedsInterruptHeal(rows: readonly TapeRecord[], folded?: readonly unknown[]): boolean {
-  const problems = lintFold(folded ?? foldTape(rows)).problems;
-  return problems.length > 0 && problems.every((p) => p.startsWith("end:"));
-}
-
-export function healFoldInterrupt(messages: readonly unknown[], at: number): unknown[] {
-  const healed = [...messages];
-  healDanglingCalls(healed, at);
-  return healed;
+export function tapeEndsAtCommittedStep(messages: readonly unknown[] | undefined): boolean {
+  messages = messages?.filter((message) => !assistantDroppedAtReplay(message));
+  if (!messages?.length || !lintFold(messages).ok) return false;
+  const last = messages[messages.length - 1] as { role?: string } | undefined;
+  if (last?.role === "user") return true;
+  if (last?.role !== "toolResult") return false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i] as { role?: string; content?: Array<{ type?: string; text?: string }> };
+    if (message.role !== "toolResult") break;
+    if (message.content?.some((block) => block.type === "text" && block.text === INTERRUPTED_TOOL_RESULT)) return false;
+  }
+  return true;
 }
 
 export interface FoldLint {

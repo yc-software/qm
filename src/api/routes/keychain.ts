@@ -231,7 +231,14 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const requesterDestination =
         (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
       const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
-      const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
+      const originSession =
+        originRun && originRun.sessionId === capability.threadRef
+          ? await deps.sessions?.getByThread(originRun.sessionId)
+          : null;
+      const requesterSeq =
+        originSession && originRun
+          ? (await deps.sessions?.getRunUserEntry(originSession.id, originRun.id))?.seq
+          : undefined;
       const requesterMessageTs =
         originRun && originRun.sessionId === capability.threadRef && originRun.request.origin.kind === "human"
           ? originRun.request.origin.messageTs

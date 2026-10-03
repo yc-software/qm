@@ -4,7 +4,7 @@ import {
   renderableTapeSlice,
   RENDER_IMPORT_EVENT,
 } from "../../src/harness/tape-projection.ts";
-import { appendCoverageImport, coverageImportViable } from "../../src/harness/replay.ts";
+import { appendHistoryImport, historyImportViable } from "../../src/harness/replay.ts";
 import { lastImportLacksScopes } from "../../src/harness/tape-fold.ts";
 import {
   TAPE_IMPORT_MAX_ENTRIES,
@@ -73,28 +73,29 @@ export type RenderImportAssessment =
   | { action: "import"; entries: SessionEntry[]; latestSeq: number; needsFoldImport: boolean };
 
 export async function assessRenderImport(
-  store: Pick<SessionStore, "latestEntrySeq" | "tapeCoverage" | "getTape" | "getEntries">,
+  store: Pick<SessionStore, "latestEntrySeq" | "getTape" | "getEntries">,
   sessionId: string,
   opts?: { force?: boolean },
 ): Promise<RenderImportAssessment> {
   const latest = await store.latestEntrySeq(sessionId);
   if (latest < 0) return { action: "skip", reason: "empty" };
-  const coverage = await store.tapeCoverage(sessionId);
   const rows = await store.getTape(sessionId);
   const entries = await store.getEntries(sessionId);
-  if (!opts?.force && coverage >= latest) {
-    const projection = projectTapeEntries(sessionId, rows);
-    if (
-      projection &&
-      projection.coveredSeq >= latest &&
-      classifyDivergences(entries, projection.entries, { coarse: false }).real.length === 0
-    )
-      return { action: "skip", reason: "covered" };
-  }
+  const projection = projectTapeEntries(sessionId, rows);
+  const matches =
+    !!projection &&
+    projection.coveredSeq >= latest &&
+    classifyDivergences(entries, projection.entries, { coarse: false }).real.length === 0;
+  if (!opts?.force && matches) return { action: "skip", reason: "covered" };
   if (entries.length > RENDER_IMPORT_MAX_ENTRIES) return { action: "skip", reason: "oversize" };
   if (entries.some((e, i) => e.seq !== i)) return { action: "skip", reason: "gapped" };
-  const needsFoldImport = coverage < latest || lastImportLacksScopes(rows);
-  if (needsFoldImport && !coverageImportViable(entries)) return { action: "skip", reason: "unservable-fold" };
+  const needsFoldImport =
+    !rows.some(
+      (row) =>
+        row.kind === "message" ||
+        (row.kind === "context_event" && (row.payload as { event?: string }).event === "legacy_import"),
+    ) || lastImportLacksScopes(rows);
+  if (needsFoldImport && !historyImportViable(entries)) return { action: "skip", reason: "unservable-fold" };
   return { action: "import", entries, latestSeq: latest, needsFoldImport };
 }
 
@@ -107,7 +108,7 @@ export async function appendRenderImport(
 ): Promise<"imported" | "unservable-fold"> {
   const last = entries[entries.length - 1];
   if (!last) return "unservable-fold";
-  if (needsFoldImport && !(await appendCoverageImport(store, lease, entries, scopeLabel))) {
+  if (needsFoldImport && !(await appendHistoryImport(store, lease, entries, scopeLabel))) {
     return "unservable-fold";
   }
   let firstMirror: TapeRecord | undefined;

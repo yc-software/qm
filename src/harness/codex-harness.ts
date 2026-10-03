@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, TurnHandedOff } from "../core/turn-error.ts";
+import { isUserStop } from "../runs/handoff.ts";
 import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
@@ -21,7 +22,13 @@ import {
   fileCodexAuthStore,
   type CodexAuthStore,
 } from "./codex-auth-store.ts";
-import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
+import {
+  abortedResult,
+  defineHarness,
+  type Harness,
+  type HarnessTurnInput,
+  type HarnessTurnResult,
+} from "./harness.ts";
 import { coreToolOptions, type ToolContextRef } from "./agent-tools.ts";
 import {
   bridgedTools,
@@ -33,6 +40,7 @@ import {
   oneShotRunner,
   tapeReplyCheckpoint,
   recordSteerIntake,
+  acknowledgeSteer,
   type SteerIntake,
   transitionTask,
   type BridgedTool,
@@ -546,6 +554,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           }
           if (method === "item/completed") {
             let stamp: Awaited<ReturnType<typeof recordSteerIntake>> | undefined;
+            let intake: SteerIntake | undefined;
             let tapeItem = item;
             if (
               threadId === state.threadId &&
@@ -562,7 +571,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               const index = state.pendingSteers.findIndex((steer) => steer.inputText === text);
               if (index >= 0) {
                 const [steer] = state.pendingSteers.splice(index, 1);
-                stamp = await recordSteerIntake(state.turn, steer!.intake);
+                intake = steer!.intake;
+                stamp = await recordSteerIntake(state.turn, intake);
                 tapeItem = { type: "message", role: "user", content: [{ type: "input_text", text: steer!.prompt }] };
               }
             }
@@ -576,11 +586,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
                   payload: tapeItem,
                   ...stamp,
                 });
+                await acknowledgeSteer(intake);
               } catch (error) {
                 state.tapeError = asError(error);
                 void state.interrupt?.();
               }
-            }
+            } else if (!state.turn.tape) await acknowledgeSteer(intake);
           }
           await processCollabItem(state, item);
         }
@@ -625,6 +636,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             });
           return { contentItems: [{ type: "inputText", text: output }], success: true };
         } catch (error) {
+          if (error instanceof TurnHandedOff) setImmediate(() => void state.interrupt?.());
           const output = error instanceof Error ? error.message : String(error);
           state.responseItems.push({ type: "function_call_output", call_id: callId, output });
           return { contentItems: [{ type: "inputText", text: output }], success: false };
@@ -776,7 +788,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
   };
 
   const runPrompt = async (turn: HarnessTurnInput, toolsEnabled = true): Promise<HarnessTurnResult> => {
-    if (turn.cancel?.aborted) return { reply: "", stopped: true };
+    if (turn.cancel?.aborted) return abortedResult(turn);
     setupUsers += 1;
     let setupUserReleased = false;
     const releaseSetupUser = () => {
@@ -877,7 +889,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (!ephemeral) rmSync(jail, { recursive: true, force: true });
         await closeEphemeral();
         finishSetup();
-        if (error === setupCancelled) return { reply: "", stopped: true };
+        if (error === setupCancelled) return abortedResult(turn);
         throw error;
       }
     } else {
@@ -890,7 +902,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       } catch (error) {
         finishSetup();
         await closeIdleRuntime();
-        if (error === setupCancelled) return { reply: "", stopped: true };
+        if (error === setupCancelled) return abortedResult(turn);
         throw error;
       }
     }
@@ -898,7 +910,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       await closeEphemeral();
       finishSetup();
       await closeIdleRuntime();
-      if (error === setupCancelled) return { reply: "", stopped: true };
+      if (error === setupCancelled) return abortedResult(turn);
       throw error;
     };
     try {
@@ -1162,7 +1174,6 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       }
     };
     let turnId = "";
-    let stoppedByUser = false;
     const interrupt = async (stopped: boolean) => {
       if (stopped && !state.stopped) {
         state.stoppedReply = textFromTurn({
@@ -1187,11 +1198,15 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               scopeLabel: turn.scopeLabel,
             });
         }
-        await turn.emit({
-          type: "assistant",
-          payload: { text: state.stoppedReply ?? "", stopped: true },
-          scopeLabel: turn.scopeLabel,
-        });
+        const reply = state.stoppedReply?.trim();
+        if (reply) {
+          const finalEntry = await turn.emit({
+            type: "assistant",
+            payload: { text: reply, stopped: true },
+            scopeLabel: turn.scopeLabel,
+          });
+          await tapeReplyCheckpoint(turn, finalEntry);
+        }
       })();
       return stoppedReplySaved;
     };
@@ -1203,18 +1218,27 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       if (turn.cancel.aborted) onCancel();
       else turn.cancel.addEventListener("abort", onCancel, { once: true });
     }
+    const onHandoffRequested = () => {
+      ref.handoffRequested = true;
+    };
+    if (turn.handoff?.aborted) onHandoffRequested();
+    else turn.handoff?.addEventListener("abort", onHandoffRequested, { once: true });
+    const cancelledResult = async (): Promise<HarnessTurnResult> => {
+      runtimeCleanupRequested = true;
+      if (!isUserStop(turn.cancel)) return { reply: "", handedOff: true, modelCalls: state.modelCalls };
+      await saveStoppedReply();
+      return { reply: state.stoppedReply?.trim() ?? "", stopped: true, modelCalls: state.modelCalls };
+    };
     const stopSignals =
       opts.signals && turn.runId
         ? startSignalPoll(
             opts.signals,
             turn.runId,
             {
-              onAbort: async () => {
-                stoppedByUser = true;
-                await interrupt(true);
-              },
+              onAbort: async () => turn.stop?.(),
               onSteer: async (text, ts, request, acknowledge) => {
-                if (ts && recordedMessageTimestamps(turn.history).has(ts)) return;
+                if (ts && recordedMessageTimestamps(turn.history, turn.tapeRows).has(ts)) return;
+                if (turn.handoff?.aborted) return false;
                 const prepared = await turn.prepareSteer?.(text, request);
                 const prompt = prepared?.text ?? text;
                 const documentText = await documentsFallbackText(
@@ -1316,26 +1340,25 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       }
       if (result.status === "failed" && !state.stopped && !ref.runtimeHandoff)
         throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
-      if (state.stopped || turn.cancel?.aborted) {
-        if (turn.cancel?.aborted) runtimeCleanupRequested = true;
-        await saveStoppedReply();
-        turnResult = { reply: state.stoppedReply ?? "", stopped: true };
+      const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
+      if (turn.cancel?.aborted) {
+        turnResult = await cancelledResult();
+      } else if (ref.handoffRequested && !terminal && result.status !== "completed") {
+        turnResult = { reply: "", handedOff: true, modelCalls: state.modelCalls };
       } else {
-        const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
         const reply = terminal ? "" : textFromTurn(result);
         for (const thinking of reasoningFromTurn(result))
           await turn.emit({ type: "thinking", payload: { thinking }, scopeLabel: turn.scopeLabel });
         if (reply && !terminal) {
           const finalEntry = await turn.emit({
             type: "assistant",
-            payload: { text: reply, ...(state.stopped ? { stopped: true } : {}) },
+            payload: { text: reply },
             scopeLabel: turn.scopeLabel,
           });
           await tapeReplyCheckpoint(turn, finalEntry);
         }
         turnResult = {
           reply,
-          ...(state.stopped ? { stopped: true as const } : {}),
           ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
@@ -1344,13 +1367,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         };
       }
     } catch (error) {
-      if (turn.cancel?.aborted) {
-        runtimeCleanupRequested = true;
-        await saveStoppedReply();
-        turnResult = { reply: state.stoppedReply ?? "", stopped: true };
-      } else {
-        throw error;
-      }
+      if (turn.cancel?.aborted) turnResult = await cancelledResult();
+      else throw error;
     } finally {
       if (timer) clearTimeout(timer);
       try {
@@ -1359,6 +1377,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         cleanupErrors.push(error);
       }
       turn.cancel?.removeEventListener("abort", onCancel);
+      turn.handoff?.removeEventListener("abort", onHandoffRequested);
       for (const [taskId, status] of state.taskStatuses) {
         if (status === "pending" || status === "in_progress") {
           try {
@@ -1381,7 +1400,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     }
     if (cleanupErrors.length) throw cleanupErrors[0];
     if (!turnResult) throw new Error("Codex turn did not produce a result");
-    return { ...turnResult, ...(stoppedByUser ? { stoppedByUser: true as const } : {}) };
+    return turnResult;
   };
 
   const single = oneShotRunner((turn) => runPrompt(turn, false));

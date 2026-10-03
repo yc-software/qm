@@ -135,3 +135,62 @@ test("skill files live only for the turn that loaded them", async () => {
   await skills.archive(first.id);
   assert.match((await app.turn({ ...request, text: "!skill helper" } as TurnRequest)).reply ?? "", /no skill file/);
 });
+
+test("a failed turn keeps renewing its session lease until sandbox cleanup finishes", async (t) => {
+  const { app, skills, sandbox, sessions } = await withDefaultComputer(freshApp());
+  await publishFileSkill(skills, "lease-helper");
+  let renewals = 0;
+  const renew = sessions.renewLease.bind(sessions);
+  sessions.renewLease = async (...args) => {
+    renewals++;
+    return renew(...args);
+  };
+  let renewedDuringCleanup = 0;
+  const teardown = sandbox.teardown.bind(sandbox);
+  sandbox.teardown = async (...args) => {
+    const before = renewals;
+    t.mock.timers.tick(sessions.leaseTtlMs);
+    renewedDuringCleanup += renewals - before;
+    return teardown(...args);
+  };
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await assert.rejects(
+    app.turn({
+      surface: "test",
+      actor,
+      conversation: { kind: "dm", threadRef: "dm:U1:lease-cleanup" },
+      text: "!skill-then-boom lease-helper",
+    } as TurnRequest),
+    /simulated fault/,
+  );
+  assert.ok(renewedDuringCleanup > 0, "the lease was renewed while cleanup was still running");
+});
+
+test("a resumed turn re-materializes authorized skill files at their recorded paths", async () => {
+  const { app, skills, sandbox } = await withDefaultComputer(freshApp());
+  const skill = await publishFileSkill(skills, "handoff-helper");
+  const request = {
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: "dm:U1:skill-handoff" },
+    text: "!skill-then-boom handoff-helper",
+    idempotencyKey: "skill-handoff",
+  } as TurnRequest;
+  const writes: Array<{ path: string; content: string }> = [];
+  const write = sandbox.writeFile.bind(sandbox);
+  sandbox.writeFile = async (handle, path, content) => {
+    if (path.endsWith("/scripts/run.sh")) writes.push({ path, content: String(content) });
+    return write(handle, path, content);
+  };
+  await assert.rejects(app.turn(request), /fault after skill load/);
+  await skills.update(skill.id, {
+    ...skill.manifest,
+    files: [{ path: "scripts/run.sh", content: "printf changed" }],
+  });
+  await skills.review(skill.id, "reviewer-1", []);
+  await skills.publish(skill.id);
+  await app.turn(request);
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0]!.path, writes[1]!.path);
+  assert.equal(writes[1]!.content, "printf changed");
+});

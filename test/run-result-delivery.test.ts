@@ -31,7 +31,6 @@ function run(over: Partial<Run>): Run {
     request: turn("hi", "C9:171.001"),
     result: { status: "ok", reply: "the reply" },
     deliveryState: null,
-    turnUserSeq: null,
     dedupKey: null,
     attempts: 1,
     errorAttempts: 0,
@@ -312,7 +311,6 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
     "exactly one turnEnd checkpoint keeps model coverage intact",
   );
   assert.deepEqual(await sessions.getTranscriptEntries(session.id), entries);
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
   assert.equal((await sessions.getEntries(session.id)).length, 1);

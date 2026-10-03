@@ -144,7 +144,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   return { orchestrator, sessions, deliveries, posted, input };
 }
 
-test("a turn-end coverage append failure after a surface post fails loudly but non-retryably", async () => {
+test("a turn-end checkpoint failure after a surface post fails loudly but non-retryably", async () => {
   const { orchestrator, sessions, posted, input } = buildScenario();
   await orchestrator.handleTurn(input("prime"));
   const appendTape = sessions.appendTape.bind(sessions);
@@ -163,13 +163,17 @@ test("a turn-end coverage append failure after a surface post fails loudly but n
   );
   await assert.rejects(turn, (err: unknown) => {
     assert.ok(err instanceof NonRetryableTurnError, "the worker must not re-execute a turn whose effects landed");
-    assert.match((err as Error).message, /coverage append failed/);
+    assert.match((err as Error).message, /checkpoint failed/);
     return true;
   });
   assert.deepEqual(posted, ["ok"], "the surface post landed exactly once");
   const session = (await sessions.getByThread(conversation.threadRef))!;
-  const latest = await sessions.latestEntrySeq(session.id);
-  assert.ok((await sessions.tapeCoverage(session.id)) < latest, "coverage stays withheld for the heal to cover");
+  assert.equal(
+    (await sessions.getTape(session.id)).filter(
+      (row) => row.kind === "annotation" && (row.payload as { turnEnd?: boolean }).turnEnd,
+    ).length,
+    1,
+  );
 });
 
 test("a pre-effect tape write failure stays retryable turn-fatal", async () => {
@@ -189,18 +193,15 @@ test("a pre-effect tape write failure stays retryable turn-fatal", async () => {
   });
 });
 
-test("a cancel-stopped turn still persists and surfaces its pending approvals", async () => {
+test("a stopped harness drops its pending approvals", async () => {
   const { orchestrator, input } = buildScenario({
     reply: "",
     stopped: true,
     pendingApprovals: [{ command: "rm -rf /srv/data", reason: "destructive command" }],
   });
-  const controller = new AbortController();
-  controller.abort();
-  const result = await orchestrator.handleTurn(input("wipe the data dir", { cancel: controller.signal }));
-  assert.equal(result.status, "pending_approval", "the approval is surfaced, not orphaned by the cancel");
-  assert.equal(result.pendingApprovals?.length, 1);
-  assert.equal(result.pendingApprovals?.[0]?.command, "rm -rf /srv/data");
+  const result = await orchestrator.handleTurn(input("wipe the data dir"));
+  assert.equal(result.status, "silent");
+  assert.equal(result.pendingApprovals, undefined);
 });
 
 test("an overheard import failure aborts the batch instead of skipping one message", async () => {

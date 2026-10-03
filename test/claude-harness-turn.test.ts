@@ -172,7 +172,6 @@ for (const shutdown of [false, true]) {
     const result = await harness.turns.runTurn(turn);
 
     assert.equal(result.stopped, true, "an interrupted turn the SDK calls an error is still a user stop");
-    assert.equal(result.stoppedByUser, true);
     assert.equal(result.reply, "");
     assert.deepEqual(
       (await signals.takePending(runId)).map((s) => s.kind),
@@ -205,11 +204,10 @@ for (const late of [
     const { turn, entries } = harnessTurn({ cancel: cancel.signal, onDelta: (text) => deltas.push(text) });
     const running = harness.turns.runTurn(turn);
     await waiting.promise;
-    cancel.abort();
+    cancel.abort("user");
     release.resolve();
     const result = await running;
     assert.equal(result.stopped, true);
-    assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
     assert.deepEqual(deltas, ["Visible partial"]);
     assert.deepEqual(
@@ -252,11 +250,10 @@ for (const bookkeeping of ["request recording", "thinking persistence"]) {
     }
     const running = harness.turns.runTurn(turn);
     await waiting.promise;
-    cancel.abort();
+    cancel.abort("user");
     release.resolve();
     const result = await running;
     assert.equal(result.stopped, true);
-    assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
     assert.deepEqual(
       entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),

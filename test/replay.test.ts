@@ -10,6 +10,7 @@ import {
   seedPriorTurns,
   selectOverheardToImport,
 } from "../src/harness/replay.ts";
+import type { TapeRecord } from "../src/sessions/session-store.ts";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
 
 function entry(type: SessionEntry["type"], text: string): SessionEntry {
@@ -532,4 +533,14 @@ test("overheard reconciliation deduplicates IDs within a batch but preserves ide
     ["100.001", "100.002", "100.003"],
   );
   assert.deepEqual(selectOverheardToImport(incoming, new Set(picked.map((p) => p.ts))), []);
+});
+
+test("steer deduplication uses committed native messages, not earlier display entries", () => {
+  const history = [triggerEntry("untaped", "keep this steer"), triggerEntry("taped", "already placed")];
+  const rows = [
+    { kind: "annotation", meta: { ts: "untaped" } },
+    { kind: "message", meta: { ts: "taped" } },
+  ] as TapeRecord[];
+  assert.deepEqual([...recordedMessageTimestamps(history, rows)], ["taped"]);
+  assert.deepEqual([...recordedMessageTimestamps(history, [])], []);
 });

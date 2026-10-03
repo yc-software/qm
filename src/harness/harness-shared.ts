@@ -9,7 +9,12 @@ import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
 import { rehydrateOpenGoal } from "./goal.ts";
-import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
+import {
+  type HarnessLlmRequestRecord,
+  type HarnessModelUtilities,
+  type HarnessTurnInput,
+  type HarnessTurnResult,
+} from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord, type NewTapeRecord } from "../sessions/session-store.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
@@ -59,7 +64,6 @@ export async function recordSteerIntake(
     },
     scopeLabel: turn.scopeLabel,
   });
-  await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
   return {
     entrySeq: entry.seq,
     meta: {
@@ -69,6 +73,10 @@ export async function recordSteerIntake(
       entryCreatedAt: entry.createdAt,
     },
   };
+}
+
+export async function acknowledgeSteer(steer: SteerIntake | undefined): Promise<void> {
+  await steer?.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }
 
 export async function tapeReplyCheckpoint(

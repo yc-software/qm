@@ -258,7 +258,12 @@ test("a lease lost mid-turn fails the turn instead of degrading silently", async
       tape: (rec: NewTapeRecord) => store.appendTape(lease, rec),
     });
     await assert.rejects(harness.turns.runTurn(turn), /without a valid session lease/);
-    assert.equal(await store.tapeCoverage(session.id), -1, "nothing on the stolen-lease tape claims coverage");
+    assert.equal(
+      (await store.getTape(session.id)).some((row) =>
+        JSON.stringify(row.payload).includes("reply after the lease was stolen"),
+      ),
+      false,
+    );
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -556,7 +561,7 @@ for (const failure of ["acknowledge", "tape"] as const) {
       if (failure === "tape") {
         await assert.rejects(harness.turns.runTurn(turn), /tape insert refused/);
         assert.equal(steered().length, 1, "the consumed steer keeps its canonical intake entry");
-        assert.equal((await signals.pending("steer-failure")).length, 0, "the recorded steer is acknowledged");
+        assert.equal((await signals.pending("steer-failure")).length, 1, "an untaped steer remains pending");
         assert.equal(
           sink.tape.some((rec) => rec.meta?.ts === "fail.1"),
           false,

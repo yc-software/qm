@@ -1486,11 +1486,16 @@ test("retry recovery supplies an excluded request without rerunning its complete
   };
   const { orch, sessions } = buildOrchestrator(harness, 500);
   await seed(sessions, [
-    { payload: { text: "finish the stored request" } },
+    { payload: { text: "finish the stored request", runId: "stored-run" } },
     { type: "tool_call", payload: { tool: "files", action: "write", callId: "done" } },
     { type: "tool_result", payload: { tool: "files", callId: "done", result: "stored ".repeat(1000) } },
   ]);
-  const result = await orch.handleTurn({ ...turn("finish the stored request"), attempt: 2, surfaceTools: false });
+  const result = await orch.handleTurn({
+    ...turn("finish the stored request"),
+    runId: "stored-run",
+    attempt: 2,
+    surfaceTools: false,
+  });
   assert.equal(result.status, "ok");
   assert.equal(result.reply, "resumed");
   assert.equal(mainCalls, 1);

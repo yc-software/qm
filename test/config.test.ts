@@ -554,12 +554,6 @@ test("Fly identity and Slack runtime settings are parsed once into Config", () =
   });
 });
 
-test("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {
-  assert.equal(loadConfig({}).maxClaims, CONFIG_DEFAULTS.maxClaims);
-  assert.equal(loadConfig({ MAX_CLAIMS: "5" }).maxClaims, 5);
-  assert.throws(() => loadConfig({ MAX_CLAIMS: "lots" }), /MAX_CLAIMS="lots" is not a number/);
-});
-
 test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
   assert.equal(loadConfig({}).modelProvider, undefined);
   assert.equal(loadConfig({ MODEL_PROVIDER: " openrouter ", OPENROUTER_API_KEY: "k" }).modelProvider, "openrouter");

@@ -681,7 +681,7 @@ for (const mechanism of ["signal", "cancel", "both"] as const) {
     if (mechanism !== "cancel") await signals.send("stop", { kind: "abort" });
     if (mechanism !== "signal") cancel.abort();
     const result = await running;
-    assert.equal(result.stoppedByUser, mechanism === "cancel" ? undefined : true);
+
     if (mechanism !== "cancel") assert.equal(result.stopped, true);
   });
 }

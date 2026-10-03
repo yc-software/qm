@@ -29,7 +29,13 @@ import {
 const GOAL_ROUND_MIN_WALL_MS = 30_000;
 
 function turnCompleted(result: HarnessTurnResult): boolean {
-  return !result.stopped && !result.runtimeHandoff && !result.pausedOnApproval && !result.pendingApprovals?.length;
+  return (
+    !result.stopped &&
+    !result.handedOff &&
+    !result.runtimeHandoff &&
+    !result.pausedOnApproval &&
+    !result.pendingApprovals?.length
+  );
 }
 
 function inputTokens(result: HarnessTurnResult): number {
@@ -95,7 +101,8 @@ async function runTurnEnforcingGoal(
       return blocked() ? "halted" : "ok";
     },
   });
-  if (result.stopped && (result.stoppedByUser || !input.cancel?.aborted) && goal.status === "active") {
+  if (result.handedOff) return result;
+  if (result.stopped && goal.status === "active") {
     goal.status = "paused";
     goal.updatedAt = Date.now();
   }
@@ -283,6 +290,7 @@ export function createHarnessRouter(
         const dispatched: HarnessTurnInput = {
           ...input,
           runtime: choice,
+          continueTurn: choice.harnessId === "pi" && input.continueTurn,
           tools: input.runtimeControl
             ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
             : input.tools,

@@ -1,9 +1,16 @@
-import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
+import { NonRetryableTurnError } from "../turn-error.ts";
+import type { Principal, Resolution, ScopeId, Session, SessionEntry } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
-import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
+import {
+  type Sandbox,
+  type SandboxHandle,
+  supportsProcessSessions,
+  SandboxProvisionCleanupError,
+} from "../../sandbox/sandbox.ts";
+import type { DurableMap } from "../../persistence/durable-map.ts";
 import type { SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import {
@@ -26,11 +33,49 @@ import { isSafeSkillName } from "../../skills/skill-name.ts";
 import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
-import { sleep } from "../../util/async.ts";
+import { sleep, withAbort } from "../../util/async.ts";
 import { loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
+
+export interface PendingSandboxScrub {
+  createdAt: number;
+  scopeLabel: string;
+  boxes: Array<{ layers: Resolution["layers"]; sandboxId?: string; egress?: Resolution["egress"]; dirs: string[] }>;
+  pausing?: string;
+}
+
+export async function finishPendingScrubs(
+  sandbox: Pick<Sandbox, "provision" | "removeDir" | "teardown">,
+  scrubs: DurableMap<PendingSandboxScrub>,
+): Promise<void> {
+  for (const [id, noted] of await scrubs.entries()) {
+    if (noted.pausing) continue;
+    const pending = await scrubs.take(id);
+    if (!pending || Date.now() - pending.createdAt > TURN_FILES_MAX_AGE_MS) continue;
+    const remaining: PendingSandboxScrub["boxes"] = [];
+    for (const box of pending.boxes) {
+      try {
+        const handle = await sandbox.provision(box.layers, {
+          ...(box.sandboxId ? { sandboxId: box.sandboxId } : {}),
+          ...(box.egress ? { egress: box.egress } : {}),
+        });
+        try {
+          await Promise.all(box.dirs.map((dir) => sandbox.removeDir(handle, dir)));
+        } finally {
+          await sandbox
+            .teardown(handle, { keepWarm: true })
+            .catch(swallowAs("orchestrator: pending scrub teardown", undefined));
+        }
+      } catch (err) {
+        swallow(`orchestrator: pending sandbox scrub ${id}`, err);
+        remaining.push(box);
+      }
+    }
+    if (remaining.length) await scrubs.put(id, { ...pending, boxes: remaining });
+  }
+}
 
 export interface TurnSandboxContext {
   deps: OrchestratorDeps;
@@ -129,6 +174,21 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     pending: null,
   };
   let scratchProvisionInFlight: Promise<SandboxHandle> | null = null;
+  let closed = false;
+  const inFlight = new Set<Promise<unknown>>();
+  const track = <T>(promise: Promise<T>): Promise<T> => {
+    const guarded = promise.then((value) => {
+      if (closed) throw closedError();
+      return value;
+    });
+    inFlight.add(guarded);
+    const settle = () => void inFlight.delete(guarded);
+    guarded.then(settle, settle);
+    return guarded;
+  };
+  const closedError = () => new Error("This turn's sandboxes have already been released");
+  const boxKey = (handle: SandboxHandle) => `${handle.backend}:${handle.id}`;
+  const boxSpecs = new Map<string, Omit<PendingSandboxScrub["boxes"][number], "dirs">>();
   const scratchKey = () => `turn:${session.id}:${transferId}`;
   let scratchStartedAt: number | undefined;
   let scratchReadyAt: number | undefined;
@@ -210,11 +270,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const resourcePending = new Map<string, Promise<SandboxHandle>>();
   let provisionInFlight: Promise<SandboxHandle> | null = null;
   const provision = (eager = false): Promise<SandboxHandle> => {
+    if (closed) return Promise.reject(closedError());
     if (!eager) box.used = true;
-    provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork, eager).catch((err) => {
-      provisionInFlight = null;
-      throw err;
-    });
+    provisionInFlight ??= track(
+      doProvision(eager ? () => {} : emitGapWork, eager).catch((err) => {
+        provisionInFlight = null;
+        throw err;
+      }),
+    );
     return provisionInFlight;
   };
   const prepareCredentials = async (
@@ -336,6 +399,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
     });
     box.pending = handle;
+    boxSpecs.set(boxKey(handle), {
+      layers: resolution.layers,
+      ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
+      egress: resolution.egress,
+    });
+    if (closed) throw closedError();
     emit("provision", provisionStart, Date.now());
     box.provisionMs = Date.now() - provisionStart;
     deps.auditLog?.record({
@@ -382,6 +451,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const skillsRoot = `${turnFilesDir}/${SKILLS_DIR}`;
   const laidTrees = new Set<string>();
+  const restoredDirs = new Map<string, Set<string>>();
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
     const treeKey = `${sandboxId ?? "default"}:${skillDir(skillsRoot, r)}`;
     if (laidTrees.has(treeKey)) return;
@@ -443,6 +513,44 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(pack ? { packDir: pack } : {}),
     };
   };
+  const restoreSkillFiles = async (entries: readonly SessionEntry[]): Promise<void> => {
+    const visible = await visibleSkillsForTurn();
+    for (const entry of entries) {
+      if (entry.type !== "tool_result") continue;
+      const payload = entry.payload as {
+        tool?: string;
+        name?: string;
+        dir?: string;
+        sandboxId?: string;
+        isError?: boolean;
+      } | null;
+      if ((payload?.tool !== "skill" && payload?.tool !== "skills") || !payload.dir || payload.isError) continue;
+      const prefix = `${turnSessionDir}/`;
+      const relative = payload.dir.startsWith(prefix) ? payload.dir.slice(prefix.length).split("/") : [];
+      if (
+        relative.length !== 3 ||
+        !/^[a-z0-9]+-[a-f0-9]{24}$/.test(relative[0]!) ||
+        relative[1] !== SKILLS_DIR ||
+        relative[2] !== payload.name ||
+        !isSafeSkillName(relative[2]!)
+      )
+        throw new NonRetryableTurnError("Cannot restore skill files outside this turn's directory");
+      const resolution = visible.find((r) => r.skill?.manifest.name === payload.name);
+      if (!resolution?.skill) throw new NonRetryableTurnError(`Cannot restore unavailable skill ${payload.name}`);
+      const bundles =
+        resolution.screenedBundles ??
+        (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [resolution]) : []);
+      const access = payload.sandboxId ? await accessResource(payload.sandboxId) : undefined;
+      if (access?.crossScope) throw new NonRetryableTurnError("Cannot restore skill files on a cross-scope sandbox");
+      const handle = access ? await provisionResource(access) : await provision();
+      const root = `${prefix}${relative[0]}/${SKILLS_DIR}`;
+      const key = `${handle.backend}:${handle.id}`;
+      const dirs = restoredDirs.get(key) ?? new Set<string>();
+      dirs.add(`${prefix}${relative[0]}`);
+      restoredDirs.set(key, dirs);
+      await laySkillTree(deps.sandbox, handle, root, resolution, bundles);
+    }
+  };
   const writableScopeId = resolution.layers.find((layer) => layer.mode === "rw")?.scopeId;
   const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
     if (target === writableScopeId || target === scopeId) return true;
@@ -484,6 +592,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     input: string | SandboxAccessPlan,
     authorize?: (access: SandboxAccessPlan) => void,
   ): Promise<SandboxHandle> => {
+    if (closed) throw closedError();
     const access = typeof input === "string" ? await accessResource(input) : input;
     const { resource, crossScope, egress, credentialScopeId } = access;
     const id = resource.id;
@@ -493,6 +602,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return provisionResource(id, authorize);
     }
     authorize?.(access);
+    if (closed) throw closedError();
     const policyKey = JSON.stringify({ egress, credentialScopeId });
     const existing = resourceHandles.get(id);
     if (existing && resourcePolicy.get(id) === policyKey) {
@@ -516,6 +626,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         ...(egressToken ? { egressToken } : {}),
       });
       resourcePendingHandles.set(id, handle);
+      boxSpecs.set(boxKey(handle), { layers, sandboxId: id, egress });
+      if (closed) throw closedError();
       if (credentialScopeId) await prepareCredentials(handle, emitGapWork, credentialScopeId);
       if (!crossScope) {
         await prepareCredentials(handle, emitGapWork);
@@ -528,40 +640,44 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     })().finally(() => {
       resourcePending.delete(id);
     });
-    resourcePending.set(id, provisioned);
-    return provisioned;
+    const tracked = track(provisioned);
+    resourcePending.set(id, tracked);
+    return tracked;
   };
 
   const provisionScratch = (): Promise<SandboxHandle> => {
+    if (closed) return Promise.reject(closedError());
     if (scratchBox.pending)
       return Promise.reject(new Error("Disposable sandbox initialization cleanup is still pending"));
     if (scratchBox.handle) return Promise.resolve(scratchBox.handle);
-    scratchProvisionInFlight ??= (async () => {
-      const provisionStart = Date.now();
-      scratchStartedAt = provisionStart;
-      recordScratchLifecycle("provision_started");
-      const handle = await deps.sandbox.provision(
-        resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
-        {
-          env: connectorEnv,
-          egress: resolution.egress,
-          ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-          scratch: { key: scratchKey() },
-          routeScopeId: memoryScopeId,
-          ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
-        },
-      );
-      scratchBox.provisionMs = Date.now() - provisionStart;
-      scratchBox.handle = handle;
-      scratchReadyAt = Date.now();
-      recordScratchLifecycle("provision_ready", handle);
-      return handle;
-    })().catch((error) => {
-      scratchProvisionInFlight = null;
-      if (error instanceof SandboxProvisionCleanupError) scratchBox.pending = error.handle;
-      recordScratchLifecycle("provision_failed", scratchBox.pending ?? undefined, { error: errMessage(error) });
-      throw error;
-    });
+    scratchProvisionInFlight ??= track(
+      (async () => {
+        const provisionStart = Date.now();
+        scratchStartedAt = provisionStart;
+        recordScratchLifecycle("provision_started");
+        const handle = await deps.sandbox.provision(
+          resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
+          {
+            env: connectorEnv,
+            egress: resolution.egress,
+            ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+            scratch: { key: scratchKey() },
+            routeScopeId: memoryScopeId,
+            ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
+          },
+        );
+        scratchBox.provisionMs = Date.now() - provisionStart;
+        scratchBox.handle = handle;
+        scratchReadyAt = Date.now();
+        recordScratchLifecycle("provision_ready", handle);
+        return handle;
+      })().catch((error) => {
+        scratchProvisionInFlight = null;
+        if (error instanceof SandboxProvisionCleanupError) scratchBox.pending = error.handle;
+        recordScratchLifecycle("provision_failed", scratchBox.pending ?? undefined, { error: errMessage(error) });
+        throw error;
+      }),
+    );
     return scratchProvisionInFlight;
   };
   const provisionOwnerAuth = ownerAuthAvailable
@@ -573,93 +689,98 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
             (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
         )
           throw new Error("Open speaker keychain access is no longer authorized");
+        if (closed) throw closedError();
         if (ownerAuthBox.handle) return ownerAuthBox.handle;
         if (ownerAuthBox.pending && !ownerAuthProvisionInFlight) {
           return Promise.reject(new Error("owner-auth box initialization failed and cleanup is still pending"));
         }
-        ownerAuthProvisionInFlight ??= (async () => {
-          const provisionStart = Date.now();
-          const handle = await deps.sandbox.provision(
-            resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
-            {
-              egress: resolution.egress,
-              ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-              scratch: { key: `owner-auth:${session.id}:${transferId}` },
-              routeScopeId: memoryScopeId,
-              ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
-            },
-          );
-          ownerAuthBox.pending = handle;
-          ownerAuthBox.provisionMs = Date.now() - provisionStart;
-          if (deps.keychain && isolateOwnerKeychain) {
-            const restoredServices = await materializeDeviceFlowLogins({
-              sandbox: deps.sandbox,
-              handle,
-              keychain: deps.keychain,
-              ownerId: actor.id,
-              ...(openSpeakerKeychain ? { allOrigins: true } : {}),
-              ...(credentialCutoverServices.length ? { excludeServices: credentialCutoverServices } : {}),
-              onAnomaly: (service, detail) =>
-                deps.errors?.record({
-                  category: "keychain",
-                  code: "device_flow_restore_failed",
-                  message: `${service} (owner-auth box): ${detail}`,
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                }),
-            });
-            for (const service of restoredServices) {
-              deps.auditLog.record({
-                at: Date.now(),
-                principalId: actor.id,
-                action: "keychain.materialize",
-                resource: `${service} (owner-auth box)`,
-                scopeLabel: scopeId,
+        ownerAuthProvisionInFlight ??= track(
+          (async () => {
+            const provisionStart = Date.now();
+            const handle = await deps.sandbox.provision(
+              resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
+              {
+                egress: resolution.egress,
+                ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+                scratch: { key: `owner-auth:${session.id}:${transferId}` },
+                routeScopeId: memoryScopeId,
+                ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
+              },
+            );
+            ownerAuthBox.pending = handle;
+            ownerAuthBox.provisionMs = Date.now() - provisionStart;
+            if (closed) throw closedError();
+            if (deps.keychain && isolateOwnerKeychain) {
+              const restoredServices = await materializeDeviceFlowLogins({
+                sandbox: deps.sandbox,
+                handle,
+                keychain: deps.keychain,
+                ownerId: actor.id,
+                ...(openSpeakerKeychain ? { allOrigins: true } : {}),
+                ...(credentialCutoverServices.length ? { excludeServices: credentialCutoverServices } : {}),
+                onAnomaly: (service, detail) =>
+                  deps.errors?.record({
+                    category: "keychain",
+                    code: "device_flow_restore_failed",
+                    message: `${service} (owner-auth box): ${detail}`,
+                    scopeLabel: scopeId,
+                    sessionId: session.id,
+                  }),
               });
+              for (const service of restoredServices) {
+                deps.auditLog.record({
+                  at: Date.now(),
+                  principalId: actor.id,
+                  action: "keychain.materialize",
+                  resource: `${service} (owner-auth box)`,
+                  scopeLabel: scopeId,
+                });
+              }
             }
-          }
-          ownerAuthBox.handle = handle;
-          return handle;
-        })().catch(async (err) => {
-          ownerAuthProvisionInFlight = null;
-          if (err instanceof SandboxProvisionCleanupError) ownerAuthBox.pending = err.handle;
-          const pendingHandle = ownerAuthBox.pending;
-          if (pendingHandle) {
-            try {
-              await scrubOwnerAuthHandle(pendingHandle).catch((scrubErr) => {
+            ownerAuthBox.handle = handle;
+            return handle;
+          })().catch(async (err) => {
+            ownerAuthProvisionInFlight = null;
+            if (err instanceof SandboxProvisionCleanupError) ownerAuthBox.pending = err.handle;
+            const pendingHandle = ownerAuthBox.pending;
+            if (pendingHandle) {
+              try {
+                await scrubOwnerAuthHandle(pendingHandle).catch((scrubErr) => {
+                  deps.errors?.record(
+                    {
+                      category: "sandbox",
+                      code: "owner_auth_scrub_failed",
+                      message: errMessage(scrubErr),
+                      scopeLabel: scopeId,
+                      sessionId: session.id,
+                    },
+                    scrubErr,
+                  );
+                });
+                await destroyEphemeralHandle(pendingHandle);
+                if (ownerAuthBox.pending === pendingHandle) ownerAuthBox.pending = null;
+              } catch (cleanupErr) {
                 deps.errors?.record(
                   {
                     category: "sandbox",
-                    code: "owner_auth_scrub_failed",
-                    message: errMessage(scrubErr),
+                    code: "owner_auth_init_cleanup_failed",
+                    message: errMessage(cleanupErr),
                     scopeLabel: scopeId,
                     sessionId: session.id,
                   },
-                  scrubErr,
+                  cleanupErr,
                 );
-              });
-              await destroyEphemeralHandle(pendingHandle);
-              if (ownerAuthBox.pending === pendingHandle) ownerAuthBox.pending = null;
-            } catch (cleanupErr) {
-              deps.errors?.record(
-                {
-                  category: "sandbox",
-                  code: "owner_auth_init_cleanup_failed",
-                  message: errMessage(cleanupErr),
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                },
-                cleanupErr,
-              );
+              }
             }
-          }
-          throw err;
-        });
+            throw err;
+          }),
+        );
         return ownerAuthProvisionInFlight;
       }
     : undefined;
   const reachBoxes = new Map<ScopeId, SandboxHandle>();
   const provisionForReach = async (target: ScopeId): Promise<SandboxHandle> => {
+    if (closed) throw closedError();
     const cached = reachBoxes.get(target);
     if (cached) return cached;
     const handle = await deps.sandbox.provision(
@@ -673,19 +794,25 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
       },
     );
+    if (closed) {
+      await deps.sandbox.teardown(handle).catch(swallowAs("orchestrator: late reach teardown", undefined));
+      throw closedError();
+    }
     reachBoxes.set(target, handle);
     return handle;
   };
-  const clearTurnFiles = async (handle: SandboxHandle): Promise<void> => {
+  const turnDirsOf = (handle: SandboxHandle) => [turnFilesDir, ...(restoredDirs.get(boxKey(handle)) ?? [])];
+  const clearTurnFiles = async (handle: SandboxHandle): Promise<boolean> => {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await deps.sandbox.removeDir(handle, turnFilesDir);
-        return;
+        await Promise.all(turnDirsOf(handle).map((dir) => deps.sandbox.removeDir(handle, dir)));
+        return true;
       } catch (err) {
         if (attempt === 3) swallow("orchestrator: turn file cleanup", err);
         else await sleep(50);
       }
     }
+    return false;
   };
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
@@ -718,153 +845,252 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         (!process.sandboxId && process.scopeId === (handle.scopeId ?? fallbackScope)),
     );
   };
-  const reclaimBox = async (): Promise<void> => {
-    let ownerCleanupError: unknown;
-    let scratchCleanupError: unknown;
-    if (ownerAuthProvisionInFlight)
-      await ownerAuthProvisionInFlight.catch(swallowAs("orchestrator: owner auth provision", undefined));
-    ownerAuthProvisionInFlight = null;
-    const reachEntries = [...reachBoxes.entries()];
-    reachBoxes.clear();
-    await Promise.all(
-      reachEntries.map(async ([target, h]) => {
-        let keepReachWarm = false;
-        if (deps.processes && supportsProcessSessions(deps.sandbox)) {
-          try {
-            keepReachWarm = await hasLiveProcesses(h, target);
-          } catch (e) {
-            swallow("orchestrator: reach live process check", e);
-            keepReachWarm = false;
-          }
-        }
-        if (keepReachWarm) {
-          await deps.sandbox
-            .teardown(h, { keepWarm: true })
-            .catch(swallowAs("orchestrator: keep warm teardown", undefined));
-          return;
-        }
-        await deps.sandbox.teardown(h).catch(swallowAs("orchestrator: teardown", undefined));
-      }),
-    );
-    const ownerHandle = ownerAuthBox.handle ?? ownerAuthBox.pending;
-    if (ownerHandle) {
+  const reclaimBox = async (deadline?: AbortSignal): Promise<void> => {
+    const startedAt = Date.now();
+    let steps = 0;
+    const deferred: string[] = [];
+    const timed = async <T>(step: string, handle: SandboxHandle | undefined, work: () => Promise<T>): Promise<T> => {
+      const at = Date.now();
+      let ok = false;
       try {
-        await scrubOwnerAuthHandle(ownerHandle).catch((scrubErr) => {
-          deps.errors?.record(
-            {
-              category: "sandbox",
-              code: "owner_auth_scrub_failed",
-              message: errMessage(scrubErr),
-              scopeLabel: scopeId,
-              sessionId: session.id,
-            },
-            scrubErr,
-          );
-        });
-        await destroyEphemeralHandle(ownerHandle);
-        ownerAuthBox.handle = null;
-        ownerAuthBox.pending = null;
-      } catch (err) {
-        ownerCleanupError = err;
-        deps.errors?.record(
-          {
-            category: "sandbox",
-            code: "owner_auth_destroy_failed",
-            message: errMessage(err),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          },
-          err,
+        const value = await work();
+        ok = true;
+        return value;
+      } finally {
+        steps++;
+        console.error(
+          `[sandbox.cleanup] step=${step} backend=${handle?.backend ?? "unknown"} ms=${Date.now() - at} ok=${ok}`,
         );
       }
-    }
-    if (scratchProvisionInFlight)
-      await scratchProvisionInFlight.catch(swallowAs("orchestrator: scratch provision", undefined));
-    scratchProvisionInFlight = null;
-    const scratchHandle = scratchBox.handle ?? scratchBox.pending;
-    if (scratchHandle) {
-      const cleanupStart = Date.now();
-      try {
-        await destroyEphemeralHandle(scratchHandle);
-        scratchBox.handle = null;
-        scratchBox.pending = null;
-        recordScratchLifecycle("released", scratchHandle, {
-          releasedAt: Date.now(),
-          cleanupMs: Date.now() - cleanupStart,
-        });
-      } catch (error) {
-        scratchCleanupError = error instanceof Error ? error : new Error(errMessage(error));
-        recordScratchLifecycle("release_failed", scratchHandle, {
-          releasedAt: Date.now(),
-          cleanupMs: Date.now() - cleanupStart,
-          error: errMessage(error),
-        });
-        deps.errors?.record(
-          {
-            category: "sandbox",
-            code: "scratch_destroy_failed",
-            message: errMessage(error),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          },
-          scratchCleanupError,
-        );
+    };
+    const audit = (scrubPending: boolean) =>
+      (steps || deferred.length) &&
+      deps.auditLog?.record({
+        at: Date.now(),
+        principalId: actor.id,
+        action: "sandbox.cleanup",
+        resource: scratchKey(),
+        scopeLabel: scopeId,
+        detail: JSON.stringify({
+          runId: input.runId,
+          sessionId: session.id,
+          totalMs: Date.now() - startedAt,
+          deferred,
+          ...(scrubPending ? { scrubPending } : {}),
+        }),
+      });
+    const { scrubbed, finished } = reclaimSteps(timed, deferred, deadline);
+    let scrubDone = false;
+    void scrubbed.then(() => (scrubDone = true));
+    if (
+      await withAbort(() => finished, deadline).then(
+        () => false,
+        () => true,
+      )
+    ) {
+      const pending = !scrubDone;
+      void finished.then(() => audit(pending));
+      if (pending) {
+        await noteScrubPending();
+        void scrubbed.then(noteScrubPending);
       }
-    }
-    await Promise.allSettled(resourcePending.values());
-    const released = new Set<string>();
-    const current = box.handle ?? box.pending;
-    const releases: Promise<void>[] = [];
-    for (const handle of [...resourceHandles.values(), ...resourcePendingHandles.values()]) {
-      const key = `${handle.backend}:${handle.id}`;
-      if (released.has(key) || (current?.id === handle.id && current.backend === handle.backend)) continue;
-      released.add(key);
-      releases.push(
-        (async () => {
-          try {
-            if (handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId)
-              await clearTurnFiles(handle);
-          } finally {
-            await deps.sandbox.teardown(handle, {
-              keepWarm: await hasLiveProcesses(handle, memoryScopeId).catch(
-                swallowAs("orchestrator: live process check", true),
-              ),
-            });
-          }
-        })(),
-      );
-    }
-    const releasedResults = await Promise.allSettled(releases);
-    for (const result of releasedResults)
-      if (result.status === "rejected") swallow("resource sandbox release", result.reason);
-    resourceHandles.clear();
-    resourcePendingHandles.clear();
-    if (provisionInFlight) await provisionInFlight.catch(swallowAs("orchestrator: provision", undefined));
-    provisionInFlight = null;
-    const handle = box.handle ?? box.pending;
-    box.handle = null;
-    box.pending = null;
-    if (!handle) {
-      if (ownerCleanupError) throw ownerCleanupError;
-      if (scratchCleanupError) throw scratchCleanupError;
       return;
     }
-    await clearTurnFiles(handle);
-    let keepWarm = false;
-    if (deps.processes && supportsProcessSessions(deps.sandbox)) {
-      try {
-        keepWarm = await hasLiveProcesses(handle, memoryScopeId);
-      } catch (e) {
-        swallow("orchestrator: live process check", e);
-        keepWarm = false;
-      }
+    audit(unscrubbed.size > 0);
+    if (unscrubbed.size) await noteScrubPending();
+    for (const result of await finished) if (result?.status === "rejected") throw result.reason;
+  };
+  const releaseOwnerAuth = async (): Promise<void> => {
+    const handle = ownerAuthBox.handle ?? ownerAuthBox.pending;
+    if (!handle) return;
+    try {
+      await scrubOwnerAuthHandle(handle).catch((scrubErr) => {
+        deps.errors?.record(
+          {
+            category: "sandbox",
+            code: "owner_auth_scrub_failed",
+            message: errMessage(scrubErr),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          scrubErr,
+        );
+      });
+      await destroyEphemeralHandle(handle);
+      ownerAuthBox.handle = null;
+      ownerAuthBox.pending = null;
+    } catch (err) {
+      deps.errors?.record(
+        {
+          category: "sandbox",
+          code: "owner_auth_destroy_failed",
+          message: errMessage(err),
+          scopeLabel: scopeId,
+          sessionId: session.id,
+        },
+        err,
+      );
+      throw err;
     }
+  };
+  const releaseScratch = async (): Promise<void> => {
+    const handle = scratchBox.handle ?? scratchBox.pending;
+    if (!handle) return;
+    const cleanupStart = Date.now();
+    try {
+      await destroyEphemeralHandle(handle);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(errMessage(cause));
+      recordScratchLifecycle("release_failed", handle, {
+        releasedAt: Date.now(),
+        cleanupMs: Date.now() - cleanupStart,
+        error: errMessage(cause),
+      });
+      deps.errors?.record(
+        {
+          category: "sandbox",
+          code: "scratch_destroy_failed",
+          message: errMessage(cause),
+          scopeLabel: scopeId,
+          sessionId: session.id,
+        },
+        error,
+      );
+      throw error;
+    }
+    scratchBox.handle = null;
+    scratchBox.pending = null;
+    recordScratchLifecycle("released", handle, { releasedAt: Date.now(), cleanupMs: Date.now() - cleanupStart });
+  };
+  const liveProcessesOn = async (handle: SandboxHandle, fallbackScope: ScopeId, label: string): Promise<boolean> => {
+    if (!deps.processes || !supportsProcessSessions(deps.sandbox)) return false;
+    return hasLiveProcesses(handle, fallbackScope).catch((e) => {
+      swallow(label, e);
+      return false;
+    });
+  };
+  const scrubResource = async (handle: SandboxHandle): Promise<boolean> =>
+    !(handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId) ||
+    clearTurnFiles(handle);
+  const teardownResource = async (handle: SandboxHandle, warm: boolean): Promise<void> => {
+    const keepWarm = warm || (await hasLiveProcesses(handle, memoryScopeId).catch(() => true));
+    await deps.sandbox.teardown(handle, { keepWarm });
+  };
+  const teardownMain = async (handle: SandboxHandle, used: boolean, warm: boolean): Promise<void> => {
+    const keepWarm = warm || (await liveProcessesOn(handle, memoryScopeId, "orchestrator: live process check"));
     await deps.sandbox.teardown(handle, {
       ...(keepWarm ? { keepWarm: true } : {}),
-      ...(box.used ? {} : { homeUnchanged: true }),
+      ...(used ? {} : { homeUnchanged: true }),
     });
-    if (ownerCleanupError) throw ownerCleanupError;
-    if (scratchCleanupError) throw scratchCleanupError;
+  };
+  const released = new Set<string>();
+  const claim = (handle: SandboxHandle): boolean => {
+    const key = boxKey(handle);
+    if (released.has(key)) return false;
+    released.add(key);
+    return true;
+  };
+  const unscrubbed = new Set<SandboxHandle>();
+  let noted = false;
+  const scrubLate = async (handle: SandboxHandle, work: () => Promise<boolean>): Promise<void> => {
+    unscrubbed.add(handle);
+    const done = await work();
+    if (done) unscrubbed.delete(handle);
+    if (!done || noted) await noteScrubPending();
+  };
+  const reclaimSteps = (
+    timed: <T>(step: string, handle: SandboxHandle | undefined, work: () => Promise<T>) => Promise<T>,
+    deferred: string[],
+    deadline: AbortSignal | undefined,
+  ) => {
+    closed = true;
+    const later = (step: string, promise: Promise<unknown> | null, release: () => Promise<unknown>): boolean => {
+      if (!promise || !inFlight.has(promise)) return false;
+      deferred.push(step);
+      void promise.then(release, release).catch(swallowAs(`orchestrator: late ${step} release`, undefined));
+      return true;
+    };
+    const takeMain = () => {
+      const handle = box.handle ?? box.pending;
+      box.handle = null;
+      box.pending = null;
+      return handle && claim(handle) ? handle : null;
+    };
+    const mainLate = later("provision", provisionInFlight, async () => {
+      const handle = takeMain();
+      if (!handle) return;
+      await scrubLate(handle, () => clearTurnFiles(handle));
+      await teardownMain(handle, box.used, true);
+    });
+    const ownerLate = later("owner_auth", ownerAuthProvisionInFlight, releaseOwnerAuth);
+    const scratchLate = later("scratch", scratchProvisionInFlight, releaseScratch);
+    const lateResources = [...resourcePending].filter(([id, promise]) =>
+      later("resource", promise, async () => {
+        const handle = resourceHandles.get(id) ?? resourcePendingHandles.get(id);
+        resourceHandles.delete(id);
+        resourcePendingHandles.delete(id);
+        if (!handle || !claim(handle)) return;
+        await scrubLate(handle, () => scrubResource(handle));
+        await teardownResource(handle, true);
+      }),
+    );
+    ownerAuthProvisionInFlight = null;
+    scratchProvisionInFlight = null;
+    provisionInFlight = null;
+    const reachEntries = [...reachBoxes.entries()];
+    reachBoxes.clear();
+    const main = mainLate ? null : takeMain();
+    const used = box.used;
+    const resources: SandboxHandle[] = [];
+    for (const [id, handle] of [...resourceHandles, ...resourcePendingHandles]) {
+      if (lateResources.some(([late]) => late === id)) continue;
+      resourceHandles.delete(id);
+      resourcePendingHandles.delete(id);
+      if (claim(handle)) resources.push(handle);
+    }
+    const ownerHandle = ownerLate ? null : (ownerAuthBox.handle ?? ownerAuthBox.pending);
+    const scratchHandle = scratchLate ? null : (scratchBox.handle ?? scratchBox.pending);
+    for (const handle of [...resources, ...(main ? [main] : [])]) unscrubbed.add(handle);
+    const scrub = (step: string, handle: SandboxHandle, work: () => Promise<boolean>) =>
+      timed(step, handle, work).then((done) => void (done && unscrubbed.delete(handle)));
+    const scrubbed = Promise.allSettled([
+      ownerHandle && timed("owner_auth_scrub", ownerHandle, releaseOwnerAuth),
+      scratchHandle && timed("scratch_destroy", scratchHandle, releaseScratch),
+      ...resources.map((handle) => scrub("resource_scrub", handle, () => scrubResource(handle))),
+      main && scrub("scrub", main, () => clearTurnFiles(main)),
+    ]);
+    const finished = scrubbed.then(async ([owner, scratch]) => {
+      const warm = !!deadline?.aborted;
+      const [mainTeardown, ...rest] = await Promise.allSettled([
+        main && timed("teardown", main, () => teardownMain(main, used, warm)),
+        ...resources.map((handle) => timed("resource_teardown", handle, () => teardownResource(handle, warm))),
+        ...reachEntries.map(async ([target, handle]) => {
+          const keepWarm = warm || (await liveProcessesOn(handle, target, "orchestrator: reach live process check"));
+          await timed("reach_teardown", handle, () =>
+            deps.sandbox.teardown(handle, keepWarm ? { keepWarm: true } : undefined),
+          ).catch(swallowAs("orchestrator: reach teardown", undefined));
+        }),
+      ]);
+      for (const result of rest) if (result.status === "rejected") swallow("resource sandbox release", result.reason);
+      return [mainTeardown, owner, scratch];
+    });
+    return { scrubbed, finished };
+  };
+  const noteScrubPending = async (): Promise<void> => {
+    if (!deps.sandboxScrubs) return;
+    const id = `${session.id}:${transferId}`;
+    const current = box.handle ?? box.pending;
+    const handles = new Set([...unscrubbed, ...(current ? [current] : []), ...resourcePendingHandles.values()]);
+    noted = handles.size > 0;
+    const boxes = [...handles].map((handle) => ({
+      ...(boxSpecs.get(boxKey(handle)) ?? { layers: resolution.layers }),
+      dirs: turnDirsOf(handle),
+    }));
+    await (
+      boxes.length
+        ? deps.sandboxScrubs.put(id, { createdAt: Date.now(), scopeLabel: scopeId, boxes })
+        : deps.sandboxScrubs.delete(id)
+    ).catch(swallowAs("orchestrator: pending sandbox scrub note", undefined));
   };
 
   return {
@@ -879,6 +1105,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionResource,
     provisionOwnerAuth,
     useSkill,
+    restoreSkillFiles,
     provisionForReach,
     reclaimBox,
     provisionPending: () => provisionInFlight !== null,

@@ -26,7 +26,6 @@ export interface Run {
   request: OrchestratorInput;
   result: TurnResult | null;
   deliveryState: RunDeliveryState | null;
-  turnUserSeq: number | null;
   dedupKey: string | null;
   attempts: number;
   errorAttempts: number;
@@ -52,8 +51,6 @@ export interface EnqueueResult {
 }
 
 export interface RunStore {
-  readonly maxClaims?: number;
-
   subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
@@ -79,8 +76,6 @@ export interface RunStore {
   ): Promise<{ requeued: boolean }>;
 
   setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean>;
-
-  noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
 
   latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
@@ -123,8 +118,8 @@ export function releasesDedupKey(result: TurnResult): boolean {
   return result.refusalKind === "session_busy";
 }
 
-export function errorParks(run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts">, maxClaims?: number): boolean {
-  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && run.attempts >= maxClaims);
+export function errorParks(run: Pick<Run, "errorAttempts" | "maxAttempts">): boolean {
+  return run.errorAttempts + 1 >= run.maxAttempts;
 }
 
 export function leaseLapsed(run: Pick<Run, "status" | "leaseExpiresAt">, asOf: number): boolean {

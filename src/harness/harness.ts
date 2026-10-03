@@ -1,3 +1,7 @@
+import { withAbort } from "../util/async.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
+import { isUserStop, turnAbortReason, type TurnAbortReason } from "../runs/handoff.ts";
+import { swallow } from "../util/errors.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import type { RuntimeControl, HarnessHandoff } from "./runtime-types.ts";
 import type {
@@ -102,6 +106,10 @@ export interface HarnessTurnInput {
   session: Session;
   runId?: string;
   cancel?: AbortSignal;
+  stop?(): void;
+  handoff?: AbortSignal;
+  handoffDeadline?: AbortSignal;
+  continueTurn?: boolean;
   input: string;
   triggerTs?: string;
   entryTs?: string;
@@ -159,8 +167,7 @@ export interface HarnessTurnResult {
   reply: string;
   silent?: boolean;
   stopped?: true;
-  stoppedByUser?: true;
-  stoppedTapeComplete?: true;
+  handedOff?: true;
   pendingApprovals?: Array<{
     command: string;
     reason: string;
@@ -256,7 +263,73 @@ export function defineHarness(
   tools: HarnessToolPresentation = { name: (coreName) => coreName },
 ): Harness {
   const turns: HarnessTurnController = {
-    runTurn: implementation.runTurn.bind(implementation),
+    runTurn: async (input) => {
+      const user = new AbortController();
+      const cancel = new AbortController();
+      const sources = [input.cancel, input.handoffDeadline, user.signal].filter((s): s is AbortSignal => !!s);
+      const reason = (): TurnAbortReason | undefined =>
+        user.signal.aborted || isUserStop(input.cancel)
+          ? "user"
+          : (turnAbortReason(input.cancel) ?? turnAbortReason(input.handoffDeadline));
+      let closed = false;
+      const writes = new Set<Promise<unknown>>();
+      const onAbort = () => {
+        const why = reason();
+        if (why !== "user") closed = true;
+        if (!cancel.signal.aborted) cancel.abort(why);
+      };
+      const settle = (result: HarnessTurnResult): HarnessTurnResult => {
+        const why = reason();
+        if (!why || (!result.stopped && !result.handedOff)) return result;
+        const { handedOff: _handedOff, stopped: _stopped, ...rest } = result;
+        if (why === "user") return { ...rest, stopped: true };
+        return {
+          reply: "",
+          handedOff: true,
+          ...(rest.modelCalls !== undefined ? { modelCalls: rest.modelCalls } : {}),
+          ...(rest.cacheUsage ? { cacheUsage: rest.cacheUsage } : {}),
+          ...(rest.compileMs !== undefined ? { compileMs: rest.compileMs } : {}),
+        };
+      };
+      if (sources.some((s) => s.aborted)) return settle({ reply: "", stopped: true });
+      for (const s of sources) s.addEventListener("abort", onAbort, { once: true });
+      const write = async <T>(operation: () => Promise<T>): Promise<T> => {
+        if (closed) throw new TurnHandedOff();
+        const pending = operation();
+        writes.add(pending);
+        try {
+          return await pending;
+        } finally {
+          writes.delete(pending);
+        }
+      };
+      try {
+        return settle(
+          await implementation.runTurn({
+            ...input,
+            cancel: cancel.signal,
+            stop: () => {
+              user.abort("user");
+              input.stop?.();
+            },
+            emit: (entry) => write(() => input.emit(entry)),
+            ...(input.tape ? { tape: (row) => write(() => input.tape!(row)) } : {}),
+          }),
+        );
+      } catch (error) {
+        if (reason()) {
+          if (!(error instanceof TurnHandedOff) && (error as { name?: string } | null)?.name !== "AbortError")
+            swallow(`harness ${profile.id}: turn failed after ${reason()} abort`, error);
+          return settle({ reply: "", stopped: true });
+        }
+        if (error instanceof TurnHandedOff) return { reply: "", handedOff: true };
+        throw error;
+      } finally {
+        closed = true;
+        for (const s of sources) s.removeEventListener("abort", onAbort);
+        await Promise.allSettled(writes);
+      }
+    },
     ...(implementation.close ? { close: implementation.close.bind(implementation) } : {}),
     ...(implementation.resetSession ? { resetSession: implementation.resetSession.bind(implementation) } : {}),
   };
@@ -276,4 +349,21 @@ export function defineHarness(
       : {}),
   };
   return { profile, turns, models, tools };
+}
+
+export function abortedResult(turn: Pick<HarnessTurnInput, "cancel">): HarnessTurnResult {
+  return isUserStop(turn.cancel) ? { reply: "", stopped: true } : { reply: "", handedOff: true };
+}
+
+export async function prepareHarnessInput<T>(
+  turn: Pick<HarnessTurnInput, "cancel" | "handoffDeadline">,
+  prepare: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const signal = AbortSignal.any([turn.cancel, turn.handoffDeadline].filter((s): s is AbortSignal => !!s));
+  try {
+    return await withAbort(() => prepare(signal), signal);
+  } catch (error) {
+    if (signal.aborted && !isUserStop(signal)) throw new TurnHandedOff();
+    throw error;
+  }
 }

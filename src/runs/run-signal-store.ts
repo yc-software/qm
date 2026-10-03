@@ -217,6 +217,7 @@ export function startSignalPoll(
   const unsubscribe = signals.onSignal(runId, drain);
   const timer = setInterval(drain, opts?.intervalMs ?? SIGNAL_POLL_MS);
   timer.unref?.();
+  drain();
   return async () => {
     accepting = false;
     clearInterval(timer);

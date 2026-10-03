@@ -127,8 +127,7 @@ test("stopping a steered run preserves earlier singleton tools and labels only i
     { seq: 2, type: "tool_result", createdAt: 2000, payload: { tool: "execute", callId: "a", code: 0 } },
     { seq: 3, type: "user", createdAt: 3000, payload: { text: "Change direction", steered: true } },
     { seq: 4, type: "tool_call", createdAt: 4000, payload: { tool: "execute", callId: "b", command: "echo after" } },
-    { seq: 5, type: "tool_result", createdAt: 5000, payload: { tool: "execute", callId: "b", code: 0 } },
-    { seq: 6, type: "assistant", createdAt: 6000, payload: { text: "(stopped)", stopped: true } },
+    { seq: 5, type: "tool_result", createdAt: 5000, payload: { tool: "execute", callId: "b", code: 0 }, stopped: true },
   ];
   const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
   try {
@@ -142,6 +141,21 @@ test("stopping a steered run preserves earlier singleton tools and labels only i
     assert.ok(tools[1]!.closest(".stopped-work"));
     assert.equal(document.querySelectorAll(".stopped-head").length, 1);
     assert.equal(document.querySelector(".inline-steer")!.closest("details"), null);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a stop before any work renders the stopped status without reply text", async () => {
+  const entries = [{ seq: 0, type: "user", createdAt: 0, payload: { text: "Original request" }, stopped: true }];
+  const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    assert.equal(document.querySelectorAll(".stopped-head").length, 1);
+    assert.match(document.querySelector(".stopped-head")!.textContent ?? "", /You stopped/);
+    assert.doesNotMatch(document.body.textContent ?? "", /\(stopped\)/);
   } finally {
     await h.close();
   }

@@ -353,7 +353,6 @@ test("the render import is idempotent and later live turns extend it densely", a
 test("an uncovered tape gets a fold import before the render stamp", async () => {
   const sim = await simSession();
   await emitTurnEntries(sim, turnOne);
-  assert.equal(await sim.store.tapeCoverage(sim.session.id), -1);
 
   const plan = await assessRenderImport(sim.store, sim.session.id);
   assert.ok(plan.action === "import" && plan.needsFoldImport);
@@ -361,7 +360,6 @@ test("an uncovered tape gets a fold import before the render stamp", async () =>
 
   const rows = await sim.store.getTape(sim.session.id);
   const entries = await sim.store.getEntries(sim.session.id);
-  assert.equal(await sim.store.tapeCoverage(sim.session.id), entries[entries.length - 1]!.seq);
 
   const fold = foldTape(rows) as Array<{ role?: string }>;
   assert.ok(fold.length >= 2);
@@ -400,29 +398,6 @@ test("a tainted uncovered session is refused without a coverage claim", async ()
       (row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry",
     ),
   );
-  assert.equal(await sim.store.tapeCoverage(sim.session.id), -1);
-});
-
-test("a tainted but coverage-latched session still gets render mirrors", async () => {
-  const sim = await simSession();
-  const emitted = await emitTurnEntries(sim, { ...turnOne, tainted: true });
-  await sim.store.appendTape(sim.lease, {
-    kind: "annotation",
-    payload: { turnEnd: true },
-    scopeLabel: scope,
-    entrySeq: emitted[emitted.length - 1]!.seq,
-  });
-
-  const plan = await assessRenderImport(sim.store, sim.session.id);
-  assert.ok(plan.action === "import" && !plan.needsFoldImport);
-  await importSession(sim);
-
-  const rows = await sim.store.getTape(sim.session.id);
-  const entries = await sim.store.getEntries(sim.session.id);
-  const projection = projectTapeEntries(sim.session.id, rows);
-  assert.ok(projection);
-  assert.deepEqual(projection!.entries, entries);
-  assert.ok(!rows.some(isLegacyImport));
 });
 
 test("sessions over the shared import cap and gapped corpora are skipped", async () => {
@@ -435,7 +410,6 @@ test("sessions over the shared import cap and gapped corpora are skipped", async
   const gapped = [entryAt(0, "user", { text: "a" }), { ...entryAt(1, "user", { text: "b" }), seq: 3 }];
   const fakeStore = {
     latestEntrySeq: () => Promise.resolve(3),
-    tapeCoverage: () => Promise.resolve(3),
     getTape: () => Promise.resolve([]),
     getEntries: () => Promise.resolve(gapped),
   };
@@ -718,7 +692,6 @@ test("a covered tape with lost payload is repaired without a forced import", asy
   const plan = await assessRenderImport(
     {
       latestEntrySeq: (id) => sim.store.latestEntrySeq(id),
-      tapeCoverage: (id) => sim.store.tapeCoverage(id),
       getTape: (id) => sim.store.getTape(id),
       getEntries: async () => changed,
     },

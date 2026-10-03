@@ -1076,21 +1076,28 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToTape);
     },
 
-    async tapeCoverage(sessionId): Promise<number> {
+    async stopMarks(sessionId): Promise<number[]> {
       const rows = await q(
-        `SELECT GREATEST(
-           COALESCE(MAX(entry_seq) FILTER (
-             WHERE kind = 'annotation'
-               AND json_typeof(safe_json(payload)->'turnEnd') = 'boolean'
-               AND safe_json(payload)->>'turnEnd' = 'true'
-           ), -1),
-           COALESCE(MAX(covers_entry_seq) FILTER (
-             WHERE kind = 'context_event' AND safe_json(payload)->>'event' = 'legacy_import'
-           ), -1)
-         ) AS n FROM session_tape WHERE session_id = $1`,
+        `SELECT MAX(e.entry_seq) AS entry_seq FROM session_tape s
+          JOIN session_tape e ON e.session_id = s.session_id AND e.seq < s.seq
+          WHERE s.session_id = $1 AND s.kind = 'stop'
+            AND (safe_json(s.payload)->>'runId' IS NULL OR EXISTS (
+              SELECT 1 FROM session_entries u WHERE u.session_id = s.session_id AND u.type = 'user'
+                AND safe_json(u.payload)->>'runId' = safe_json(s.payload)->>'runId' AND u.seq <= e.entry_seq
+            ))
+          GROUP BY s.seq HAVING MAX(e.entry_seq) IS NOT NULL`,
         [sessionId],
       );
-      return Number(rows[0]?.n ?? -1);
+      return rows.map((r) => Number(r.entry_seq));
+    },
+
+    async getRunUserEntry(sessionId, runId): Promise<SessionEntry | undefined> {
+      const rows = await q(
+        `SELECT * FROM session_entries WHERE session_id = $1 AND type = 'user'
+          AND safe_json(payload)->>'runId' = $2 ORDER BY seq LIMIT 1`,
+        [sessionId, runId],
+      );
+      return rows[0] ? rowToEntry(rows[0]) : undefined;
     },
 
     async latestEntrySeq(sessionId): Promise<number> {

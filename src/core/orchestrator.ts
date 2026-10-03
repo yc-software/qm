@@ -1,3 +1,6 @@
+import type { TapeStopPayload } from "../sessions/session-store.ts";
+import { isUserStop, turnAbortReason } from "../runs/handoff.ts";
+import { uncertainToolCalls } from "../harness/tool-replay.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { memoryBoundedEntries, memoryContextPayload, nextMemoryContext } from "../memory/context-boundary.ts";
@@ -125,12 +128,10 @@ import { filterHistoryForAudience, principalEntitledToScope } from "../resolutio
 import {
   filterTapeForAudience,
   foldTape,
-  healFoldInterrupt,
-  lastImportLacksScopes,
   lintFold,
   rehydrateFoldImages,
+  tapeEndsAtCommittedStep,
   tapeEventsEntitled,
-  tapeNeedsInterruptHeal,
 } from "../harness/tape-fold.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../harness/tape-projection.ts";
@@ -154,10 +155,9 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { findTrailingPartialTurn, resumeNote, turnAtSeq } from "./turn-resume.ts";
+import { resumeNote, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
-  appendCoverageImport,
   recordedMessageTimestamps,
   renderOverheard,
   selectOverheardToImport,
@@ -166,7 +166,13 @@ import {
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
-import { NonRetryableTurnError, TitleRejected, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
+import {
+  NonRetryableTurnError,
+  TitleRejected,
+  TurnHandedOff,
+  turnFailureMessage,
+  type TurnFailurePayload,
+} from "./turn-error.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -262,6 +268,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     );
   }
   const leaseKeepaliveMs = Math.floor(deps.sessions.leaseTtlMs / 3);
+  const backgroundCleanups = new Set<Promise<void>>();
   const pending = deps.approvals ?? createMemoryMap<PendingApprovalRecord>();
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants ?? createMemoryMap<CommandApprovalGrant>();
@@ -449,6 +456,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   return {
+    async cleanupsDrained() {
+      while (backgroundCleanups.size) await Promise.allSettled(backgroundCleanups);
+    },
     async screenSecuritySteer({ payload, actor, conversation, sessionId }) {
       const resolution = await deps.resolution.resolve(conversation, actor);
       const { screening } = resolution.securityPolicy;
@@ -1362,16 +1372,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
 
+      const priorStops = (await deps.sessions.getTape(session.id)).filter(
+        (row) => row.kind === "stop" && row.scopeLabel === scopeId,
+      );
+      if (input.runId && priorStops.some((row) => (row.payload as TapeStopPayload).runId === input.runId))
+        return { status: "silent", sessionId: session.id, stopped: true };
       const isRetry = (input.attempt ?? 1) > 1;
       const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
-        if (!input.runId || !deps.runs) return null;
-        const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
-        if (seq == null) return null;
-        const entries = memoryBoundedEntries(await deps.sessions.getEntries(session.id));
-        if (!entries.some((entry) => entry.seq === seq)) return null;
+        if (!input.runId) return null;
+        const user = await deps.sessions.getRunUserEntry(session.id, input.runId);
+        if (!user) return null;
         return turnAtSeq(
-          entries.filter((entry) => entry.seq >= seq),
-          seq,
+          memoryBoundedEntries(await deps.sessions.getEntries(session.id, { sinceSeq: user.seq })),
+          user.seq,
         );
       };
       const initialMemoryWindow = await deps.sessions.getContextWindow(session.id);
@@ -2050,6 +2063,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionResource,
         provisionOwnerAuth,
         useSkill,
+        restoreSkillFiles,
         provisionForReach,
         reclaimBox,
         provisionPending,
@@ -2115,14 +2129,44 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let contextRecovered = false;
       let turnProgress = 0;
       const turnAbort = new AbortController();
-      if (input.cancel?.aborted) turnAbort.abort();
-      else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
+      if (input.cancel?.aborted) turnAbort.abort(input.cancel.reason);
+      else input.cancel?.addEventListener("abort", () => turnAbort.abort(input.cancel?.reason), { once: true });
       const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
         progress: () => turnProgress,
-        onStalled: () => turnAbort.abort(),
+        onStalled: () => turnAbort.abort("lease-lost"),
       });
+      const cleanupDeadline = () =>
+        turnAbortReason(turnAbort.signal) && !isUserStop(turnAbort.signal) ? turnAbort.signal : input.handoffDeadline;
+      const emittedEntries: SessionEntry[] = [];
+      let stopRecorded = false;
+      const recordStop = async (): Promise<void> => {
+        if (stopRecorded) return;
+        if (
+          input.runId &&
+          (await deps.sessions.getTape(session.id)).some(
+            (row) => row.kind === "stop" && isObj(row.payload) && row.payload.runId === input.runId,
+          )
+        ) {
+          stopRecorded = true;
+          return;
+        }
+        await deps.sessions.appendTape(lease, {
+          kind: "stop",
+          payload: {
+            reason: "user",
+            ...(input.runId ? { runId: input.runId } : {}),
+          } satisfies TapeStopPayload,
+          scopeLabel: scopeId,
+        });
+        stopRecorded = true;
+      };
       let failureUserPayload: Record<string, unknown> | undefined;
       try {
+        if (input.runId && (await deps.signals?.pending(input.runId))?.some(({ signal }) => signal.kind === "abort")) {
+          turnAbort.abort("user");
+          await recordStop();
+          return { status: "silent", sessionId: session.id, stopped: true };
+        }
         await withManagedRosterVersion(async () => {
           await reconcileSessionParticipants(session.id);
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
@@ -2517,16 +2561,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const volatileContext = systemPrompt.slice(stableSystemBytes).trim();
         systemPrompt = systemPrompt.slice(0, stableSystemBytes);
 
-        if (
-          ambientTurn &&
-          deps.harness.models.shouldRespond &&
-          !(
-            isRetry &&
-            (recordedTurn ??
-              (!memoryContextChanged &&
-                findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.text)))
-          )
-        ) {
+        if (ambientTurn && deps.harness.models.shouldRespond && !(isRetry && recordedTurn)) {
           const detectHistory = filterHistory(
             memoryBoundedEntries((await deps.sessions.getContextWindow(session.id)).entries)
               .slice(-DETECT_HISTORY_TAIL)
@@ -3073,10 +3108,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (memoryHistoryReset || historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES)
             return undefined;
           try {
-            const preAppended = new Set(preAppendedSeqs);
-            const priorMaxSeq = rawEntries.reduce((m, e) => (preAppended.has(e.seq) ? m : Math.max(m, e.seq)), -1);
-            let covered = priorMaxSeq < 0 || (await deps.sessions.tapeCoverage(session.id)) >= priorMaxSeq;
-            let rows = filterTapeForAudience(
+            const rows = filterTapeForAudience(
               await deps.sessions.getTape(session.id),
               conversation.audience,
               scopeId,
@@ -3085,47 +3117,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const sameHarness = rows.every(
               (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
             );
-            if (
-              (!covered || lastImportLacksScopes(rows)) &&
-              deps.sessionTapeMode === "serve" &&
-              sameHarness &&
-              participantHistorySeqs === undefined
-            ) {
-              const imported = await appendCoverageImport(deps.sessions, lease, rawEntries, scopeId);
-              if (imported) {
-                console.log(
-                  `[tape-heal] session=${session.id} covers=${imported.coversEntrySeq} messages=${
-                    (imported.payload as { messages: unknown[] }).messages.length
-                  }`,
-                );
-                rows = [...rows, imported];
-                covered = true;
-              }
-            }
             const eventsEntitled = tapeEventsEntitled(rows, conversation.audience, scopeId, resolution.orgScopeId);
             const eligible =
               deps.sessionTapeMode === "serve" &&
-              covered &&
               sameHarness &&
               eventsEntitled &&
               !rows.some(
                 (row) => row.kind === "context_event" && isObj(row.payload) && row.payload.mode === "recent",
               ) &&
               participantHistorySeqs === undefined;
-            let fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
-            if (eligible && rows.length && fold && tapeNeedsInterruptHeal(rows, fold)) {
-              const interrupt = await deps.sessions.appendTape(lease, {
-                kind: "context_event",
-                payload: { event: "interrupt" },
-                scopeLabel: scopeId,
-              });
-              rows = [...rows, interrupt];
-              fold = healFoldInterrupt(fold, interrupt.createdAt);
-            }
+            const fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
             const serve = eligible && !!fold?.length && lintFold(fold).ok;
-            return { rows, serve, covered, fold };
+            return { rows, serve, fold };
           } catch (e) {
-            swallow("tape: read/heal", e);
+            swallow("tape: read", e);
             return undefined;
           }
         })();
@@ -3241,8 +3246,30 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const approvalReplay =
           !!pausedTurnUserEntry &&
           String((pausedTurnUserEntry.payload as { text?: string } | null)?.text ?? "").trim() === input.text.trim();
-        const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
+        const partial = isRetry ? recordedTurn : null;
         const resume = partial && partial.workEntries > 0 ? partial : null;
+        if (partial) {
+          const recoveryEntries = await deps.sessions.getEntries(session.id, { sinceSeq: partial.userSeq });
+          const recoveryTape = await deps.sessions.getTape(session.id);
+          const turnStart = recoveryTape.findLastIndex(
+            (row) => row.entrySeq === partial.userSeq && row.kind === "message",
+          );
+          const uncertain = uncertainToolCalls(recoveryEntries, turnStart < 0 ? [] : recoveryTape.slice(turnStart));
+          if (uncertain.length)
+            throw new NonRetryableTurnError(
+              `The previous worker stopped before recording the outcome of ${uncertain.join(", ")}. It may still be running or may have completed. I stopped rather than repeat it; check the original operation before continuing.`,
+            );
+          await restoreSkillFiles(visibleHistory.filter((entry) => entry.seq > partial.userSeq));
+        }
+        const seamlessResume =
+          !!partial &&
+          history === visibleHistory &&
+          !releasedToolOutput &&
+          !recordedTurn?.answer &&
+          !input.approval &&
+          !!tapeRows?.serve &&
+          (!resume || (tapeRows.fold?.at(-1) as { role?: string } | undefined)?.role !== "user") &&
+          tapeEndsAtCommittedStep(tapeRows.fold);
         if (partial)
           postKeys.seed(
             completedSurfaceEnqueues(
@@ -3267,10 +3294,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
           });
           console.error(
-            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries}`,
+            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} seamless=${seamlessResume}`,
           );
         }
-        let turnInput = partial ? resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume }) : baseText;
+        const resumeInput = resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume });
+        let turnInput = partial ? resumeInput : baseText;
         if (partial && !history.some((entry) => entry.seq === partial.userSeq))
           turnInput += `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`;
         if (releasedToolOutput) {
@@ -3300,7 +3328,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnStart = Date.now();
         let firstChunkAt: number | undefined;
         let lastChunkAt: number | undefined;
-        const emittedEntries: SessionEntry[] = [];
         const syntheticPrompt =
           (input.proactiveOpener && !input.text.trim()) ||
           automatedTurn ||
@@ -3573,10 +3600,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
               if (appended.type === "user" && spine.turnUserEntrySeq === undefined) {
                 spine.turnUserEntrySeq = appended.seq;
-                if (input.runId && deps.runs)
-                  await deps.runs
-                    .noteTurnUserSeq(input.runId, appended.seq)
-                    .catch(swallowAs("orchestrator: record turn boundary", false));
               }
               if (appended.type === "user") failureUserPayload = undefined;
               if (appended.type === "tool_call") {
@@ -3728,6 +3751,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
+            stop: () => turnAbort.abort("user"),
+            ...(input.handoff ? { handoff: input.handoff } : {}),
+            ...(input.handoffDeadline ? { handoffDeadline: input.handoffDeadline } : {}),
+            ...(seamlessResume && !continuation ? { continueTurn: true } : {}),
             input: harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
@@ -3980,7 +4007,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 usage[key] += segment.cacheUsage[key];
           };
           addUsage();
-          while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
+          while (segment.runtimeHandoff && !segment.stopped && !segment.handedOff && !turnAbort.signal.aborted) {
             if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
             if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
               throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
@@ -4040,6 +4067,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             modelCalls += segment.modelCalls ?? 0;
             addUsage();
           }
+          if (segment.stopped || isUserStop(turnAbort.signal)) await recordStop();
+          else if (segment.handedOff || turnAbortReason(turnAbort.signal)) throw new TurnHandedOff();
           return {
             ...segment,
             ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
@@ -4055,15 +4084,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
         const primarySubturnEndSeq = emittedEntries.at(-1)?.seq;
-        const preTurnCovered = tapeRows ? tapeRows.covered : false;
-        let latchedCoverageSeq = -1;
-        const latchCoverage = async (): Promise<void> => {
+        let checkpointSeq = -1;
+        const checkpointTurn = async (): Promise<void> => {
           const lastSeq = [...emittedEntries.map((e) => e.seq), ...preAppendedSeqs].reduce(
             (m, s2) => Math.max(m, s2),
             -1,
           );
-          const stoppedUnsafe = !!result.stopped && !result.stoppedTapeComplete;
-          if (lastSeq <= latchedCoverageSeq || !preTurnCovered || stoppedUnsafe) return;
+          if (lastSeq <= checkpointSeq || stopRecorded) return;
           const spanStart = [...emittedEntries.map((e) => e.seq), ...preAppendedSeqs].reduce(
             (m, s2) => Math.min(m, s2),
             lastSeq,
@@ -4080,10 +4107,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           } catch (e) {
             if (e instanceof ProjectRosterChanged || e instanceof NonRetryableTurnError) throw e;
             throw new NonRetryableTurnError(
-              `turn-end coverage append failed after the turn's effects landed (coverage withheld, heal covers it): ${errMessage(e)}`,
+              `turn-end checkpoint failed after the turn's effects landed: ${errMessage(e)}`,
             );
           }
-          latchedCoverageSeq = lastSeq;
+          checkpointSeq = lastSeq;
         };
         if (
           input.addressed &&
@@ -4093,9 +4120,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !input.cancel?.aborted &&
           spine.surfaceOutboundCount === 0 &&
           !result.silent &&
-          !result.stopped
+          !stopRecorded
         ) {
-          await latchCoverage();
+          await checkpointTurn();
           // The model already wrote a reply as plain assistant text — deliver that text
           // directly instead of nudging it to re-post (a nudge here re-sends near-identical
           // text, which surfaces that render assistant entries show twice).
@@ -4169,7 +4196,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
             );
-            if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
+            if (spine.surfaceOutboundCount === 0 && !result.silent && !stopRecorded) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination && deps.deliveries) {
                 try {
@@ -4205,9 +4232,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return fb?.closed && text ? text : undefined;
         })();
         const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
-        const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
 
-        await latchCoverage();
+        await checkpointTurn();
 
         const outcome = deriveTurnOutcome({
           ...(reply !== undefined ? { reply } : {}),
@@ -4276,7 +4302,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
         });
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (!pausing && !stopRecorded && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
@@ -4360,18 +4386,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               }
             }
-            if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
-              await generateAndStoreTitle(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
-            }
           } finally {
-            await reclaimBox();
+            await reclaimBox(cleanupDeadline());
           }
+        };
+        const nameSession = async (): Promise<void> => {
+          if (!stopRecorded && !pausing && turnCompleted && !session.title && !fallbackTitleWrite)
+            await generateAndStoreTitle(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
         };
 
         let finalResult: TurnResult;
         const sourceUserSeq = partial?.userSeq ?? emittedEntries.find((e) => e.type === "user")?.seq;
         const sourceAssistantEntrySeq = [...emittedEntries].reverse().find((e) => e.type === "assistant")?.seq;
-        if (cancelStopped && !result.pendingApprovals?.length) {
+        if (stopRecorded) {
           finalResult = { status: "silent", sessionId: session.id, stopped: true };
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
@@ -4463,13 +4490,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (isPollFire && !stagedAttachments.length && isSilentPollReply(reply)) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };
+          finalResult = { status: "silent", sessionId: session.id, ...(stopRecorded ? { stopped: true } : {}) };
         } else {
           finalResult = {
             status: "ok",
             sessionId: session.id,
             reply,
-            ...(result.stopped ? { stopped: true } : {}),
+            ...(stopRecorded ? { stopped: true } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
             ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
@@ -4483,14 +4510,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
           leaseReleased = true;
-          void tail().catch(swallowAs("orchestrator: background tail", undefined));
+          const cleanup = tail().finally(() => backgroundCleanups.delete(cleanup));
+          backgroundCleanups.add(cleanup);
+          void cleanup.then(nameSession).catch(swallowAs("orchestrator: background tail", undefined));
         } else {
           await tail();
           tailOwnsCleanup = true;
+          await nameSession();
         }
         await deps.errors?.flush();
         return finalResult;
       } catch (err) {
+        if (isUserStop(turnAbort.signal)) {
+          await recordStop();
+          return { status: "silent", sessionId: session.id, stopped: true };
+        }
+        if (turnAbortReason(turnAbort.signal) === "lease-lost") throw new Error("session lease lost", { cause: err });
+        if (err instanceof TurnHandedOff || turnAbortReason(turnAbort.signal)) throw new TurnHandedOff();
         if (err instanceof ProjectRosterChanged) {
           return {
             status: "refused",
@@ -4593,8 +4629,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         throw err;
       } finally {
         if (input.runId) deps.turnStream?.end(input.runId);
-        stopLeaseKeepalive();
-        if (!tailOwnsCleanup) await reclaimBox();
+        try {
+          if (!tailOwnsCleanup) await reclaimBox(cleanupDeadline());
+        } finally {
+          stopLeaseKeepalive();
+        }
         if (!leaseReleased) {
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);

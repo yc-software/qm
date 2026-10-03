@@ -736,7 +736,12 @@ export function createTurnMethods(
           ? {
               input: {
                 runId: run.id,
-                seq: run.turnUserSeq,
+                seq:
+                  (
+                    await deps.sessions
+                      .getByThread(run.sessionId)
+                      .then((s) => s && deps.sessions.getRunUserEntry(s.id, run.id))
+                  )?.seq ?? null,
                 text: run.request.displayText ?? run.request.text ?? "",
                 createdAt: run.createdAt,
                 ...(run.request.attachments?.length
@@ -769,12 +774,14 @@ export function createTurnMethods(
 
     async getRunToolEntries(runId, viewer, afterSeq) {
       const run = await deps.runs.get(runId);
-      if (!run || run.turnUserSeq === null) return [];
+      if (!run) return [];
       if (viewer && !(await viewerMayUseRun(run, viewer))) return [];
       const session = await deps.sessions.getByThread(run.sessionId);
       if (!session) return [];
+      const user = await deps.sessions.getRunUserEntry(session.id, runId);
+      if (!user) return [];
       const entries = await deps.sessions.getEntries(session.id, {
-        sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1),
+        sinceSeq: Math.max(user.seq, (afterSeq ?? -1) + 1),
       });
       const nextRun = entries.findIndex((e) => {
         const owner = (e.payload as { runId?: unknown } | null)?.runId;

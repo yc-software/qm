@@ -578,6 +578,35 @@ test("forRender serves the projection and honors sinceSeq and limit like getEntr
   );
 });
 
+test("a typed stop event marks its anchored entry for display without breaking the projection", async () => {
+  const sim = await simSession();
+  await simTurn(sim, { input: "one", reply: "1" });
+  const stoppedSeq = (await sim.store.getEntries(sim.session.id)).find((e) => e.type === "assistant")!.seq;
+  await sim.store.appendTape(sim.lease, {
+    kind: "stop",
+    payload: { reason: "user" },
+    scopeLabel: scope,
+  });
+  await simTurn(sim, { input: "two", reply: "2" });
+  const entries = await sim.store.getEntries(sim.session.id);
+  assert.deepEqual(await sim.store.stopMarks(sim.session.id), [stoppedSeq]);
+  assert.ok(projectTapeEntries(sim.session.id, await sim.store.getTape(sim.session.id)));
+  const expected = entries.map((e) => (e.seq === stoppedSeq ? { ...e, stopped: true } : e));
+  const source = createTranscriptSource(sim.store);
+  assert.deepEqual((await source.forRender(sim.session.id)).entries, expected);
+  await sim.store.addParticipant(sim.session.id, "viewer@example.com", undefined, { includeHistory: true });
+  assert.deepEqual((await source.forViewer(sim.session.id, "viewer@example.com")).entries, expected);
+  const stored = createMemorySessionStore({ now: () => CLOCK });
+  const plain = await stored.getOrCreateByThread("dm:stop-plain", "dm", scope);
+  const { lease } = await stored.acquireLease(plain.id);
+  const user = await stored.append(lease!, { type: "user", payload: { text: "go" }, scopeLabel: scope });
+  await stored.appendTape(lease!, { kind: "stop", payload: { reason: "user" }, scopeLabel: scope });
+  assert.deepEqual(
+    (await createTranscriptSource(stored).forRender(plain.id)).entries.map((e) => [e.seq, e.stopped]),
+    [[user.seq, true]],
+  );
+});
+
 test("a limited read of a long session projects the anchored tail", async () => {
   const sim = await simSession();
   for (let i = 0; i < 40; i++) await simTurn(sim, { input: `question ${i}`, reply: `answer ${i}` });

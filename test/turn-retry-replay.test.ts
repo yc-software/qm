@@ -154,7 +154,7 @@ test("a retry replays the answer the previous attempt recorded instead of asking
   const first = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 }));
   assert.equal(first.status, "ok");
   assert.equal((await asks()).length, 1, "the first attempt recorded the ask once");
-  const boundary = (await runs.get(run.id))?.turnUserSeq;
+  const boundary = (await asks())[0]?.seq;
   assert.equal(typeof boundary, "number", "the attempt recorded its turn boundary against the run");
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
@@ -164,7 +164,7 @@ test("a retry replays the answer the previous attempt recorded instead of asking
   assert.equal(typeof retry.sourceAssistantEntrySeq, "number", "the replay names the recorded answer entry");
   assert.equal((await asks()).length, 1, "the ask is not appended a second time");
   assert.equal(turns.length, 1, "the model is not asked to answer twice");
-  assert.equal((await runs.get(run.id))?.turnUserSeq, boundary, "the boundary is not moved by the retry");
+  assert.equal((await asks())[0]?.seq, boundary, "the boundary is not moved by the retry");
 });
 
 test("a retry with no recorded boundary runs the turn, so a lost attempt never drops the ask", async () => {
@@ -195,9 +195,9 @@ test("a retry does not claim a later message's answer as its own", async () => {
   const mine = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
   const { lease } = await sessions.acquireLease(session.id);
-  const boundary = await sessions.append(lease!, {
+  await sessions.append(lease!, {
     type: "user",
-    payload: { text: ASK },
+    payload: { text: ASK, runId: mine.id },
     scopeLabel: session.scopeId,
   });
   await sessions.append(lease!, { type: "user", payload: { text: "a later ask" }, scopeLabel: session.scopeId });
@@ -207,7 +207,6 @@ test("a retry does not claim a later message's answer as its own", async () => {
     scopeLabel: session.scopeId,
   });
   await sessions.releaseLease(lease!);
-  await runs.noteTurnUserSeq(mine.id, boundary.seq);
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: mine.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
@@ -255,13 +254,12 @@ async function seedTurn(
 test("a steer mid-turn does not make an answered turn look unanswered", async () => {
   const { orchestrator, sessions, runs, turns, input, asks } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
-  const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
+  await seedTurn(sessions, [
+    { type: "user", payload: { text: ASK, runId: run.id } },
     { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
     { type: "user", payload: { text: "also check the log", ts: "1", steered: true } },
     { type: "assistant", payload: { text: "checked both" } },
   ]);
-  await runs.noteTurnUserSeq(run.id, marker);
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
@@ -273,14 +271,50 @@ test("a steer mid-turn does not make an answered turn look unanswered", async ()
 test("a turn that recorded no reply replays as silent, not as an empty answer", async () => {
   const { orchestrator, sessions, runs, turns, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
-  const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
+  await seedTurn(sessions, [
+    { type: "user", payload: { text: ASK, runId: run.id } },
     { type: "assistant", payload: { text: "" } },
   ]);
-  await runs.noteTurnUserSeq(run.id, marker);
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "silent", "an empty reply must not surface as a turn with no response");
   assert.equal(retry.reply, undefined);
   assert.equal(turns.length, 0);
 });
+
+for (const sameRun of [true, false])
+  test(`a committed Stop ${sameRun ? "terminates its retry" : "does not resume into an identical new request"}`, async () => {
+    const { orchestrator, sessions, runs, turns, input, asks } = buildScenario();
+    const first = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+    const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
+    const { lease } = await sessions.acquireLease(session.id);
+    const user = await sessions.append(lease!, {
+      type: "user",
+      payload: { text: ASK, runId: first.id },
+      scopeLabel: "personal:U1",
+    });
+    await sessions.appendTape(lease!, {
+      kind: "message",
+      harness: "pi",
+      payload: { role: "user", content: [{ type: "text", text: ASK }] },
+      scopeLabel: "personal:U1",
+      entrySeq: user.seq,
+    });
+    await sessions.appendTape(lease!, {
+      kind: "stop",
+      payload: { reason: "user", runId: first.id },
+      scopeLabel: "personal:U1",
+    });
+    await sessions.releaseLease(lease!);
+    const run = sameRun ? first : (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+    const result = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+    assert.equal(result.status, sameRun ? "silent" : "ok");
+    assert.equal(turns.length, sameRun ? 0 : 1);
+    assert.equal((await asks()).length, sameRun ? 1 : 2);
+    assert.equal(
+      (await sessions.getTape(session.id)).filter(
+        (row) => row.kind === "context_event" && (row.payload as { event?: string }).event === "legacy_import",
+      ).length,
+      0,
+    );
+  });

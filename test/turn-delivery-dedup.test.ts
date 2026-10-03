@@ -30,7 +30,7 @@ function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnReques
   };
 }
 
-test("a retried turn does not re-post: the same position dedups against the delivered row", async () => {
+test("an uncertain post is not repeated even when an outbox receipt exists", async () => {
   const built = freshApp();
   const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
@@ -38,8 +38,7 @@ test("a retried turn does not re-post: the same position dedups against the deli
   const afterFirst = await built.deliveries.pending("slack");
   assert.equal(afterFirst.length, 1, "the interrupted attempt already enqueued its post");
 
-  const res = await built.app.turn(req);
-  assert.equal(res.status, "silent", res.reason);
+  await assert.rejects(built.app.turn(req), /previous worker stopped before recording the outcome of slack/);
 
   const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.equal(rows.length, 1, "the retry's re-post collapses onto the first attempt's delivery");

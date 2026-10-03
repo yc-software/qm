@@ -890,7 +890,14 @@ test("run snapshots expose authorized durable web input with safe attachment met
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 50 }],
   });
   assert.equal(await built.app.getRun(run.id, "internal:other"), null);
-  await built.runs.noteTurnUserSeq(run.id, 0);
+  const session = await built.sessions.getOrCreateByThread(run.sessionId, "dm", `personal:${run.request.actor.id}`);
+  const { lease } = await built.sessions.acquireLease(session.id);
+  await built.sessions.append(lease!, {
+    type: "user",
+    payload: { text: "pending input", runId: run.id },
+    scopeLabel: session.scopeId,
+  });
+  await built.sessions.releaseLease(lease!);
   assert.equal((await built.app.getRun(run.id, run.request.actor.id))?.input?.seq, 0);
   const slack = await built.app.turn(dm("slack input", "D-no-web-input"));
   assert.equal((await built.app.getRun(slack.runId!))?.input, undefined);

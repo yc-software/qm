@@ -514,7 +514,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       await snapshotHome(scopeId, session);
     },
 
-    async computerStatus(scopeId: string): Promise<ComputerStatus> {
+    async computerStatus(scopeId: string, statusOpts?: { passive?: boolean }): Promise<ComputerStatus> {
       const name = sandboxScopeName(prefix, scopeId);
       const stored = await store.get(scopeId);
 
@@ -530,8 +530,11 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         ...(stored.lastSnapshotMs ? { checkpointAtMs: stored.lastSnapshotMs } : {}),
       };
       try {
+        if (statusOpts?.passive && !client.info) return { machine, guestResponsive: false };
         if (client.info) {
           const info = await client.info(stored.sandboxId);
+          if (statusOpts?.passive)
+            return { machine, guestResponsive: false, lifecycleState: info.state === "paused" ? "paused" : "running" };
           expiresAtMs = info.state === "running" ? info.expiresAtMs : undefined;
           if (info.state === "paused")
             return {

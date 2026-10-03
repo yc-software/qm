@@ -11,8 +11,7 @@ export interface MemoryRuntime {
 
 const FENCE_HOLD_MS = 600_000;
 
-export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRuntime {
-  const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
+export function createMemoryRunStore(): MemoryRuntime {
   const runs = new Map<string, Run>();
   const retryAfter = new Map<string, number>();
   const byKey = new Map<string, string>();
@@ -46,8 +45,6 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   }
 
   const store: RunStore = {
-    ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
-
     async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
       if (dedupKey) {
         const existingId = byKey.get(dedupKey);
@@ -63,7 +60,6 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         request,
         result: null,
         deliveryState: null,
-        turnUserSeq: null,
         dedupKey: dedupKey ?? null,
         attempts: 0,
         errorAttempts: 0,
@@ -141,13 +137,6 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       };
     },
 
-    async noteTurnUserSeq(runId: string, seq: number) {
-      const run = runs.get(runId);
-      if (!run || run.turnUserSeq !== null) return false;
-      run.turnUserSeq = seq;
-      return true;
-    },
-
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState) {
       const run = runs.get(runId);
       if (!run) return false;
@@ -178,7 +167,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
             (!returned.has(run.id) ||
               (() => {
                 const wake = runs.get(byKey.get(`subagent-return:${run.id}`) ?? "");
-                return wake?.status === "pending" && wake.attempts === 0 && wake.turnUserSeq === null;
+                return wake?.status === "pending" && wake.attempts === 0;
               })()) &&
             run.id > afterId &&
             run.sessionId.startsWith("agent:main:subagent:"),
@@ -223,7 +212,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async editPendingText(runId, text, expectedText) {
       const run = runs.get(runId);
-      if (!run || run.status !== "pending" || run.attempts !== 0 || run.turnUserSeq !== null) return false;
+      if (!run || run.status !== "pending" || run.attempts !== 0) return false;
       if ((run.request.displayText ?? run.request.text) !== expectedText) return false;
       run.request = { ...run.request, text, displayText: text };
       return true;
@@ -232,7 +221,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     async withdraw(runId, opts) {
       const run = runs.get(runId);
       if (!run || run.status !== "pending") return false;
-      if (opts?.unstartedOnly && (run.attempts !== 0 || run.turnUserSeq !== null)) return false;
+      if (opts?.unstartedOnly && run.attempts !== 0) return false;
       runs.delete(runId);
       retryAfter.delete(runId);
       if (run.dedupKey) byKey.delete(run.dedupKey);
@@ -292,7 +281,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         run.leaseToken = randomUUID();
         run.leaseExpiresAt = now + FENCE_HOLD_MS;
         if (onRetired) await onRetired([run.sessionId]);
-        const r = retire(run, reason, !tooOld);
+        const r = retire(run, reason, !tooOld, { countsAsError: true });
         if (!r.applied) continue;
         if (r.requeued) requeued++;
         else parked++;
@@ -351,18 +340,13 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run.leaseExpiresAt = null;
     run.workerId = null;
     if (opts?.countsAsError) run.errorAttempts += 1;
-    const overClaimed = run.attempts >= maxClaims;
-    if (retry && run.errorAttempts < run.maxAttempts && !overClaimed) {
+    if (retry && run.errorAttempts < run.maxAttempts) {
       run.status = "pending";
       retryAfter.set(run.id, Date.now() + Math.max(0, opts?.retryAfterMs ?? 0));
       return { requeued: true, applied: true };
     }
     run.status = "failed";
-    const reason =
-      !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
-        ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
-        : error;
-    run.result = { status: "failed", sessionId: run.sessionId, reason };
+    run.result = { status: "failed", sessionId: run.sessionId, reason: error };
     run.finishedAt = Date.now();
     settle(run);
     return { requeued: false, applied: true };

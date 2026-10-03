@@ -1,6 +1,8 @@
 import type { SandboxResources } from "./sandbox-resources.ts";
 import type { WorkspaceLayer } from "../types.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
 import {
   CapabilityUnsupportedError,
   SandboxProvisionCleanupError,
@@ -31,11 +33,25 @@ export interface RoutingSandboxOptions {
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
   resources: SandboxResources;
+  pauses?: DurableMap<{ createdAt: number; scopeLabel: string; boxes: unknown[]; pausing?: string }>;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
+const PAUSE_SETTLE_MS = 30_000;
+
 export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const { backends, resources, defaultBackend } = opts;
+  const pauseKey = (resourceId: string) => `pausing:${resourceId}`;
+  const settlePause = async (sandbox: Sandbox, resourceId: string, backingScopeId: string): Promise<void> => {
+    const note = await opts.pauses?.get(pauseKey(resourceId)).catch(swallowAs("sandbox: pause note read", null));
+    if (!note) return;
+    while (Date.now() < note.createdAt + PAUSE_SETTLE_MS) {
+      const status = await sandbox.computerStatus?.(backingScopeId, { passive: true }).catch(() => undefined);
+      if (status?.lifecycleState === "paused") break;
+      await sleep(250);
+    }
+    await opts.pauses!.delete(pauseKey(resourceId)).catch(swallowAs("sandbox: pause note clear", undefined));
+  };
   const fallback = ((): Sandbox => {
     const s = backends[defaultBackend];
     if (!s) throw new Error(`sandbox router: default backend ${defaultBackend} is not constructed`);
@@ -121,7 +137,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       const routedLayers = layers.map((layer) =>
         layer.mode === "rw" ? { ...layer, scopeId: resource.backingScopeId } : layer,
       );
-      const handle = await resources.use(resource.id, () => provision(routedLayers), true);
+      const handle = await resources.use(
+        resource.id,
+        async () => {
+          await settlePause(sandbox, resource.id, resource.backingScopeId);
+          return provision(routedLayers);
+        },
+        true,
+      );
       return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
     },
 
@@ -159,10 +182,25 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       });
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      const action = () => forHandle(handle).teardown(handle, tdOpts);
-      return handle.resourceId
-        ? resources.use(handle.resourceId, action, !!tdOpts?.destroy || !!forHandle(handle).profile.parksOnTeardown)
-        : action();
+      const parks = !!forHandle(handle).profile.parksOnTeardown;
+      const { resourceId } = handle;
+      const pauses = parks && !tdOpts?.destroy && !tdOpts?.keepWarm && resourceId ? opts.pauses : undefined;
+      const action = async () => {
+        await pauses
+          ?.put(pauseKey(resourceId!), {
+            createdAt: Date.now(),
+            scopeLabel: handle.scopeId ?? "",
+            boxes: [],
+            pausing: resourceId,
+          })
+          .catch(swallowAs("sandbox: pause note write", undefined));
+        try {
+          await forHandle(handle).teardown(handle, tdOpts);
+        } finally {
+          await pauses?.delete(pauseKey(resourceId!)).catch(swallowAs("sandbox: pause note clear", undefined));
+        }
+      };
+      return resourceId ? resources.use(resourceId, action, !!tdOpts?.destroy || parks) : action();
     },
 
     ...(some(supportsProcessSessions)

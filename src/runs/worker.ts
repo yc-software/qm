@@ -1,10 +1,11 @@
+import { createHandoff, isUserStop, type Handoff, type HandoffSignals } from "./handoff.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import { NonRetryableTurnError, TurnHandedOff, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
 import { errMessage, errorAlreadyReported, swallow } from "../util/errors.ts";
@@ -27,16 +28,17 @@ const CLAIM_FAIL_CRASH_CONSECUTIVE = 20;
 export async function processRun(
   deps: ProcessDeps,
   run: Run,
-  opts?: { background?: boolean; shutdown?: AbortSignal },
+  opts?: { background?: boolean; shutdown?: AbortSignal; handoff?: HandoffSignals },
 ): Promise<TurnResult> {
   const token = run.leaseToken;
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
   const cancel = new AbortController();
-  const onShutdown = (): void => cancel.abort();
+  const onShutdown = (): void => cancel.abort("shutdown");
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let workDeadline: ReturnType<typeof setTimeout> | undefined;
+  let wallClockExpired = false;
   let consecutiveLost = 0;
   let leaseLost = false;
   const beat = setInterval(() => {
@@ -54,7 +56,7 @@ export async function processRun(
           console.warn(
             `[worker] run ${run.id} lost its lease after ${consecutiveLost} consecutive beats; cancelling the in-process turn`,
           );
-          cancel.abort();
+          cancel.abort("lease-lost");
         }
       })
       .catch((err: unknown) => {
@@ -71,9 +73,11 @@ export async function processRun(
   try {
     if (run.request.swarm) {
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
-      workDeadline = setTimeout(() => cancel.abort(), turnMs);
+      workDeadline = setTimeout(() => {
+        wallClockExpired = true;
+        cancel.abort("swarm-wall-clock");
+      }, turnMs);
     }
-    if (run.request.swarm && run.attempts > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
@@ -81,21 +85,27 @@ export async function processRun(
       runId: run.id,
       attempt: run.attempts,
       runLeaseToken: token,
-      finalAttempt: errorParks(run, deps.runs.maxClaims),
+      finalAttempt: errorParks(run),
       background: opts?.background ?? false,
       cancel: cancel.signal,
+      ...(opts?.handoff ? { handoff: opts.handoff.requested, handoffDeadline: opts.handoff.deadline } : {}),
       ...(queueMs !== undefined ? { queueMs } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
     stopBeat();
-    if (opts?.shutdown?.aborted) return result;
     if (!(await deps.runs.complete(run.id, token, result))) {
       throw new Error(`run ${run.id} lost its lease before completion`);
     }
     return result;
-  } catch (err) {
+  } catch (caught) {
     stopBeat();
-    if (opts?.shutdown?.aborted) throw err;
+    let err = caught;
+    if (wallClockExpired) err = new NonRetryableTurnError("swarm turn exceeded its wall clock");
+    else if (leaseLost) err = new Error("run lease lost", { cause: caught });
+    if (err instanceof TurnHandedOff) {
+      await handBack(deps, run.id, token);
+      throw err;
+    }
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
     if (!errorAlreadyReported(err))
       deps.errors?.record(
@@ -108,7 +118,7 @@ export async function processRun(
         err,
       );
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
-      retry: !(err instanceof NonRetryableTurnError),
+      retry: !(err instanceof NonRetryableTurnError) && !isUserStop(cancel.signal),
       retryAfterMs: retryDelay(run.errorAttempts),
     });
     throw err;
@@ -116,14 +126,20 @@ export async function processRun(
     clearTimeout(workDeadline);
     stopBeat();
     opts?.shutdown?.removeEventListener("abort", onShutdown);
-    if (opts?.shutdown?.aborted)
-      await deps.runs
-        .releaseLease(run.id, token)
-        .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
+  }
+}
+
+async function handBack(deps: ProcessDeps, runId: string, token: string): Promise<void> {
+  try {
+    if (await deps.runs.releaseLease(runId, token)) console.log(`[worker] run ${runId} handed back to the queue`);
+    else console.warn(`[worker] run ${runId} lease was already gone at handback; the reaper owns it`);
+  } catch (e) {
+    swallow(`worker: handback failed run=${runId}; lease will expire`, e);
   }
 }
 
 export interface WorkerDeps extends ProcessDeps {
+  handoff?: Handoff;
   pollMs?: number;
   recoveryPollMs?: number;
   workerId?: string;
@@ -134,6 +150,7 @@ export interface WorkerDeps extends ProcessDeps {
 
 export interface Worker {
   start(): void;
+  requestHandoff(graceMs: number): void;
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
@@ -171,6 +188,7 @@ export function createWorker(deps: WorkerDeps): Worker {
   let loopDone: Promise<void> | null = null;
   let claimDone: Promise<void> | null = null;
   let inFlight: { shutdown: AbortController; done: Promise<void> } | null = null;
+  const handoff = deps.handoff ?? createHandoff();
 
   async function loop(): Promise<void> {
     let claimFailures = 0;
@@ -225,11 +243,12 @@ export function createWorker(deps: WorkerDeps): Worker {
       claimDone = null;
       deps.onClaimed?.();
       try {
-        const work = () => processRun(deps, run, { background: true, shutdown: shutdown.signal });
+        const work = () =>
+          processRun(deps, run, { background: true, shutdown: shutdown.signal, handoff: handoff.signals() });
         if (deps.admittedWork) await deps.admittedWork.run(work);
         else await work();
       } catch (e) {
-        if (!shutdown.signal.aborted) swallow("worker: background run crashed", e);
+        if (!shutdown.signal.aborted && !(e instanceof TurnHandedOff)) swallow("worker: background run crashed", e);
       } finally {
         if (shutdown.signal.aborted)
           console.log(`[worker] shutdown settled worker=${workerId} run=${run.id} thread=${run.sessionId}`);
@@ -247,10 +266,16 @@ export function createWorker(deps: WorkerDeps): Worker {
     return claimDone ?? Promise.resolve();
   }
 
+  function requestHandoff(graceMs: number): void {
+    void stopClaims();
+    handoff.request(graceMs);
+  }
+
   return {
     start() {
       if (loopDone) return;
       stopped = false;
+      if (!deps.handoff) handoff.reset();
       unsubscribe = deps.runs.subscribeAvailable?.(notify, {
         pollMs,
         onResync: notify,
@@ -266,10 +291,12 @@ export function createWorker(deps: WorkerDeps): Worker {
       await stopClaims();
       const held = inFlight;
       if (!held) return;
-      held.shutdown.abort();
+      handoff.request(0);
+      held.shutdown.abort("shutdown");
       await held.done;
     },
     stopClaims,
+    requestHandoff,
     drained: () => loopDone ?? Promise.resolve(),
     async stop(drainMs = STOP_DRAIN_MS) {
       void stopClaims();

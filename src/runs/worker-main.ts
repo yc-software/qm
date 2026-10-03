@@ -23,4 +23,4 @@ function shutdown(signal: string): void {
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
-shutdownOnUncaught("qm:worker", shutdown);
+shutdownOnUncaught("qm:worker");

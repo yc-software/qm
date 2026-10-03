@@ -147,7 +147,12 @@ export interface SessionPin extends NewSessionPin {
   createdAt: number;
 }
 
-type TapeKind = "message" | "context_event" | "annotation";
+type TapeKind = "message" | "context_event" | "annotation" | "stop";
+
+export interface TapeStopPayload {
+  reason: "user";
+  runId?: string;
+}
 
 export const TAPE_RENDER_VERSION = 1;
 
@@ -223,7 +228,7 @@ export function transcriptEntryFromTape(row: TapeRecord): SessionEntry | null {
   };
 }
 
-export type TranscriptAppendSessions = Pick<SessionStore, "append" | "appendTape" | "latestEntrySeq" | "tapeCoverage">;
+export type TranscriptAppendSessions = Pick<SessionStore, "append" | "appendTape">;
 
 export async function appendEntryOutsideTurn(
   sessions: TranscriptAppendSessions,
@@ -231,10 +236,7 @@ export async function appendEntryOutsideTurn(
   entry: NewEntry,
   modelText?: (appended: SessionEntry) => string,
 ): Promise<SessionEntry> {
-  const tapeContiguous =
-    (await sessions.tapeCoverage(lease.sessionId)) === (await sessions.latestEntrySeq(lease.sessionId));
   const appended = await sessions.append(lease, entry);
-  if (!tapeContiguous) return appended;
   if (modelText) {
     await sessions.appendTape(lease, {
       kind: "message",
@@ -584,7 +586,7 @@ export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntr
 
 export const ENTRY_STRING_BUDGET = 2_000;
 
-export type TranscriptEntry = SessionEntry & { truncated?: true };
+export type TranscriptEntry = SessionEntry & { truncated?: true; stopped?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
 const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
@@ -734,12 +736,13 @@ export interface SessionStore {
   canReadTranscriptSuffix(sessionId: string, beforeSeq: number): Promise<boolean>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
+  getRunUserEntry(sessionId: string, runId: string): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
   clearSecurityTaint(sessionId: string): Promise<boolean>;
 
   appendTape(lease: Lease, rec: NewTapeRecord): Promise<TapeRecord>;
   getTape(sessionId: string, opts?: GetTapeOptions): Promise<TapeRecord[]>;
-  tapeCoverage(sessionId: string): Promise<number>;
+  stopMarks(sessionId: string): Promise<number[]>;
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;

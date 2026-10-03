@@ -1511,12 +1511,12 @@ test("a surface post's sent files render as delivered files on the reply bubble"
   );
 });
 
-for (const text of ["Partial answer", "", "(stopped)"]) {
+for (const text of ["Partial answer", ""]) {
   test(`stopped history retains its state without promoting commentary: ${text || "empty"}`, () => {
     const entries: SessionEntry[] = [
       { seq: 1, type: "user", payload: { text: "check" }, createdAt: 1 },
-      { seq: 2, type: "text", payload: { text: "Checking.", phase: "commentary" }, createdAt: 2 },
-      { seq: 3, type: "assistant", payload: { text, stopped: true }, createdAt: 3 },
+      { seq: 2, type: "text", payload: { text: "Checking.", phase: "commentary" }, createdAt: 2, stopped: !text },
+      ...(text ? [{ seq: 3, type: "assistant" as const, payload: { text }, createdAt: 3, stopped: true }] : []),
     ];
     const messages = entriesToMessages(entries);
     const answer = messages.find((message) => message.role === "assistant") as AssistantWork;
@@ -1674,8 +1674,7 @@ test("live consumed steers join canonical history once and survive stopped/error
     { type: "user", seq: 1, createdAt: 1, payload: { text: "start" } },
     { type: "tool_call", seq: 2, createdAt: 2, payload: { tool: "execute", callId: "a" } },
     { type: "user", seq: 3, createdAt: 3, payload: { text: "Change direction", steered: true } },
-    { type: "tool_result", seq: 4, createdAt: 4, payload: { tool: "execute", callId: "a" } },
-    { type: "assistant", seq: 5, createdAt: 5, payload: { text: "(stopped)", stopped: true } },
+    { type: "tool_result", seq: 4, createdAt: 4, payload: { tool: "execute", callId: "a" }, stopped: true },
   ];
   const work = (entriesToMessages(entries).at(-1) as AssistantWork).work!;
   for (const reason of ["aborted", "error"] as const) {
@@ -1685,7 +1684,7 @@ test("live consumed steers join canonical history once and survive stopped/error
     assert.equal(live.length, 2);
     assert.equal((live[1] as { entrySeq?: number }).entrySeq, 3);
     live.push({ ...entriesToMessages(entries).at(-1)!, stopReason: reason } as AgentMessage);
-    assert.equal(forkCutSeq(entries, live, live.length - 1), 5);
+    assert.equal(forkCutSeq(entries, live, live.length - 1), 4);
     assert.equal(forkCutSeq(entries, live, 1), 3);
   }
 });

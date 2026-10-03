@@ -240,6 +240,15 @@ test("computerStatus probes the guest", async () => {
   assert.match(status.machine, /e2b sandbox sbx-/);
 });
 
+test("a passive computerStatus reads provider state without touching the guest", async () => {
+  const s = make({ client: nativeClient() });
+  await s.provision(layers);
+  const before = fake.execScripts().length;
+  const status = await s.computerStatus!(scope, { passive: true });
+  assert.equal(status.lifecycleState, "running");
+  assert.equal(fake.execScripts().length, before);
+});
+
 test("computerStatus reports a gone sandbox as unprovisioned, not wedged", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);

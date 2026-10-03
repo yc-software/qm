@@ -32,7 +32,11 @@ function overheardPayload(e: SessionEntry): OverheardEntryPayload | null {
   return p as unknown as OverheardEntryPayload;
 }
 
-export function recordedMessageTimestamps(history: readonly SessionEntry[]): Set<string> {
+export function recordedMessageTimestamps(history: readonly SessionEntry[], tape?: readonly TapeRecord[]): Set<string> {
+  if (tape)
+    return new Set(
+      tape.flatMap((row) => (row.kind === "message" && typeof row.meta?.ts === "string" ? [row.meta.ts] : [])),
+    );
   const seen = new Set<string>();
   for (const e of history) {
     if (e.type !== "user") continue;
@@ -245,20 +249,20 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
   return out;
 }
 
-export function coverageImportViable(entries: readonly SessionEntry[]): boolean {
+export function historyImportViable(entries: readonly SessionEntry[]): boolean {
   if (!entries.length || entries.length > TAPE_IMPORT_MAX_ENTRIES) return false;
   if (entries.some((e) => (e.payload as { securityTainted?: unknown } | null)?.securityTainted === true)) return false;
   return coverageImportEvent(entries).messages.length > 0;
 }
 
-export async function appendCoverageImport(
+export async function appendHistoryImport(
   sessions: Pick<SessionStore, "appendTape">,
   lease: Lease,
   entries: readonly SessionEntry[],
   scopeLabel: ScopeId,
 ): Promise<TapeRecord | null> {
   const last = entries[entries.length - 1];
-  if (!last || !coverageImportViable(entries)) return null;
+  if (!last || !historyImportViable(entries)) return null;
   return sessions.appendTape(lease, {
     kind: "context_event",
     payload: coverageImportEvent(entries),

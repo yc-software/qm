@@ -904,27 +904,6 @@ test("the orchestrator sandbox path selects worker storage without changing auth
   await assert.rejects(turn.provisionResource(foreign.id), /requires permission to use its owning scope/);
 });
 
-test("durable worker rejects excessive swarm claims before calling the harness", async () => {
-  const { service, caller, runs } = await swarmFixture();
-  await service.spawn(caller, { requestId: "one", text: "Work" });
-  await service.sweep();
-  const pending = (await runs.list()).find((item) => item.request.swarm)!;
-  const claimed = (await runs.claimById(pending.id, "test", 60_000))!;
-  let called = false;
-  const orchestrator = {
-    handleTurn: async () => {
-      called = true;
-      return { status: "silent" as const };
-    },
-  } as unknown as Orchestrator;
-  await assert.rejects(
-    processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, { ...claimed, attempts: 4 }),
-    /claim budget/,
-  );
-  assert.equal(called, false);
-  assert.equal((await runs.get(claimed.id))!.status, "failed");
-});
-
 test("swarm work cancellation has a hard worker deadline independent of the harness", async (context) => {
   const { service, caller, runs } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
@@ -954,6 +933,7 @@ test("swarm work cancellation has a hard worker deadline independent of the harn
   context.mock.timers.tick(1);
   await work;
   assert.equal(cancelled, true);
+  assert.equal((await runs.get(claimed.id))?.status, "done", "the swarm wall clock is a terminal stop, not a handoff");
 });
 
 for (const action of ["spawn", "send", "context"] as const) {

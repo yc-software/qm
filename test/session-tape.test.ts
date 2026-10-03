@@ -70,38 +70,6 @@ test("getTape limit returns the newest N oldest-first, matching getEntries seman
   );
 });
 
-test("tapeCoverage counts only watermarks and import covers — message mirrors can't launder a gap", async () => {
-  const { store, session, lease } = await sessionWithLease();
-  assert.equal(await store.tapeCoverage(session.id), -1);
-  await store.appendTape(lease, {
-    kind: "context_event",
-    payload: { event: "legacy_import", messages: [] },
-    scopeLabel: scope,
-    coversEntrySeq: 41,
-  });
-  assert.equal(await store.tapeCoverage(session.id), 41);
-  await store.appendTape(lease, {
-    kind: "message",
-    payload: { role: "user", content: [] },
-    scopeLabel: scope,
-    entrySeq: 42,
-  });
-  assert.equal(await store.tapeCoverage(session.id), 41);
-  await store.appendTape(lease, { kind: "annotation", payload: { subturnEnd: true }, scopeLabel: scope, entrySeq: 99 });
-  assert.equal(await store.tapeCoverage(session.id), 41);
-  await store.appendTape(lease, { kind: "annotation", payload: { turnEnd: "true" }, scopeLabel: scope, entrySeq: 98 });
-  assert.equal(await store.tapeCoverage(session.id), 41);
-  await store.appendTape(lease, {
-    kind: "context_event",
-    payload: { event: "compaction", text: "summary" },
-    scopeLabel: scope,
-    coversEntrySeq: 100,
-  });
-  assert.equal(await store.tapeCoverage(session.id), 41);
-  await store.appendTape(lease, { kind: "annotation", payload: { turnEnd: true }, scopeLabel: scope, entrySeq: 42 });
-  assert.equal(await store.tapeCoverage(session.id), 42);
-});
-
 test("deleteSession removes tape rows", async () => {
   const { store, session, lease } = await sessionWithLease();
   await store.appendTape(lease, { kind: "message", payload: {}, scopeLabel: scope });

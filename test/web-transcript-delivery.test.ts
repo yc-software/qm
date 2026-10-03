@@ -90,14 +90,13 @@ test("the recorded entry keeps the tape projection servable and renders through 
   });
   await deliveries.pending("web");
 
-  assert.equal(await sessions.tapeCoverage(session.id), 0, "the write advances tape coverage over its own entry");
   const projected = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(projected.length, 1);
   assert.equal(projected[0]!.type, "assistant");
   assert.equal((projected[0]!.payload as { text?: string }).text, "cron reply body");
 });
 
-test("a session whose tape is already behind gets the entry but no orphan tape rows", async () => {
+test("a delivery is mirrored even when earlier entries have no native model records", async () => {
   const { sessions, deliveries } = wired();
   const session = await webSession(sessions);
   const { lease } = await sessions.acquireLease(session.id, "turn");
@@ -117,9 +116,8 @@ test("a session whose tape is already behind gets the entry but no orphan tape r
   assert.equal(entries.length, 2, "the transcript entry still lands");
   const tape = await sessions.getTape(session.id);
   assert.ok(
-    tape.every((row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry"),
+    tape.some((row) => row.kind === "message" && JSON.stringify(row.payload).includes("delivered into a stale tape")),
   );
-  assert.equal(await sessions.tapeCoverage(session.id), -1, "transcript annotations do not advance model coverage");
   assert.deepEqual(await sessions.getTranscriptEntries(session.id), entries);
 });
 

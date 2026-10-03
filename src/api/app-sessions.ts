@@ -14,7 +14,7 @@ import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../harness/tape-projection.ts";
-import { appendCoverageImport } from "../harness/replay.ts";
+import { appendHistoryImport } from "../harness/replay.ts";
 import { swallowAs } from "../util/errors.ts";
 import { latestGoalRecord } from "../harness/goal.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
@@ -941,7 +941,7 @@ export function createSessionMethods(
             forkBoundarySeq = appended.seq;
           }
           if (forkBoundarySeq !== null) {
-            await appendCoverageImport(deps.sessions, lease, copiedEntries, source.scopeId).catch(
+            await appendHistoryImport(deps.sessions, lease, copiedEntries, source.scopeId).catch(
               swallowAs("fork: tape import", undefined),
             );
           }

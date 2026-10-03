@@ -293,13 +293,6 @@ test("addressed + no post → exactly one nudge → the agent posts on the conti
     await sleep(300);
     const all = (await built.deliveries.pending("slack")) as any[];
     assert.equal(all.filter((d) => d.text === "nudged reply").length, 1, "the nudge fires at most once");
-    const session = await built.sessions.getByThread("ch:C-nudge:700.1");
-    const entries = await built.sessions.getEntries(session!.id);
-    assert.equal(
-      await built.sessions.tapeCoverage(session!.id),
-      entries.at(-1)!.seq,
-      "the watermark is a write-completeness claim: no append failed, so a nudged turn still advances it",
-    );
   } finally {
     await built.runtime.stop();
   }

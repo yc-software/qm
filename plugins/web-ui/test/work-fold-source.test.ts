@@ -20,7 +20,7 @@ test("the reply text is hidden only while the work fold is active, never for a f
     chat,
     /const workActive =\s*hasWork && isStreaming && !streamingFinal && \(work\?\.status === "working" \|\| work\?\.status === "thinking"\);/,
   );
-  assert.match(chat, /assistantDisplayText\(workActive \? "" : text, message\.stopReason\)/);
+  assert.match(chat, /assistantDisplayText\(workActive \? "" : text\)/);
   assert.doesNotMatch(chat, /isStreaming && hasWork && !streamingFinal \? ""/);
 });
 

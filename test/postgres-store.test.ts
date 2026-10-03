@@ -739,40 +739,6 @@ test("pg lease: a lock taken by an older instance still blocks, and reports what
   assert.ok(blocked.heldUntil! > Date.now(), "the expiry is still readable, so the lock is still datable");
 });
 
-test("pg tape coverage counts only boolean turn-end watermarks and legacy imports", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("personal", "tape-coverage");
-  const session = await s.getOrCreateByThread("pg-tape-coverage", "dm", scope);
-  const { lease } = await s.acquireLease(session.id);
-  assert.ok(lease);
-
-  await s.appendTape(lease, { kind: "annotation", payload: { subturnEnd: true }, scopeLabel: scope, entrySeq: 50 });
-  await s.appendTape(lease, { kind: "annotation", payload: { turnEnd: "true" }, scopeLabel: scope, entrySeq: 49 });
-  await s.appendTape(lease, {
-    kind: "context_event",
-    payload: { event: "compaction", text: "summary" },
-    scopeLabel: scope,
-    coversEntrySeq: 60,
-  });
-  await s.appendTape(lease, {
-    kind: "message",
-    harness: "pi",
-    payload: { role: "user", content: [{ type: "text", text: "\ud800" }] },
-    scopeLabel: scope,
-  });
-  assert.equal(await s.tapeCoverage(session.id), -1);
-
-  await s.appendTape(lease, { kind: "annotation", payload: { turnEnd: true }, scopeLabel: scope, entrySeq: 42 });
-  assert.equal(await s.tapeCoverage(session.id), 42);
-  await s.appendTape(lease, {
-    kind: "context_event",
-    payload: { event: "legacy_import", messages: [] },
-    scopeLabel: scope,
-    coversEntrySeq: 45,
-  });
-  assert.equal(await s.tapeCoverage(session.id), 45);
-});
-
 test("pg latestEntrySeq, participant windows, and tape meta attachments round-trip", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "proj-reads");
@@ -1823,23 +1789,6 @@ test("pg run store: a session_busy completion frees the dedup key so the same ke
   }
 });
 
-test("pg run store: the turn boundary is recorded once and survives a re-claim", { skip }, async () => {
-  const { runs, close } = createPostgresRunStore(URL!);
-  try {
-    const session = `sSeq-${randomUUID()}`;
-    const run = (await runs.enqueue({ sessionId: session, request: turn("where is that running?") })).run;
-    assert.equal(run.turnUserSeq, null, "a fresh run has no recorded turn");
-    assert.equal(await runs.noteTurnUserSeq(run.id, 0), true, "seq 0 is a real seq, not an absent marker");
-    assert.equal((await runs.get(run.id))?.turnUserSeq, 0);
-    assert.equal(await runs.noteTurnUserSeq(run.id, 41), false, "a later attempt cannot move the boundary");
-    const claimed = await runs.claimById(run.id, "w1", 5_000);
-    assert.equal(claimed?.turnUserSeq, 0, "the re-claimed run still carries the boundary the dead attempt recorded");
-    assert.equal(await runs.noteTurnUserSeq(randomUUID(), 7), false, "an unknown run records nothing");
-  } finally {
-    await close();
-  }
-});
-
 test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger, reaper", { skip }, async () => {
   const { runs, ledger, close } = createPostgresRunStore(URL!);
   try {
@@ -2110,13 +2059,13 @@ test("pg run store: reaper parks over-age runs, requeues young ones, and audits 
     const parked = await runs.get(old.id);
     assert.equal(parked?.status, "failed", "park is a loud terminal failure");
     assert.match(parked?.result?.reason ?? "", /max age/);
-    assert.equal(parked?.errorAttempts, 0, "age-cap park does not spend the error budget");
+    assert.equal(parked?.errorAttempts, 1, "an expired lease is a failed attempt");
     const oldEv = oldEvents.find((e) => e.runId === old.id);
     assert.equal(oldEv?.outcome, "parked");
     assert.equal(oldEv?.sessionId, "ageOld");
     assert.equal(oldEv?.workerId, "wOld");
     assert.equal(oldEv?.attempts, 1);
-    assert.equal(oldEv?.errorAttempts, 0);
+    assert.equal(oldEv?.errorAttempts, 1);
 
     const young = (await runs.enqueue({ sessionId: "ageYoung", request: turn("normal") })).run;
     assert.ok((await runs.claimById(young.id, "wYoung", 1))?.leaseToken);
@@ -2129,7 +2078,7 @@ test("pg run store: reaper parks over-age runs, requeues young ones, and audits 
     const youngEv = youngEvents.find((e) => e.runId === young.id);
     assert.equal(youngEv?.outcome, "requeued");
     assert.equal(youngEv?.workerId, "wYoung");
-    assert.equal(youngEv?.errorAttempts, 0);
+    assert.equal(youngEv?.errorAttempts, 1);
   } finally {
     await close();
   }
@@ -2887,7 +2836,6 @@ test(
         assert.deepEqual(await s.getEntries(session.id, { sinceSeq: 1, beforeSeq, limit }), page);
       }
     }
-    assert.equal(await s.tapeCoverage(session.id), -1);
     assert.equal(await s.clearSecurityTaint(session.id), true);
     const after = await s.getEntries(session.id);
     assert.deepEqual(await s.getTranscriptEntries(session.id), after);
@@ -2897,7 +2845,6 @@ test(
     assert.equal((await s.getTape(session.id)).length, 8);
     assert.equal(await s.clearSecurityTaint(session.id), true);
     assert.equal((await s.getTape(session.id)).length, 8);
-    assert.equal(await s.tapeCoverage(session.id), -1);
     assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
     await s.append(lease, { type: "soul", payload: { text: "legacy instructions" }, scopeLabel: scope });
     assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
@@ -2964,7 +2911,6 @@ test("pg transcript backfill is bounded, idempotent, and independent of model co
       afterSeq = page.afterSeq;
     }
     assert.deepEqual(await s.getTranscriptEntries(session.id), await s.getEntries(session.id));
-    assert.equal(await s.tapeCoverage(session.id), -1);
     const repeated = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: true });
     assert.deepEqual(repeated, { busy: false, scanned: 200, changed: 0, afterSeq: 199 });
     assert.equal((await s.getTape(session.id)).length, 620);
@@ -3259,3 +3205,24 @@ test("pg context window preserves user memory checkpoints through compaction and
     await store.releaseLease(lease);
   }
 });
+
+test(
+  "Postgres stop marks the last entry a stopped run wrote, and nothing for a run that wrote nothing",
+  { skip },
+  async () => {
+    const s = createPostgresSessionStore(URL!);
+    const scope = scopeId("personal", "stop-marks");
+    const session = await s.getOrCreateByThread("pg-stop-marks", "dm", scope);
+    const { lease } = await s.acquireLease(session.id);
+    assert.ok(lease);
+    assert.deepEqual(await s.stopMarks(session.id), []);
+    await s.appendTape(lease, { kind: "stop", payload: { reason: "user", runId: "early" }, scopeLabel: scope });
+    const user = await s.append(lease, { type: "user", payload: { text: "go", runId: "r1" }, scopeLabel: scope });
+    await s.appendTape(lease, { kind: "stop", payload: { reason: "user", runId: "not-started" }, scopeLabel: scope });
+    assert.deepEqual(await s.stopMarks(session.id), []);
+    await s.appendTape(lease, { kind: "stop", payload: { reason: "user", runId: "r1" }, scopeLabel: scope });
+    assert.deepEqual(await s.stopMarks(session.id), [user.seq]);
+    assert.equal((await s.getRunUserEntry(session.id, "r1"))?.seq, user.seq);
+    assert.equal(await s.getRunUserEntry(session.id, "missing"), undefined);
+  },
+);

@@ -1,6 +1,12 @@
 import { SandboxProvisionCleanupError, cleanupFailedProvision } from "../src/sandbox/sandbox.ts";
 import { execFileSync } from "node:child_process";
-import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
+import {
+  createTurnSandboxes,
+  finishPendingScrubs,
+  type PendingSandboxScrub,
+  type TurnSandboxContext,
+} from "../src/core/orchestrator/sandboxes.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -491,19 +497,30 @@ test("scratch credentials are selected per command and masked before returning",
   await assert.rejects(ctx.execute("env", { scratch: true, credentials: ["owner"] }), /requires scope:owner/);
 });
 
-function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
+function turnBoxes(
+  sandbox: Partial<Sandbox>,
+  transferId = "turn-a",
+  sandboxScrubs = createMemoryMap<PendingSandboxScrub>(),
+) {
   const events: import("../src/audit/audit-log.ts").AuditEvent[] = [];
+  const cleanups: import("../src/audit/audit-log.ts").AuditEvent[] = [];
   const errors: unknown[] = [];
   const boxes = createTurnSandboxes({
     deps: {
       sandbox,
-      auditLog: { record: (event: import("../src/audit/audit-log.ts").AuditEvent) => events.push(event) },
+      auditLog: {
+        record: (event: import("../src/audit/audit-log.ts").AuditEvent) =>
+          (event.action === "sandbox.cleanup" ? cleanups : events).push(event),
+      },
       errors: { record: (...args: unknown[]) => errors.push(args) },
+      sandboxScrubs,
     },
     input: { runId: "run-1" },
     actor: { id: "U1" },
     session: { id: "session-1" },
     transferId,
+    emitGapWork: () => {},
+    turnFilesDir: ".agent-turn/s/t",
     scopeId: scopeId("channel", "C1"),
     memoryScopeId: scopeId("channel", "C1"),
     connectorEnv: { AGENT_API_TOKEN: "scope-capability" },
@@ -515,7 +532,7 @@ function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
       ],
     },
   } as unknown as TurnSandboxContext);
-  return { boxes, events, errors };
+  return { boxes, events, cleanups, errors };
 }
 
 test("scratch provisioning is singleflight within a turn and isolated across turns", async () => {
@@ -566,21 +583,52 @@ test("scratch provisioning is singleflight within a turn and isolated across tur
   assert.ok(!JSON.stringify(first.events).includes("scope-capability"));
 });
 
-test("reclaim waits for in-flight scratch creation before destroying its handle", async () => {
-  const ready = Promise.withResolvers<SandboxHandle>();
-  const destroyed: string[] = [];
-  const { boxes } = turnBoxes({
-    provision: () => ready.promise,
-    async teardown(handle) {
-      destroyed.push(handle.id);
+test("a new worker finishes a pending scrub and keeps it while the box is unreachable", async () => {
+  const scrubs = createMemoryMap<PendingSandboxScrub>();
+  const layers = [{ scopeId: scopeId("channel", "C1"), mode: "rw" as const, mountPath: "" }];
+  await scrubs.put("expired", { createdAt: 1, scopeLabel: "channel:C1", boxes: [{ layers, dirs: ["old"] }] });
+  const { boxes } = turnBoxes(
+    {
+      async provision() {
+        return { ...scopedHandle, backend: "e2b", resourceId: "sbx-1" };
+      },
+      async removeDir(_handle, dir) {
+        if (dir === ".agent-turn/s/t") await new Promise(() => {});
+      },
+      async listDir() {
+        return [];
+      },
     },
-  });
-  const provision = boxes.provisionScratch();
-  const reclaim = boxes.reclaimBox();
-  ready.resolve(scratchHandle);
-  await Promise.all([provision, reclaim]);
-  assert.deepEqual(destroyed, [scratchHandle.id]);
-  assert.equal(boxes.scratchBox.handle, null);
+    "turn-a",
+    scrubs,
+  );
+  await boxes.provision();
+  await boxes.reclaimBox(AbortSignal.abort());
+  assert.deepEqual(
+    (await scrubs.get("session-1:turn-a"))?.boxes.map((box) => box.dirs),
+    [[".agent-turn/s/t"]],
+  );
+  const calls: string[] = [];
+  let reachable = false;
+  const sandbox = {
+    async provision(_layers: unknown, opts?: { sandboxId?: string }) {
+      if (!reachable) throw new Error("provider down");
+      calls.push(`provision:${opts?.sandboxId}`);
+      return scopedHandle;
+    },
+    async removeDir(_handle: SandboxHandle, dir: string) {
+      calls.push(`remove:${dir}`);
+    },
+    async teardown(_handle: SandboxHandle, opts?: { keepWarm?: boolean }) {
+      calls.push(`teardown:${opts?.keepWarm}`);
+    },
+  };
+  await finishPendingScrubs(sandbox, scrubs);
+  assert.equal((await scrubs.entries()).length, 1);
+  reachable = true;
+  await finishPendingScrubs(sandbox, scrubs);
+  assert.deepEqual(calls, ["provision:sbx-1", "remove:.agent-turn/s/t", "teardown:true"]);
+  assert.equal((await scrubs.entries()).length, 0);
 });
 
 test("scratch destruction failures keep their cause and retain the handle for retry", async () => {

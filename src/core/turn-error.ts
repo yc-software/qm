@@ -14,6 +14,13 @@ export class ProviderTurnError extends Error {
   }
 }
 
+export class TurnHandedOff extends Error {
+  constructor() {
+    super("turn handed off to the incoming deployment");
+    this.name = "TurnHandedOff";
+  }
+}
+
 export class TitleRejected extends Error {
   readonly rule: string;
   constructor(rule: string, sample: string) {

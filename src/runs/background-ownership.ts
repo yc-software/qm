@@ -8,6 +8,7 @@ export interface BackgroundMember {
   state: "admitted" | "relinquished" | "drained";
   retired: boolean;
   ready: boolean;
+  handoffRequestedAt?: number;
 }
 
 export interface BackgroundOwnership {
@@ -126,6 +127,9 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
           !state.members.some((member) => !member.retired && member.deploymentId === request.desiredDeploymentId)
         )
           throw new BackgroundOwnershipConflict("Desired deployment has no enrolled instances");
+        const handoffRequestedAt = Date.now();
+        for (const member of state.members)
+          if (member.state === "admitted") member.handoffRequestedAt ??= handoffRequestedAt;
         state.enabled = true;
         state.generation++;
         state.desiredDeploymentId = request.desiredDeploymentId;
@@ -147,6 +151,7 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
         }
         member.generation = state.generation;
         member.state = "admitted";
+        delete member.handoffRequestedAt;
         member.ready = false;
       });
     },

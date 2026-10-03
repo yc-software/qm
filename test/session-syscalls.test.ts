@@ -1570,6 +1570,20 @@ test("stopping an idle coordinator cancels running and queued descendants and bl
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
+test("stop keeps a handed-off pending run so its next claim records the stop", async () => {
+  const r = await rig();
+  const opened = await r.syscallsFor(r.room).open({ task: "handed off" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+  assert.equal(await r.runs.releaseLease(run.id, claimed!.leaseToken!), true);
+  assert.equal((await r.runs.get(run.id))!.status, "pending");
+  assert.equal(await stopSessionTree(r, r.room), true);
+  assert.equal((await r.runs.get(run.id))!.status, "pending");
+  assert.equal((await r.signals.pending(run.id))[0]!.signal.kind, "abort");
+});
+
 test("stop still signals a queued child claimed during withdrawal", async () => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "race the claim" });
