@@ -220,3 +220,52 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
   assert.ok(a.artifactId, "artifact id present so the web surface can serve the bytes");
   assert.ok(!("blobId" in a), "internal blob handle is not leaked to surfaces");
 });
+
+function reachTools(transfer: ReturnType<typeof createMemoryBlobTransferStore>, enqueueFails = false) {
+  return createSurfaceToolDeps({
+    deps: {
+      deliveries: {
+        async enqueue() {
+          if (enqueueFails) throw new Error("delivery store down");
+          return { id: "d1" };
+        },
+      },
+      sandbox: fakeSandbox({ "report.pdf": bytes("PDF") }),
+    },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "channel", channelRef: "C1" },
+    session: { id: "S1" },
+    defaultDestination: { type: "thread", target: "C1/1" },
+    strictReadOnly: false,
+    provision: async () => handle,
+    blobTransfer: transfer,
+    fileRegistration: {},
+    postProvenance: () => ({}),
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+}
+
+test("surface reach discards uploaded files when the destination cannot be resolved", async () => {
+  const transfer = createMemoryBlobTransferStore();
+  const r = await reachTools(transfer).reach("hi", { recipient: "nobody" }, ["report.pdf"]);
+  assert.equal(r.ok, false);
+  assert.equal(await transfer.sweep(0), 0, "no orphaned blob is left behind");
+});
+
+test("surface post discards uploaded files when the delivery cannot be enqueued", async () => {
+  const transfer = createMemoryBlobTransferStore();
+  const r = await reachTools(transfer, true).post("hi", undefined, ["report.pdf"]);
+  assert.equal(r.ok, false);
+  assert.equal(await transfer.sweep(0), 0, "no orphaned blob is left behind");
+});
+
+test("surface post refuses more files than a message can carry before uploading any", async () => {
+  const transfer = createMemoryBlobTransferStore();
+  const files = Array.from({ length: 21 }, (_, i) => `f${i}.txt`);
+  const r = await reachTools(transfer).post("hi", undefined, files);
+  assert.equal(r.ok, false);
+  assert.match(r.ok ? "" : (r.message ?? ""), /too many files/);
+  assert.equal(await transfer.sweep(0), 0);
+});

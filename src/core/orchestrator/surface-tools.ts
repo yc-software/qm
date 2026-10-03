@@ -27,7 +27,12 @@ import type {
   SurfaceSearchResult,
 } from "../../tools/primitives.ts";
 import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../../persistence/blob-transfer.ts";
-import { collectNamedOutbound, type ArtifactRegistration } from "../attachments.ts";
+import {
+  collectNamedOutbound,
+  discardOutbound,
+  MAX_OUTBOUND_FILES,
+  type ArtifactRegistration,
+} from "../attachments.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -192,8 +197,15 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   };
   const resolveFiles = async (
     files?: readonly string[],
-  ): Promise<{ ok: true; attachments?: OutgoingAttachment[] } | { ok: false; message: string }> => {
-    if (!files?.length) return { ok: true };
+  ): Promise<
+    { ok: true; attachments?: OutgoingAttachment[]; discard: () => Promise<void> } | { ok: false; message: string }
+  > => {
+    if (!files?.length) return { ok: true, discard: async () => {} };
+    if (new Set(files).size > MAX_OUTBOUND_FILES)
+      return {
+        ok: false,
+        message: `too many files — a message carries at most ${MAX_OUTBOUND_FILES}; nothing was sent`,
+      };
     const invalid = files.filter(hasParentPathSegment);
     if (invalid.length)
       return {
@@ -209,7 +221,15 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     ];
     if (bad.length)
       return { ok: false, message: `couldn't attach: ${bad.join(", ")} — nothing was sent; fix the path(s) and retry` };
-    return { ok: true, attachments: r.attachments };
+    return {
+      ok: true,
+      attachments: r.attachments,
+      discard: async () => {
+        await Promise.all(
+          r.attachments.map((a) => discardOutbound(a, blobTransfer, fileRegistration, r.createdArtifactIds)),
+        );
+      },
+    };
   };
   return {
     post: async (postText, opts, files) => {
@@ -235,6 +255,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(footer ? { debugFooter: footer } : {}),
       };
       const sent = await enqueue(projectedDestination, postText, seq, f.attachments);
+      if (!sent.ok) await f.discard();
       return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
     },
     reach: async (postText, target, files) => {
@@ -251,9 +272,15 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!f.ok) return { ok: false, message: f.message };
       const sending = postText.trim().length > 0 || (f.attachments?.length ?? 0) > 0;
       const d = await resolveDestination(target, { mayOpenGroup: sending });
-      if (!d.ok) return { ok: false, message: d.message };
+      if (!d.ok) {
+        await f.discard();
+        return { ok: false, message: d.message };
+      }
       const r0 = await enqueue(d.destination, postText, seq, f.attachments);
-      if (!r0.ok) return r0;
+      if (!r0.ok) {
+        await f.discard();
+        return r0;
+      }
       const r = f.attachments?.length ? { ...r0, attachments: postedFileMetas(f.attachments) } : r0;
       spine.crossConversationPosts += 1;
       let label = `a group DM (${target.participants?.length ?? 0} people)`;
