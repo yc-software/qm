@@ -2768,7 +2768,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const baseTools = createToolContext({
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
-          ...(deps.sandboxMigration ? { sandboxMigration: deps.sandboxMigration, invalidateProvision } : {}),
+          invalidateProvision,
           provision,
           provisionScratch,
           provisionResource,

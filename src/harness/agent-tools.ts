@@ -345,7 +345,7 @@ export type CoreToolOptions = Omit<
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    sandboxResources: config.sandboxResourcesEnabled,
+    sandboxResources: true,
     scratchExec: config.scratchExecEnabled,
     // Availability is checked per turn; Open can be enabled without restarting the harness.
     ownerAuthExec: true,

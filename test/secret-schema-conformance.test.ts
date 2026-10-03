@@ -29,7 +29,6 @@ test("runtime schema conditions reference env vars the CLI schema also condition
   // so `qm secrets` and core boot validation agree about when a secret becomes required.
   const runtimeConditionEnv = [
     "SANDBOX_BACKEND",
-    "SANDBOX_SCOPE_BACKENDS",
     "DEPLOY_PROVIDER",
     "AWS_DEPLOY_APPS_DOMAIN",
     "DEPLOY_APPS_DOMAIN",
@@ -45,10 +44,7 @@ test("runtime schema conditions reference env vars the CLI schema also condition
     conditions?: CliCondition[];
   }
   const collect = (when: CliCondition): void => {
-    if (when.kind === "sandbox-backend") {
-      cliConditionEnv.add("SANDBOX_BACKEND");
-      cliConditionEnv.add("SANDBOX_SCOPE_BACKENDS");
-    }
+    if (when.kind === "sandbox-backend") cliConditionEnv.add("SANDBOX_BACKEND");
     if (when.name) cliConditionEnv.add(when.name);
     for (const name of when.names ?? []) cliConditionEnv.add(name);
     for (const nested of when.conditions ?? []) collect(nested);

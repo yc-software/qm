@@ -1,0 +1,120 @@
+# QM spec
+
+> Human-written. Agents must not edit this file, except to add entries to the Wall of shame.
+
+## North stars
+
+1. **Unhobble.** Frontier models are smarter than we usually allow them to be. What scaffolds and supports the model today will restrain it tomorrow; keep the harness as thin as possible.
+2. **Free the brain.** State lives in Postgres and the agent can query it. Unhobbling also implies freeing the agent from dependency on any specific provider: sandboxes, models, and harnesses are just swappable resources for the agent.
+3. **Fast is the best feature.** Every bit of overhead above base inference time should be measured and driven down.
+4. **Agent UX = human UX.** Tools, errors, hints and prompts are the agent's interface, so they get the same care as the web UI. Spend every context token on purpose.
+5. **Delete before you add.** Via negativa. This codebase is already way too flabby. Always try the solution that simplifies or removes code before adding anything.
+
+## Subsystems, most central first
+
+**Agent turns.** The system revolves around durable execution against a central writeahead log: the session tape. To execute an agent turn, a session offers up a write lease, at which point a worker claims it from the run queue. The _orchestrator_ assembles context and drives a harness, which fulfills tool calls, and the result is committed to the session tape. The system should be robust to interruption at any time, end to end, and scale to swarms that are millions of agents strong.
+
+**Swappable harnesses and models.** Agents have a single tool catalog; their turns can be fulfilled by Pi, Codex, Claude Code or OpenCode, which call into the model catalog, the canonical source for model varieties, effort levels, speed multipliers, and their prices. A particular selection of those variables fulfilling a turn is called the _runtime_.
+
+**Scopes.** The original model was one OpenClaw per-person or per-channel. That means isolated compute, memory, files, crons, and apps. Breaking through that isolation requires an explicit and auditable _grant_.
+
+**Sandboxes.** In OpenClaw and similar systems – the agent’s computer is home, but also a prison. In QM, no sandbox is precious. Parallel computation is encouraged, and durable state should be written in either Postgres or object storage wherever possible to enable that. Management and provisioning of compute is generally left to the model. This allows it to use its intelligence in the deployment of resources as it deems necessary.
+
+**Credentials.** The most secure configuration is a secret that the agent never sees. Unfortunately, the world was not designed with agents in mind. Certain operations become awkward or impossible under this rule. So, in keeping with our capabilities-first north star – we allow escape hatches that trade off some level of security (for example, on-disk credentials that could in principle be lost to a prompt injected agent) to be used at the operators’ discretion.
+
+**Context.** Primarily, this is system prompt, memory, guidance, and skills. Current model rule following is weak and prone to fail. System prompt is used for general orientation of the agent to the QM harness environment, not strict instructions or checks – these belong _locally_ – closer in context-distance to where the agent’s attention actually is. By default, memory is an append-only per-scope notebook recalled with vector search matching on every turn. Given that org memory is an unsolved problem, we allow hooks for swappable implementations of this. Guidance is intended for a per-scope's standing orders; and skills are implemented typically.
+
+**Background work.** Crons, loops, and webhooks run with their owners permissions, but unattended work is generally considered more of a prompt injection risk. Therefore, explicit grants are required before credentials can be used for it.
+
+**Surfaces.** There is one source of truth, which are the tokens sent to the model provider’s GPUs for inference. Everything else is a projection of that: Slack and the web UI read the same sessions and present them the way each host expects.
+
+**Artifacts.** Apps, files, skills, crons, etc should all be shareable with a familiar Google-Docs style interface, be versioned, and tracked in Postgres or object storage.
+
+## Wall of shame
+
+Patterns from this repo's history, with the PRs that introduced or removed them.
+
+### Overengineering (3 examples)
+
+- **qm#1311** (2026-09-16): Admin redesign (#1276) shipped an Original/New comparison toggle, duplicate original cards/styles and variant URL plumbing; replacement PR removed ~1,006 net lines of scaffolding. _Status:_ wound back in qm#1311.
+- **qm#896** (2026-09-02): An optional core-search backend injection point had no production caller and existed only for tests; removed. _Status:_ wound back in qm#896.
+- **qm#894** (2026-09-02): Procedural memory ('Memorable') landed as a pluggable provider under a new scope-aware memory router (#700) with MEMORY_PROVIDER_CONFIG routes, alongside a separate MEMORY_STRATEGY switch.
+
+### Band-aid fixes (8 examples)
+
+- **qm#1743** (2026-09-30): Refusal fallback extended by regex-matching Anthropic usage-policy text and 'gateway model is unavailable' to trigger a hard-coded alternate-model ladder (claude-opus-5 / claude-sonnet-5), plus a new admin fallbackRuntime.
+- **qm#1748** (2026-09-30): Every non-Modal sandbox took one exclusive sandbox-resource:<id> advisory lock around each command/file op, so sessions sharing a computer queued behind each other; replaced a backend!=='modal' special case with shared locks and a parksOnTeardown profile property. _Status:_ wound back in qm#1748.
+- **qm#1753** (2026-09-30): Session-counter recount ran on every store init under the global maintenance lock (not a one-time migration), freezing chat writes during blue/green promotion; removed. _Status:_ wound back in qm#1753.
+- **qm#1432** (2026-09-19): Per-turn reconciliation of a shared skills/ index under a sandbox-wide advisory lock (skill projection) stalled turns 5 minutes; replaced with an explicit skill tool and per-turn skill dirs. _Status:_ wound back in qm#1432.
+- **qm#1133** (2026-09-12): A factory-specific retry ladder (FACTORY_READ_RETRIES=6) was added around sandbox readProcess polling after one timeout under load. _Status:_ wound back (factory code absent on current main).
+- **qm#965** (2026-09-07): One legacy \u0000 payload bricked sessions; fixes proposed tolerating poisoned rows and sanitizing every Postgres text write. _Status:_ unknown.
+- **qm#394** (2026-08-13): Memory tool silently coerces malformed `remember` calls (content/query/bare string) into facts instead of fixing the tool schema.
+- **qm#469** (2026-08-13): Sandbox status collapses any unanswering shell into a 'wedged' verdict with baked-in 'restart the computer' advice.
+
+### Duplication (8 examples)
+
+- **qm#1776** (2026-09-30): Sprites cold-boot '503 Process not ready' exec re-send implemented on main after the same fix (qm#1489) had already landed only on the long-lived factory side branch.
+- **qm#1520** (2026-09-22): Factory required pasted factory-anthropic/-github/-linear/-slack keychain secrets duplicating core's own model auth and connectors (two sources of truth); QM-73..76 resolve from core config/owner connectors instead. _Status:_ wound back in qm#1520, qm#1522, qm#1523, qm#1524 (on factory branch).
+- **qm#1476** (2026-09-21): Context settings had its own model picker separate from the composer's; switched to reuse the composer model/preset picker. _Status:_ wound back in qm#1476 (both plugins/web-ui/src/model-picker.ts and context-model.ts still exist).
+- **qm#1427** (2026-09-19): The 'software factory' loop (wrapper, workflows, own Linear/GitHub/Slack/Anthropic credentials, own sizing knobs) was developed as a parallel system on side branch qm-29-port-factory-loop (~QM-29..QM-84 PRs) rather than on native Loops on main. _Status:_ unknown (factory/ absent from main; branch still receives merges).
+- **qm#1272** (2026-09-16): Session transcripts are kept in both session_entries and session_tape, with SESSION_TAPE_MODE shadow/serve choosing between them.
+- **qm#1185** (2026-09-15): Each subscriber held its own LISTEN connection and pg-boss kept its own pool; consolidated to one listener per process and the shared query pool. _Status:_ wound back in qm#1185.
+- **qm#993** (2026-09-08): Chat search queried both the dedicated search index and legacy entry history for every visible conversation, causing timeouts. _Status:_ wound back in qm#993.
+- **qm#488** (2026-08-13): Web-UI /api router had ~50 hand-copied body-parse/relay/path-decode fragments that drifted (some returned 400 instead of 413). _Status:_ wound back in qm#488.
+
+### Hand-rolling (2 examples)
+
+- **qm#1419** (2026-09-22): Sprites backend used raw REST fetches; moved to Sprites SDK 0.2.3 (WebSocket exec, filesystem APIs, checkpoints); sibling PRs #1420-#1422 aligned Modal/E2B/Smolmachines with provider docs. _Status:_ wound back in qm#1419.
+- **qm#1407** (2026-09-22): Internal Fly transports piped data through `fly ssh console` (broke on Windows PTY); replaced with Machines exec API stdin. _Status:_ wound back in qm#1407.
+
+### Non-durability (4 examples)
+
+- **qm#1789** (2026-09-30): Docker-published apps have no persistent /data mount, so app data is lost on redeploy.
+- **qm#1694** (2026-09-28): Recurring jobs were told to keep checkpoints on sandbox workspace disk, lost when the computer is replaced; now published to durable scoped Files. _Status:_ wound back in qm#1694.
+- **qm#452** (2026-08-13): Multiview layout lived only in localStorage and was lost on a new device or profile. _Status:_ wound back in qm#452.
+- **qm#64** (2026-08-04): Cron fire log was stored inside the cron's jsonb row, grew without bound, and every fire rewrote the whole log. _Status:_ wound back (src/cron/fire-store.ts; cron-store.ts migrates legacy fireLog out, cron_fires table).
+
+### Config-matrix expansion (10 examples)
+
+- **qm#1784** (2026-09-30): Security screening had three overlapping env knobs (SECURITY_SCREEN_BACKEND, SECURITY_SCREEN_ALL_POSTURES, SECURITY_SCREEN_PROXY_ROLLOUT) plus per-posture inboundScreening; collapsed into one SECURITY_SCREEN=off|observe|enforce. _Status:_ wound back in qm#1784.
+- **qm#1747** (2026-09-30): New SANDBOX_CAPABILITY_TTL_HOURS env var (48h default, or 0/none for non-expiring bearer tokens) right after #1518 hard-set 48h.
+- **qm#1619** (2026-09-25): Separate org runtime defaults for conversations, crons/loops and sub-agents, then per-cron overrides (#1593) and a fallback runtime (#1743): four overlapping runtime settings with precedence rules.
+- **qm#1201** (2026-09-15): Security screening gained an off/model/proxy backend plus ALL_POSTURES, four PROXY_* vars and a timeout, layered on HARNESS_SECURITY_POSTURE and the org-level Auto flagger settings from qm#878.
+- **qm#1208** (2026-09-15): EAGER_PROVISION was an opt-in flag no deploy template set, so every deployment missed a 66s-to-3s median speedup until it defaulted on. _Status:_ partly wound back; flag remains (src/config.ts).
+- **qm#1162** (2026-09-14): Gateway deployments had to maintain an environment model allowlist; replaced by discovering models from the gateway's key-scoped list. _Status:_ wound back in qm#1162.
+- **qm#1044** (2026-09-10): The unified `sandbox` tool shipped behind SANDBOX_RESOURCES_ENABLED alongside the legacy execute/background tools, so two tool surfaces and both flag states must be supported.
+- **qm#922** (2026-09-04): Another sandbox backend (agent37) was added, bringing providers to about ten (agent37, aws, e2b, modal, porter, smolmachines, sprites, superserve, local/docker); qm#954 proposed Kubernetes as well.
+- **qm#876** (2026-09-02): Porter added as yet another SANDBOX_BACKEND and DEPLOY_PROVIDER (plus a Helm chart), shortly after Modal and E2B.
+- **qm#478** (2026-08-13): Added smolmachines as yet another sandbox backend, then SMOLMACHINES_CPUS/MEMORY_MB/DISK_GB env knobs (qm#507).
+
+### God files (1 example)
+
+- **qm#1296** (2026-09-16): The AWS deploy backend keeps absorbing capacity proofs, ownership handover and candidate logic.
+
+### Mismatched UI (3 examples)
+
+- **qm#1545** (2026-09-22): Transcript elements each hardcoded their own font-size, so multiview panes showed 15px/14px headers beside 12px text; unified on one --chat-font-size base. _Status:_ wound back in qm#1545.
+- **qm#1053** (2026-09-11): A parallel 'Beautiful UI' design system (10 stacked PRs) and an admin redesign with an Original/New toggle were built next to the existing web UI styles. _Status:_ wound back in qm#1053 (closed with #1054-#1062, #992, #1215).
+- **qm#513** (2026-08-13): Multiview panes showed two stacked headers (pane chrome plus the hosted chat's own top bar). _Status:_ wound back in qm#513.
+
+### Over-indexing on YC (3 examples)
+
+- **qm#1315** (2026-09-16): The generic web UI onboarding says 'the agent harness we use to run YC' and 'your YC partner in a box', and the welcome ideas cite 'YC Deal' and 'the YC investor database'.
+- **qm#1008** (2026-09-09): A 29-file 'software factory' loop (Linear auto-triage, forge ship contract) built for YC's own workflow was ported into public src/loops/factory before it had ever run end to end. _Status:_ wound back in qm#1026.
+- **qm#530** (2026-08-15): Assistant and org names were fixed across prompts, manifests, auth and UI; made deployment-configurable with neutral defaults. _Status:_ wound back in qm#530.
+
+### Regex (3 examples)
+
+Regex standing in for a parser, a typed error, a stored field or a model call. Main has 1,443 production regex sites in 380 files; cleanup is the regex-removal backlog.
+
+- **qm#1354** (2026-09-17): The web UI re-parses shell commands with a hand-written tokenizing regex (and sniffs `sed -n Np` and Markdown headings by pattern) to decide how to present tool activity, instead of using the structured call data.
+- **qm#1210** (2026-09-15): Composio consent links are found by regex-scanning model text for URLs and Markdown links, then stripped with dynamically built `RegExp`s, rather than arriving as a typed connector-link field.
+- **qm#169** (2026-08-03): The agent self-API allowlist is a chain of path regexes (`/^\/v1\/projects\/[^/]+$/`, …) instead of matching on the router's declared routes.
+
+### YC info leaking into public qm (1 example)
+
+- **qm#1504** (2026-09-22): Public docs/test fixtures had org-specific rollout guidance and identity examples plus 92 tracked screenshots (8.1 MB); scrubbed and AGENTS.md now bans committed screenshots. _Status:_ wound back in qm#1504 (partially; YC welcome copy remains).
+
+### Discarded error evidence (1 example)
+
+- **Sandbox startup and cleanup** (2026-10-02): A provider authentication failure reached the tool transcript as a bare "Command execution failed." The cleanup wrappers in `src/sandbox/sandbox.ts` dropped the original causes, destruction retries in `src/core/orchestrator/sandboxes.ts` swallowed every exception, and `src/harness/agent-tools.ts` recorded only the generic status. Keep the primary failure and every cleanup failure, redacted, in access-controlled diagnostics; a short user-facing message never replaces the evidence. _Status:_ unresolved on main 5dbebac6.

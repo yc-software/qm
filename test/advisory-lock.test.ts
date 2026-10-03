@@ -1,11 +1,6 @@
-import {
-  createSandboxResources,
-  type SandboxResource,
-  type SandboxDefault,
-  type SandboxResourceRollout,
-} from "../src/sandbox/sandbox-resources.ts";
-import type { SandboxRoute } from "../src/sandbox/sandbox-routing.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import type { SandboxResource, SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
+import { upgradeLegacySandboxes, type SandboxResourceUpgradeMarker } from "../src/sandbox/sandbox-resource-upgrade.ts";
+import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -134,55 +129,64 @@ test("pg mutex: waiting beyond timeoutMs throws a clear error", { skip }, async 
   }
 });
 
-test("pg sandbox activation fences publication from a separate compatible reader", { skip }, async () => {
+test("pg sandbox upgrade runs once across cores and never overwrites a newer default", { skip }, async () => {
   const pgA = createPgPool(URL!);
   const pgB = createPgPool(URL!);
   const release = Promise.withResolvers<string[]>();
   try {
-    const options = {
-      enabled: false,
-      rollout: createMemoryMap<SandboxResourceRollout>(),
-      records: createMemoryMap<SandboxResource>(),
-      defaults: createMemoryMap<SandboxDefault>(),
-      routes: createMemoryMap<SandboxRoute>(),
-      backends: {},
-      defaultBackend: "local" as const,
-      canUseScope: async () => true,
-    };
+    const maps = (pg: typeof pgA) => ({
+      availableBackends: ["local"] as const,
+      records: createPostgresMap<SandboxResource>(pg, "upgrade_sandbox_records"),
+      defaults: createPostgresMap<SandboxDefault>(pg, "upgrade_sandbox_defaults"),
+      marker: createPostgresMap<SandboxResourceUpgradeMarker>(pg, "upgrade_sandbox_marker"),
+      legacyBackend: () => "local" as const,
+    });
+    const shared = maps(pgA);
+    const other = maps(pgB);
+    await shared.defaults.put("personal:cleared", { sandboxId: null });
     const entered = Promise.withResolvers<void>();
-    const reader = createSandboxResources({ ...options, lock: createPostgresAdvisoryLock(pgB, { pollMs: 10 }) });
-    const active = createSandboxResources({
-      ...options,
-      enabled: true,
+    let calls = 0;
+    const first = upgradeLegacySandboxes({
+      ...shared,
       lock: createPostgresAdvisoryLock(pgA, { pollMs: 10 }),
       legacyScopes: () => {
+        calls++;
         entered.resolve();
         return release.promise;
       },
     });
-    const activation = active.initialize();
     await entered.promise;
-    const publication = reader.recordLegacy("personal:late", "local", { id: "late", rootDir: "/workspace" });
-    release.resolve([]);
-    await activation;
-    const id = await publication;
-    assert.equal((await reader.resolve("personal:late"))?.id, id);
-    assert.deepEqual(await options.defaults.get("personal:late"), { sandboxId: id });
-    let changed = false;
-    await assert.rejects(
-      reader.withLegacyMutation("personal:late", async () => {
-        changed = true;
-      }),
-      /retired/,
-    );
-    assert.equal(changed, false);
+    const second = upgradeLegacySandboxes({
+      ...other,
+      lock: createPostgresAdvisoryLock(pgB, { pollMs: 10 }),
+      legacyScopes: async () => {
+        calls++;
+        return ["personal:late"];
+      },
+    });
+    await shared.defaults.put("personal:old", { sandboxId: "newer" });
+    release.resolve(["personal:old", "personal:cleared", "personal:adopted"]);
+    await Promise.all([first, second]);
+    assert.equal(calls, 1);
+    assert.deepEqual(await shared.defaults.get("personal:old"), { sandboxId: "newer" });
+    assert.equal(await shared.defaults.get("personal:late"), null);
+    assert.deepEqual(await other.defaults.get("personal:cleared"), { sandboxId: null });
+    const adopted = await other.defaults.get("personal:adopted");
+    assert.ok(adopted?.sandboxId);
+    assert.equal((await other.records.get(adopted.sandboxId))?.backingScopeId, "personal:adopted");
+    await upgradeLegacySandboxes({
+      ...other,
+      lock: createPostgresAdvisoryLock(pgB),
+      routes: async () => {
+        throw new Error("completed upgrades must never read legacy routing again");
+      },
+    });
   } finally {
     release.resolve([]);
     await pgA.close();
     await pgB.close();
   }
 });
-
 test(
   "pg shared sandbox use overlaps across cores and excludes lifecycle mutations",
   { skip, timeout: 10000 },

@@ -45,7 +45,6 @@ import {
   type SandboxResource,
   type SandboxDefault,
   type SandboxResources,
-  type SandboxResourceRollout,
 } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import type { probeModel } from "./harness/pi-harness.ts";
@@ -235,13 +234,12 @@ import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
+import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
-  createSandboxRouter,
-  ROUTE_CACHE_TTL_MS,
-  type SandboxBackendName,
-  type SandboxRoute,
-} from "./sandbox/sandbox-routing.ts";
-import { createSandboxMigrationRunner, type SandboxMigrationRunner } from "./sandbox/sandbox-migration-runner.ts";
+  upgradeLegacySandboxes,
+  legacySandboxBackendForScope,
+  type LegacyRoute,
+} from "./sandbox/sandbox-resource-upgrade.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
 import {
@@ -540,7 +538,6 @@ export interface BuiltApp {
   memory: MemoryService;
   sandbox: Sandbox;
   advisoryLock: AdvisoryLock;
-  sandboxMigration: SandboxMigrationRunner;
   sandboxResources: SandboxResources;
   blobTransfer: BlobTransferStore;
   files: FileArtifactStore;
@@ -1094,38 +1091,47 @@ export function buildApp(
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
-  for (const backend of Object.values(config.sandboxScopeDefaults ?? {})) {
-    if (backend && !sandboxBackends[backend]) throw new Error(`Scope sandbox backend ${backend} is not configured`);
-  }
-  const sandboxRoutes = artifactMap<SandboxRoute>("sandbox_routing");
+  const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
+  const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
-    enabled: config.sandboxResourcesEnabled,
-    rollout: artifactMap<SandboxResourceRollout>("sandbox_resource_rollout"),
-    legacyScopes: async () => (await sessions.distinctScopes()).map((scope) => scope.scopeId),
-    legacySandboxes: async () => {
-      const [e2b, modal, aws, superserve] = await Promise.all([
-        e2bBodies.entries(),
-        modalBodies.entries(),
-        awsBodies.entries(),
-        superserveBodies.entries(),
-      ]);
-      return [
-        ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-        ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
-        ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-        ...superserve.map(([scopeId, body]) => ({
-          scopeId,
-          backend: "superserve" as const,
-          machineId: body.sandboxId,
-        })),
-      ];
-    },
-    records: artifactMap<SandboxResource>("sandbox_resources"),
-    defaults: artifactMap<SandboxDefault>("sandbox_defaults"),
-    routes: sandboxRoutes,
+    records: sandboxRecords,
+    defaults: sandboxDefaults,
+    upgrade: () =>
+      upgradeLegacySandboxes({
+        availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
+        records: sandboxRecords,
+        defaults: sandboxDefaults,
+        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
+        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
+        lock: advisoryLock,
+        legacyBackend: (scope) =>
+          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
+        specFor: (backend) => sandboxBackends[backend]?.profile.spec,
+        legacyScopes: async () => [
+          ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
+          ...(await environments.list()).map((environment) => environment.id),
+        ],
+        legacySandboxes: async () => {
+          const [e2b, modal, aws, superserve] = await Promise.all([
+            e2bBodies.entries(),
+            modalBodies.entries(),
+            awsBodies.entries(),
+            superserveBodies.entries(),
+          ]);
+          return [
+            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
+            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
+            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
+            ...superserve.map(([scopeId, body]) => ({
+              scopeId,
+              backend: "superserve" as const,
+              machineId: body.sandboxId,
+            })),
+          ];
+        },
+      }),
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
-    scopeDefaults: config.sandboxScopeDefaults,
     lock: advisoryLock,
     beforeRetire: async (record) => {
       if (
@@ -1162,36 +1168,8 @@ export function buildApp(
   const sandbox: Sandbox = createSandboxRouter({
     resources: sandboxResources,
     backends: sandboxBackends,
-    routes: sandboxRoutes,
     defaultBackend: config.sandboxBackend,
-    scopeDefaults: config.sandboxScopeDefaults,
     onError: sandboxOnError,
-  });
-  const sandboxMigration = createSandboxMigrationRunner({
-    backends: sandboxBackends,
-    routes: sandboxRoutes,
-    defaultBackend: config.sandboxBackend,
-    scopeDefaults: config.sandboxScopeDefaults,
-    advisoryLock,
-    settleMs: ROUTE_CACHE_TTL_MS,
-    provisionOptions: async (scopeId) => {
-      const egressSecret = config.capabilitySecret ?? config.signingSecret;
-      if (!egressSecret) return {};
-      const egressToken = await mintCapabilityToken(
-        {
-          actorId: "system:sandbox-migration",
-          scopeId: scopeId as ScopeId,
-          aud: EGRESS_PROXY_AUD,
-          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, config.apiBaseUrl ?? "", true),
-          exp: Date.now() + CAPABILITY_TTL_MS,
-        },
-        egressSecret,
-        config.capabilityTokenCompression,
-      );
-      return { egressToken };
-    },
-    withLegacyMutation: (scope, action) => sandboxResources.withLegacyMutation(scope, action),
-    hasLiveWork: async (scope) => !!processes && (await processes.liveByScope(scope)).length > 0,
   });
   const secretSource =
     config.secretsBackend === "aws"
@@ -1939,7 +1917,6 @@ export function buildApp(
     workspace,
     files,
     sandbox,
-    sandboxMigration,
     sandboxResources,
     swarms,
     connectorTokens,
@@ -2870,7 +2847,6 @@ export function buildApp(
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
     sandbox,
-    sandboxMigration,
     sandboxResources,
     advisoryLock,
     blobTransfer,
@@ -3048,7 +3024,6 @@ export function serverDeps(
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
     environments: built.environments,
-    sandboxMigration: built.sandboxMigration,
     sandboxResources: built.sandboxResources,
   };
 }

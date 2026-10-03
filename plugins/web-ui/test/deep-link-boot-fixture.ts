@@ -45,6 +45,7 @@ interface HarnessOptions {
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
+  openNewChat?: boolean;
 }
 
 export const SESSION = {
@@ -150,6 +151,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         effective: { harnessId: "pi", modelId: "m" },
         upgradeAvailable: false,
       });
+    }
+    if (path.startsWith("/api/ui-state?key=open-new-chat")) {
+      return Response.json({ value: opts.openNewChat ?? null, updatedAt: opts.openNewChat ? 1 : 0 });
     }
     if (path.startsWith("/api/ui-state")) {
       if (opts.holdRemoteSplit) await remoteSplitHeld;

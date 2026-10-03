@@ -2,13 +2,10 @@ import { basename } from "node:path/posix";
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
-  CopyObjectCommand,
   CreateMultipartUploadCommand,
   GetObjectCommand,
-  HeadObjectCommand,
   PutObjectCommand,
   UploadPartCommand,
-  UploadPartCopyCommand,
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -64,7 +61,6 @@ export interface HomeSnapshotStore {
   open(scope: string): Promise<StoredSnapshot | null>;
   put(scope: string, data: Uint8Array): Promise<void>;
   createUpload(scope: string): Promise<SnapshotUpload>;
-  adoptFromS3?(scope: string, ref: { bucket: string; key: string }): Promise<void>;
 }
 
 export class SnapshotTooLargeError extends Error {
@@ -159,53 +155,8 @@ export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapsho
         abort,
       };
     },
-    async adoptFromS3(scope, ref): Promise<void> {
-      const head = (await s3.send(new HeadObjectCommand({ Bucket: ref.bucket, Key: ref.key }))) as {
-        ContentLength?: number;
-      };
-      const size = head.ContentLength ?? 0;
-      const Key = keyFor(scope);
-      const source = `/${ref.bucket}/${encodeURIComponent(ref.key)}`;
-      if (size <= SINGLE_COPY_MAX_BYTES) {
-        await s3.send(new CopyObjectCommand({ Bucket, Key, CopySource: source }));
-        return;
-      }
-      const started = (await s3.send(new CreateMultipartUploadCommand({ Bucket, Key }))) as { UploadId?: string };
-      const uploadId = started.UploadId!;
-      try {
-        const parts: Array<{ ETag: string; PartNumber: number }> = [];
-        for (let offset = 0, part = 1; offset < size; offset += COPY_PART_BYTES, part++) {
-          const end = Math.min(offset + COPY_PART_BYTES, size) - 1;
-          const copied = (await s3.send(
-            new UploadPartCopyCommand({
-              Bucket,
-              Key,
-              UploadId: uploadId,
-              PartNumber: part,
-              CopySource: source,
-              CopySourceRange: `bytes=${offset}-${end}`,
-            }),
-          )) as { CopyPartResult?: { ETag?: string } };
-          parts.push({ ETag: copied.CopyPartResult!.ETag!, PartNumber: part });
-        }
-        await s3.send(
-          new CompleteMultipartUploadCommand({
-            Bucket,
-            Key,
-            UploadId: uploadId,
-            MultipartUpload: { Parts: parts },
-          }),
-        );
-      } catch (e) {
-        await s3.send(new AbortMultipartUploadCommand({ Bucket, Key, UploadId: uploadId })).catch(() => {});
-        throw e;
-      }
-    },
   };
 }
-
-const SINGLE_COPY_MAX_BYTES = 4_500_000_000;
-const COPY_PART_BYTES = 1_000_000_000;
 
 export interface HomeSnapshotSessionIo<S> {
   runCommand(

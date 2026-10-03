@@ -171,12 +171,15 @@ test("flag ON: the description advertises the routing policy truthfully", () => 
   assert.doesNotMatch((legacy as unknown as { description: string }).description, /scratch/i);
 });
 
-function freshApp(extra: Partial<Config> = {}) {
+async function freshApp(extra: Partial<Config> = {}) {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-scratch-")),
     ...extra,
   });
-  return buildApp(config);
+  const built = buildApp(config);
+  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "scoped");
+  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  return built;
 }
 
 const dm = (text: string): TurnRequest => ({
@@ -187,7 +190,7 @@ const dm = (text: string): TurnRequest => ({
 });
 
 test("a scratch turn runs on a separate volumeless box with scoped capability tokens", async () => {
-  const { app } = freshApp({ signingSecret: "s3cret", apiBaseUrl: "https://core.test" });
+  const { app } = await freshApp({ signingSecret: "s3cret", apiBaseUrl: "https://core.test" });
 
   const scoped = await app.turn(dm("!run printenv AGENT_API_TOKEN"));
   assert.equal(scoped.status, "ok");
@@ -201,7 +204,7 @@ test("a scratch turn runs on a separate volumeless box with scoped capability to
   assert.equal(scratch.reply, "<redacted:credential>", "scoped capability tokens are usable but masked in output");
 
   assert.ok(
-    fakeSprites.names().some((n) => n.startsWith("qm-personal-u1-")),
+    fakeSprites.names().some((n) => n.startsWith("qm-sandbox-")),
     "the scoped box is the scope's durable sprite",
   );
   assert.ok(
@@ -215,7 +218,7 @@ test("a scratch turn runs on a separate volumeless box with scoped capability to
 });
 
 test("nothing on the scratch box survives the turn", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const first = await app.turn(dm('!scratch sh -c "echo leak > leak.txt && cat leak.txt"'));
   assert.equal(first.reply, "leak");
   const second = await app.turn(dm('!scratch sh -c "cat leak.txt 2>/dev/null; echo clean"'));
@@ -223,7 +226,7 @@ test("nothing on the scratch box survives the turn", async () => {
 });
 
 test("a deliverable has to live on the scoped computer — the scratch box can't be attached from", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const made = await app.turn(dm('!scratch sh -c "printf hello > from-scratch.txt && echo made"'));
   assert.equal(made.reply, "made");
   const res = await app.turn(dm("!attach from-scratch.txt"));
@@ -232,7 +235,7 @@ test("a deliverable has to live on the scoped computer — the scratch box can't
 });
 
 test("a scratch-only turn still reclaims its box (reset + suspend) when the turn ends", async () => {
-  const { app, sandbox } = freshApp();
+  const { app, sandbox } = await freshApp();
   let toreDown = 0;
   const realTeardown = sandbox.teardown.bind(sandbox);
   sandbox.teardown = async (handle, opts) => {
@@ -294,77 +297,6 @@ test("execute schema lists exact command credential handles", async () => {
 
   await call(execute, { command: "gh api user", credentials: ["kc_github12345"] });
   assert.deepEqual(seen.at(-1)?.opts, { credentials: ["kc_github12345"] });
-});
-
-test("migrateComputer gates on approval, validates the target, bounds the copy, and settles routing", async () => {
-  const migrated: Array<{ scope: string; to: string; reason?: string; opts?: unknown }> = [];
-  const audited: string[] = [];
-  let invalidated = 0;
-  const runner = {
-    migrateScope: async (scope: string, to: string, reason?: string, opts?: unknown) => {
-      migrated.push({ scope, to, ...(reason ? { reason } : {}), opts });
-      return {
-        scopeId: scope,
-        from: "e2b",
-        to,
-        resynced: false,
-        capabilitiesLost: [],
-        bytes: 1,
-        sha: "shashasha1234",
-        sourceFiles: 1,
-      };
-    },
-    listRoutes: async () => [],
-    availableBackends: () => ["e2b", "modal"],
-    defaultBackend: "e2b",
-  };
-  const base = {
-    sandboxMigration: runner as never,
-    migrateSettleMs: 0,
-    invalidateProvision: () => {
-      invalidated++;
-    },
-    auditLog: { record: (e: { action: string }) => audited.push(e.action) } as never,
-  };
-
-  const unapproved = routingCtx(base);
-  await assert.rejects(unapproved.ctx.migrateComputer("modal"), (e: Error) => e.name === "NeedsApproval");
-
-  const { ctx } = routingCtx({ ...base, authorizeCommand: (c: string) => c === 'computer:"migrate" to:"modal"' });
-  await assert.rejects(ctx.migrateComputer("sprites"), /not an available backend here.*e2b, modal/);
-  const moved = await ctx.migrateComputer("modal");
-  assert.deepEqual(moved, { from: "e2b", to: "modal" });
-  assert.deepEqual(migrated, [
-    { scope: scopeId("personal", "U1"), to: "modal", reason: "agent-requested", opts: { copyTimeoutSec: 1800 } },
-  ]);
-  assert.equal(invalidated, 1, "the turn's provision memo is cleared so the next command lands on the new box");
-  assert.deepEqual(audited, ["sandbox_routes.migrate"]);
-});
-
-test("migrateComputer rewords the operator-only force refusal and audits failures", async () => {
-  const audited: string[] = [];
-  const runner = {
-    migrateScope: async () => {
-      throw new Error("cannot migrate to sprites: it has no process sessions. Migrate with force to accept the loss.");
-    },
-    listRoutes: async () => [],
-    availableBackends: () => ["e2b", "sprites"],
-    defaultBackend: "e2b",
-  };
-  const { ctx } = routingCtx({
-    sandboxMigration: runner as never,
-    migrateSettleMs: 0,
-    authorizeCommand: () => true,
-    auditLog: { record: (e: { action: string }) => audited.push(e.action) } as never,
-  });
-  await assert.rejects(ctx.migrateComputer("sprites"), /An operator can force this from the admin console\./);
-  await assert.rejects(ctx.migrateComputer("sprites"), (e: Error) => !/Migrate with force/.test(e.message));
-  assert.deepEqual(audited, ["sandbox_routes.migrate_failed", "sandbox_routes.migrate_failed"]);
-});
-
-test("migrateComputer without a wired runner fails loudly", async () => {
-  const { ctx } = routingCtx({ authorizeCommand: () => true });
-  await assert.rejects(ctx.migrateComputer("modal"), /not available on this deployment/);
 });
 
 test("execute masks credential output before model delivery, screening, and transcript logging", async () => {

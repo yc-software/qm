@@ -498,15 +498,14 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     ),
     "a stray key without a template must not enable the secondary backend",
   );
-  assert.throws(
+  assert.doesNotThrow(
     () =>
       loadConfig({
         SANDBOX_BACKEND: "local",
         SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}',
         SUPERSERVE_API_KEY: "ss_live_k",
       }),
-    /SUPERSERVE_TEMPLATE/,
-    "a scope routed to superserve needs the template even when it is not the primary backend",
+    "upgrade-only provider settings do not require live credentials or templates",
   );
   assert.doesNotThrow(() =>
     loadConfig({
@@ -886,16 +885,6 @@ test("direct Files initiation defaults off and requires explicit activation", ()
   assert.throws(() => loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "maybe" }));
 });
 
-test("sandbox resource rollout requires explicit activation", () => {
-  assert.equal(loadConfig({ ...productionEnv }).sandboxResourcesEnabled, false);
-  for (const value of ["true", "on", "1"])
-    assert.equal(loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: value }).sandboxResourcesEnabled, true);
-  assert.throws(
-    () => loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: "enable" }),
-    /not a recognized boolean/,
-  );
-});
-
 test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.equal(loadConfig({}).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
@@ -903,7 +892,7 @@ test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
 });
 
-test("sandbox scope defaults parse exact scope kinds and reject malformed mappings", () => {
+test("legacy sandbox scope defaults are parsed for upgrade", () => {
   const credentials = {
     SPRITES_TOKEN: "unit-test-sprites",
     MODAL_TOKEN_ID: "unit-test-modal-id",
@@ -911,7 +900,7 @@ test("sandbox scope defaults parse exact scope kinds and reject malformed mappin
   };
   assert.deepEqual(
     loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' })
-      .sandboxScopeDefaults,
+      .legacySandboxScopeDefaults,
     { personal: "modal", channel: "sprites" },
   );
   for (const value of [

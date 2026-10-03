@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp as buildAppRaw } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
@@ -25,6 +25,43 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
+const noDefaultSandbox = new WeakSet<object>();
+function requestScope(req: TurnRequest): string | null {
+  const c = req.conversation;
+  if (c.kind === "dm") return `personal:${req.actor.externalId}`;
+  if ((c.kind === "channel" || c.kind === "group") && c.channelRef) return `${c.kind}:${c.channelRef}`;
+  return null;
+}
+async function selectComputer(built: ReturnType<typeof buildAppRaw>, actorId: string, scope: ScopeId) {
+  const asSpeaker = built.sandboxResources.forTurn({ actorId, scopeId: scope, isCurrent: async () => true });
+  const computer = await asSpeaker.create(actorId, scope, built.sandboxResources.defaultBackend());
+  await asSpeaker.setDefault(actorId, scope, computer.id);
+  return computer;
+}
+function buildApp(...args: Parameters<typeof buildAppRaw>): ReturnType<typeof buildAppRaw> {
+  const built = buildAppRaw(...args);
+  const ready = new Map<string, Promise<void>>();
+  const ensure = (actorId: string, scope: string) => {
+    let p = ready.get(scope);
+    if (!p) {
+      p = (async () => {
+        if (noDefaultSandbox.has(built)) return;
+        if (await built.sandboxResources.resolve(scope as ScopeId)) return;
+        await selectComputer(built, actorId, scope as ScopeId);
+      })();
+      ready.set(scope, p);
+    }
+    return p;
+  };
+  const turn = built.app.turn.bind(built.app);
+  built.app.turn = async (req, ...rest) => {
+    const scope = requestScope(req);
+    if (scope) await ensure(req.actor.externalId, scope);
+    return turn(req, ...rest);
+  };
+  return built;
+}
 
 function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecurityScreener) {
   const config = testConfig({
@@ -1726,7 +1763,9 @@ test("turn-private transfer files are removed after staging", async () => {
 });
 
 test("a later turn removes same-conversation and expired transfer files", async () => {
-  const { app, sandbox } = freshApp();
+  const built = freshApp();
+  const { app, sandbox } = built;
+  await selectComputer(built, "U1", scopeId("personal", "U1"));
   const handle = await sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
   const sessionDir = `${TURN_FILES_DIR}/${hashId(["dm:U1:t1"], 24)}`;
   await sandbox.writeFile(handle, `${sessionDir}/abandoned/inbox/stale.bin`, "stale");
@@ -3832,7 +3871,8 @@ test("environments: an unattached scope provisions through its own scope (today'
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
   });
-  const { app, sandbox } = buildApp(config);
+  const built = buildApp(config);
+  const { app, sandbox } = built;
   const realProvision = sandbox.provision.bind(sandbox);
   let rwScope: string | undefined;
   sandbox.provision = (layers, opts) => {
@@ -3844,6 +3884,7 @@ test("environments: an unattached scope provisions through its own scope (today'
   assert.equal(before.status, "ok");
   assert.equal(rwScope, scopeId("personal", "U1"), "no attachment ⇒ provision through the scope itself");
 
+  await selectComputer(built, "U-shared", scopeId("personal", "U-shared"));
   const env = await app.createEnvironment({ scopeId: scopeId("personal", "U-shared"), name: "prod", actorId: "U1" });
   await app.attachScope({ scopeId: scopeId("personal", "U1"), environmentId: env.id, actorId: "U1" });
 
@@ -4184,7 +4225,9 @@ test("Auto screens oversize external output in chunks, so an injection buried pa
 });
 
 test("activated resource defaults preserve an existing computer and stop eager provisioning after unset", async () => {
-  const built = freshApp({ sandboxResourcesEnabled: true, eagerProvisionEnabled: true });
+  const built = freshApp({ eagerProvisionEnabled: true });
+  noDefaultSandbox.add(built);
+  await selectComputer(built, "U1", scopeId("personal", "U1"));
   await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
   await built.sandboxResources.initialize();
   const boxes = spyProvisioning(built.sandbox);
@@ -4249,6 +4292,7 @@ for (const combined of [true, false]) {
   test(`turn cleanup retains recent and malformed paths and removes stale files (combined=${combined})`, async () => {
     const built = freshApp();
     if (!combined) built.sandbox.removeDirAndList = undefined;
+    await selectComputer(built, "U1", scopeId("personal", "U1"));
     const handle = await built.sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
     const old = `.agent-turn/owner/${(Date.now() - 48 * 3600_000).toString(36)}-nonce/file`;
     const recent = `.agent-turn/owner/${Date.now().toString(36)}-nonce/file`;
