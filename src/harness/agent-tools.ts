@@ -171,6 +171,12 @@ function passedRememberFields(params: { facts?: unknown; content?: unknown; quer
   return fields.length ? fields.join(", ") : "none";
 }
 
+// Every notebook line is re-read into the prompt on every turn, so one call can't paste a
+// document into memory: a fact is a sentence, and a rewrite is a curated notebook.
+const MEMORY_FACT_MAX_CHARS = 2_000;
+const MEMORY_FACTS_PER_CALL = 50;
+const MEMORY_NOTEBOOK_MAX_CHARS = 64_000;
+
 function rememberFacts(params: { facts?: unknown; content?: unknown; query?: unknown }): {
   facts: string[];
   coercedFrom?: "facts" | "content" | "query";
@@ -1382,6 +1388,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ),
               true,
             );
+          const oversized = facts.find((fact) => fact.length > MEMORY_FACT_MAX_CHARS);
+          if (oversized || facts.length > MEMORY_FACTS_PER_CALL)
+            return recordResult(
+              callId,
+              { tool: "memory", action, error: "facts too large" },
+              text(
+                oversized
+                  ? `[error] each fact must be at most ${MEMORY_FACT_MAX_CHARS} characters (one got ${oversized.length}). Memory holds short pointers; put long content in a file and remember where it is.`
+                  : `[error] at most ${MEMORY_FACTS_PER_CALL} facts per call (got ${facts.length}).`,
+              ),
+              true,
+            );
           const added = await tc.memoryRemember(facts);
           if (added === null) return unavailable();
           return recordResult(
@@ -1403,6 +1421,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               true,
             );
           }
+          // Grandfather notebooks already over the cap: a curation rewrite may keep or shrink them, never grow.
+          const ceiling =
+            params.content.length > MEMORY_NOTEBOOK_MAX_CHARS
+              ? Math.max(MEMORY_NOTEBOOK_MAX_CHARS, ((await tc.memoryRead()) ?? "").length)
+              : MEMORY_NOTEBOOK_MAX_CHARS;
+          if (params.content.length > ceiling)
+            return recordResult(
+              callId,
+              { tool: "memory", action, error: "content too large", chars: params.content.length },
+              text(
+                `[error] a notebook can be at most ${ceiling} characters (got ${params.content.length}). Curate it down; keep long data in files.`,
+              ),
+              true,
+            );
           const ok = await tc.memoryRewrite(params.content);
           if (ok === null) return unavailable();
           return recordResult(
