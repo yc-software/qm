@@ -444,12 +444,12 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           claudeChildEnv(authEnv ? { ...opts.env, ...authEnv } : (opts.env ?? {}), jail),
           turn.claudeOauthToken,
         ),
-        tools: allowSubagents ? ["Agent"] : [],
+        tools: [...(allowSubagents ? ["Agent"] : []), "WebSearch"],
         skills: [],
         settingSources: [],
         strictMcpConfig: true,
         mcpServers: { qm: server },
-        allowedTools: [...(allowSubagents ? ["Agent"] : []), ...bridgedNames],
+        allowedTools: [...(allowSubagents ? ["Agent"] : []), "WebSearch", ...bridgedNames],
         ...(allowSubagents ? { agents: childAgents } : {}),
         ...(allowSubagents
           ? {
@@ -556,8 +556,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     let signalsStopped = false;
     const recordedEnvelope = {
       system: turn.systemPrompt,
-      tools: allowSubagents ? ["Agent"] : [],
-      allowedTools: [...(allowSubagents ? ["Agent"] : []), ...bridgedNames],
+      tools: [...(allowSubagents ? ["Agent"] : []), "WebSearch"],
+      allowedTools: [...(allowSubagents ? ["Agent"] : []), "WebSearch", ...bridgedNames],
       childAgents: allowSubagents ? childAgents : {},
       permissionMode: "bypassPermissions",
       cwd: "[ephemeral control jail]",

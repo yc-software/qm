@@ -1440,6 +1440,14 @@ export function applyThinkingBinding<T>(
   return payload;
 }
 
+export function applyNativeWebSearch<T>(payload: T, api?: string): T {
+  if (api !== "openai-responses" && api !== "openai-codex-responses") return payload;
+  if (!payload || typeof payload !== "object") return payload;
+  const body = payload as { tools?: unknown };
+  body.tools = [...(Array.isArray(body.tools) ? body.tools : []), { type: "web_search" }];
+  return payload;
+}
+
 export function applyFastSpeed<T>(payload: T, fast: boolean | undefined, api?: string): T {
   if (fast && payload && typeof payload === "object") {
     if (api && api.toLowerCase().startsWith("openai")) {
@@ -1747,6 +1755,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ref.pendingPrepareNextTurn = undefined;
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
+          applyNativeWebSearch(payload, (model as { api?: string } | undefined)?.api);
           applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
           const result = prior ? await prior(payload, model) : payload;
           const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
