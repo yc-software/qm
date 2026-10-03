@@ -503,9 +503,33 @@ test("a manage grantee may redeploy but cannot make the owner's app public", asy
         files: [],
         public: true,
       }),
-    /only the owner/,
+    /cannot change who can reach it/,
   );
   assert.equal((await deploy.getDeployment(d.id))?.public, undefined);
+});
+
+test("republish, rename and rollback never change visibility; only the separate public toggle does", async () => {
+  const { deploy } = makeDeploy();
+  const owner = { ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [] };
+  const d = await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  assert.equal(d.public, undefined, "first publish is private by default");
+  await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  for (const extra of [
+    { name: "vis", public: true },
+    { name: "vis", public: false },
+    { name: "vis", share: [{ scope: scopeId("personal", "U2"), permission: "read" as const }] },
+    { name: "vis2", renameFrom: "vis", public: true },
+    { name: "vis", rollbackTo: 1, public: true },
+  ])
+    await assert.rejects(() => deploy.deployOrUpdate({ ...owner, ...extra }), /cannot change who can reach it/);
+  const after = await deploy.getDeployment(d.id);
+  assert.equal(after?.public, undefined);
+  assert.equal(after?.name, "vis");
+  assert.equal((await deploy.reachDeployment("vis", "U2")).status, "denied");
+  await deploy.setDeploymentPublic(d.id, true, { createdBy: "U1" });
+  assert.equal((await deploy.getDeployment(d.id))?.public, true);
+  await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  assert.equal((await deploy.getDeployment(d.id))?.public, true, "a plain republish keeps the existing setting");
 });
 
 test("transferDeploymentOwner is home authority — a write ('manage') grantee cannot give the app away", async () => {

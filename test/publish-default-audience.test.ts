@@ -215,20 +215,45 @@ test("D2: private channel grants exclude the owner", async () => {
   assert.equal((await deploy.reachDeployment("priv", "U9")).status, "denied");
 });
 
-test("D3: republish from the originating channel reconciles — joiner added, leaver revoked", async () => {
+test("D3: republish from the originating channel never changes reach — joiners not added, leavers kept", async () => {
   const { deploy, acl } = svc();
   const config = createMemoryConfigStore(ORG);
   await channel(deploy, acl, config, "U1", "C2", {
     isPrivate: true,
     members: [internal("U1"), internal("U2"), internal("U3")],
   }).publish({ entrypoint: "node server.js", name: "priv" });
-  await channel(deploy, acl, config, "U1", "C2", {
-    isPrivate: true,
+  const r = await channel(deploy, acl, config, "U1", "C2", {
+    isPrivate: false,
     members: [internal("U1"), internal("U2"), internal("U4")],
   }).publish({ entrypoint: "node server.js", name: "priv" });
-  assert.equal((await deploy.reachDeployment("priv", "U2")).status, "ok", "U2 stays");
-  assert.equal((await deploy.reachDeployment("priv", "U4")).status, "ok", "U4 added");
-  assert.equal((await deploy.reachDeployment("priv", "U3")).status, "denied", "U3 revoked");
+  assert.equal(r.version, 2);
+  assert.equal((await deploy.reachDeployment("priv", "U3")).status, "ok", "U3 kept");
+  assert.equal((await deploy.reachDeployment("priv", "U4")).status, "denied", "U4 not added");
+  assert.equal((await deploy.reachDeployment("priv", "U-anyone")).status, "denied", "no org widening");
+});
+
+test("republish refuses audience changes, including an empty opt-out; sharing changes reach separately", async () => {
+  const { deploy, acl } = svc();
+  const config = createMemoryConfigStore(ORG);
+  await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+    entrypoint: "node server.js",
+    name: "site",
+    share: [],
+  });
+  for (const share of [[{ scope: orgScope, permission: "read" as const }], []])
+    await assert.rejects(
+      () =>
+        channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+          entrypoint: "node server.js",
+          name: "site",
+          share,
+        }),
+      /cannot change who can reach it/,
+    );
+  assert.equal((await deploy.reachDeployment("site", "U-anyone")).status, "denied");
+  const id = (await deploy.getDeployment("site"))!.id;
+  await deploy.shareDeployment(id, orgScope, "read", { createdBy: "U1" });
+  assert.equal((await deploy.reachDeployment("site", "U-anyone")).status, "ok");
 });
 
 test("D3: a redeploy from a DM/other context never shrinks or shifts the default audience", async () => {
@@ -296,69 +321,6 @@ test("D3: an UNKNOWN privacy signal (e.g. flaky conversations.info) FREEZES — 
   assert.match(r.audience?.note ?? "", /public\/private|leaving reach unchanged/);
 });
 
-test("D3: a complete enumeration finding only the owner revokes prior default members", async () => {
-  const { deploy, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
-  await channel(deploy, acl, config, "U1", "C2", {
-    isPrivate: true,
-    members: [internal("U1"), internal("U2"), internal("U3")],
-  }).publish({ entrypoint: "node server.js", name: "priv" });
-  await channel(deploy, acl, config, "U1", "C2", { isPrivate: true, members: [internal("U1")] }).publish({
-    entrypoint: "node server.js",
-    name: "priv",
-  });
-  assert.equal((await deploy.reachDeployment("priv", "U2")).status, "denied");
-  assert.equal((await deploy.reachDeployment("priv", "U3")).status, "denied");
-});
-
-test("D5: an explicit opt-out (share:[]) issued from a DM still applies — owner directive bypasses source-binding", async () => {
-  const { deploy, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
-  await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  assert.equal((await deploy.reachDeployment("site", "U-anyone")).status, "ok");
-  const dmCtx = ctxFor(deploy, acl, config, { actor: "U1", contextScope: scopeId("personal", "U1"), kind: "dm" });
-  await dmCtx.publish({ entrypoint: "node server.js", name: "site", share: [] });
-  assert.equal(
-    (await deploy.reachDeployment("site", "U-anyone")).status,
-    "denied",
-    "opt-out from a DM dropped the org grant",
-  );
-  assert.equal((await deploy.reachDeployment("site", "U1")).status, "ok");
-});
-
-test("D3/D5: reconcile revoking a departed default member PRESERVES the owner's explicit write co-manager grant", async () => {
-  const { deploy, deployStore, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
-  await channel(deploy, acl, config, "U1", "C2", {
-    isPrivate: true,
-    members: [internal("U1"), internal("U2"), internal("U3")],
-  }).publish({
-    entrypoint: "node server.js",
-    name: "priv",
-    share: [{ scope: scopeId("personal", "U2"), permission: "write" }],
-  });
-  await channel(deploy, acl, config, "U1", "C2", {
-    isPrivate: true,
-    members: [internal("U1"), internal("U3")],
-  }).publish({ entrypoint: "node server.js", name: "priv" });
-  const id = (await deployStore.getByName("priv"))!.id;
-  const grants = await acl.grantsFor(scopeId("personal", "U1"), `deployment:${id}`);
-  const u2 = grants.filter((g) => g.granteeScopeId === scopeId("personal", "U2"));
-  assert.ok(
-    u2.some((g) => g.permission === "write"),
-    "explicit write co-manager grant survives reconcile",
-  );
-  assert.ok(!u2.some((g) => g.permission === "read"), "the departed member's default read grant is revoked");
-  assert.equal(
-    (await deploy.reachDeployment("priv", "U2")).status,
-    "ok",
-    "U2 still reaches via the surviving write grant",
-  );
-});
-
 test("D4: a first publish whose member enumeration is incomplete reports a user-visible 'share manually' note", async () => {
   const { deploy, acl } = svc();
   const config = createMemoryConfigStore(ORG);
@@ -395,22 +357,6 @@ test("D3: a redeploy from a DIFFERENT channel never shifts reach to the wrong ch
     [scopeId("personal", "U2"), scopeId("personal", "U3")].sort(),
     "default set unchanged (not shifted to C3)",
   );
-});
-
-test("D3: public → private transition drops the org grant on the next ship", async () => {
-  const { deploy, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
-  await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  assert.equal((await deploy.reachDeployment("site", "U-anyone")).status, "ok");
-  await channel(deploy, acl, config, "U1", "C1", {
-    isPrivate: true,
-    members: [internal("U1"), internal("U2")],
-  }).publish({ entrypoint: "node server.js", name: "site" });
-  assert.equal((await deploy.reachDeployment("site", "U-anyone")).status, "denied", "org grant dropped");
-  assert.equal((await deploy.reachDeployment("site", "U1")).status, "ok", "owner still reaches");
 });
 
 test("D5: an explicit share layers on top of the public default (org + the named person)", async () => {
@@ -457,7 +403,7 @@ test("D5: only the OWNER may widen — even a write-grant manager cannot re-shar
         name: "site",
         share: [{ scope: scopeId("personal", "U7"), permission: "read" }],
       }),
-    /only a manager/,
+    /cannot change who can reach it/,
   );
 });
 

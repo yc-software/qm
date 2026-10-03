@@ -1145,9 +1145,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
-      "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
-      "publication-time grants. `public: true` makes the app reachable without sign-in; it is never the default and is refused unless an org admin has enabled external app sharing. " +
-      "Use apps action share for subsequent grants. Share the full absolute URL " +
+      "deployment name, not its ID. On a first publish, set audience to [] to suppress default audience grants, or supply " +
+      "publication-time grants; `public: true` makes the app reachable without sign-in, is never the default, and is refused unless an org admin has enabled external app sharing. " +
+      "Republishing, renaming or rolling back an existing app ships code only and never changes who can reach it: `audience` and `public` are refused there. " +
+      "Change an existing app's visibility only with apps action share. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
       "Egress is open, " +
@@ -1170,7 +1171,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }),
           {
             description:
-              "Publication-time access grants. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Existing explicit grants survive. Use apps action share for subsequent grants.",
+              "First-publish access grants only. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Refused when republishing an existing app; use apps action share instead.",
           },
         ),
       ),
@@ -1206,7 +1207,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       public: Type.Optional(
         Type.Boolean({
           description:
-            "Explicitly set whether anyone with the link can open the app without signing in. Defaults to private for new apps; omit to preserve the current setting on updates.",
+            "First publish only: set whether anyone with the link can open the app without signing in. New apps are private by default. Refused when republishing; change an existing app with apps action share.",
         }),
       ),
       alwaysOn: Type.Optional(
