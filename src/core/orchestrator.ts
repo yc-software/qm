@@ -1,3 +1,4 @@
+import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { memoryBoundedEntries, memoryContextPayload, nextMemoryContext } from "../memory/context-boundary.ts";
@@ -575,6 +576,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input = { ...input, model: undefined, harness: undefined, thinkingLevel: undefined, fastMode: undefined };
       const swarmEntryProvenance = input.swarm ? { origin: "automation", swarm: input.swarm } : {};
       await deps.refreshModels?.();
+      input = await scopeTeamsToTurn(input, deps, external);
       const { actor, conversation } = input;
       const automatedTurn = input.origin.kind === "automation";
       const ambientTurn = input.origin.kind === "ambient";

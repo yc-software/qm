@@ -1,3 +1,4 @@
+import type { TeamRecord } from "../../teams/teams.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
@@ -370,6 +371,29 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         principalId: actor.id,
         action: "feature-flag.update",
         resource: `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
+        scopeLabel: scope,
+      });
+      return { ok: true };
+    },
+  },
+  {
+    id: "teams",
+    kind: "custom",
+    target: "org",
+    readKey: "teams",
+    label:
+      "Teams. Each team is a team:<id> scope shared by its members. rooms lists extra scopes where it is always available; isolatedInOpen keeps it isolated even when the org posture is Open.",
+    get: (deps) => deps.teams?.list(),
+    apply: async (ctx, actor, scope) => {
+      if (!ctx.deps.teams) return { error: "not available on this deployment", status: 404 };
+      const parsed = parseTeam(ctx.body, actor.id);
+      if ("error" in parsed) return parsed;
+      if (parsed.remove) await ctx.deps.teams.remove(parsed.id);
+      else await ctx.deps.teams.put(parsed.team);
+      audit(ctx.deps, {
+        principalId: actor.id,
+        action: parsed.remove ? "team.remove" : "team.update",
+        resource: `team:${parsed.id}`,
         scopeLabel: scope,
       });
       return { ok: true };
@@ -1269,4 +1293,44 @@ export function adminResourceManifest(): AdminResourceManifestEntry[] {
     ...(r.label ? { label: r.label } : {}),
     ...(r.enumValues ? { enumValues: r.enumValues } : {}),
   }));
+}
+
+const TEAM_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const TEAM_MAX = 500;
+
+function parseTeam(
+  body: unknown,
+  actorId: string,
+): { error: string } | { id: string; remove: true } | { id: string; remove: false; team: TeamRecord } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (typeof b.id !== "string" || !TEAM_ID.test(b.id))
+    return { error: "teams requires id: lowercase letters, digits, -" };
+  if (b.remove === true) return { id: b.id, remove: true };
+  const people = (v: unknown) => (Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim()) ? v : null);
+  const members = people(b.members ?? []);
+  const admins = people(b.admins ?? []);
+  if (!members || !admins || members.length + admins.length > TEAM_MAX)
+    return { error: `members and admins must be arrays of at most ${TEAM_MAX} person ids` };
+  const rooms = Array.isArray(b.rooms) ? b.rooms : [];
+  const room = (r: unknown) => {
+    if (typeof r !== "string") return false;
+    const { kind, ref } = parseScopeId(r as ScopeId);
+    return (kind === "channel" || kind === "group") && !!ref;
+  };
+  if (rooms.length > TEAM_MAX || !rooms.every(room))
+    return { error: "rooms must be channel:<id> or group:<id> scopes" };
+  return {
+    id: b.id,
+    remove: false,
+    team: {
+      id: b.id,
+      name: typeof b.name === "string" && b.name.trim() ? b.name.trim() : b.id,
+      members: [...new Set(members as string[])],
+      admins: [...new Set(admins as string[])],
+      rooms: [...new Set(rooms as ScopeId[])],
+      isolatedInOpen: b.isolatedInOpen === true,
+      updatedAt: Date.now(),
+      updatedBy: actorId,
+    },
+  };
 }

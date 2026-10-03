@@ -32,6 +32,7 @@ import type { WebhookStore } from "../../webhooks/webhook-store.ts";
 import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../../credentials/keychain.ts";
 import type { DeviceFlowCutoverStore } from "../../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../../feature-flags.ts";
+import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
 import type { LivenessCache } from "../../credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../../credentials/connector-status.ts";
@@ -192,6 +193,7 @@ export interface OrchestratorDeps {
   scratchExec?: boolean;
   deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
+  teams?: TeamStore;
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;

@@ -50,7 +50,7 @@ export function createResolutionService(
         ...(!external ? [{ scopeId: orgScope, mountPath: "global", mode: "ro" as const }] : []),
         { scopeId: scope, mountPath: "", mode: "rw" },
       ];
-      if (!external && isDm && actor.teamIds) {
+      if (!external && (isDm || conversation.teamScoped) && actor.teamIds) {
         for (const tid of actor.teamIds) {
           layers.push({ scopeId: scopeId("team", tid), mountPath: `team-${tid}`, mode: "ro" });
         }
