@@ -14,6 +14,7 @@ const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
 let capturedOptions: Record<string, unknown> = {};
 
 let currentScript: Script = async function* () {};
+let interruptHook: (() => Promise<void>) | undefined;
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
@@ -31,6 +32,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
           return {};
         },
         async interrupt() {
+          if (interruptHook) return interruptHook();
           await generator.return?.(undefined as never);
         },
         close() {
@@ -152,6 +154,29 @@ test("a steered turn persists every reply, not only the last result's", async ()
     .filter((entry) => entry.type === "user")
     .map((entry) => (entry.payload as { text: string }).text);
   assert.deepEqual(userTexts, ["what is the capital of france?", "now do the other three"]);
+});
+
+test("a stop aborts the provider even when the SDK never acknowledges the interrupt", async (t) => {
+  interruptHook = () => new Promise<void>(() => {});
+  t.after(() => {
+    interruptHook = undefined;
+  });
+  const cancel = new AbortController();
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    const signal = (capturedOptions.abortController as AbortController).signal;
+    cancel.abort();
+    await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    yield resultMessage("", { subtype: "error_during_execution", errors: ["aborted"], is_error: true });
+  };
+  const harness = createClaudeHarness({ interruptAckMs: 20 });
+  const { turn } = harnessTurn({ cancel: cancel.signal });
+  const result = await Promise.race([
+    harness.turns.runTurn(turn),
+    new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 2_000).unref()),
+  ]);
+  assert.notEqual(result, "hung");
+  assert.equal((result as { stopped?: boolean }).stopped, true);
 });
 
 for (const shutdown of [false, true]) {
