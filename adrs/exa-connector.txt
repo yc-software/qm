@@ -1,0 +1,25 @@
+exa connector
+
+It would be really useful if QM had first-class Exa support for agents —
+web / neural search as an Admin-configured connector (or MCP-shaped tool
+surface), so orgs don't have to hand-roll sandbox CLIs and API keys.
+
+What we'd want, roughly:
+- Admin can register an Exa API key (org-shared) or per-user key from Keychain
+  if that fits the model
+- agent can run common Exa reads first: search, contents / highlights, find
+  similar
+- clear rate-limit / cost controls so company rollouts don't blow the budget
+- works from agent turns without requiring a custom sandbox image just for Exa
+
+Why this belongs in QM: research agents lean hard on high-quality web search.
+Today this can be approximated with an Exa CLI or HTTP calls from the sandbox
+plus a skill, but a supported connector would match how other SaaS tools show
+up under Admin → Connectors and be much cleaner for rollouts.
+
+Happy for you to shape this as:
+- a first-class HTTP/API connector with built-in Exa tools, or
+- a first-class MCP connector recipe for Exa, or
+- both
+
+Not a security report — just a product ask.
