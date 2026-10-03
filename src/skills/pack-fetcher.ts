@@ -245,6 +245,18 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
     });
   }
 
+  async function checkoutTarget(repoDir: string, ref: string): Promise<string> {
+    if (!ref) return "HEAD";
+    if (SHA_RE.test(ref)) return ref;
+    const remote = `refs/remotes/origin/${ref}`;
+    try {
+      await git(["rev-parse", "--verify", "--quiet", `${remote}^{commit}`], repoDir, undefined);
+      return remote;
+    } catch {
+      return ref;
+    }
+  }
+
   return {
     async fetch(pack) {
       const ref = (pack.ref ?? "").trim();
@@ -256,7 +268,7 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
       const repoDir = join(work, "repo");
       try {
         await git(["clone", "--no-checkout", "--quiet", repo.url, "repo"], work, auth, repo.gitConfig);
-        await git(["checkout", "--detach", "--quiet", ref || "HEAD"], repoDir, undefined);
+        await git(["checkout", "--detach", "--quiet", await checkoutTarget(repoDir, ref)], repoDir, undefined);
         const commit = (await git(["rev-parse", "HEAD"], repoDir, undefined)).trim();
         const files = await readTree(repoDir);
         return { commit, files };
