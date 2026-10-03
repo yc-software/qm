@@ -675,7 +675,8 @@ test("restart between enqueue and outbox acknowledgement does not redeliver", as
   await Promise.all([service.sweep(), restarted.sweep()]);
   assert.equal((await runs.list()).length, before.length);
   assert.deepEqual((await runs.list()).map((run) => run.id).sort(), before.map((run) => run.id).sort());
-  assert.equal((await store.pending()).length, 0);
+  const settled = (await store.get(root.id))!;
+  assert.ok(settled.messages.every((m) => Object.values(m.notifications).every((n) => n.state !== "pending")));
 });
 
 test("sandbox reservation survives a crash after provisioning without creating another disk", async () => {
@@ -986,4 +987,43 @@ test("an old session credential cannot attach to a replacement session on the sa
   await fixture.sessions.addParticipant(replacement.id, "alice");
   await assert.rejects(fixture.service.spawn(fixture.caller, { requestId: "replacement", text: "Work" }), /mismatch/);
   assert.equal(await fixture.store.get(replacement.id), null);
+});
+
+test("a stopped worker's private computer is retired once its run has ended", async () => {
+  const { service, caller, runs, records, store, root } = await swarmFixture();
+  const [worker] = await service.spawn(caller, { requestId: "one", text: "Work" });
+  await service.sweep();
+  await service.sweep();
+  assert.equal((await records.get(worker!.id))!.state, "ready");
+  await service.control(caller, { memberId: worker!.id, state: "stopped" });
+  const notification = (await store.get(root.id))!.messages[0]!.notifications[worker!.id]!;
+  if (notification.runId) {
+    const claimed = await runs.claimById(notification.runId, "w", 60_000);
+    if (claimed) await runs.complete(claimed.id, claimed.leaseToken!, { status: "ok", reply: "stopped" });
+  }
+  await service.sweep();
+  assert.equal((await records.get(worker!.id))!.state, "retired");
+  assert.equal((await store.get(root.id))!.members.find((m) => m.id === worker!.id)!.released, true);
+});
+
+test("ready workers' computers are retired after the swarm's work window ends", async (context) => {
+  const { service, caller, runs, records, store, root } = await swarmFixture();
+  const [worker] = await service.spawn(caller, { requestId: "one", text: "Work" });
+  await service.sweep();
+  await service.sweep();
+  assert.equal((await records.get(worker!.id))!.state, "ready");
+  for (const run of (await runs.list()).filter((r) => r.request.swarm)) {
+    const claimed = await runs.claimById(run.id, "w", 60_000);
+    if (claimed) await runs.complete(claimed.id, claimed.leaseToken!, { status: "ok", reply: "done" });
+  }
+  await service.sweep();
+  assert.equal((await records.get(worker!.id))!.state, "ready", "a live swarm keeps its workers");
+  const expiresAt = (await store.get(root.id))!.expiresAt;
+  context.mock.timers.enable({ apis: ["Date"], now: expiresAt + 1 });
+  try {
+    await service.sweep();
+  } finally {
+    context.mock.timers.reset();
+  }
+  assert.equal((await records.get(worker!.id))!.state, "retired");
 });
