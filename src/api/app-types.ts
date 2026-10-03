@@ -131,6 +131,7 @@ export interface DeploymentView {
   currentVersion: number;
   appliedVersion?: number;
   status: Deployment["status"];
+  crash?: { exitCode?: number; oomKilled?: boolean; at: number };
   alwaysOn?: boolean;
   embedAncestors?: string[];
   public: boolean;
@@ -161,6 +162,15 @@ export function deploymentView(d: Deployment): DeploymentView {
     currentVersion: d.currentVersion,
     ...(d.appliedVersion !== undefined ? { appliedVersion: d.appliedVersion } : {}),
     status: d.status,
+    ...(d.status === "crashed" && d.crash
+      ? {
+          crash: {
+            ...(typeof d.crash.exitCode === "number" ? { exitCode: d.crash.exitCode } : {}),
+            ...(d.crash.oomKilled ? { oomKilled: true } : {}),
+            at: d.crash.at,
+          },
+        }
+      : {}),
     ...(d.alwaysOn ? { alwaysOn: true } : {}),
     ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
     public: d.public === true,

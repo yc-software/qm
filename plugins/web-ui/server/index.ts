@@ -2330,6 +2330,26 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async ({ res, params }) => relayCap(res, "GET", `/v1/deployments/${encodeURIComponent(params.id!)}/share`),
   },
   {
+    method: "GET",
+    path: "/api/deployments/:id/logs",
+    handle: async ({ res, params }) => {
+      const r = await coreFetchCap("GET", `/v1/deployments/${encodeURIComponent(params.id!)}/logs`);
+      if (r.status !== 200) return relay(res, r);
+      let parsed: { logs?: string | null; message?: string };
+      try {
+        parsed = JSON.parse(r.text) as typeof parsed;
+      } catch {
+        return json(res, 502, { error: "bad_core_response" });
+      }
+      res.writeHead(200, {
+        "content-type": "text/plain; charset=utf-8",
+        "x-content-type-options": "nosniff",
+        "cache-control": "no-store",
+      });
+      res.end(parsed.logs ?? parsed.message ?? "");
+    },
+  },
+  {
     method: "POST",
     path: "/api/deployments/:id/share",
     handle: async ({ req, res, params }) => {

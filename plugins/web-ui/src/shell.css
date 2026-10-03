@@ -7357,6 +7357,12 @@ a.connector-widget:focus-visible {
 .deploy-status.archived > span {
   background: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
 }
+.deploy-status.crashed > span {
+  background: var(--destructive, #c0392b);
+}
+.deploy-crash {
+  color: var(--destructive, #c0392b);
+}
 .deploy-permission {
   display: inline-flex;
   align-items: center;

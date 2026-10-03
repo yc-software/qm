@@ -121,7 +121,7 @@ export function createDeploymentMethods(
       const enriched = await Promise.all(
         deployments.map(async (d): Promise<ViewerDeployment | null> => {
           const permission = await principalGitPermission(d, principalId);
-          return permission ? { ...deploymentView(d), permission } : null;
+          return permission ? { ...deploymentView(await deps.deploy.refreshRunState(d)), permission } : null;
         }),
       );
       return enriched.filter((d): d is ViewerDeployment => d != null);
