@@ -850,11 +850,12 @@ export async function renderDeploys(): Promise<void> {
     deployScope = null;
   }
   const seq = appState.viewRenderSeq;
-  await ensureContexts();
   deployLoading = deployList.length === 0;
   deployNotices = withDeploymentListNotice(deployNotices, "");
+  const refresh = refreshDeployments();
+  await ensureContexts();
   drawDeploysPage();
-  await refreshDeployments();
+  await refresh;
   if (seq !== appState.viewRenderSeq || appState.currentView !== "deploys") return;
   if (requestedId) {
     await openDeploy(deployList.find((d) => d.id === requestedId) ?? { id: requestedId });
