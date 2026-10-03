@@ -100,10 +100,7 @@ export function createTurnMethods(
   return {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const startedAt = performance.now();
-      const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
-        ? (await deps.sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
-        : false;
-      if (!externalSlackRequestAllowed(req, deps.externalSlackPolicies, historicalSlack))
+      if (!externalSlackRequestAllowed(req, deps.externalSlackPolicies))
         return {
           status: "refused",
           reason: "External Slack requests require their current authenticated source context.",
