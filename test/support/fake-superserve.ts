@@ -35,6 +35,7 @@ export interface FakeSuperserve {
   createdCount(name: string): number;
   homeDir(name: string): string;
   pause(name: string): void;
+  fail(name: string): void;
   expire(name: string): void;
   execScripts(): string[];
   calls(): string[];
@@ -64,6 +65,13 @@ export function installFakeSuperserve(): FakeSuperserve {
   const byName = (name: string): FakeRecord | undefined => {
     const all = [...records.values()].filter((r) => r.name === name).sort((a, b) => b.createdAt - a.createdAt);
     return all.find((r) => !r.expired) ?? all[0];
+  };
+
+  const reap = (r: FakeRecord): void => {
+    calls.push(`kill:${r.id}`);
+    r.expired = true;
+    r.status = "deleted";
+    rmSync(r.home, { recursive: true, force: true });
   };
 
   const gone = (r: FakeRecord): never => {
@@ -152,12 +160,21 @@ export function installFakeSuperserve(): FakeSuperserve {
     },
   });
 
+  const readBack = (rules: string[] | undefined): string[] | undefined =>
+    rules?.map((rule) => (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(rule) ? `${rule}/32` : rule));
   const info = (r: FakeRecord): SuperserveSandboxInfo => ({
     id: r.id,
     name: r.name,
     status: r.status,
     metadata: r.metadata,
-    ...(r.network ? { network: r.network } : {}),
+    ...(r.network
+      ? {
+          network: {
+            ...(r.network.allowOut ? { allowOut: readBack(r.network.allowOut) } : {}),
+            ...(r.network.denyOut ? { denyOut: readBack(r.network.denyOut) } : {}),
+          },
+        }
+      : {}),
     vcpuCount: 2,
     memoryMib: 2048,
     ...(r.timeoutSeconds !== undefined ? { timeoutSeconds: r.timeoutSeconds } : {}),
@@ -203,6 +220,7 @@ export function installFakeSuperserve(): FakeSuperserve {
       if (hook) await hook();
       const r = records.get(sandboxId);
       const matches = Object.entries(scopeMetadata ?? {}).every(([k, v]) => r?.metadata[k] === v);
+      if (r && r.status === "failed") reap(r);
       if (!r || r.expired || !matches) throw new SuperserveSandboxGoneError(sandboxId, "sandbox was not found");
       return info(r);
     },
@@ -212,9 +230,11 @@ export function installFakeSuperserve(): FakeSuperserve {
         listFailure = null;
         throw error;
       }
-      return [...records.values()]
-        .filter((r) => !r.expired && Object.entries(metadata).every(([k, v]) => r.metadata[k] === v))
-        .map(info);
+      const matching = [...records.values()].filter(
+        (r) => !r.expired && Object.entries(metadata).every(([k, v]) => r.metadata[k] === v),
+      );
+      for (const r of matching.filter((r) => r.status === "failed")) reap(r);
+      return matching.filter((r) => !r.expired).map(info);
     },
     async kill(sandboxId): Promise<void> {
       calls.push(`kill:${sandboxId}`);
@@ -241,6 +261,10 @@ export function installFakeSuperserve(): FakeSuperserve {
     pause: (name) => {
       const r = byName(name);
       if (r) r.status = "paused";
+    },
+    fail: (name) => {
+      const r = byName(name);
+      if (r) r.status = "failed";
     },
     expire: (name) => {
       const r = byName(name);
