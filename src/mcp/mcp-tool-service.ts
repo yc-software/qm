@@ -9,12 +9,31 @@
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage } from "../util/errors.ts";
+import type { PublicOAuthClient } from "../connectors/oauth.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpFetch } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const MAX_TOOLS_PER_SERVER = 64;
 const MAX_RESULT_CHARS = 60_000;
+const SIGN_IN = "";
+
+export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[] {
+  return servers.flatMap((s) =>
+    s.enabled && s.auth === "oauth-user" && s.clientId && s.oauthAuthorizeUrl && s.oauthTokenUrl && s.credentialHost
+      ? [
+          {
+            name: s.id,
+            host: s.credentialHost,
+            authUrl: s.oauthAuthorizeUrl,
+            tokenUrl: s.oauthTokenUrl,
+            scopes: s.oauthScopes ?? [],
+            clientId: s.clientId,
+          },
+        ]
+      : [],
+  );
+}
 
 export interface McpToolDescriptor {
   /** Namespaced tool name exposed to the model, e.g. "salesforce_query". */
@@ -38,6 +57,8 @@ export interface McpToolService {
   close(): void;
 }
 
+class SignInRequired extends Error {}
+
 function authOf(server: McpServer): McpAuth {
   if (server.auth === "bearer") return { mode: "bearer", token: server.bearerToken ?? "" };
   if (server.auth === "client-credentials")
@@ -52,10 +73,20 @@ export function createMcpToolService(opts: {
   fetchImpl?: McpFetch;
   now?: () => number;
   refreshIntervalMs?: number;
+  /** Where a person signs in to a per-user OAuth server, e.g. the portal self-connect page. */
+  signInUrl?: (serverId: string) => string;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
+  const learned = new Map<string, Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>>();
+
+  function signInMessage(server: McpServer): string {
+    const url = opts.signInUrl?.(server.id);
+    return url
+      ? `Sign in to ${server.name} first: [Connect ${server.name}](${url}). Then try again.`
+      : `Sign in to ${server.name} from the Connectors page first, then try again.`;
+  }
   let closed = false;
 
   function record(action: string, resource: string, status: string, principalId?: string): void {
@@ -93,7 +124,10 @@ export function createMcpToolService(opts: {
       principalId,
       server.credentialAccountType,
     );
-    if (!token) throw new Error(`Connect your account for MCP server ${server.id} before using this tool`);
+    if (!token) {
+      if (server.auth === "oauth-user") throw new SignInRequired(signInMessage(server));
+      throw new Error(`Connect your account for MCP server ${server.id} before using this tool`);
+    }
     return createMcpClient({
       url: server.url,
       auth: { mode: "bearer", token },
@@ -107,7 +141,21 @@ export function createMcpToolService(opts: {
     const next: McpToolDescriptor[] = [];
     for (const server of servers) {
       try {
-        const tools = (await clientFor(server).listTools()).slice(0, MAX_TOOLS_PER_SERVER);
+        let tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+        if (server.auth === "oauth-user") {
+          tools = learned.get(server.id) ?? [];
+          if (!tools.length) {
+            next.push({
+              name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+              serverId: server.id,
+              remoteName: SIGN_IN,
+              description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
+              inputSchema: { type: "object", properties: {} },
+              readOnly: true,
+            });
+            continue;
+          }
+        } else tools = (await clientFor(server).listTools()).slice(0, MAX_TOOLS_PER_SERVER);
         for (const tool of tools) {
           next.push({
             name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
@@ -145,11 +193,23 @@ export function createMcpToolService(opts: {
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
-        const result = await (await callerClient(server, principalId)).callTool(def.remoteName, args);
+        const client = await callerClient(server, principalId);
+        if (def.remoteName === SIGN_IN) {
+          const tools = (await client.listTools()).slice(0, MAX_TOOLS_PER_SERVER);
+          learned.set(server.id, tools);
+          await refresh();
+          record("call", `${def.serverId}/sign_in`, `ok tools=${tools.length}`, principalId);
+          return `Signed in to ${server.name}. Tools now available: ${tools.map((t) => `${server.id}_${t.name}`).join(", ")}`;
+        }
+        const result = await client.callTool(def.remoteName, args);
         record("call", `${def.serverId}/${def.remoteName}`, "ok", principalId);
         const text = mcpResultText(result) || JSON.stringify(result.structuredContent ?? "") || "";
         return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}\n[truncated]` : text;
       } catch (e) {
+        if (e instanceof SignInRequired) {
+          record("call", `${def.serverId}/${def.remoteName || "sign_in"}`, "sign-in required", principalId);
+          return e.message;
+        }
         record("call", `${def.serverId}/${def.remoteName}`, `error: ${errMessage(e)}`, principalId);
         throw e;
       }

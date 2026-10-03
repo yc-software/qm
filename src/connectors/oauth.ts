@@ -109,7 +109,7 @@ function makeTokenAdapters(opts: {
     ...(basic ? { authorization: `Basic ${Buffer.from(`${client.id}:${client.secret}`).toString("base64")}` } : {}),
   });
   const clientBody = (client: ResolvedClient): Record<string, string> =>
-    basic ? { client_id: client.id } : { client_id: client.id, client_secret: client.secret };
+    basic || !client.secret ? { client_id: client.id } : { client_id: client.id, client_secret: client.secret };
   const checkErrorBody = (raw: Record<string, unknown>): void => {
     if (opts.rejectErrorBody && raw.error)
       throw new Error(`${prefix}oauth error: ${String(raw.error_description ?? raw.error)}`);
@@ -442,6 +442,48 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
     },
   },
 };
+
+export interface PublicOAuthClient {
+  name: string;
+  host: string;
+  authUrl: string;
+  tokenUrl: string;
+  scopes: string[];
+  clientId: string;
+}
+
+const publicClients = new Map<string, PublicOAuthClient>();
+
+// Registers admin-configured public OAuth clients (PKCE, no secret) alongside
+// the built-in providers, so the same start/callback/refresh paths serve them.
+export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
+  for (const name of publicClients.keys()) delete PROVIDERS[name];
+  publicClients.clear();
+  for (const c of clients) {
+    if (PROVIDERS[c.name]) continue;
+    publicClients.set(c.name, c);
+    PROVIDERS[c.name] = {
+      hosts: [c.host],
+      authUrl: c.authUrl,
+      tokenUrl: c.tokenUrl,
+      scopes: c.scopes,
+      clientIdEnv: "",
+      clientSecretEnv: "",
+      redirectPath: `${c.name}/callback`,
+      consentMode: "standard",
+      egressRule: [],
+      pkce: true,
+      setupGuide: { console: "Admin → MCP servers", url: "", steps: [] },
+    };
+  }
+}
+
+export function withPublicOAuthClients(resolve: OAuthClientResolver): OAuthClientResolver {
+  return async (provider, ctx) => {
+    const c = publicClients.get(provider);
+    return c ? { id: c.clientId, secret: "", clientRef: `public:${provider}` } : resolve(provider, ctx);
+  };
+}
 
 export interface ResolvedClient {
   id: string;

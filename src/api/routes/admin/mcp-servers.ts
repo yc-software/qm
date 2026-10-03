@@ -5,11 +5,46 @@
 // model-provider credential, not like a personal connector.
 
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
+import { PROVIDERS } from "../../../connectors/oauth.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
-const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials"];
+const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
+
+function httpsUrl(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  try {
+    const u = new URL(v.trim());
+    return u.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)
+      ? u.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseScopes(v: unknown): string[] | undefined {
+  const raw: unknown[] | undefined = typeof v === "string" ? v.split(/\s+/) : undefined;
+  return (raw ?? (Array.isArray(v) ? (v as unknown[]) : undefined))
+    ?.filter((x): x is string => typeof x === "string" && !!x.trim())
+    .map((x) => x.trim());
+}
+
+async function discoverOAuth(issuer: string): Promise<{ authorize?: string; token?: string }> {
+  const base = issuer.replace(/\/+$/, "");
+  for (const path of ["/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"]) {
+    try {
+      const r = await fetch(`${base}${path}`, { redirect: "error" });
+      if (!r.ok) continue;
+      const meta = (await r.json()) as { authorization_endpoint?: unknown; token_endpoint?: unknown };
+      return { authorize: httpsUrl(meta.authorization_endpoint), token: httpsUrl(meta.token_endpoint) };
+    } catch {
+      continue;
+    }
+  }
+  return {};
+}
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -79,11 +114,35 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
   const existing = await ctx.deps.mcpServers.get(id);
-  const credentialScope = b.credentialScope ?? existing?.credentialScope ?? "shared";
+  const oauthUser = auth === "oauth-user";
+  if (oauthUser && PROVIDERS[id] && existing?.auth !== "oauth-user") {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
+  }
+  const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
   if (credentialScope !== "shared" && credentialScope !== "per-user") {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "credentialScope must be shared or per-user" });
   }
-  const credentialHost = b.credentialHost ?? existing?.credentialHost;
+  const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
+  if (
+    oauthUser &&
+    typeof credentialHost === "string" &&
+    Object.entries(PROVIDERS).some(
+      ([name, p]) => name !== id && p.hosts.some((h) => credentialHost === h || credentialHost.endsWith(`.${h}`)),
+    )
+  ) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "credentialHost is already used by another connector",
+    });
+  }
+  let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
+  let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);
+  const issuer = httpsUrl((b as { oauthIssuer?: unknown }).oauthIssuer);
+  if (oauthUser && issuer && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
+    const found = await discoverOAuth(issuer);
+    oauthAuthorizeUrl ??= found.authorize;
+    oauthTokenUrl ??= found.token;
+  }
   const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
   if (!["default", "personal", "company"].includes(credentialAccountType)) {
     return sendJson(ctx.res, 400, {
@@ -121,6 +180,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(auth === "bearer"
       ? { bearerToken: typeof b.bearerToken === "string" && b.bearerToken ? b.bearerToken : existing?.bearerToken }
       : {}),
+    ...(oauthUser
+      ? {
+          clientId: typeof b.clientId === "string" && b.clientId ? b.clientId.trim() : existing?.clientId,
+          oauthAuthorizeUrl,
+          oauthTokenUrl,
+          oauthScopes: parseScopes(b.oauthScopes) ?? existing?.oauthScopes ?? [],
+        }
+      : {}),
     ...(auth === "client-credentials"
       ? {
           clientId: typeof b.clientId === "string" && b.clientId ? b.clientId : existing?.clientId,
@@ -141,8 +208,15 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "client-credentials auth requires clientId and clientSecret",
     });
   }
+  if (oauthUser && (!server.clientId || !server.oauthAuthorizeUrl || !server.oauthTokenUrl)) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message:
+        "oauth-user auth requires clientId plus HTTPS oauthAuthorizeUrl and oauthTokenUrl (or an oauthIssuer to discover them)",
+    });
+  }
   let toolNames: string[] | undefined;
-  if (b.validate !== false && ctx.deps.mcpToolService) {
+  if (b.validate !== false && !oauthUser && ctx.deps.mcpToolService) {
     try {
       toolNames = await ctx.deps.mcpToolService.probe(server);
     } catch (e) {
