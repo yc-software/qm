@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
@@ -88,6 +89,29 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
+function replyMessageId(item: LoopItem, draft: ReplyDraft, to: readonly string[]): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([item.id, to, draft.cc ?? null, draft.subject ?? null, draft.body]))
+    .digest("hex")
+    .slice(0, 32);
+  return `<qm-loop-${digest}@qm.invalid>`;
+}
+
+async function alreadySent(fetchImpl: typeof fetch, token: string, messageId: string): Promise<boolean> {
+  try {
+    const query = new URLSearchParams({ q: `in:sent rfc822msgid:${messageId}`, maxResults: "1" });
+    const res = await fetchImpl(`https://${GMAIL_HOST}/gmail/v1/users/me/messages?${query}`, {
+      signal: AbortSignal.timeout(10000),
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { messages?: unknown[] };
+    return (body.messages?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): string | null {
   const meta = metaOf(item);
   if (!meta) return null;
@@ -103,6 +127,7 @@ export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): string |
     ...(cc.length ? [`Cc: ${cc.join(", ")}`] : []),
     `Subject: ${headerValue(replySubject(item, draft))}`,
     ...(rfcId ? [`In-Reply-To: ${rfcId}`, `References: ${rfcId}`] : []),
+    `Message-ID: ${replyMessageId(item, draft, to)}`,
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: base64",
@@ -124,6 +149,8 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
   const mime = buildGmailReplyMime(item, draft);
   if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
   const threadId = metaOf(item)?.threadId;
+  const messageId = /^Message-ID: (.+)$/m.exec(mime)?.[1];
+  if (messageId && (await alreadySent(fetchImpl, token, messageId))) return { ok: true, result: draft.body };
   const res = await fetchImpl(`https://${GMAIL_HOST}/gmail/v1/users/me/messages/send`, {
     method: "POST",
     signal: AbortSignal.timeout(30000),
