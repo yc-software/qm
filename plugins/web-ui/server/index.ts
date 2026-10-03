@@ -3404,6 +3404,13 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
       else res.end();
       return;
     }
+    // decodeURIComponent on a malformed percent-escape (e.g. `/%E0%A4%A`) in a path or path param is
+    // the client's mistake: answer 400 instead of letting it surface as a 502 and an error report.
+    if (err instanceof URIError) {
+      if (!res.headersSent) json(res, 400, { error: "bad_request", message: "malformed URL escape" });
+      else res.end();
+      return;
+    }
     throw err;
   }
 };
