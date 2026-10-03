@@ -9,11 +9,10 @@ import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { ensureInboxLoop, INBOX_SYNC_TASK_VERSION, renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
+import { INBOX_SYNC_TASK_VERSION, renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import type { Cron, Loop, LoopItem } from "../src/types.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { sleep } from "../src/util/async.ts";
 
@@ -181,7 +180,7 @@ const ITEM = {
 };
 
 async function inboxLoop(w: World): Promise<Loop> {
-  return ensureInboxLoop(w.loops.store, "josh");
+  return (await ensureDefaultInboxLoops(w.loops.store, "josh"))[1]!;
 }
 
 async function seed(
@@ -662,11 +661,8 @@ test("follow-up needs a message and a wired fire service", async () => {
   assert.equal(out.status, 404);
 });
 
-test("the inbox resolver reports no loop until sync is set up", async () => {
+test("sync setup creates source-specific loops", async () => {
   const w = world();
-  const before = await call(w, { method: "GET", path: "/v1/loops/inbox" });
-  assert.equal(before.status, 200);
-  assert.equal((before.body as { loop: Loop | null }).loop, null);
   const created = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
   assert.equal(created.status, 200);
   const body = created.body as { loop: Loop; syncCron: { id: string; taskVersion: number } };
@@ -677,8 +673,6 @@ test("the inbox resolver reports no loop until sync is set up", async () => {
   assert.equal(stored.owner, "josh");
   assert.equal((stored.destination as { target: string }).target, "josh");
   assert.equal(stored.action, renderSourceInboxTask(body.loop.id, "gmail"));
-  const after = await call(w, { method: "GET", path: "/v1/loops/inbox" });
-  assert.equal((after.body as { loop: Loop }).loop.id, body.loop.id);
 });
 
 test("sync-cron is created once, refreshes stale task text, and disables on request", async () => {
@@ -812,27 +806,6 @@ test("concurrent source sends share a durable decision claim", async () => {
   assert.equal((await w.loops.items.get(item.id))!.decisionToken, undefined);
 });
 
-test("legacy and canonical item URLs serialize a concurrent send", async () => {
-  const w = world();
-  w.loops.lock = createMemoryAdvisoryLock();
-  const { loop, item } = await seed(w);
-  const defaults = await ensureDefaultInboxLoops(w.loops.store, "josh");
-  const target = defaults.find((value) => value.sources?.includes("slack"))!;
-  await w.loops.items.moveSource(loop.id, target.id, "slack");
-  const results = await Promise.all(
-    [loop.id, target.id].map((id) =>
-      call(w, {
-        method: "POST",
-        path: `/v1/loops/${id}/items/${item.id}/action?principalId=josh`,
-        body: { kind: "send" },
-        capability: PORTAL,
-      }),
-    ),
-  );
-  assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
-  assert.equal(w.sent.length, 1);
-});
-
 test("a conversational send refuses a stale draft before starting an agent turn", async () => {
   const w = world();
   const { loop, item } = await seed(w);
@@ -855,7 +828,7 @@ test("a conversational send refuses a stale draft before starting an agent turn"
 
 test("inbox list refreshes open Gmail items before returning counts, but not another owner's loop", async () => {
   const w = world();
-  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  const loop = (await ensureDefaultInboxLoops(w.loops.store, "josh"))[0]!;
   const refreshes: string[] = [];
   // Exercise the route with the real refresher via the same dependency used by wiring.
   const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
@@ -891,66 +864,24 @@ test("inbox list refreshes open Gmail items before returning counts, but not ano
   assert.equal(refreshes.length, 1);
 });
 
-test("Slack thread keys reuse a legacy item's identity, edits, and replied watermark", async () => {
+test("ordinary item reads only hydrate Slack with the refresh flag", async () => {
   const w = world();
-  const loop = await ensureInboxLoop(w.loops.store, "josh");
-  await w.loops.items.ingest([
-    {
-      loopId: loop.id,
-      dedupeKey: "D1",
-      source: "slack",
-      sourceAt: 2000,
-      sourcePayload: { slack: { channelId: "D1", ts: "1.0", threadTs: "1.0" } },
-      proposal: { by: "human", data: { body: "Keep this edit" } },
-    },
-  ]);
-  const [original] = await w.loops.items.byLoop(loop.id);
-  const ingest = () =>
-    call(w, {
-      method: "POST",
-      path: `/v1/loops/${loop.id}/items`,
-      body: {
-        items: [
-          {
-            ...ITEM,
-            sourceKey: "D1:1.0",
-            receivedAt: 2000,
-            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0" },
-            draft: { body: "Agent replacement" },
-          },
-        ],
-      },
-    });
-  assert.equal((await ingest()).status, 200);
-  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
-  assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
-  await w.loops.items.recordAction(original!.id, { kind: "replied", outcome: "dismissed", sourceAt: 3000 });
-  await ingest();
-  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
-  assert.equal((await w.loops.items.get(original!.id))!.status, "skipped");
+  const loop = await inboxLoop(w);
+  await w.loops.items.ingest([{ loopId: loop.id, dedupeKey: "slack", source: "slack", sourcePayload: {} }]);
+  const [item] = await w.loops.items.byLoop(loop.id);
+  let refreshes = 0;
+  w.sourceRefresh = async () => {
+    refreshes++;
+  };
+  await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}` });
+  assert.equal(refreshes, 0);
+  await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1` });
+  assert.equal(refreshes, 1);
 });
-
-for (const migrated of [false, true])
-  test(`ordinary item reads only hydrate Slack with the refresh flag (migrated=${migrated})`, async () => {
-    const w = world();
-    const loop = migrated
-      ? (await ensureDefaultInboxLoops(w.loops.store, "josh")).find((loop) => loop.sources?.includes("slack"))!
-      : await ensureInboxLoop(w.loops.store, "josh");
-    await w.loops.items.ingest([{ loopId: loop.id, dedupeKey: "slack", source: "slack", sourcePayload: {} }]);
-    const [item] = await w.loops.items.byLoop(loop.id);
-    let refreshes = 0;
-    w.sourceRefresh = async () => {
-      refreshes++;
-    };
-    await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}` });
-    assert.equal(refreshes, 0);
-    await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1` });
-    assert.equal(refreshes, 1);
-  });
 
 test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", async () => {
   const w = world();
-  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  const loop = await inboxLoop(w);
   await w.loops.items.ingest([
     {
       loopId: loop.id,
@@ -1040,7 +971,7 @@ test("followup accepts only typed runtime and staged attachment fields", async (
 });
 
 test("email classification is scoped to the owner's flagged personal inbox", async () => {
-  for (const surface of [undefined, "inbox", "inbox:gmail", "inbox:slack"]) {
+  for (const surface of [undefined, "inbox:gmail", "inbox:slack"]) {
     for (const enabled of [false, true]) {
       for (const source of ["gmail", "slack"]) {
         const w = world();
@@ -1053,7 +984,7 @@ test("email classification is scoped to the owner's flagged personal inbox", asy
           successCondition: "Messages reviewed",
           surface,
         });
-        const classified = enabled && source === "gmail" && (surface === "inbox" || surface === "inbox:gmail");
+        const classified = enabled && source === "gmail" && surface === "inbox:gmail";
         const flagEnabled = async (flag: string, scope: string) => {
           assert.equal(flag, "inbox_loops");
           assert.equal(scope, "personal:josh");

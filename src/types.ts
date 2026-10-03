@@ -429,7 +429,6 @@ export interface LoopItemTriage {
 }
 
 export interface LoopItem {
-  previousLoopId?: string;
   triage?: LoopItemTriage;
   inboxPreview?: LoopSourcePayload;
   id: string;
@@ -440,7 +439,7 @@ export interface LoopItem {
   sourcePayload?: LoopSourcePayload;
   sourceAt?: number;
   proposal?: LoopProposal;
-  agentDrafts?: LoopProposal[];
+  agentDrafts: LoopProposal[];
   agentMentionKeys?: string[];
   thread?: LoopThreadMessage[];
   status: LoopItemStatus;

@@ -1,4 +1,3 @@
-import { boundLoopCron } from "../src/loops/authority.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { inboxRoutes } from "../src/api/routes/inbox.ts";
@@ -12,8 +11,7 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { uiStateId } from "../src/surfaces/ui-state.ts";
 import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
-import { migrateInbox } from "../src/loops/inbox-migration.ts";
+import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
@@ -145,79 +143,10 @@ test("pagination is stable across equal timestamps and counts exceed the loaded 
   assert.equal(new Set([...first.items, ...second.items].map((item: any) => item.id)).size, 65);
 });
 
-test("migration preserves human edits, item and output IDs, dedupe and paused automation", async () => {
-  const w = world();
-  const legacy = await ensureInboxLoop(w.deps.store, "alice");
-  const cron = await w.deps.crons.create({
-    owner: "alice",
-    createdBy: "alice",
-    ownerScopeId: "personal:alice",
-    schedule: { everyMs: 900000 },
-    enabled: false,
-  });
-  await w.deps.store.update(legacy.id, { cronId: cron.id });
-  await w.deps.items.ingest([
-    {
-      loopId: legacy.id,
-      dedupeKey: "thread",
-      source: "gmail",
-      sourcePayload: { title: "Edited draft" },
-      proposal: { data: { body: "My words" }, by: "human" },
-    },
-  ]);
-  const [item] = await w.deps.items.byLoop(legacy.id);
-  await w.deps.items.appendThread(item!.id, [{ role: "human", text: "Keep this wording" }]);
-  const output = await w.deps.outputs.capture({
-    loopId: legacy.id,
-    itemId: item!.id,
-    attemptId: "a",
-    shipAction: "send",
-    title: "Reply",
-    capturedBy: "agent",
-  });
-  const defaults = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  assert.equal(await migrateInbox(w.deps, w.uiState, (await w.deps.store.get(legacy.id))!, defaults), true);
-  assert.equal(await migrateInbox(w.deps, w.uiState, legacy, defaults), true);
-  const moved = (await w.deps.items.get(item!.id))!;
-  assert.equal(moved.loopId, defaults[0]!.id);
-  assert.equal(moved.proposal!.data.body, "My words");
-  assert.equal(moved.thread![0]!.text, "Keep this wording");
-  assert.equal((await w.deps.outputs.get(output.id))!.loopId, moved.loopId);
-  await w.deps.items.ingest([
-    {
-      loopId: moved.loopId,
-      dedupeKey: "thread",
-      source: "gmail",
-      sourcePayload: {},
-      proposal: { data: { body: "Overwrite" }, by: "agent" },
-    },
-  ]);
-  assert.equal((await w.deps.items.byLoop(moved.loopId)).length, 1);
-  assert.equal((await w.deps.items.get(item!.id))!.proposal!.data.body, "My words");
-  assert.ok((await w.deps.crons.list()).every((entry) => !entry.enabled));
-  for (const loop of defaults) assert.ok(await boundLoopCron((await w.deps.store.get(loop.id))!, w.deps.crons));
-});
-
-test("moving records refuses collisions and a cached worker cannot claim a moved item", async () => {
-  const w = world();
-  const legacy = await ensureInboxLoop(w.deps.store, "alice");
-  const [target] = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  await w.deps.items.ingest([{ loopId: legacy.id, dedupeKey: "same", source: "gmail", sourcePayload: {} }]);
-  const [item] = await w.deps.items.byLoop(legacy.id);
-  await w.deps.items.moveSource(legacy.id, target!.id, "gmail");
-  assert.equal(await w.deps.items.claim(item!.id, undefined, legacy.id), null);
-  await w.deps.items.ingest([{ loopId: legacy.id, dedupeKey: "collision", source: "gmail", sourcePayload: {} }]);
-  await w.deps.items.ingest([{ loopId: target!.id, dedupeKey: "collision", source: "gmail", sourcePayload: {} }]);
-  await w.deps.items.moveSource(legacy.id, target!.id, "gmail");
-  assert.equal((await w.deps.items.byLoop(legacy.id)).length, 1);
-});
-
-test("disabled rollout cannot create defaults, migrate legacy Inbox, or update selection", async () => {
+test("disabled rollout cannot create defaults or update selection", async () => {
   const w = world(false);
-  const legacy = await ensureInboxLoop(w.deps.store, "alice");
   for (const method of ["GET", "PUT"]) assert.equal((await w.call(method, { loopIds: [] })).status, 403);
-  assert.equal((await w.deps.store.list()).length, 1);
-  assert.equal((await w.deps.store.get(legacy.id))?.state, "enabled");
+  assert.equal((await w.deps.store.list()).length, 0);
 });
 
 test("Sent chat items stay out of Inbox counts and handled history remains readable", async () => {
@@ -248,141 +177,6 @@ test("Sent chat items stay out of Inbox counts and handled history remains reada
     handled.data.items.map((entry: any) => entry.id),
     [item.id],
   );
-});
-
-for (const completed of [false, true]) {
-  test(`payload-only source migration repairs ${completed ? "completed" : "pending"} accounts without losing drafts`, async () => {
-    const w = world();
-    const legacy = await ensureInboxLoop(w.deps.store, "alice");
-    const defaults = await ensureDefaultInboxLoops(w.deps.store, "alice");
-    const cron = await w.deps.crons.create({
-      owner: "alice",
-      createdBy: "alice",
-      ownerScopeId: "personal:alice",
-      schedule: { everyMs: 900000 },
-      enabled: false,
-    });
-    await w.deps.store.update(legacy.id, { cronId: cron.id });
-    if (completed) {
-      await w.deps.store.setState(legacy.id, "archived");
-      await w.uiState.put(uiStateId("alice", "inbox-migration"), {
-        value: { phase: "complete", enabled: false },
-        updatedAt: Date.now(),
-      });
-    }
-    await w.uiState.put(uiStateId("alice", "inbox-loops"), {
-      value: [...defaults.map((loop) => loop.id), legacy.id],
-      updatedAt: Date.now(),
-    });
-    if (completed) {
-      for (const [index, loop] of defaults.entries()) {
-        const sourceCron = await w.deps.crons.create({
-          loopId: loop.id,
-          owner: "alice",
-          createdBy: "alice",
-          ownerScopeId: "personal:alice",
-          schedule: { everyMs: 120000 + index * 60000 },
-          enabled: index === 0,
-          runAs: "owner",
-        });
-        await w.deps.store.update(loop.id, { cronId: sourceCron.id, runAs: "owner" });
-        if (index === 1) await w.deps.store.setState(loop.id, "paused");
-      }
-    }
-    const beforeCrons = await Promise.all(
-      defaults.map(async (loop) => {
-        const current = await w.deps.store.get(loop.id);
-        return current?.cronId ? w.deps.crons.get(current.cronId) : null;
-      }),
-    );
-    const beforeDefaults = await Promise.all(defaults.map((loop) => w.deps.store.get(loop.id)));
-    for (const source of ["gmail", "slack"]) {
-      await w.deps.items.ingest([
-        {
-          loopId: legacy.id,
-          dedupeKey: source,
-          sourcePayload: { source, title: `${source} draft` },
-          proposal: { by: "human", data: { body: "Keep my words" } },
-        },
-      ]);
-    }
-    const originals = await w.deps.items.byLoop(legacy.id);
-    for (const item of originals) {
-      await w.deps.items.appendThread(item.id, [{ role: "human", text: "Preserve history" }]);
-      await w.deps.outputs.capture({
-        loopId: legacy.id,
-        itemId: item.id,
-        attemptId: "a",
-        shipAction: "send",
-        title: "Draft",
-        capturedBy: "agent",
-      });
-    }
-    const result = (await w.call()).data;
-    assert.equal(result.migrationPending, false);
-    assert.equal(result.total, 2);
-    assert.deepEqual(
-      result.selected.map((loop: any) => loop.id),
-      defaults.map((loop) => loop.id),
-    );
-    for (const original of originals) {
-      const item = (await w.deps.items.get(original.id))!;
-      assert.equal(item.source, original.sourcePayload!.source);
-      assert.equal(item.loopId, defaults.find((loop) => loop.sources![0] === item.source)!.id);
-      assert.equal(item.proposal!.data.body, "Keep my words");
-      assert.equal(item.thread![0]!.text, "Preserve history");
-      assert.equal((await w.deps.outputs.byItem(item.id))[0]!.loopId, item.loopId);
-      assert.equal(result.items.find((entry: any) => entry.id === item.id).source, item.source);
-    }
-    if (completed)
-      assert.deepEqual(await Promise.all(defaults.map((loop) => w.deps.store.get(loop.id))), beforeDefaults);
-    if (completed)
-      assert.deepEqual(
-        await Promise.all(
-          defaults.map(async (loop) => {
-            const current = await w.deps.store.get(loop.id);
-            return current?.cronId ? w.deps.crons.get(current.cronId) : null;
-          }),
-        ),
-        beforeCrons,
-      );
-    assert.deepEqual((await w.call()).data.items, result.items);
-    assert.equal((await w.deps.items.byLoop(legacy.id)).length, 0);
-  });
-}
-
-test("completed repair keeps conflicting drafts visible while moving unrelated items", async () => {
-  const w = world();
-  const legacy = await ensureInboxLoop(w.deps.store, "alice");
-  const defaults = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  await w.deps.store.setState(legacy.id, "archived");
-  await w.uiState.put(uiStateId("alice", "inbox-migration"), {
-    value: { phase: "complete", enabled: true },
-    updatedAt: Date.now(),
-  });
-  for (const [loopId, key, body] of [
-    [legacy.id, "collision", "Human draft"],
-    [defaults[0]!.id, "collision", "New draft"],
-    [legacy.id, "unrelated", "Other draft"],
-  ]) {
-    await w.deps.items.ingest([
-      {
-        loopId: loopId!,
-        dedupeKey: key!,
-        sourcePayload: { source: "gmail", title: body },
-        proposal: { by: "human", data: { body } },
-      },
-    ]);
-  }
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await w.call();
-    assert.equal(result.status, 200);
-    assert.equal(result.data.migrationPending, false);
-    assert.equal(result.data.total, 3);
-    assert.equal(result.data.selected.find((loop: any) => loop.id === legacy.id).count, 1);
-    assert.equal(result.data.selected.find((loop: any) => loop.id === defaults[0]!.id).count, 2);
-    assert.equal((await w.deps.items.byLoop(legacy.id))[0]!.proposal!.data.body, "Human draft");
-  }
 });
 
 test("the inbox feed reconciles selected owner Gmail loops before counting summaries", async () => {
@@ -560,18 +354,6 @@ test("explicit refresh filters stay consistent across saved preference changes w
   assert.equal(latest.total, 2);
   assert.equal(latest.items.length, 1);
   assert.equal((await w.call("GET", null, "filter=invalid")).status, 400);
-});
-
-test("legacy source metadata survives an empty filtered email view", async () => {
-  const w = world();
-  const loop = await ensureInboxLoop(w.deps.store, "alice");
-  await w.deps.items.ingest([
-    { loopId: loop.id, dedupeKey: "receipt", source: "gmail", sourcePayload: { automated: true } },
-  ]);
-  await w.call("PUT", { loopIds: [loop.id] });
-  const feed = (await w.call()).data;
-  assert.equal(feed.items.length, 0);
-  assert.deepEqual(feed.selected[0].sources, ["gmail"]);
 });
 
 test("email classification is projected only by the flagged inbox endpoint", async (t) => {

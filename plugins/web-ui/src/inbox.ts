@@ -224,7 +224,6 @@ export const inboxState = {
   picker: false,
   menuId: null as string | null,
   selectionBusy: false,
-  migrationPending: false,
   loopId: null as string | null,
   syncCron: null as InboxSyncCron | null,
   loaded: false,
@@ -493,7 +492,6 @@ export async function refreshInbox(
   if (!opts.silent || inboxState.loaded) drawAll();
   try {
     type Feed = {
-      migrationPending: boolean;
       filter: InboxFilter;
       selected: typeof inboxState.selected;
       available: typeof inboxState.available;
@@ -545,7 +543,6 @@ export async function refreshInbox(
     inboxState.available = metadata.available;
     inboxState.total = metadata.total;
     inboxState.filter = refreshFilter!;
-    inboxState.migrationPending = metadata.migrationPending;
     const next = [...combined.values()];
     const openId = fullSurface?.selectedId;
     const detail = openId ? inboxState.items.find((item) => item.id === openId && item.detailLoaded) : undefined;
@@ -1696,9 +1693,6 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
   `;
 }
 
-const MIGRATION_STATUS = "Moving your Inbox…";
-const MIGRATION_HINT = "Available once your existing Inbox finishes moving";
-
 function syncStatusLabel(cron: InboxSyncCron): string {
   if (!cron.enabled) return "Sync paused";
   return cron.lastFiredAt ? `Synced ${relTime(cron.lastFiredAt)}` : "First sync pending";
@@ -1742,8 +1736,7 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
   }
   const loops = syncLoops(surface.viewId);
   const crons = loops.flatMap((loop) => (loop.syncCron ? [loop.syncCron] : []));
-  const moving = inboxState.migrationPending;
-  if (!crons.length && !moving) return nothing;
+  if (!crons.length) return nothing;
   const status =
     crons.length === 1 ? syncStatusLabel(crons[0]!) : `${crons.filter((cron) => cron.enabled).length} syncs on`;
   return html`<span class="inbox-sync-line">
@@ -1751,11 +1744,10 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
       label: "Sync",
       busyLabel: "Syncing…",
       busy: inboxState.syncBusy,
-      disabled: moving,
-      tooltip: moving ? MIGRATION_HINT : "Sync now",
+      tooltip: "Sync now",
       action: () => void syncNow(surface.viewId),
     })}
-    <span class="inbox-sync-status" role=${moving ? "status" : nothing}>${moving ? MIGRATION_STATUS : status}</span>
+    <span class="inbox-sync-status">${status}</span>
   </span>`;
 }
 
@@ -1944,15 +1936,12 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
                     <span class="inbox-setup-icon" aria-hidden="true">${loopIcon(loop, 17)}</span>
                     <div class="inbox-setup-copy">
                       <span class="inbox-setup-title">${loop.name}</span
-                      ><span class="inbox-setup-description"
-                        >${inboxState.migrationPending ? MIGRATION_STATUS : "Sync not set up"}</span
-                      >
+                      ><span class="inbox-setup-description">Sync not set up</span>
                     </div>
                     <button
                       class="inbox-setup-action"
                       aria-label=${`Set up ${loop.name}`}
-                      ${inboxState.migrationPending ? tip(MIGRATION_HINT) : nothing}
-                      ?disabled=${inboxState.syncBusy || inboxState.migrationPending}
+                      ?disabled=${inboxState.syncBusy}
                       @click=${() => void setUpSync(loop.id)}
                     >
                       <span>${inboxState.syncBusy ? "Setting up…" : "Set up"}</span>${icon(ChevronRight, 14)}

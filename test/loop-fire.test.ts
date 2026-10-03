@@ -1,5 +1,5 @@
 import { createAdmittedWork } from "../src/util/admitted-work.ts";
-import { renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
+import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
@@ -675,17 +675,6 @@ test("bound loops reject missing crons, foreign scheduler bindings, and authorit
   assert.equal(s.turns.length, 0);
 });
 
-test("legacy inbox sync cron is not a grant source for inbox event turns", async () => {
-  const s = service(HAPPY);
-  const loop = await makeLoop(s.loops, { surface: "inbox" });
-  const cron = await bindCron(s, loop, { loopId: undefined, unattendedGrants: ["admin.sessions.read"] });
-  assert.equal((await s.fire.fire(loop.id, "slack-event")).status, "silent");
-  assert.equal(s.turns.length, 1);
-  assert.equal(s.turns[0]?.text, renderInboxSyncTask(loop.id));
-  assert.ok(s.turns.every((turn) => turn.unattendedGrants === undefined));
-  assert.equal((await s.fire.fire(loop.id, "invalid-delegation", cron.id)).status, "failed");
-});
-
 test("privileged item turns inherit grants only for the owner", async () => {
   const s = service(HAPPY);
   const created = await makeLoop(s.loops);
@@ -787,7 +776,7 @@ test("an admitted loop drains all stages after ownership closes", async () => {
 
 test("inbox fires repair an existing shell without creating generic intake records", async () => {
   const s = service(async (req) => {
-    assert.equal(req.text, renderInboxSyncTask(loop.id));
+    assert.equal(req.text, renderSourceInboxTask(loop.id, "slack"));
     await s.items.ingest([
       {
         loopId: loop.id,
@@ -805,7 +794,7 @@ test("inbox fires repair an existing shell without creating generic intake recor
     ]);
     return "Synced";
   });
-  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
   await s.items.enqueue({ loopId: loop.id, sourceKey: "channel:123", sourceSummary: "support request" });
   assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
   assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
@@ -841,7 +830,7 @@ test("inbox sync exceptions count once and recover on a successful retry", async
     if (fail) throw new Error("connector unavailable");
     return "Synced";
   });
-  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
   assert.equal((await s.fire.fire(loop.id, "broken")).status, "failed");
   assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 1);
   assert.equal((await s.items.byLoop(loop.id)).length, 0);

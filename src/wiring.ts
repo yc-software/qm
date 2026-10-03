@@ -1787,7 +1787,7 @@ export function buildApp(
     lock: advisoryLock,
     accepts: async (id) => {
       const loop = await loopStore.get(id);
-      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
+      return Boolean(loop);
     },
   });
   const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>

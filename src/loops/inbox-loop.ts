@@ -1,11 +1,6 @@
 import type { Loop } from "../types.ts";
 import { scopeId } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";
-import { SOURCE_IDS } from "./sources/index.ts";
-
-const INBOX_LOOP_NAME = "Inbox";
-
-const INBOX_LOOP_SURFACE = "inbox";
 
 export const INBOX_SYNC_TASK_VERSION = 5;
 
@@ -15,10 +10,7 @@ export const INBOX_LEDGER_MAX_ITEMS = 500;
 
 export const INBOX_LEDGER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-const INBOX_SUCCESS_CONDITION =
-  "Every Slack message and email waiting on the person's own reply is on the ledger with a ready-to-send draft in their voice, and nothing else is.";
-
-export function renderInboxSyncTask(loopId: string): string {
+function renderInboxSyncTask(loopId: string): string {
   return `Inbox sync v${INBOX_SYNC_TASK_VERSION}. Keep the user's QM inbox loop current: every Slack message and email genuinely WAITING ON A REPLY FROM THEM gets a ledger item with a ready-to-send draft in their own voice. The inbox UI is the only delivery surface — never message the user, and NEVER send a reply yourself; you produce drafts only.
 
 1. GET $AGENT_API_URL/v1/loops/${loopId}/items (agent capability header) — note existing items: skip complete items already tracked unless a NEWER inbound message has arrived since (compare sourceAt); re-post such items with the fresh message and a fresh draft. Refresh an agent draft when sourceAt is newer than proposal.at, even if the ledger already contains the latest message; realtime updates refresh message data before drafting. Preserve human-edited drafts. Repair incomplete open items first: an existing dedupeKey with missing sourcePayload, title, snippet, source metadata, or proposal is unfinished work, not a reason to skip it. Re-read its original conversation using the dedupeKey and summary, then ingest the complete item and draft under that same dedupeKey even when no newer message arrived. Never invent message content from a summary; if the source is unavailable, leave the item pending for retry.
@@ -63,32 +55,4 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
 
 export function renderSourceInboxTask(loopId: string, source: string): string {
   return `Source restriction: scan only ${source}. Never read or ingest another source. Keep a separate watermark for this Loop.\n${renderInboxSyncTask(loopId)}`;
-}
-
-function isInboxLoop(loop: Loop): boolean {
-  return loop.surface === INBOX_LOOP_SURFACE;
-}
-
-export async function findInboxLoop(store: LoopStore, owner: string): Promise<Loop | null> {
-  const scope = scopeId("personal", owner);
-  const loops = await store.list();
-  return loops.find((loop) => loop.ownerScopeId === scope && isInboxLoop(loop)) ?? null;
-}
-
-export async function ensureInboxLoop(store: LoopStore, owner: string): Promise<Loop> {
-  const existing = await findInboxLoop(store, owner);
-  if (existing) return existing;
-  const { loop } = await store.create({
-    owner,
-    createdBy: owner,
-    ownerScopeId: scopeId("personal", owner),
-    name: INBOX_LOOP_NAME,
-    surface: INBOX_LOOP_SURFACE,
-    sources: [...SOURCE_IDS],
-    purpose: "Everything waiting on a reply from you, drafted and ready to send.",
-    playbook: renderInboxSyncTask("$LOOP_ID"),
-    successCondition: INBOX_SUCCESS_CONDITION,
-    shipActions: [{ action: "send", gate: "hold" }],
-  });
-  return loop;
 }

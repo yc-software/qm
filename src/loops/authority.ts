@@ -20,7 +20,6 @@ export async function boundLoopCron(
   ) {
     throw new Error("loop cron authority binding mismatch");
   }
-  if (loop.surface === "inbox" && cron.loopId === undefined && firingCronId === undefined) return cron;
   if (cron.loopId !== loop.id) throw new Error("loop cron authority binding mismatch");
   return cron;
 }

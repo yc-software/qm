@@ -29,7 +29,6 @@ const USER_SCOPED: Rule[] = [
   pat("POST", "/v1/loops/:id/grants", { in: "query", name: "principalId" }),
   pat("POST", "/v1/loops/:id/autopilot", { in: "query", name: "principalId" }),
   pat("DELETE", "/v1/loops/:id/grants/:grantId", { in: "query", name: "principalId" }),
-  pat("GET", "/v1/loops/inbox", { in: "query", name: "principalId" }),
   pat("POST", "/v1/loops/inbox/sync-cron", { in: "query", name: "principalId" }),
   pat("GET", "/v1/loops/:id/items", { in: "query", name: "principalId" }),
   pat("POST", "/v1/loops/:id/items", { in: "query", name: "principalId" }),

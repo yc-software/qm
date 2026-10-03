@@ -10,6 +10,7 @@ import { adapterForItem } from "../src/loops/sources/index.ts";
 function item(source: string, payload: Record<string, unknown>, proposal?: Record<string, unknown>): LoopItem {
   return {
     id: "i1",
+    agentDrafts: [],
     loopId: "l1",
     sourceKey: "t1",
     source,
@@ -317,13 +318,9 @@ test("every agent draft the item ever had contributes to the disarm set, even af
   assert.equal(renderSlackSendText(held, "calmer second draft"), "calmer second draft");
 });
 
-test("an agent posting through the API and an item with unknown provenance get every mention disarmed", () => {
+test("an agent posting through the API gets every mention disarmed", () => {
   const fresh = item("slack", slackMeta, { body: "x" });
   assert.equal(renderSlackSendText(fresh, "go <!here> <@U9>", "agent"), "go @\u200bhere @U9");
-  const legacy = item("slack", slackMeta, { body: "edited before deploy <!here>" });
-  legacy.proposal!.by = "human";
-  delete legacy.agentDrafts;
-  assert.equal(renderSlackSendText(legacy, "edited before deploy <!here>"), "edited before deploy @\u200bhere");
   const scratch = item("slack", slackMeta);
   scratch.agentDrafts = [];
   assert.equal(renderSlackSendText(scratch, "mine <!here>"), "mine <!here>", "a person's own item stays live");

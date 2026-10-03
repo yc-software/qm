@@ -30,7 +30,6 @@ interface DecideOutputInput {
 }
 
 export interface LoopOutputStore {
-  rebindItem(itemId: string, from: string, to: string): Promise<void>;
   capture(input: CaptureOutputInput): Promise<LoopOutput>;
   get(id: string): Promise<LoopOutput | null>;
   byLoop(loopId: string): Promise<LoopOutput[]>;
@@ -118,12 +117,6 @@ export function createLoopOutputStore(
   };
 
   return {
-    async rebindItem(itemId, from, to) {
-      for (const output of await backing.select({ where: { field: "itemId", anyOfFold: [itemId] } })) {
-        if (output.itemId !== itemId) continue;
-        await update(output.id, (current) => (current.loopId === from ? { ...current, loopId: to } : current));
-      }
-    },
     async capture(input) {
       const id = loopOutputId(
         input.loopId,

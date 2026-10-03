@@ -137,6 +137,7 @@ test("regrouping moves only the item and hands its old group to the oldest remai
     loopId: LOOP,
     sourceKey: id,
     status: "queued",
+    agentDrafts: [],
     attempts: 0,
     runIds: [],
     outputIds: [],

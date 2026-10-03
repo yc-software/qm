@@ -5,14 +5,7 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
-import {
-  requireLoopAuthority,
-  canAdministerLoop,
-  loadAdministrable,
-  loopDeps,
-  actingPrincipal,
-  type LoopServiceDeps,
-} from "./loops.ts";
+import { requireLoopAuthority, loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } from "./loops.ts";
 import { scopeId, parseScopeId } from "../../types.ts";
 import { isResolved, isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
@@ -22,13 +15,11 @@ import { adapterForItem, sourceAdapter } from "../../loops/sources/index.ts";
 import {
   ensureDefaultInboxLoops,
   renderSourceInboxTask,
-  findInboxLoop,
   INBOX_LEDGER_MAX_ITEMS,
   INBOX_LEDGER_RETENTION_MS,
   INBOX_SYNC_DEFAULT_EVERY_MS,
   INBOX_SYNC_TASK_VERSION,
 } from "../../loops/inbox-loop.ts";
-import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { THINKING_LEVELS, isHarnessId } from "../../model/pi-models.ts";
 import { principalDestination } from "../../reach/reach.ts";
 
@@ -111,7 +102,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
   if (wanted !== null && !isLedgerState(wanted)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
   }
-  if ((loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && loop.owner === loaded.acting.actorId) {
+  if (loop.surface?.startsWith("inbox:") && loop.owner === loaded.acting.actorId) {
     const openMail = (await deps.items.byLoop(loop.id)).filter(
       (item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail",
     );
@@ -131,11 +122,6 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop } = loaded;
-  if (loop.surface === "inbox" && loop.state !== "enabled")
-    return sendJson(ctx.res, 409, {
-      error: "migration_pending",
-      message: "This Inbox producer has been retired or paused for migration.",
-    });
   if (!ctx.capability) {
     return sendJson(ctx.res, 403, { error: "forbidden", message: "ledger items are ingested by the agent" });
   }
@@ -151,11 +137,10 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
     ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
     : undefined;
   const classifyInboxEmail =
-    (loop.surface === "inbox" || loop.surface === "inbox:gmail") &&
+    loop.surface === "inbox:gmail" &&
     loop.ownerScopeId === scopeId("personal", loop.owner) &&
     (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loop.owner))) === true;
   const entries: IngestEntryInput[] = [];
-  const existingItems = await deps.items.byLoop(loop.id);
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(loop, raw);
     if ("error" in parsed) {
@@ -164,15 +149,6 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
     if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
       for (const key of ["automated", "probablyResolved"])
         if (typeof raw[key] === "boolean") parsed.sourcePayload[key] = raw[key];
-    }
-    if (parsed.source === "slack") {
-      const adapter = sourceAdapter("slack")!;
-      const existing = existingItems.find(
-        (item) =>
-          (item.source ?? item.sourcePayload?.source) === "slack" && adapter.matchesEvent(item, parsed.dedupeKey),
-      );
-      // Retain the ID, human edits and resolution watermark of legacy channel-keyed cards.
-      if (existing) parsed.dedupeKey = existing.sourceKey;
     }
     entries.push(sessionId && parsed.proposal ? { ...parsed, proposal: { ...parsed.proposal, sessionId } } : parsed);
   }
@@ -188,11 +164,6 @@ async function loadItem(
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.loop)) return null;
   const item = await loaded.deps.items.get(ctx.params.itemId ?? "");
-  if (item && item.loopId !== loaded.loop.id && item.previousLoopId === loaded.loop.id) {
-    const target = await loaded.deps.store.get(item.loopId);
-    if (target && (await canAdministerLoop(ctx, target, loaded.acting)))
-      return { deps: loaded.deps, loop: target, item, actorId: loaded.acting.actorId };
-  }
   if (!item || item.loopId !== loaded.loop.id) {
     sendJson(ctx.res, 404, { error: "not_found", message: "no such ledger item" });
     return null;
@@ -263,7 +234,7 @@ async function getItem(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   if (
     ctx.url.searchParams.get("refreshSource") === "1" &&
-    (loaded.loop.surface === "inbox" || loaded.loop.surface?.startsWith("inbox:")) &&
+    loaded.loop.surface?.startsWith("inbox:") &&
     loaded.loop.owner === loaded.actorId
   )
     await ctx.deps.inboxSourceRefresh?.(loaded.loop.owner, [loaded.item]);
@@ -517,19 +488,6 @@ export function cronSummary(cron: Cron | null): {
   };
 }
 
-async function getInboxLoop(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
-  const acting = actingPrincipal(ctx);
-  if (!acting) return;
-  const loop =
-    (await deps.store.list()).find(
-      (candidate) => candidate.owner === acting.actorId && candidate.surface === "inbox:gmail",
-    ) ?? (await findInboxLoop(deps.store, acting.actorId));
-  const cron = loop?.cronId ? await ctx.app.getCron(loop.cronId) : null;
-  sendJson(ctx.res, 200, { loop, syncCron: cronSummary(cron) });
-}
-
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const owner = ctx.actor?.p;
   if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
@@ -608,12 +566,6 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
   const owner = acting.actorId;
   try {
     const defaults = await ensureDefaultInboxLoops(deps.store, owner);
-    const legacy = await findInboxLoop(deps.store, owner);
-    if (legacy && (!ctx.deps.uiState || !(await migrateInbox(deps, ctx.deps.uiState, legacy, defaults))))
-      return sendJson(ctx.res, 409, {
-        error: "migration_pending",
-        message: "The existing Inbox is still being migrated. Sync remains paused.",
-      });
     const requested = typeof body.loopId === "string" ? body.loopId : null;
     const targets = defaults.filter((loop) => !requested || loop.id === requested);
     if (!targets.length) return sendJson(ctx.res, 404, { error: "not_found" });
@@ -677,7 +629,6 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
   { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
   { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
   { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },

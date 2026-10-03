@@ -86,7 +86,6 @@ export interface LoopItemLedger {
   prune(loopId: string, options: PruneOptions): Promise<number>;
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
-  moveSource(from: string, to: string, source: string): Promise<void>;
   summaries(
     loopIds: string[],
     options?: { includeEmailClassification?: boolean },
@@ -126,7 +125,7 @@ function sameDraft(a: LoopProposal | undefined, b: LoopProposal): boolean {
 }
 
 export function agentDraftsOf(item: Pick<LoopItem, "proposal" | "agentDrafts">): LoopProposal[] {
-  const kept = item.agentDrafts ?? [];
+  const kept = item.agentDrafts;
   if (item.proposal?.by !== "agent" || sameDraft(kept.at(-1), item.proposal)) return kept;
   return [...kept, item.proposal];
 }
@@ -257,28 +256,6 @@ export function createLoopItemLedger(
   };
 
   const ledger: LoopItemLedger = {
-    async moveSource(from, to, source) {
-      const targets = await forLoop(to);
-      for (const item of await forLoop(from)) {
-        if ((item.source ?? item.sourcePayload?.source) !== source) continue;
-        if (targets.some((target) => target.sourceKey === item.sourceKey && target.id !== item.id)) continue;
-        await update(item.id, (current) => {
-          if (
-            current.loopId !== from ||
-            current.status === "in_progress" ||
-            (current.decisionToken && (current.decisionAt ?? 0) + DECISION_LEASE_MS > Date.now())
-          )
-            return current;
-          return {
-            ...current,
-            source,
-            loopId: to,
-            previousLoopId: from,
-            inboxPreview: inboxPreview(current.sourcePayload),
-          };
-        });
-      }
-    },
     async enqueue(input) {
       const id = await idFor(input.loopId, input.sourceKey);
       const now = Date.now();
@@ -286,6 +263,7 @@ export function createLoopItemLedger(
         id,
         loopId: input.loopId,
         sourceKey: input.sourceKey,
+        agentDrafts: [],
         status: "queued",
         attempts: 0,
         runIds: [],
@@ -708,6 +686,5 @@ export function createLoopItemLedger(
       }
       return result;
     },
-    moveSource: (from, to, source) => guarded([from, to], () => ledger.moveSource(from, to, source), false),
   };
 }

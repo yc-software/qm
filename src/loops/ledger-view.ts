@@ -76,7 +76,7 @@ export interface LedgerItemView {
   updatedAt: number;
 }
 
-export function ledgerItemView(item: LoopItem, loop: Pick<Loop, "triage">): LedgerItemView {
+export function ledgerItemView(item: Omit<LoopItem, "agentDrafts">, loop: Pick<Loop, "triage">): LedgerItemView {
   const triage = visibleTriage(loop, item.triage);
   return {
     id: item.id,

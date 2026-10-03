@@ -102,14 +102,9 @@ function agentDraftBodies(item: LoopItem): string[] {
   });
 }
 
-function provenanceUnknown(item: LoopItem): boolean {
-  return item.agentDrafts === undefined && item.proposal?.by === "human";
-}
-
 export function renderSlackSendText(item: LoopItem, body: string, actor: "human" | "agent" = "human"): string {
   const agentBodies = agentDraftBodies(item);
-  if (actor === "agent" || provenanceUnknown(item) || agentBodies.includes(body.trim()))
-    return neutralizeMentions(body);
+  if (actor === "agent" || agentBodies.includes(body.trim())) return neutralizeMentions(body);
   const everWritten = new Set([
     ...(item.agentMentionKeys ?? []),
     ...agentBodies.flatMap((b) => [...wireMentionKeys(b)]),
@@ -192,12 +187,7 @@ export const slackAdapter: LoopSourceAdapter = {
   matchesEvent(item, conversationRef) {
     const slack = metaOf(item);
     if (!slack) return false;
-    return (
-      slackConversationRef(slack.channelId, slack.ts, slack.threadTs, slack.isDirectMessage) === conversationRef ||
-      (!slack.threadTs &&
-        (slack.isDirectMessage ?? slack.channelId.startsWith("D")) &&
-        conversationRef === `${slack.channelId}:${slack.ts}`)
-    );
+    return slackConversationRef(slack.channelId, slack.ts, slack.threadTs, slack.isDirectMessage) === conversationRef;
   },
   parseProposal(raw) {
     const draft = parseReplyDraft(raw);
