@@ -672,6 +672,29 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ],
       },
       {
+        id: "sessions/store/0020-spend-usage-json-size-plpgsql",
+        statements: [
+          `CREATE OR REPLACE FUNCTION spend_usage_json(t text) RETURNS jsonb
+             LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $spend_usage_json$
+             DECLARE j jsonb;
+             BEGIN
+               IF t IS NULL OR octet_length(t) > 2000 OR NOT pg_input_is_valid(t, 'jsonb') THEN
+                 RETURN NULL;
+               END IF;
+               j := t::jsonb;
+               IF pg_input_is_valid(j ->> 'costUsd', 'double precision') IS NOT FALSE
+                  AND pg_input_is_valid(j ->> 'input', 'bigint') IS NOT FALSE
+                  AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE
+                  AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE
+                  AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN
+                 RETURN j;
+               END IF;
+               RETURN NULL;
+             END
+             $spend_usage_json$`,
+        ],
+      },
+      {
         id: "sessions/store/0021-spend-covering-index",
         statements: [
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend

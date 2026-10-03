@@ -332,7 +332,7 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
   try {
     await raw.query("DROP INDEX session_llm_requests_spend, session_llm_requests_spend_wide");
     await raw.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ('sessions/store/0020-spend-usage-json', 'sessions/store/0020-spend-usage-json-size', 'sessions/store/0021-spend-covering-index')",
+      "DELETE FROM qm_schema_migrations WHERE id IN ('sessions/store/0020-spend-usage-json', 'sessions/store/0020-spend-usage-json-size', 'sessions/store/0020-spend-usage-json-size-plpgsql', 'sessions/store/0021-spend-covering-index')",
     );
     await insert("spend-index-normal", "normal", JSON.stringify(usage));
     await insert("spend-index-wide", wideModel, JSON.stringify(wideUsage));
@@ -3259,3 +3259,25 @@ test("pg context window preserves user memory checkpoints through compaction and
     await store.releaseLease(lease);
   }
 });
+
+test(
+  "pg spend_usage_json returns NULL for invalid or unusual usage text instead of raising (Postgres 18 inlines SQL functions)",
+  { skip },
+  async () => {
+    const store = createPostgresSessionStore(URL!);
+    await store.countSessions();
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    try {
+      const { rows } = await raw.query(
+        `SELECT spend_usage_json(t) AS j FROM (VALUES ('not json'), ('{"costUsd":"abc"}'), ('{"costUsd":0.5,"input":1}'), (NULL)) v(t)`,
+      );
+      assert.deepEqual(
+        rows.map((row) => row.j),
+        [null, null, { costUsd: 0.5, input: 1 }, null],
+      );
+    } finally {
+      await raw.end();
+    }
+  },
+);
