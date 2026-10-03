@@ -434,6 +434,24 @@ test("pg directory: a private Slack Connect roster is not an ordinary send targe
   assert.deepEqual(await store.listChannelsFor("U-member"), []);
 });
 
+test("pg directory: a channel with guests is not an all-internal roster", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replace([{ principalId: "U-member", displayName: "Member", type: "internal" }]);
+  await store.replaceChannels(
+    [{ channelId: "C-guests", name: "guests", isPrivate: true, hasGuests: true }],
+    [{ channelId: "C-guests", principalId: "U-member" }],
+  );
+  assert.equal(await store.channelMember("C-guests", "U-member"), true);
+  assert.equal(await store.conversationMembers("channel", "C-guests"), undefined);
+  await store.replaceChannels([{ channelId: "C-guests", name: "guests", isPrivate: true }], [], undefined, []);
+  assert.equal(await store.conversationMembers("channel", "C-guests"), undefined);
+  await store.replaceChannels(
+    [{ channelId: "C-guests", name: "guests", isPrivate: true }],
+    [{ channelId: "C-guests", principalId: "U-member" }],
+  );
+  assert.equal((await store.conversationMembers("channel", "C-guests"))?.length, 1);
+});
+
 test("pg directory: a partial group swap preserves unknown rosters", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await store.replaceGroups(

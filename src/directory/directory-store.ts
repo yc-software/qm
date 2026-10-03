@@ -13,6 +13,7 @@ export interface DirectoryChannel {
   name: string;
   isPrivate?: boolean;
   isExternal?: boolean;
+  hasGuests?: boolean;
 }
 
 export interface ChannelMembership {
@@ -105,6 +106,7 @@ export function createDirectoryStore(): DirectoryStore {
   let channels: DirectoryChannel[] = [];
   let channelMembers: Map<string, Set<string>> | undefined;
   let knownChannelRosters: Set<string> | undefined;
+  const guestChannels = new Set<string>();
   let groupMembers: Map<string, Set<string>> | undefined;
   let listedGroupIds: Set<string> | undefined;
   let knownGroupRosters: Set<string> | undefined;
@@ -186,12 +188,16 @@ export function createDirectoryStore(): DirectoryStore {
         channelMembers = byChannel;
         knownChannelRosters ??= new Set();
         for (const channelId of rosterIds) if (listed.has(channelId)) knownChannelRosters.add(channelId);
+        for (const channelId of rosterIds) guestChannels.delete(channelId);
+        for (const channel of nextChannels)
+          if (channel.hasGuests && rosterIds.has(channel.channelId)) guestChannels.add(channel.channelId);
       }
       for (const member of revocations) {
         if (updatedIds.has(member.channelId) && !protectedIds.has(member.channelId) && member.principalId)
           channelMembers?.get(member.channelId)?.delete(member.principalId);
       }
       for (const id of channelObservedAts.keys()) if (!listed.has(id)) channelObservedAts.delete(id);
+      for (const id of guestChannels) if (!listed.has(id)) guestChannels.delete(id);
       return true;
     },
     async channelMember(channelId, principalId) {
@@ -277,7 +283,7 @@ export function createDirectoryStore(): DirectoryStore {
       let ids: string[];
       if (kind === "channel") {
         const channel = channels.find((candidate) => candidate.channelId === id);
-        if (!channel || channel.isExternal || !knownChannelRosters?.has(id)) return undefined;
+        if (!channel || channel.isExternal || guestChannels.has(id) || !knownChannelRosters?.has(id)) return undefined;
         ids = [...(channelMembers?.get(id) ?? [])];
       } else {
         if (!knownGroupRosters?.has(id)) return undefined;

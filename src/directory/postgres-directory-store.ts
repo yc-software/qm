@@ -186,6 +186,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       id: "directory/store/0004",
       statements: ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS observed_at BIGINT"],
     },
+    {
+      id: "directory/store/0005",
+      statements: ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS has_guests BOOLEAN NOT NULL DEFAULT FALSE"],
+    },
   ]);
 
   async function pick<T>(
@@ -316,7 +320,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           ? undefined
           : dedupMemberships(channelMembers).filter((member) => rosterIds!.has(member.channelId));
       let revokedRows = dedupMemberships(revocations).filter((member) => listedIds.has(member.channelId));
-      const channelsPart = list.map((c) => `${c.channelId}|${c.name}|${c.isPrivate ? 1 : 0}|${c.isExternal ? 1 : 0}`);
+      const channelsPart = list.map(
+        (c) => `${c.channelId}|${c.name}|${c.isPrivate ? 1 : 0}|${c.isExternal ? 1 : 0}|${c.hasGuests ? 1 : 0}`,
+      );
       const membersPart =
         membershipRows === undefined
           ? []
@@ -356,14 +362,15 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           }
           if (list.length) {
             await client.query(
-              `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
-             SELECT $1, rows.*, $8::bigint FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[]) AS rows
+              `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, has_guests, observed_at)
+             SELECT $1, rows.*, $9::bigint FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[], $8::boolean[]) AS rows
              ON CONFLICT (org_id, channel_id) DO UPDATE SET
                name = EXCLUDED.name,
                name_lc = EXCLUDED.name_lc,
                is_private = EXCLUDED.is_private,
                is_external = EXCLUDED.is_external,
                roster_known = directory_channels.roster_known OR EXCLUDED.roster_known,
+               has_guests = CASE WHEN EXCLUDED.roster_known THEN EXCLUDED.has_guests ELSE directory_channels.has_guests END,
                observed_at = EXCLUDED.observed_at`,
               [
                 orgId,
@@ -373,6 +380,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
                 list.map((c) => !!c.isPrivate),
                 list.map((c) => !!c.isExternal),
                 list.map((c) => rosterIds?.has(c.channelId) ?? false),
+                list.map((c) => !!c.hasGuests && (rosterIds?.has(c.channelId) ?? false)),
                 partial ? syncedAt : null,
               ],
             );
@@ -603,7 +611,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const rows =
         kind === "channel"
           ? await q(
-              `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
+              `SELECT channel.roster_known, channel.is_external OR channel.has_guests AS is_external, roster.principal_id AS roster_principal_id,
                       member.principal_id, member.display_name, member.type, member.slack_id
                FROM directory_channels channel
                LEFT JOIN directory_channel_members roster
