@@ -161,9 +161,20 @@ export function runtimeModelOptions(
   modelsByHarness: Readonly<Record<string, readonly string[]>>,
   catalog: Readonly<Record<string, ModelMetadata>> = {},
 ): ModelOption[] {
-  return approvedHarnesses.flatMap((harnessId) =>
+  const all = approvedHarnesses.flatMap((harnessId) =>
     buildOptions(modelsByHarness[harnessId] ?? [], harnessId, true, catalog),
   );
+  const byCost = (opt: ModelOption): number => {
+    const c = opt.model.cost;
+    return c ? c.input + c.output : Infinity;
+  };
+  const groups = new Map<string, ModelOption[]>();
+  for (const opt of all) {
+    const bucket = groups.get(opt.groupLabel) ?? [];
+    bucket.push(opt);
+    groups.set(opt.groupLabel, bucket);
+  }
+  return [...groups.values()].flatMap((bucket) => bucket.slice().sort((a, b) => byCost(a) - byCost(b)));
 }
 
 export function defaultModelValue(scopeKey?: string | null): ModelOptionValue {
