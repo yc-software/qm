@@ -2098,3 +2098,121 @@ dialog.credential-dialog {
   max-width: 100%;
   margin-right: 12px;
 }
+
+.spend-range-anchor {
+  position: relative;
+  height: 0;
+  z-index: 30;
+}
+.spend-range-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+}
+.spend-range {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 31;
+  padding: 16px 20px 12px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.5);
+  background: var(--surface);
+  box-shadow:
+    0 12px 32px rgba(16, 24, 40, 0.14),
+    0 2px 6px rgba(16, 24, 40, 0.06);
+}
+.spend-range:focus {
+  outline: none;
+}
+.spend-range-months {
+  display: grid;
+  grid-template-columns: repeat(2, 252px);
+  gap: 32px;
+}
+.spend-range-head {
+  display: grid;
+  grid-template-columns: 28px 1fr 28px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.spend-range-title {
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+}
+.spend-range-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 36px);
+  row-gap: 4px;
+}
+.spend-range-weekday {
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+#app-view #main .spend-range-nav,
+#app-view #main .spend-range-day {
+  position: relative;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+#app-view #main .spend-range-nav {
+  width: 28px;
+  border-radius: var(--radius);
+  font-size: 18px;
+  line-height: 1;
+}
+#app-view #main .spend-range-nav:hover:not(:disabled),
+#app-view #main .spend-range-day:hover:not(:disabled, .edge) {
+  background: var(--subtle);
+}
+#app-view #main .spend-range-day.in-range {
+  background: var(--subtle);
+}
+#app-view #main .spend-range-day.edge {
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+}
+#app-view #main .spend-range-day:disabled {
+  opacity: 0.35;
+  background: transparent;
+}
+#app-view #main .spend-range-day.today::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+#app-view #main .spend-range-day:focus-visible,
+#app-view #main .spend-range-nav:focus-visible {
+  outline: 2px solid var(--trigger);
+  outline-offset: -2px;
+}
+.spend-range-hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+@media (max-width: 640px) {
+  .spend-range-months {
+    grid-template-columns: 252px;
+  }
+  .spend-range-month:first-child {
+    display: none;
+  }
+}

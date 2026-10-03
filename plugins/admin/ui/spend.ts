@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { spendChart } from "./spend-chart.ts";
+import { monthStart, nextDay, previousDay, rangePicker, shiftMonth, windowLabel } from "./spend-range.ts";
 import { table, card, renderer } from "./shared.ts";
 
 type Services = Record<string, any>;
@@ -38,6 +39,9 @@ export class SpendView {
   sortKey = "costUsd";
   sortDir: "asc" | "desc" = "desc";
   search: HTMLElement | null = null;
+  pickerOpen = false;
+  pickerMonth = 0;
+  pickerPending: string | null = null;
   constructor(root: HTMLElement, data: any, services: Services) {
     this.root = root;
     this.data = data;
@@ -67,11 +71,18 @@ export class SpendView {
         [fmtUsd(org.cron?.costUsd), "Crons"],
         [org.cacheHitRatio == null ? "n/a" : s.fmtPct(org.cacheHitRatio), "Cache hit rate"],
       ],
-      tabs: RANGES.map((range) => ({
-        label: range,
-        active: (s.range || "30d") === range,
-        onClick: () => s.setRange(range),
-      })),
+      tabs: [
+        ...RANGES.map((range) => ({
+          label: range,
+          active: !s.custom && (s.range || "30d") === range,
+          onClick: () => s.setRange(range),
+        })),
+        {
+          label: s.custom ? windowLabel(s.custom, this.today()) : "Custom",
+          active: Boolean(s.custom),
+          onClick: () => (this.pickerOpen ? this.closePicker() : this.openPicker()),
+        },
+      ],
       search: {
         value: this.filter,
         placeholder: "person, scope or model",
@@ -87,6 +98,30 @@ export class SpendView {
       search.replaceWith(previous);
       if (focused) active?.focus({ preventScroll: true });
     } else this.search = search;
+  }
+  today(): string {
+    return this.services.today ?? new Date().toISOString().slice(0, 10);
+  }
+  openPicker() {
+    this.pickerOpen = true;
+    this.pickerPending = null;
+    this.pickerMonth = monthStart(this.services.custom ? previousDay(this.services.custom.to) : this.today());
+    this.draw();
+    this.root.querySelector<HTMLElement>(".spend-range")?.focus();
+  }
+  closePicker() {
+    this.pickerOpen = false;
+    this.pickerPending = null;
+    this.draw();
+  }
+  pick(day: string) {
+    if (this.pickerPending === null) {
+      this.pickerPending = day;
+      return this.draw();
+    }
+    const [first, last] = [this.pickerPending, day].sort();
+    this.closePicker();
+    this.services.setCustomRange(first, nextDay(last!));
   }
   sortBy(key: string) {
     if (this.sortKey === key) this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
@@ -141,6 +176,23 @@ export class SpendView {
     const org = this.data.org || {};
     this.paint(
       html`${
+        this.pickerOpen
+          ? html`<div class="spend-range-anchor">
+              ${rangePicker({
+                month: this.pickerMonth,
+                window: s.custom ?? null,
+                pending: this.pickerPending,
+                today: this.today(),
+                onPick: (day) => this.pick(day),
+                onShift: (delta) => {
+                  this.pickerMonth = shiftMonth(this.pickerMonth, delta);
+                  this.draw();
+                },
+                onClose: () => this.closePicker(),
+              })}
+            </div>`
+          : null
+      }${
         this.data.asOf == null
           ? null
           : html`<p class="subline">

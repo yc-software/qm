@@ -71,9 +71,9 @@ const EMPTY = {
   scopes: [],
 };
 
-function render(data: any) {
+function render(data: any, services: Record<string, unknown> = {}) {
   const f = litFixture();
-  const calls: any = { shell: null, ranges: [], opened: [], downloads: 0, modelDownloads: 0, api: 0 };
+  const calls: any = { shell: null, ranges: [], customs: [], opened: [], downloads: 0, modelDownloads: 0, api: 0 };
   const view = f.ui.spend.spend(f.root, data, {
     range: "30d",
     defaultShell: (opts: any) => {
@@ -89,10 +89,12 @@ function render(data: any) {
     plural: (n: number, one: string) => `${n} ${one}`,
     openUser: (principal: string) => calls.opened.push(principal),
     setRange: (range: string) => calls.ranges.push(range),
+    setCustomRange: (from: string, to: string) => calls.customs.push([from, to]),
     downloadCsv: (breakdown?: string) => {
       if (breakdown === "model") calls.modelDownloads += 1;
       else calls.downloads += 1;
     },
+    ...services,
   });
   const peopleRows = () =>
     [...f.root.querySelectorAll(".tablewrap")[0]!.querySelectorAll("tbody tr")].map((r) =>
@@ -119,6 +121,7 @@ test("spend view: KPI stats, stacked chart and range tabs describe the whole org
     ["7d", false],
     ["30d", true],
     ["90d", false],
+    ["Custom", false],
   ]);
   assert.equal(f.root.querySelectorAll(".spend-column").length, 30, "zero-spend dates retain their space");
   assert.ok(f.root.textContent!.includes("$0.53"), "daily average includes zero-spend days");
@@ -378,4 +381,95 @@ test("spend chart: person toggle is disabled for reports without person buckets"
     true,
   );
   f.window.close();
+});
+
+function picker(f: ReturnType<typeof litFixture>) {
+  const day = (label: string) => f.root.querySelector<HTMLButtonElement>(`.spend-range button[aria-label="${label}"]`);
+  const nav = (label: string) => f.root.querySelector<HTMLButtonElement>(`.spend-range-nav[aria-label="${label}"]`)!;
+  const months = () => [...f.root.querySelectorAll(".spend-range-title")].map((h) => h.textContent!.trim());
+  const open = () => f.root.querySelector(".spend-range") !== null;
+  return { day, nav, months, open };
+}
+
+test("spend view: the Custom tab opens a two-month UTC calendar and two picks apply an inclusive window", () => {
+  const { f, calls } = render(DATA, { today: "2026-09-30" });
+  const custom = calls.shell.tabs.at(-1);
+  assert.deepEqual([custom.label, custom.active], ["Custom", false]);
+  custom.onClick();
+  const p = picker(f);
+  assert.deepEqual(p.months(), ["August 2026", "September 2026"]);
+  assert.equal(p.day("September 30, 2026")!.classList.contains("today"), true);
+  p.day("September 1, 2026")!.click();
+  assert.match(f.root.querySelector(".spend-range-hint")!.textContent!, /last day/);
+  assert.equal(p.day("September 1, 2026")!.getAttribute("aria-pressed"), "true");
+  assert.deepEqual(calls.customs, [], "the first pick waits for the second");
+  p.day("September 30, 2026")!.click();
+  assert.deepEqual(calls.customs, [["2026-09-01", "2026-10-01"]]);
+  assert.equal(p.open(), false);
+  assert.equal(calls.api, 0);
+  f.window.close();
+});
+
+test("spend view: reversed picks swap, future days and months are disabled, and Escape or the backdrop dismisses", () => {
+  const { f, calls } = render(DATA, { today: "2026-09-15" });
+  const custom = calls.shell.tabs.at(-1);
+  custom.onClick();
+  const p = picker(f);
+  assert.equal(p.day("September 15, 2026")!.disabled, false);
+  assert.equal(p.day("September 16, 2026")!.disabled, true);
+  assert.equal(p.nav("Next month").disabled, true);
+  p.nav("Previous month").click();
+  assert.deepEqual(p.months(), ["July 2026", "August 2026"]);
+  assert.equal(p.nav("Next month").disabled, false);
+  p.day("August 20, 2026")!.click();
+  p.day("July 10, 2026")!.click();
+  assert.deepEqual(calls.customs, [["2026-07-10", "2026-08-21"]]);
+  custom.onClick();
+  f.root.querySelector(".spend-range")!.dispatchEvent(new f.window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal(p.open(), false);
+  custom.onClick();
+  f.root.querySelector<HTMLElement>(".spend-range-backdrop")!.click();
+  assert.equal(p.open(), false);
+  custom.onClick();
+  p.day("September 3, 2026")!.click();
+  p.day("September 3, 2026")!.click();
+  assert.deepEqual(calls.customs.at(-1), ["2026-09-03", "2026-09-04"], "one day twice is a single-day window");
+  f.window.close();
+});
+
+test("spend view: an applied custom window labels its tab, deactivates the presets and highlights its days", () => {
+  const { f, calls } = render(DATA, { custom: { from: "2026-08-28", to: "2026-09-03" }, today: "2026-09-30" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.shell.tabs.map((t: any) => [t.label, t.active]))), [
+    ["7d", false],
+    ["30d", false],
+    ["90d", false],
+    ["Aug 28 – Sep 2", true],
+  ]);
+  calls.shell.tabs[0].onClick();
+  assert.deepEqual(calls.ranges, ["7d"]);
+  calls.shell.tabs.at(-1).onClick();
+  const p = picker(f);
+  assert.deepEqual(p.months(), ["August 2026", "September 2026"]);
+  const selected = [...f.root.querySelectorAll(".spend-range-day.in-range")].map((b) => b.getAttribute("aria-label"));
+  assert.deepEqual(selected, [
+    "August 28, 2026",
+    "August 29, 2026",
+    "August 30, 2026",
+    "August 31, 2026",
+    "September 1, 2026",
+    "September 2, 2026",
+  ]);
+  const edges = [...f.root.querySelectorAll(".spend-range-day.edge")].map((b) => b.getAttribute("aria-label"));
+  assert.deepEqual(edges, ["August 28, 2026", "September 2, 2026"]);
+  f.window.close();
+});
+
+test("spend view: the custom tab label stays short, naming the year only when it is not the current one", () => {
+  const label = (from: string, to: string, today = "2026-09-30") =>
+    render(DATA, { custom: { from, to }, today }).calls.shell.tabs.at(-1).label;
+  assert.equal(label("2026-09-01", "2026-10-01"), "Sep 1–30");
+  assert.equal(label("2026-09-03", "2026-09-04"), "Sep 3");
+  assert.equal(label("2026-08-28", "2026-09-03"), "Aug 28 – Sep 2");
+  assert.equal(label("2025-03-01", "2025-04-01"), "Mar 1–31, 2025");
+  assert.equal(label("2025-12-28", "2026-01-04"), "Dec 28, 2025 – Jan 3, 2026");
 });
