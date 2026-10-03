@@ -19,7 +19,9 @@ for building and running; `MODAL_ENVIRONMENT` selects the SDK environment. The b
 does not change running sandboxes or deploy core.
 
 With no `MODAL_IMAGE` set during the build, the image starts from QM's pinned Node
-base and installs its usual shell, Python, Git, curl, and archive utilities. To extend
+base and installs its usual shell, Python, Git, curl, and archive utilities. It also
+makes `pip install` work without a virtual environment and preinstalls pinned
+requests, beautifulsoup4, lxml, openpyxl, pypdf and python-docx. To extend
 an existing custom image, set `MODAL_IMAGE` to its registry reference (prefer an
 immutable digest) or an existing Modal image ID. Custom bases must already contain
 Node, npm, and QM's baseline utilities; this preserves the existing custom-image

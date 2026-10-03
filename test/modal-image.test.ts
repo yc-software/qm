@@ -43,3 +43,9 @@ test("Modal preserves custom registry images and the default baseline", async ()
     ["commands", [MODAL_DEFAULT_IMAGE_SETUP]],
   ]);
 });
+
+test("Modal default baseline keeps pip usable with common Python packages", () => {
+  assert.match(MODAL_DEFAULT_IMAGE_SETUP, / python3-pip /);
+  assert.match(MODAL_DEFAULT_IMAGE_SETUP, /break-system-packages = true/);
+  assert.match(MODAL_DEFAULT_IMAGE_SETUP, /pip install .*beautifulsoup4==/);
+});
