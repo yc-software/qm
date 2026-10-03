@@ -15,6 +15,7 @@ import type { DirectoryStore } from "../../directory/directory-store.ts";
 import { isOverheardEntry } from "../../sessions/session-store.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { collectBytes } from "../../util/bytes.ts";
+import { absoluteAppLinks } from "../../util/text.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import type { FileArtifact, FileArtifactStore } from "../../files/file-artifact-store.ts";
@@ -40,11 +41,12 @@ export function isScreenableTextAttachment(mimetype: string): boolean {
   );
 }
 
-export function stripAckPrefix(text: string, ack: string | undefined): string {
+export function stripAckPrefix(text: string, ack: string | undefined, appBaseUrl?: string): string {
   if (!text || !ack) return text;
+  const sentAck = absoluteAppLinks(ack, appBaseUrl);
   const lead = text.trimStart();
-  if (!lead.startsWith(ack)) return text;
-  return lead.slice(ack.length).trimStart();
+  if (!lead.startsWith(sentAck)) return text;
+  return lead.slice(sentAck.length).trimStart();
 }
 
 export function headLooksLikeText(head: Buffer): boolean {

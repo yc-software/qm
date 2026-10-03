@@ -4099,7 +4099,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           // The model already wrote a reply as plain assistant text — deliver that text
           // directly instead of nudging it to re-post (a nudge here re-sends near-identical
           // text, which surfaces that render assistant entries show twice).
-          const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
+          const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText, deps.publicWebUrl).trim();
           const silentPollNarration = isPollFire && isSilentPollReply(primaryReply);
           if (primaryReply && !silentPollNarration && defaultDestination && deps.deliveries) {
             try {
@@ -4170,7 +4170,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
             );
             if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
-              const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
+              const fallback = stripAckPrefix(result.reply ?? "", spineAckText, deps.publicWebUrl).trim();
               if (fallback && defaultDestination && deps.deliveries) {
                 try {
                   const fallbackKey = postKeys.key(defaultDestination, postKeys.take());
@@ -4204,7 +4204,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;
         })();
-        const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
+        const reply = stripAckPrefix(result.reply ?? "", harvestedAck, deps.publicWebUrl);
         const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
 
         await latchCoverage();
