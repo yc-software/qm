@@ -4,8 +4,11 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inspect } from "node:util";
 import { createGitFetcher, resolvePackAuth } from "../src/skills/pack-fetcher.ts";
 import type { SkillPack } from "../src/skills/skill-pack-store.ts";
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function makeSourceRepo(): { dir: string; sha: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-src-fixture-"));
@@ -255,6 +258,195 @@ test("rejects repositories resolving to a private network before invoking Git", 
         ),
       /public network address/,
     );
+  }
+});
+
+function refusingGit(dir: string): string {
+  const git = join(dir, "git");
+  writeFileSync(
+    git,
+    "#!/bin/sh\n" +
+      "echo \"fatal: could not read Username for 'https://git.example': terminal prompts disabled\" >&2\n" +
+      "exit 128\n",
+  );
+  chmodSync(git, 0o700);
+  return git;
+}
+
+function leakingGit(dir: string): string {
+  const git = join(dir, "git");
+  writeFileSync(
+    git,
+    "#!/bin/sh\n" +
+      'echo "fatal: could not read Username" >&2\n' +
+      "env | grep ^GIT_CONFIG_VALUE_ >&2\n" +
+      "exit 128\n",
+  );
+  chmodSync(git, 0o700);
+  return git;
+}
+
+const AUTH = (await resolvePackAuth(
+  {
+    serviceCredential: async () => ({ secret: "supersecret", host: "git.example", enabled: true }),
+    connectorToken: async () => undefined,
+  },
+  { url: "https://git.example/repo", authCredentialSlug: "repo-token", createdBy: "u1" },
+))!;
+
+test("a rejected credential is reported as rejected rather than as a missing one", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-git-auth-refused-"));
+  try {
+    await assert.rejects(
+      () =>
+        createGitFetcher({
+          gitBin: refusingGit(dir),
+          lookup: async () => ["93.184.216.34"],
+          resolveAuth: async () => AUTH,
+        }).fetch(src({ url: "https://git.example/repo", authCredentialSlug: "repo-token" })),
+      (err: Error) => {
+        assert.match(err.message, /could not read Username/);
+        assert.match(err.message, /the credential this pack names \(repo-token\) was sent as the Authorization header/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("both halves of the credential are scrubbed out of what git said", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-git-scrub-"));
+  try {
+    await assert.rejects(
+      () =>
+        createGitFetcher({
+          gitBin: leakingGit(dir),
+          lookup: async () => ["93.184.216.34"],
+          resolveAuth: async () => AUTH,
+        }).fetch(src({ url: "https://git.example/repo", authCredentialSlug: "repo-token" })),
+      (err: Error) => {
+        assert.match(err.message, /GIT_CONFIG_VALUE_/, "the stub really did echo the injected git config");
+        assert.match(err.message, /Authorization: .*\*\*\*/, "including the auth header, with its value masked");
+        assert.doesNotMatch(err.message, /supersecret/);
+        assert.doesNotMatch(err.message, new RegExp(escapeRe(AUTH.value)));
+        const printed = inspect(err, { depth: 4 });
+        assert.doesNotMatch(printed, /supersecret/, "and the cause chain console.error walks carries none of it");
+        assert.doesNotMatch(printed, new RegExp(escapeRe(AUTH.value)));
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a connector token is named as one, because the remedy is not a keychain edit", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-git-connector-"));
+  try {
+    await assert.rejects(
+      () =>
+        createGitFetcher({
+          gitBin: refusingGit(dir),
+          lookup: async () => ["93.184.216.34"],
+          resolveAuth: async () => AUTH,
+        }).fetch(src({ url: "https://git.example/repo" })),
+      /a connector token for this host was sent as the Authorization header/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a pack that names a credential which did not resolve is not told it names none", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-git-auth-unresolved-"));
+  try {
+    await assert.rejects(
+      () =>
+        createGitFetcher({
+          gitBin: refusingGit(dir),
+          lookup: async () => ["93.184.216.34"],
+          resolveAuth: async () => undefined,
+        }).fetch(src({ url: "https://git.example/repo", authCredentialSlug: "repo-token" })),
+      (err: Error) => {
+        assert.match(
+          err.message,
+          /the one this pack names \(repo-token\) is missing, disabled, or delivered by environment/,
+        );
+        assert.doesNotMatch(err.message, /this pack names none/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a deployment that resolves no credentials at all says so instead of blaming the pack", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-git-no-resolver-"));
+  try {
+    await assert.rejects(
+      () =>
+        createGitFetcher({ gitBin: refusingGit(dir), lookup: async () => ["93.184.216.34"] }).fetch(
+          src({ url: "https://git.example/repo", authCredentialSlug: "repo-token" }),
+        ),
+      (err: Error) => {
+        assert.match(err.message, /this deployment resolves none for skill packs/);
+        assert.doesNotMatch(err.message, /repo-token/, "the pack is not blamed for a deployment-level gap");
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a not-found is answered with the ambiguity it actually carries", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-git-notfound-"));
+  const git = join(dir, "git");
+  writeFileSync(git, "#!/bin/sh\necho 'remote: Repository not found.' >&2\nexit 128\n");
+  chmodSync(git, 0o700);
+  try {
+    await assert.rejects(
+      () =>
+        createGitFetcher({
+          gitBin: git,
+          lookup: async () => ["93.184.216.34"],
+          resolveAuth: async () => AUTH,
+        }).fetch(src({ url: "https://git.example/repo", authCredentialSlug: "repo-token" })),
+      (err: Error) => {
+        assert.match(err.message, /answered the same way/);
+        assert.match(err.message, /repo-token/, "and it still names which credential was sent");
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a git failure that is about neither credentials nor a missing repo is passed through untouched", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-git-other-failure-"));
+  const git = join(dir, "git");
+  writeFileSync(git, "#!/bin/sh\necho 'fatal: unable to access: SSL certificate problem' >&2\nexit 128\n");
+  chmodSync(git, 0o700);
+  try {
+    await assert.rejects(
+      () =>
+        createGitFetcher({
+          gitBin: git,
+          lookup: async () => ["93.184.216.34"],
+          resolveAuth: async () => AUTH,
+        }).fetch(src({ url: "https://git.example/repo", authCredentialSlug: "repo-token" })),
+      (err: Error) => {
+        assert.match(err.message, /SSL certificate problem/);
+        assert.doesNotMatch(err.message, /was sent as the/);
+        assert.doesNotMatch(err.message, / — $/, "and no dangling separator is left behind");
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
