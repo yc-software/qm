@@ -256,3 +256,47 @@ test("HTTP retry after a lost initial response exposes only a complete pool and 
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("a person opening a session with no swarm, or with swarms off, gets an empty view instead of an error, even when swarms aren't allowed for them", async () => {
+  const fixture = await swarmFixture();
+  const secret = "source-auth-test-secret".repeat(3);
+  const portalIdentitySecret = "portal-test-secret".repeat(3);
+  let enabled = true;
+  const app = {
+    swarms: { ...fixture.service, enabledFor: async () => enabled },
+    authorizesCapabilityScope: async () => true,
+    getSessionForViewer: async (id: string, actorId: string) => {
+      const session = await fixture.sessions.getForParticipant(id, actorId);
+      return session ? { session, entries: [] } : null;
+    },
+  } as unknown as App;
+  const server = createServer(app, {
+    signingSecret: secret,
+    capabilitySecret: "capability-test-secret".repeat(3),
+    portalIdentitySecret,
+    requireSignedPortalIdentity: true,
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const path = `/v1/sessions/${fixture.root.id}/swarm`;
+    const portal = await mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, portalIdentitySecret);
+    const get = () =>
+      fetch(`${base}${path}`, {
+        headers: signedRequestHeaders(secret, "GET", path, "", { "x-portal-identity": portal }),
+      });
+    for (const flag of [true, false]) {
+      enabled = flag;
+      const response = await get();
+      assert.equal(response.status, 200, `swarms ${flag ? "on" : "off"}`);
+      assert.equal(await response.json(), null);
+    }
+    enabled = true;
+    fixture.state.allowed = false;
+    const denied = await get();
+    assert.equal(denied.status, 200, "swarms not allowed for this person");
+    assert.equal(await denied.json(), null);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});

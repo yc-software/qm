@@ -23,6 +23,9 @@ import {
   type SwarmStore,
 } from "./swarm-store.ts";
 
+export class SwarmNotFoundError extends Error {}
+export class SwarmAccessDeniedError extends Error {}
+
 export type SwarmCaller =
   { kind: "agent"; claims: CapabilityClaims } | { kind: "human"; actorId: string; sessionId: string; runId?: string };
 
@@ -256,7 +259,7 @@ export function createSwarmService(deps: {
         ...(caller.kind === "agent" && caller.claims.members ? { members: caller.claims.members } : {}),
       }))
     )
-      throw new Error("scope access denied");
+      throw new SwarmAccessDeniedError("scope access denied");
     if (swarm) {
       if (swarm.scopeId !== session.scopeId || !swarm.participants.includes(actorId))
         throw new Error("swarm access denied");
@@ -265,14 +268,14 @@ export function createSwarmService(deps: {
       if (!rosterMatches(participants, swarm.participants)) throw new Error("swarm session roster changed");
       if (!swarm.members.some((member) => member.id === identity.memberId && member.sessionId === session.id))
         throw new Error("session is not a swarm member");
-    } else if (identity.rootId !== session.id) throw new Error("swarm not found");
+    } else if (identity.rootId !== session.id) throw new SwarmNotFoundError("swarm not found");
     return { auth: { ...identity, sessionId: session.id, actorId, fence }, swarm };
   }
 
   async function load(caller: SwarmCaller): Promise<{ auth: Authority; swarm: Swarm; self: SwarmMember }> {
     const { auth, swarm } = await authority(caller);
     const self = swarm?.members.find((member) => member.id === auth.memberId);
-    if (!swarm || !self) throw new Error("swarm not found; spawn an initial pool first");
+    if (!swarm || !self) throw new SwarmNotFoundError("swarm not found; spawn an initial pool first");
     return { auth, swarm, self };
   }
 
