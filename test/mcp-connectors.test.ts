@@ -152,6 +152,7 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     userTokens: users,
     fetchImpl: async (_url, init) => {
       const rpc = JSON.parse(init.body);
+      if (rpc.method === "initialize" || rpc.method.startsWith("notifications/")) return jsonResponse({ result: {} });
       if (rpc.method === "tools/list") {
         catalogAuth.push(init.headers.authorization!);
         return jsonResponse({ result: { tools: TOOLS } });
@@ -262,3 +263,127 @@ test("per-user connectors select an explicit account slot without falling back t
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
+
+test("mcp client speaks the Streamable HTTP lifecycle to a stateful official-SDK server, and re-initializes after the server drops the session", async (t) => {
+  const { McpServer: SdkServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+  const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+  const { z } = await import("zod");
+  const { createServer } = await import("node:http");
+  const { randomUUID } = await import("node:crypto");
+  const sessions = new Map<string, InstanceType<typeof StreamableHTTPServerTransport>>();
+  let inits = 0;
+  const http = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
+    const sid = req.headers["mcp-session-id"];
+    if (typeof sid === "string" && !sessions.has(sid)) {
+      res.writeHead(404).end();
+      return;
+    }
+    let transport = typeof sid === "string" ? sessions.get(sid) : undefined;
+    if (!transport) {
+      inits++;
+      const created: InstanceType<typeof StreamableHTTPServerTransport> = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => void sessions.set(id, created),
+      });
+      transport = created;
+      const s = new SdkServer({ name: "fixture", version: "1" });
+      s.tool("echo", { msg: z.string() }, async ({ msg }) => ({ content: [{ type: "text", text: `echo:${msg}` }] }));
+      await s.connect(transport);
+    }
+    await transport.handleRequest(req, res, body);
+  });
+  await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
+  t.after(() => http.close());
+  const port = (http.address() as { port: number }).port;
+  const client = createMcpClient({ url: `http://127.0.0.1:${port}/mcp`, auth: { mode: "none" } });
+  assert.deepEqual(
+    (await client.listTools()).map((tool) => tool.name),
+    ["echo"],
+  );
+  assert.equal(mcpResultText(await client.callTool("echo", { msg: "hi" })), "echo:hi");
+  sessions.clear(); // server restart / session expiry
+  assert.equal(mcpResultText(await client.callTool("echo", { msg: "again" })), "echo:again");
+  assert.equal(inits, 2, "one handshake, plus one after the session was dropped");
+});
+
+test("a client-credentials token rejected before its expiry is re-minted once instead of failing until restart", async () => {
+  let minted = 0;
+  let valid = "";
+  const fetch: McpFetch = async (url, init) => {
+    if (url.endsWith("/token")) {
+      minted++;
+      valid = `tok-${minted}`;
+      return jsonResponse({ access_token: valid });
+    }
+    if (init.headers.authorization !== `Bearer ${valid}`) return jsonResponse({ error: "unauthorized" }, 401);
+    const rpc = JSON.parse(init.body);
+    return jsonResponse({ id: rpc.id, result: rpc.method === "tools/list" ? { tools: TOOLS } : {} });
+  };
+  const client = createMcpClient({
+    url: "https://mcp.example.com/mcp",
+    auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
+    fetchImpl: fetch,
+  });
+  assert.equal((await client.listTools()).length, 2);
+  valid = "rotated-server-side";
+  assert.equal((await client.listTools()).length, 2);
+  assert.equal(minted, 2);
+});
+
+test("cancelling a turn aborts the in-flight MCP call and tells the server to stop", async () => {
+  const cancelled: unknown[] = [];
+  let callId: unknown;
+  const fetch: McpFetch = async (_url, init) => {
+    const rpc = JSON.parse(init.body);
+    if (rpc.method === "notifications/cancelled") cancelled.push(rpc.params);
+    if (rpc.method !== "tools/call") return jsonResponse({ id: rpc.id, result: {} });
+    callId = rpc.id;
+    return new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+    });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  const controller = new AbortController();
+  const pending = client.callTool("slow", {}, controller.signal);
+  await new Promise((r) => setTimeout(r, 10));
+  controller.abort(new Error("turn stopped"));
+  await assert.rejects(pending, /turn stopped/);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(cancelled, [{ requestId: callId, reason: "turn stopped" }]);
+  await assert.rejects(
+    client.callTool("slow", {}, controller.signal),
+    /turn stopped/,
+    "already-aborted calls never send",
+  );
+});
+
+for (const status of [400, 405]) {
+  test(`a legacy server that answers initialize with ${status} still serves tools/list and tools/call without a session`, async () => {
+    const seen: Array<{ method: string; session?: string }> = [];
+    const fetch: McpFetch = async (_url, init) => {
+      const rpc = JSON.parse(init.body);
+      seen.push({ method: rpc.method, session: init.headers["mcp-session-id"] });
+      if (rpc.method === "initialize") return jsonResponse({ error: "unsupported" }, status);
+      if (rpc.method === "tools/list") return jsonResponse({ id: rpc.id, result: { tools: TOOLS } });
+      if (rpc.method === "tools/call")
+        return jsonResponse({ id: rpc.id, result: { content: [{ type: "text", text: `ran ${rpc.params.name}` }] } });
+      return jsonResponse({ error: "unexpected" }, 500);
+    };
+    const client = createMcpClient({ url: "https://legacy.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+    assert.equal((await client.listTools()).length, 2);
+    const result = await client.callTool(TOOLS[0]!.name, {});
+    assert.equal(mcpResultText(result), `ran ${TOOLS[0]!.name}`);
+    assert.deepEqual(
+      seen.map((s) => s.method),
+      ["initialize", "tools/list", "tools/call"],
+      "initialize is tried once, no initialized ack, then plain requests",
+    );
+    assert.ok(
+      seen.every((s) => s.session === undefined),
+      "no Mcp-Session-Id is ever sent",
+    );
+  });
+}

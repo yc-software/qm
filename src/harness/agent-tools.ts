@@ -4163,7 +4163,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           if (!tc) return text("[error] no active tool context");
           await recordCall(callId, { tool: d.name, mcpServer: d.serverId, args: params });
           try {
-            const out = await tc.callMcpTool(d.name, (params ?? {}) as Record<string, unknown>);
+            const out = await tc.callMcpTool(d.name, (params ?? {}) as Record<string, unknown>, ref.abortSignal);
             return recordExternalResult(
               callId,
               { tool: d.name, mcpServer: d.serverId },
