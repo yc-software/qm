@@ -4,10 +4,11 @@
 
 ## North stars
 
-1. **Unhobble.** Frontier models are smarter than we usually allow them to be. QM is about maximum enablement conditioned on risk tolerance and capital allocation.
-2. **Free the brain.** State lives in Postgres and the agent can query it. Sandboxes, model providers, and harnesses are just swappable resources for the agent.
+1. **Unhobble.** Frontier models are smarter than we usually allow them to be. What scaffolds and supports the model today will restrain it tomorrow; keep the harness as thin as possible.
+2. **Free the brain.** State lives in Postgres and the agent can query it. Unhobbling also implies freeing the agent from dependency on any specific provider: sandboxes, models, and harnesses are just swappable resources for the agent.
 3. **Fast is the best feature.** Every bit of overhead above base inference time should be measured and driven down.
 4. **Agent UX = human UX.** Tools, errors, hints and prompts are the agent's interface, so they get the same care as the web UI. Spend every context token on purpose.
+5. **Delete before you add.** Via negativa. This codebase is already way too flabby. Always try the solution that simplifies or removes code before adding anything.
 
 ## Subsystems, most central first
 
