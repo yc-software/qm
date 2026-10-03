@@ -80,11 +80,11 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 - **qm#1747** (2026-09-30): New SANDBOX_CAPABILITY_TTL_HOURS env var (48h default, or 0/none for non-expiring bearer tokens) right after #1518 hard-set 48h.
 - **qm#1619** (2026-09-25): Separate org runtime defaults for conversations, crons/loops and sub-agents, then per-cron overrides (#1593) and a fallback runtime (#1743): four overlapping runtime settings with precedence rules.
 - **qm#1201** (2026-09-15): Security screening gained an off/model/proxy backend plus ALL_POSTURES, four PROXY_* vars and a timeout, layered on HARNESS_SECURITY_POSTURE and the org-level Auto flagger settings from qm#878.
-- **qm#1208** (2026-09-15): EAGER_PROVISION was an opt-in flag no deploy template set, so every deployment missed a 66s-to-3s median speedup until it defaulted on. _Status:_ partly wound back; flag remains (src/config.ts:1654).
+- **qm#1208** (2026-09-15): EAGER_PROVISION was an opt-in flag no deploy template set, so every deployment missed a 66s-to-3s median speedup until it defaulted on. _Status:_ partly wound back; flag remains (src/config.ts).
 - **qm#1162** (2026-09-14): Gateway deployments had to maintain an environment model allowlist; replaced by discovering models from the gateway's key-scoped list. _Status:_ wound back in qm#1162.
 - **qm#1044** (2026-09-10): The unified `sandbox` tool shipped behind SANDBOX_RESOURCES_ENABLED alongside the legacy execute/background tools, so two tool surfaces and both flag states must be supported.
 - **qm#922** (2026-09-04): Another sandbox backend (agent37) was added, bringing providers to about ten (agent37, aws, e2b, modal, porter, smolmachines, sprites, superserve, local/docker); qm#954 proposed Kubernetes as well.
-- **qm#876** (2026-09-02): Porter added as yet another SANDBOX_BACKEND and DEPLOY_PROVIDER (plus a Helm chart),, shortly after Modal and E2B.
+- **qm#876** (2026-09-02): Porter added as yet another SANDBOX_BACKEND and DEPLOY_PROVIDER (plus a Helm chart), shortly after Modal and E2B.
 - **qm#478** (2026-08-13): Added smolmachines as yet another sandbox backend, then SMOLMACHINES_CPUS/MEMORY_MB/DISK_GB env knobs (qm#507).
 
 ### God files (1 example)
@@ -97,16 +97,15 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 - **qm#1053** (2026-09-11): A parallel 'Beautiful UI' design system (10 stacked PRs) and an admin redesign with an Original/New toggle were built next to the existing web UI styles. _Status:_ wound back in qm#1053 (closed with #1054-#1062, #992, #1215).
 - **qm#513** (2026-08-13): Multiview panes showed two stacked headers (pane chrome plus the hosted chat's own top bar). _Status:_ wound back in qm#513.
 
-### Over-indexing on YC (4 examples)
+### Over-indexing on YC (3 examples)
 
-- **qm#1315** (2026-09-16): Generic web UI welcome ships YC-batch copy (YC Deals, YC investor database, get_yc_application, 'progress through the YC batch').
 - **qm#1315** (2026-09-16): The generic web UI onboarding says 'the agent harness we use to run YC' and 'your YC partner in a box', and the welcome ideas cite 'YC Deal' and 'the YC investor database'.
 - **qm#1008** (2026-09-09): A 29-file 'software factory' loop (Linear auto-triage, forge ship contract) built for YC's own workflow was ported into public src/loops/factory before it had ever run end to end. _Status:_ wound back in qm#1026.
 - **qm#530** (2026-08-15): Assistant and org names were fixed across prompts, manifests, auth and UI; made deployment-configurable with neutral defaults. _Status:_ wound back in qm#530.
 
 ### Regex (3 examples)
 
-Regex standing in for a parser, a typed error, a stored field or a model call. Main has 1,443 production regex sites in 380 files; cleanup is LAB-166.
+Regex standing in for a parser, a typed error, a stored field or a model call. Main has 1,443 production regex sites in 380 files; cleanup is the regex-removal backlog.
 
 - **qm#1354** (2026-09-17): The web UI re-parses shell commands with a hand-written tokenizing regex (and sniffs `sed -n Np` and Markdown headings by pattern) to decide how to present tool activity, instead of using the structured call data.
 - **qm#1210** (2026-09-15): Composio consent links are found by regex-scanning model text for URLs and Markdown links, then stripped with dynamically built `RegExp`s, rather than arriving as a typed connector-link field.
