@@ -107,6 +107,7 @@ export function createPostgresAdvisoryLock(
   type Context = {
     client: PoolClient;
     references: number;
+    broken: boolean;
     keys: Map<string, { shared: boolean; count: number }>;
   };
   const sessions = new AsyncLocalStorage<{ context: Context; active: boolean }>();
@@ -114,14 +115,14 @@ export function createPostgresAdvisoryLock(
     const parent = sessions.getStore();
     const context = parent?.active
       ? parent.context
-      : { client: await (await pg.sessionPool()).connect(), references: 0, keys: new Map() };
+      : { client: await (await pg.sessionPool()).connect(), references: 0, keys: new Map(), broken: false };
     context.references++;
     const lease = { context, active: true };
     try {
       return await sessions.run(lease, () => action(context));
     } finally {
       lease.active = false;
-      if (--context.references === 0) context.client.release();
+      if (--context.references === 0) context.client.release(context.broken);
     }
   };
   const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean, wait: boolean): Promise<T | null> => {
@@ -143,7 +144,12 @@ export function createPostgresAdvisoryLock(
           try {
             return { acquired: true, value: await fn() };
           } finally {
-            await client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [key]);
+            await client
+              .query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [key])
+              .catch((error: unknown) => {
+                context.broken = true;
+                throw error;
+              });
           }
         } finally {
           if (--reservation.count === 0) keys.delete(key);
