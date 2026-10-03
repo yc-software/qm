@@ -1148,7 +1148,7 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
       "x-frame-options": "SAMEORIGIN",
       "x-content-type-options": "nosniff",
     });
-    return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+    return pipeUpstream(res, r.body);
   }
 
   const csp = scriptCapableContentType(contentType)
@@ -1161,7 +1161,16 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
     "x-content-type-options": "nosniff",
   };
   res.writeHead(200, framedByOwnSurfaces(res, headers, csp));
-  return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+  return pipeUpstream(res, r.body);
+}
+
+function pipeUpstream(res: ServerResponse, body: NonNullable<Response["body"]>): ServerResponse {
+  const stream = Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
+  stream.on("error", () => res.destroy());
+  res.on("close", () => {
+    if (!res.writableFinished) stream.destroy();
+  });
+  return stream.pipe(res);
 }
 
 const apiRoutes: readonly WebRoute[] = [
