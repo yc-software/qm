@@ -449,3 +449,61 @@ test("an in-place recovery of a marked task-list reply does not replay attachmen
   assert.deepEqual(uploads, [], "attachments behind a delivered marker are not replayed");
   assert.equal((await store.pending("slack")).length, 0, "the delivery is acked");
 });
+
+test("a reply too long for one message replaces the task-list message instead of editing it in place", async () => {
+  const { store, makePoller } = harness();
+  const posts: Array<{ text?: string; ts?: string }> = [];
+  const updates: unknown[] = [];
+  const deletes: unknown[] = [];
+  let n = 0;
+  const client = {
+    chat: {
+      async postMessage(args: { channel: string; text?: string }) {
+        posts.push(args);
+        return { ok: true, ts: `300.${++n}`, channel: args.channel };
+      },
+      async update(args: { text: string }) {
+        updates.push(args);
+        if (args.text.length > 40_000)
+          throw Object.assign(new Error("msg_too_long"), { data: { error: "msg_too_long" } });
+        return { ok: true };
+      },
+      async delete(args: unknown) {
+        deletes.push(args);
+        return { ok: true };
+      },
+    },
+    conversations: {
+      async history() {
+        return { messages: [] };
+      },
+      async replies() {
+        return { messages: [] };
+      },
+    },
+    files: { async uploadV2() {} },
+    pins: {
+      async add() {
+        return {};
+      },
+      async remove() {
+        return {};
+      },
+    },
+  };
+  const d = await store.enqueue({
+    destination: { type: "slack", target: "C1:100.0", editRef: "100.5" },
+    text: "word ".repeat(9_000),
+    idempotencyKey: "run:R9",
+  });
+  d.createdAt = Date.now() - 60_000;
+  await makePoller().pollDeliveries(client);
+  assert.equal(updates.length, 0, "no in-place edit of a message Slack can't hold");
+  assert.ok(posts.length > 1, "the reply is split into several messages");
+  assert.ok(
+    posts.every((p) => (p.text ?? "").length <= 3_800),
+    "every part fits",
+  );
+  assert.deepEqual(deletes, [{ channel: "C1", ts: "100.5" }], "the stale task-list message is removed");
+  assert.equal((await store.pending("slack")).length, 0);
+});

@@ -17,6 +17,7 @@ import {
   parseDeliveryTarget,
   postWithVerify,
   recoveryVerifyOldest,
+  SLACK_POST_SPLIT_LIMIT,
   renderTaskList,
   slackReplyArgs,
   slackSectionBlocks,
@@ -344,7 +345,11 @@ export function createDeliveryPoller(deps: {
                   d.idempotencyKey ?? d.id,
                   verifyOldest ?? String(Date.now() / 1000 - 60),
                 ).catch(swallowAs("slack: delivered-marker probe", undefined));
-              if (d.destination.editRef) {
+              // A reply too big for one message can't be finalized in place: chat.update has no
+              // splitting (msg_too_long / >50 blocks), and the fallback post below would leave the
+              // old task-list message behind next to a reply that repeats it.
+              const fitsInPlace = text.length <= SLACK_POST_SPLIT_LIMIT && (footerBlocks?.length ?? 0) <= 50;
+              if (d.destination.editRef && fitsInPlace) {
                 const unfurlLinks = runId ? false : d.destination.unfurlLinks;
                 try {
                   const alreadyDelivered = d.attachments?.length ? await deliveredMarker() : undefined;
@@ -374,6 +379,10 @@ export function createDeliveryPoller(deps: {
                 d.idempotencyKey ?? d.id,
                 runId || recoveredRow(d) ? { verifyFirst: true, ...(verifyOldest ? { verifyOldest } : {}) } : undefined,
               );
+              if (d.destination.editRef && !fitsInPlace && res.ts !== d.destination.editRef)
+                await client.chat
+                  .delete({ channel, ts: d.destination.editRef })
+                  .catch(swallowAs("slack: delete superseded task list", undefined));
               const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
               if (root) threads.mark(channel, root, true);
               if (!res.reused) await replayAttachments(root);
