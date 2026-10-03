@@ -80,11 +80,14 @@ export function brokerPathAllowed(pathname: string, prefixes?: string[]): boolea
   );
 }
 
-export function brokerCredentialAuthHeader(rec: DecryptedServiceCredential): [string, string] {
+export function brokerInjectedHeaders(rec: DecryptedServiceCredential, actorId: string): Record<string, string> {
   const injHeader = rec.injection?.header || "Authorization";
   const rawScheme = rec.injection?.scheme ?? "Bearer ";
   const injScheme = rawScheme && !/\s$/.test(rawScheme) ? `${rawScheme} ` : rawScheme;
-  return [injHeader, `${injScheme}${rec.secret}`];
+  return {
+    [injHeader]: `${injScheme}${rec.secret}`,
+    ...(rec.injection?.actor ? { "x-qm-actor": actorId } : {}),
+  };
 }
 
 type CredentialGrant =
@@ -114,6 +117,15 @@ export async function grantedCredential(
       message: "this credential is switched off for published apps",
       host: rec.host,
     };
+  if (credentialInjectionError(rec.injection))
+    return {
+      status: 503,
+      code: "invalid_injection",
+      message: "credential injection configuration is invalid",
+      host: rec.host,
+    };
+  if (rec.injection?.actor && (typeof claims.actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(claims.actorId)))
+    return { status: 403, code: "invalid_actor", message: "actor identity cannot be attested", host: rec.host };
   return { rec };
 }
 
@@ -157,18 +169,12 @@ export async function brokerCredentialCall(opts: {
   const grant = await grantedCredential(claims, slug, reader, orgScopeId);
   if (!grant.rec) return deny(grant.status, grant.code, grant.message, grant.host);
   const { rec } = grant;
-  if (credentialInjectionError(rec.injection)) {
-    return deny(503, "invalid_injection", "credential injection configuration is invalid", rec.host);
-  }
   if (
     body.headers &&
     typeof body.headers === "object" &&
     Object.keys(body.headers).some((key) => key.toLowerCase() === "x-qm-actor")
   ) {
     return deny(400, "reserved_header", "x-qm-actor is set only by the broker", rec.host);
-  }
-  if (rec.injection?.actor && (typeof claims.actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(claims.actorId))) {
-    return deny(403, "invalid_actor", "actor identity cannot be attested", rec.host);
   }
   let parsed: URL;
   try {
@@ -204,9 +210,7 @@ export async function brokerCredentialCall(opts: {
       if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) headers[k] = v;
     }
   }
-  const [injHeader, injValue] = brokerCredentialAuthHeader(rec);
-  headers[injHeader] = injValue;
-  if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
+  Object.assign(headers, brokerInjectedHeaders(rec, claims.actorId));
 
   let resp: BrokerFetchResponse;
   try {
