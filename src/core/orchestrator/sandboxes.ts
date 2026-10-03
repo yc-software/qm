@@ -859,10 +859,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         keepWarm = false;
       }
     }
-    await deps.sandbox.teardown(handle, {
-      ...(keepWarm ? { keepWarm: true } : {}),
-      ...(box.used ? {} : { homeUnchanged: true }),
-    });
+    await deps.sandbox
+      .teardown(handle, {
+        ...(keepWarm ? { keepWarm: true } : {}),
+        ...(box.used ? {} : { homeUnchanged: true }),
+      })
+      .catch(swallowAs("orchestrator: park turn computer", undefined));
     if (ownerCleanupError) throw ownerCleanupError;
     if (scratchCleanupError) throw scratchCleanupError;
   };
