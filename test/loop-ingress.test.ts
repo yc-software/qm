@@ -440,3 +440,31 @@ test("revoking rollout blocks new deliveries and processing already queued work"
   await denied.setEnabled(w.loop.id, source.id, false);
   await assert.rejects(denied.setEnabled(w.loop.id, source.id, true), /not enabled/);
 });
+
+test("an expired Gmail cursor resyncs only the most recent inbox page, not the whole mailbox", async () => {
+  const listed: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("profile")) return Response.json({ emailAddress: "alice@example.com", historyId: "500" });
+    if (url.pathname.endsWith("history")) return new Response("", { status: 404 });
+    if (url.pathname.endsWith("messages")) {
+      listed.push(url.search);
+      return Response.json({ nextPageToken: `p${listed.length}`, messages: [{ id: `m${listed.length}` }] });
+    }
+    const id = url.pathname.split("/").at(-1);
+    return Response.json({ id, threadId: `t-${id}`, internalDate: "1", labelIds: ["INBOX"], payload: { headers: [] } });
+  };
+  const client = createGmailPushClient({ connectorAccessToken: async () => "token" }, gmailConfig, fetchImpl);
+  const entries: unknown[] = [];
+  const next = await client.changes(
+    "alice",
+    "loop",
+    { email: "alice@example.com", historyId: "1", expiresAt: 1 },
+    async (b) => {
+      entries.push(...b);
+    },
+  );
+  assert.equal(next, "500");
+  assert.equal(listed.length, 1, "a years-deep inbox is not paged through");
+  assert.equal(entries.length, 1);
+});
