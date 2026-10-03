@@ -437,3 +437,20 @@ test("goal active time banks each turn and excludes idle and paused gaps", () =>
   assert.equal(goalFloorUnmet(goal, meter, resumedAt + 12 * 60_000), false);
   assert.equal(reviveGoalRecord(structuredClone(goal)).activeMs, 8 * 60_000);
 });
+
+test("verifyGoalCompletion reads the verdict even when prose around it has braces", async () => {
+  const judged = (reply: string) => verifyGoalCompletion(async () => reply, "obj", "ev");
+  const prose = await judged(
+    'The note cites {tests: green}. Verdict:\n```json\n{"complete": true, "reasons": "all {3} checks pass"}\n```',
+  );
+  assert.deepEqual(prose, { complete: true, reasons: "all {3} checks pass" });
+  const draftThenFinal = await judged(
+    '{"complete": true, "reasons": "draft"} on reflection: {"complete": false, "reasons": "missing tests"}',
+  );
+  assert.deepEqual(draftThenFinal, { complete: false, reasons: "missing tests" });
+  const nested = await judged('{"complete": true, "reasons": "ok", "detail": {"files": 2}} trailing }');
+  assert.equal(nested.complete, true);
+  const wrongShape = await judged('{"complete": "true"} {"verdict": true}');
+  assert.equal(wrongShape.complete, false);
+  assert.match(wrongShape.reasons, /not parseable/);
+});
