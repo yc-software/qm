@@ -352,7 +352,11 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     }),
     (error: Error) => {
       assert.equal(error.message, "Disposable sandbox destruction failed");
-      assert.equal((error.cause as Error).message, "persistent control-plane deletion failure");
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(
+        error.errors.map((attempt: Error) => attempt.message),
+        Array(3).fill("persistent control-plane deletion failure"),
+      );
       return true;
     },
   );
