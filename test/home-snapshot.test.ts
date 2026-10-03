@@ -120,18 +120,91 @@ test("snapshot streams the home tar as fixed-size parts and hydrates it back byt
   assert.equal(existsSync(b.tar), false);
 });
 
-test("a home over the size cap is refused before a single byte is read", async () => {
+test("the tar is streamed with no archive and at most one part on the sandbox disk", async () => {
+  const a = box();
+  fill(a.home, "data.bin", 4096 * 6 + 1);
+  const footprints: string[][] = [];
+  const watching: HomeSnapshotSessionIo<Box> = {
+    ...io,
+    readFileBytes: async (b, abs) => {
+      footprints.push(
+        readdirSync(b.root, { recursive: true })
+          .map(String)
+          .filter((f) => f !== "home" && !f.startsWith("home/")),
+      );
+      return io.readFileBytes(b, abs);
+    },
+  };
+  await ops(a, createMemorySnapshotStore(), { io: watching }).snapshotHome("scope", a);
+  assert.ok(footprints.length >= 7, `read ${footprints.length} parts`);
+  for (const files of footprints) {
+    assert.equal(files.includes("home.tar"), false, `archive materialized: ${files}`);
+    assert.equal(files.filter((f) => /\.part(\.tmp)?$/.test(f)).length, 1, `parts on disk: ${files}`);
+  }
+  assert.deepEqual(readdirSync(a.root), ["home"], "no scratch file survives the snapshot");
+});
+
+test("a guest write failure on the final part fails the snapshot instead of committing a truncated archive", async () => {
+  const a = box();
+  fill(a.home, "data.bin", 4096 * 2 + 10);
+  const bin = join(a.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "dd"),
+    `#!/bin/sh\ncase "$*" in */2.part.tmp*) echo "dd: failed to write: No space left on device" >&2; exit 1;; esac\nexec /bin/dd "$@"\n`,
+    { mode: 0o755 },
+  );
+  const fullDisk: HomeSnapshotSessionIo<Box> = {
+    ...io,
+    async runCommand(b, script) {
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+      const r = spawnSync("sh", ["-c", script], { cwd: b.root, encoding: "utf8", env });
+      return { exitCode: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+    },
+  };
+  const rec = recordingStore();
+  await rec.store.put("scope", Buffer.from("previous"));
+  await assert.rejects(
+    () => ops(a, rec.store, { io: fullDisk }).snapshotHome("scope", a),
+    /producer failed \(exit 1\).*No space left on device/,
+  );
+  assert.equal(rec.parts.length, 2, "the parts before the failure were uploaded");
+  assert.equal(rec.completed, 0, "a truncated archive is never committed");
+  assert.equal(rec.aborted, 1);
+  const kept = await rec.store.open("scope");
+  assert.equal(Buffer.concat(await Array.fromAsync(kept!.parts)).toString(), "previous");
+});
+
+test("a producer orphaned by a failed upload cannot poison the next snapshot", async () => {
+  const a = box();
+  const data = fill(a.home, "data.bin", 4096 * 3 + 9);
+  const down: HomeSnapshotStore = {
+    ...createMemorySnapshotStore(),
+    createUpload: async () => {
+      throw new Error("store down");
+    },
+  };
+  await assert.rejects(() => ops(a, down).snapshotHome("scope", a), /store down/);
+  const store = createMemorySnapshotStore();
+  await ops(a, store).snapshotHome("scope", a);
+  const b = box();
+  assert.equal(await ops(b, store).hydrateHome("scope", b), true);
+  assert.ok(Buffer.from(readFileSync(join(b.home, "data.bin"))).equals(data));
+});
+
+test("a home over the size cap aborts the upload once the cap is crossed", async () => {
   const a = box();
   fill(a.home, "huge.bin", 4096 * 8);
   const rec = recordingStore();
   await assert.rejects(
     () => ops(a, rec.store, { maxBytes: 4096 * 4 }).snapshotHome("scope", a),
-    (e: unknown) => e instanceof SnapshotTooLargeError && /cap is 16384/.test((e as Error).message),
+    (e: unknown) => e instanceof SnapshotTooLargeError && /cap of 16384 bytes/.test((e as Error).message),
   );
-  assert.equal(rec.parts.length, 0, "no part was uploaded");
+  assert.ok(rec.parts.length <= 4, `only parts within the cap were uploaded, got ${rec.parts.length}`);
   assert.equal(rec.completed, 0);
-  assert.equal(existsSync(a.tar), false, "the oversized tar is removed from the sandbox");
-  assert.equal(await createMemorySnapshotStore().open("scope"), null);
+  assert.equal(rec.aborted, 1);
+  assert.deepEqual(readdirSync(a.root), ["home"], "the producer is stopped and its scratch removed");
+  assert.equal(await rec.store.open("scope"), null);
 });
 
 test("a part that comes back the wrong size fails the snapshot and aborts the upload", async () => {
@@ -142,7 +215,7 @@ test("a part that comes back the wrong size fails the snapshot and aborts the up
     ...io,
     readFileBytes: async (b, abs) => {
       const bytes = await io.readFileBytes(b, abs);
-      return bytes && abs.endsWith(".1.part") ? bytes.subarray(0, bytes.length - 1) : bytes;
+      return bytes && abs.endsWith("/1.part") ? bytes.subarray(0, bytes.length - 1) : bytes;
     },
   };
   const snap = createHomeSnapshotOps<Box>({
@@ -154,10 +227,16 @@ test("a part that comes back the wrong size fails the snapshot and aborts the up
     io: lying,
     partBytes: 4096,
   });
+  await rec.store.put("scope", Buffer.from("previous"));
   await assert.rejects(() => snap.snapshotHome("scope", a), /part 1: got 4095 bytes, expected 4096/);
   assert.equal(rec.aborted, 1);
   assert.equal(rec.completed, 0);
-  assert.equal(await rec.store.open("scope"), null, "a failed upload never replaces the stored snapshot");
+  const kept = await rec.store.open("scope");
+  assert.equal(
+    Buffer.concat(await Array.fromAsync(kept!.parts)).toString(),
+    "previous",
+    "a failed upload never replaces the stored snapshot",
+  );
 });
 
 test("hydrate coalesces a stream of small chunks into partBytes writes", async () => {
