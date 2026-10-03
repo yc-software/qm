@@ -294,3 +294,45 @@ test("explicit capture uses the conversation origin rather than the notebook des
   assert.equal(await tool.memoryRemember(["synthetic fact"]), 1);
   assert.equal(context?.conversationScopeId, "group:origin");
 });
+
+test("a rewrite based on a stale read does not drop a fact remembered in between", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-rewrite-race-")));
+  const memory = createMemoryService(workspace);
+  const scope = scopeId("personal", "U1");
+  await workspace.ensureScope(scope);
+  await memory.capture(scope, ["Owns billing"], at);
+  const curator = ctxFor({ scope, workspace, memory });
+  const other = ctxFor({ scope, workspace, memory });
+
+  const seen = await curator.memoryRead();
+  assert.match(seen ?? "", /Owns billing/);
+  await other.memoryRemember(["Prefers terse replies"]);
+  await assert.rejects(curator.memoryRewrite("- Owns billing (curated)\n"), /changed/i);
+  assert.match(await memory.read(scope), /Prefers terse replies/);
+
+  await curator.memoryRead();
+  assert.equal(await curator.memoryRewrite("- Owns billing (curated)\n- Prefers terse replies\n"), true);
+  assert.match(await memory.read(scope), /curated/);
+});
+
+test("the `memory` tool reports a stale rewrite as an error and accepts the turn's own remembers", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-rewrite-tool-")));
+  const memory = createMemoryService(workspace);
+  const scope = scopeId("personal", "U1");
+  await workspace.ensureScope(scope);
+  await memory.capture(scope, ["Owns billing"], at);
+  const ref: ToolContextRef = { current: ctxFor({ scope, workspace, memory }), emit: () => {}, scopeLabel: scope };
+  const memoryTool = createAgentTools(ref).find((t) => t.name === "memory");
+
+  await call(memoryTool, { action: "read" });
+  await call(memoryTool, { action: "remember", facts: ["Ships on Fridays"] });
+  assert.match(textOf(await call(memoryTool, { action: "rewrite", content: "- Owns billing\n" })), /Rewrote/);
+
+  await call(memoryTool, { action: "read" });
+  await ctxFor({ scope, workspace, memory }).memoryRemember(["Prefers terse replies"]);
+  const stale = await call(memoryTool, { action: "rewrite", content: "- Owns billing (curated)\n" }).catch(
+    (error: unknown) => ({ content: [{ type: "text", text: String(error) }] }),
+  );
+  assert.match(textOf(stale), /changed/i);
+  assert.match(await memory.read(scope), /Prefers terse replies/);
+});

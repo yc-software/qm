@@ -521,6 +521,7 @@ export interface ToolContextDeps {
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
+  let notebookReadRevision: string | undefined;
   const writableScopeId = deps.layers.find((l) => l.mode === "rw")?.scopeId ?? null;
   const memory =
     deps.context?.memory ??
@@ -1158,21 +1159,29 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryRead(): Promise<string | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
-      return timed("recall", () => memory!.read(write));
+      return timed("recall", async () => {
+        if (memory!.readHead && memory!.replaceIfRevision)
+          notebookReadRevision = (await memory!.readHead(write)).revision || undefined;
+        return memory!.read(write);
+      });
     },
 
     async memoryRemember(facts: string[]): Promise<number | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
       return once(() =>
-        timed("memory_write", () =>
-          memory!.capture(write, facts, Date.now(), deps.createdBy, {
+        timed("memory_write", async () => {
+          const before = notebookReadRevision && (await memory!.readHead?.(write))?.revision;
+          const added = await memory!.capture(write, facts, Date.now(), deps.createdBy, {
             ...deps.memoryCaptureMetadata?.(),
             mode: "explicit",
             actorId: deps.createdBy,
             conversationScopeId: writableScopeId ?? write,
-          }),
-        ),
+          });
+          if (before && before === notebookReadRevision)
+            notebookReadRevision = (await memory!.readHead?.(write))?.revision || undefined;
+          return added;
+        }),
       );
     },
 
@@ -1181,7 +1190,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!memory || !write) return null;
       return once(() =>
         timed("memory_write", async () => {
-          await memory!.replace(write, content, deps.createdBy);
+          const revision = notebookReadRevision;
+          if (revision && memory!.replaceIfRevision) {
+            if (!(await memory!.replaceIfRevision(write, content, revision, deps.createdBy)))
+              throw new Error("Memory changed since you read it; read it again and rewrite from the current notebook.");
+            notebookReadRevision = (await memory!.readHead?.(write))?.revision || undefined;
+          } else {
+            await memory!.replace(write, content, deps.createdBy);
+          }
           return true as const;
         }),
       );
