@@ -487,6 +487,7 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
     if (url.pathname === "/session/status") return json(res, { ses_main: { type: "idle" } });
     if (req.method === "POST" && message) {
       process.qaInitial = JSON.parse(await readBody(req));
+      (await import("node:fs")).writeFileSync(${JSON.stringify(capturePath + ".started")}, "started");
       while (!process.qaSteered) await new Promise(resolve => setTimeout(resolve, 10));
       while (!require("node:fs").existsSync(${JSON.stringify(capturePath + ".release")})) await new Promise(resolve => setTimeout(resolve, 5));
       await capture("ses_main", { messages: [
@@ -536,9 +537,14 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
       },
     ],
   });
-  await signals.send(turn.runId, { kind: "steer", text: "read the documents", ts: "doc.1" });
-  const steerWindowStart = Date.now();
   const running = harness.turns.runTurn(turn);
+  const startDeadline = Date.now() + 8_000;
+  while (!existsSync(capturePath + ".started")) {
+    if (Date.now() > startDeadline) throw new Error("mock OpenCode did not receive the turn");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const steerWindowStart = Date.now();
+  await signals.send(turn.runId, { kind: "steer", text: "read the documents", ts: "doc.1" });
   const deadline = Date.now() + 8_000;
   while (!existsSync(capturePath)) {
     if (Date.now() > deadline) throw new Error("mock OpenCode did not receive steer");
