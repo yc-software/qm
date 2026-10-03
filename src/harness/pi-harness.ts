@@ -960,12 +960,30 @@ function formatPiAssistantError(raw: string | undefined): string {
     : `Model provider API error: ${provider.message}`;
 }
 
-const TRANSIENT_PROVIDER_ERROR_TYPES = new Set(["overloaded_error", "api_error", "rate_limit_error", "timeout_error"]);
+/**
+ * Provider error `type`s that retrying cannot fix. Anything else falls through to the
+ * message-pattern check: OpenAI tags rate limits `requests`/`tokens` and 5xx `server_error`,
+ * and LiteLLM-style gateways send `type: "None"`, so an allowlist of transient types
+ * wrongly ended those turns.
+ */
+const FINAL_PROVIDER_ERROR_TYPES = new Set([
+  "authentication_error",
+  "permission_error",
+  "invalid_request_error",
+  "not_found_error",
+  "request_too_large",
+  "billing_error",
+  "insufficient_quota",
+  "budget_exceeded",
+]);
+
+const TRANSIENT_NETWORK_ERROR = /\b(ECONNRESET|ETIMEDOUT|EPIPE|ECONNABORTED|EHOSTUNREACH|ENETUNREACH|UND_ERR_SOCKET)\b/;
 
 function piErrorRetryable(failed: AssistantMessage): boolean {
+  if (isContextOverflow(failed)) return false;
   const providerType = failed.errorMessage ? parseProviderError(failed.errorMessage)?.type : undefined;
-  if (providerType && !TRANSIENT_PROVIDER_ERROR_TYPES.has(providerType)) return false;
-  return isRetryableAssistantError(failed) && !isContextOverflow(failed);
+  if (providerType && FINAL_PROVIDER_ERROR_TYPES.has(providerType)) return false;
+  return isRetryableAssistantError(failed) || TRANSIENT_NETWORK_ERROR.test(failed.errorMessage ?? "");
 }
 
 function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
