@@ -314,6 +314,14 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
       if (scopeKind(toScopeId) === "org") {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");
       }
+      // Two live skills with one name in a scope make resolution pick one arbitrarily (by row
+      // order), so the moved skill could silently replace — or be hidden by — the resident one.
+      const clash = (await skills.all()).find(
+        (x) =>
+          x.id !== s.id && x.scopeId === toScopeId && x.status !== "archived" && x.manifest.name === s.manifest.name,
+      );
+      if (clash)
+        throw new Error(`${toScopeId} already has a skill named "${s.manifest.name}" — rename or archive one first`);
       s.scopeId = toScopeId;
       s.updatedAt = Date.now();
       await skills.put(s.id, s);
