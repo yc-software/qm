@@ -114,3 +114,7 @@ Regex standing in for a parser, a typed error, a stored field or a model call. M
 ### YC info leaking into public qm (1 example)
 
 - **qm#1504** (2026-09-22): Public docs/test fixtures had org-specific rollout guidance and identity examples plus 92 tracked screenshots (8.1 MB); scrubbed and AGENTS.md now bans committed screenshots. _Status:_ wound back in qm#1504 (partially; YC welcome copy remains).
+
+### Discarded error evidence (1 example)
+
+- **Sandbox startup and cleanup** (2026-10-02): A provider authentication failure reached the tool transcript as a bare "Command execution failed." The cleanup wrappers in `src/sandbox/sandbox.ts` dropped the original causes, destruction retries in `src/core/orchestrator/sandboxes.ts` swallowed every exception, and `src/harness/agent-tools.ts` recorded only the generic status. Keep the primary failure and every cleanup failure, redacted, in access-controlled diagnostics; a short user-facing message never replaces the evidence. _Status:_ unresolved on main 5dbebac6.
