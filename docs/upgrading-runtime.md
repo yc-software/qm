@@ -23,7 +23,9 @@ available until the new revision has passed operational checks.
   sandbox records so existing computers are preserved; afterwards
   `SANDBOX_SCOPE_BACKENDS` has no runtime effect. To move a scope to another
   provider, create a sandbox there, copy durable work via git or Files, and set
-  it as the default.
+  it as the default. Keep credentials and provider settings for all legacy mappings
+  until the import completes; an unconfigured provider needed by the import stops
+  startup before any adoption state is written.
 - Reach-denied Slack notifications are retired. Consult the audit log for denied
   requests.
 
