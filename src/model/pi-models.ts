@@ -3,7 +3,7 @@ import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseModelOverlay, type ModelOverlay } from "./model-overlay.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
-import { isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import { customModelCatalog, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -434,6 +434,7 @@ export function defaultWebuiModelIds(): readonly string[] {
     ...DEFAULT_WEBUI_MODEL_IDS,
     ...gatewayModelCatalog(true).map((m) => m.id),
     ...[...overlays.values()].filter((m) => m.webui).map((m) => m.id),
+    ...customModelCatalog().map((m) => m.id),
   ];
 }
 
