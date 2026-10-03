@@ -43,7 +43,6 @@ import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
-import type { SandboxMigrationRunner } from "../sandbox/sandbox-migration-runner.ts";
 import type { EgressEnforcement, Sandbox } from "../sandbox/sandbox.ts";
 import type { EnvironmentStore } from "../environments/environment-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
@@ -166,7 +165,6 @@ export interface ServerDeps {
   egressDeclaredEnforcement?: EgressEnforcement;
   egressEnforcement?: EgressEnforcement;
   egressControlPlaneConfigured?: boolean;
-  sandboxMigration?: SandboxMigrationRunner;
   sandboxResources?: SandboxResources;
   sandbox?: Sandbox;
   advisoryLock?: AdvisoryLock;

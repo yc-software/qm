@@ -415,27 +415,6 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
   assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
 
-test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets the scope's sandbox", async () => {
-  const { Readable } = await import("node:stream");
-  const { makeTar } = await import("../src/sandbox/tar.ts");
-  const blobs = createMemoryBlobTransferStore();
-  const s = make({ blobTransfer: blobs, capabilitySecret: "blob-secret", apiBaseUrl: "http://core.internal:8080" });
-
-  const a = await s.provision(layers);
-  await s.writeFile(a, "old.txt", "stale e2b-era sandbox\n");
-  await s.teardown(a, { keepWarm: true });
-
-  const tar = await makeTar([{ path: "migrated.txt", data: Buffer.from("came from e2b\n") }]);
-  const { blobId } = await blobs.put(Readable.from([Buffer.from(tar)]));
-  assert.ok(s.adoptHomeSnapshot);
-  await s.adoptHomeSnapshot!(scope, blobId);
-
-  const b = await s.provision(layers);
-  const migrated = await s.run(b, "cat ~/migrated.txt");
-  assert.equal(migrated.stdout, "came from e2b\n", "hydrates from the adopted snapshot");
-  assert.notEqual((await s.run(b, "cat ~/old.txt")).code, 0, "the pre-adopt sandbox was discarded, not reused");
-});
-
 test("persistHomeSnapshot writes the live home to the snapshot store on demand", async () => {
   const store = createMemoryMap<StoredModalSandbox>();
   const counting = instrumentedSnapshotStore();

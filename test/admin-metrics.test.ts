@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -98,6 +99,7 @@ test("metrics: turn anatomy splits no-sandbox (Trace A) from sandbox (Trace B) t
       text: "hello there",
     };
     assert.equal((await s.built.app.turn(chat)).status, "ok");
+    await selectDefaultSandbox(s.built, "U2", "personal:U2");
     const tool: TurnRequest = {
       surface: "test",
       actor: { externalId: "U2" },

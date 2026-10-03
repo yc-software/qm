@@ -34,9 +34,8 @@ key through the CLI's secret configuration:
 }
 ```
 
-`env.core.SANDBOX_BACKEND` overrides `sandbox.backend`. To select Superserve for
-individual scope kinds, use `SANDBOX_SCOPE_BACKENDS`; the same key, template, and
-database requirements apply.
+`env.core.SANDBOX_BACKEND` overrides `sandbox.backend`. Agents and admins select Superserve per
+scope by creating a Superserve sandbox and setting it as the default.
 
 For local development, export the key and template and run
 `npm run dev-instance -- --sandbox superserve`.

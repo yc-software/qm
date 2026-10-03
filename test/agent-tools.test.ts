@@ -24,9 +24,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       };
     },
     async restartComputer() {},
-    async migrateComputer(): Promise<{ from: string; to: string }> {
-      throw new Error("computer migration is not available on this deployment");
-    },
     async computerStatus() {
       return { machine: "healthy", guestResponsive: true };
     },
