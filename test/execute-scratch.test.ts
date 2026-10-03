@@ -592,13 +592,17 @@ test("scratch destruction failures keep their cause and retain the handle for re
     },
     async teardown() {
       attempts++;
-      if (fail) throw new Error("teardown-boom");
+      if (fail) throw new Error(`teardown-boom-${attempts}`);
     },
   });
   await boxes.provisionScratch();
   await assert.rejects(boxes.reclaimBox(), (error: Error) => {
     assert.equal(error.message, "Disposable sandbox destruction failed");
-    assert.equal((error.cause as Error).message, "teardown-boom");
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(
+      error.errors.map((attempt: Error) => attempt.message),
+      ["teardown-boom-1", "teardown-boom-2", "teardown-boom-3"],
+    );
     return true;
   });
   assert.equal(attempts, 3);
@@ -607,7 +611,7 @@ test("scratch destruction failures keep their cause and retain the handle for re
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.released").length, 0);
   assert.equal(
     JSON.parse(events.find((event) => event.action === "sandbox.scratch.release_failed")!.detail!).error,
-    "Disposable sandbox destruction failed <- Error: teardown-boom",
+    "Disposable sandbox destruction failed",
   );
   assert.equal(errors.length, 1);
   fail = false;

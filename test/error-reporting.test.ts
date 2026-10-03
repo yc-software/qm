@@ -69,8 +69,10 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
 }
 
 test("real SDK sends full exception details, causes and classification", async () => {
-  const { events, code } = await runReporting(`
-    const error = new TypeError('top-message', { cause: new Error('root-cause') });
+  const { events, code, output } = await runReporting(`
+    const error = Object.assign(new TypeError('top-message', { cause: new Error('root-cause') }), { stderr: 'command failed', exitCode: 17, body: { upstream: { reason: 'failure' } } });
+    const { errDetail } = await import('./plugins/chassis/src/errors.ts');
+    console.log(errDetail(error));
     reportBackendError(error);
     console.error('request-url', error);
     reportBackendError(new Error('record-message'), 'run:failed', { detail: 'extra-detail' });
@@ -78,6 +80,11 @@ test("real SDK sends full exception details, causes and classification", async (
   `);
   assert.equal(code, 0);
   assert.equal(events.length, 2);
+  assert.equal(events[0]!.contexts.TypeError.stderr, "command failed");
+  assert.equal(events[0]!.contexts.TypeError.exitCode, 17);
+  assert.deepEqual(events[0]!.contexts.TypeError.body, { upstream: { reason: "failure" } });
+  assert.ok(output.includes("stderr=command failed"));
+  assert.ok(output.includes("exitCode=17"));
   const values = events[0]!.exception.values.map((value: { value: string }) => value.value);
   assert.ok(values.includes("top-message"));
   assert.ok(values.includes("root-cause"));

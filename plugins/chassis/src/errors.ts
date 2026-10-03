@@ -38,31 +38,53 @@ export function errChain(e: unknown): string {
 
 function errorFields(e: unknown): string {
   if (typeof e !== "object" || e === null) return "";
-  const record = e as { code?: unknown; status?: unknown; statusCode?: unknown };
-  const fields = Object.entries({
-    code: record.code,
-    status: record.status ?? record.statusCode,
-  }).filter(([, value]) => typeof value === "string" || typeof value === "number");
-  return fields.length ? ` [${fields.map(([key, value]) => `${key}=${String(value)}`).join(" ")}]` : "";
+  const fields = Object.entries(Object.getOwnPropertyDescriptors(e))
+    .filter(([, descriptor]) => descriptor.enumerable)
+    .map(([key, descriptor]) => {
+      try {
+        const seen = new Set<object>();
+        const value = descriptor.value;
+        const text =
+          typeof value === "object" && value !== null
+            ? JSON.stringify(value, (_key, item) => {
+                if (typeof item === "bigint") return String(item);
+                if (typeof item === "object" && item !== null) {
+                  if (seen.has(item)) return "[Circular]";
+                  seen.add(item);
+                }
+                return item;
+              })
+            : String(value);
+        return `${key}=${descriptor.get ? "[Getter]" : text}`;
+      } catch {
+        return `${key}=[Unserializable]`;
+      }
+    });
+  return fields.length ? ` [${fields.join(" ")}]` : "";
 }
 
 export function errDetail(e: unknown, seen = new Set<unknown>()): string {
-  if (seen.has(e)) return "";
-  seen.add(e);
-  const frames =
-    e instanceof Error
-      ? (e.stack
-          ?.split("\n")
-          .slice(1)
-          .map((line) => line.trim()) ?? [])
-      : [];
-  const stack = frames.filter(Boolean).join(" | ");
-  const nested = e instanceof Error ? [e.cause, ...(e instanceof AggregateError ? e.errors : [])] : [];
-  const details = nested
-    .filter((error) => error != null)
-    .map((error) => errDetail(error, seen))
-    .filter(Boolean);
-  return `${errChain(e)}${errorFields(e)}${stack ? ` {stack: ${stack}}` : ""}${details.length ? ` {causes: ${details.join(" | ")}}` : ""}`;
+  try {
+    if (seen.has(e)) return "";
+    seen.add(e);
+    const frames =
+      e instanceof Error
+        ? (e.stack
+            ?.split("\n")
+            .slice(1)
+            .map((line) => line.trim()) ?? [])
+        : [];
+    const stack = frames.filter(Boolean).join(" | ");
+    const nested =
+      e instanceof Error ? [e.cause, ...(e instanceof AggregateError && Array.isArray(e.errors) ? e.errors : [])] : [];
+    const details = nested
+      .filter((error) => error != null)
+      .map((error) => errDetail(error, seen))
+      .filter(Boolean);
+    return `${errChain(e)}${errorFields(e)}${stack ? ` {stack: ${stack}}` : ""}${details.length ? ` {causes: ${details.join(" | ")}}` : ""}`;
+  } catch {
+    return "[Uninspectable error]";
+  }
 }
 
 export function swallow(context: string, e: unknown): void {

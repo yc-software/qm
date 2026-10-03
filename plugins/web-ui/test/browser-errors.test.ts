@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initializeBrowserErrors, reportHandledError, stopBrowserErrors } from "../src/browser-errors.ts";
 import { browserErrorConfig } from "../server/browser-error-config.ts";
+import { ApiError } from "../src/core-bridge.ts";
 import type { Me } from "../src/shell-state.ts";
 
 const origin = "https://app.example.com";
@@ -58,13 +59,19 @@ test("browser errors keep HTTP failures and their context while dropping network
     }
     reportHandledError("web:network", new DOMException("request cancelled", "AbortError"));
     sdk.captureException(new DOMException("request cancelled", "AbortError"));
-    reportHandledError("web:approvals_fetch", new TypeError("approvals 500", { cause: new Error("db down") }));
+    const body = { error: { details: { reason: "db down" } } };
+    reportHandledError(
+      "web:approvals_fetch",
+      Object.assign(new ApiError("approvals 500", 500, body), { cause: new Error("db down") }),
+    );
     await sdk.flush(1000);
     assert.equal(sent.length, 1);
     const event = JSON.parse(sent[0]!.split("\n")[2]!);
     const values = event.exception.values.map((value: { value: string }) => value.value);
     assert.ok(values.includes("approvals 500"));
     assert.ok(values.includes("db down"));
+    assert.equal(event.contexts.ApiError.status, 500);
+    assert.deepEqual(event.contexts.ApiError.body, body);
     assert.equal(event.tags.error_code, "web:approvals_fetch");
     assert.deepEqual(event.fingerprint, ["{{ default }}", "web:approvals_fetch"]);
     assert.equal(event.user.username, "alice@example.com");

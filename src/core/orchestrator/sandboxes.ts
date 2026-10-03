@@ -161,17 +161,17 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   let ownerAuthProvisionInFlight: Promise<SandboxHandle> | null = null;
   const destroyEphemeralHandle = async (handle: SandboxHandle): Promise<void> => {
-    let lastError: unknown;
+    const errors: unknown[] = [];
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await deps.sandbox.teardown(handle, { destroy: true });
         return;
       } catch (error) {
-        lastError = error;
+        errors.push(error);
         if (attempt < 3) await sleep(50 * attempt);
       }
     }
-    throw new Error("Disposable sandbox destruction failed", { cause: lastError });
+    throw new AggregateError(errors, "Disposable sandbox destruction failed");
   };
   const scrubOwnerAuthHandle = async (handle: SandboxHandle): Promise<void> => {
     if (!deps.keychain || !isolateOwnerKeychain) return;

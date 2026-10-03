@@ -19,7 +19,11 @@ export function initializeErrorReporting(
     release: env.SENTRY_RELEASE ?? env.GIT_SHA,
     serverName: "",
     defaultIntegrations: false,
-    integrations: [sdk.onUncaughtExceptionIntegration(), sdk.linkedErrorsIntegration()],
+    integrations: [
+      sdk.onUncaughtExceptionIntegration(),
+      sdk.linkedErrorsIntegration(),
+      sdk.extraErrorDataIntegration({ depth: 10, captureErrorCause: true }),
+    ],
     skipOpenTelemetrySetup: tracesSampleRate === 0,
     ...(tracesSampleRate > 0 ? { tracesSampleRate } : {}),
     tracePropagationTargets: [],

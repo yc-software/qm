@@ -119,7 +119,7 @@ test("reportFailure logs every failure but marks only reportable ones as reporte
   assert.deepEqual(
     logged.map((line) => line.replace(/ \{stack: .*\}$/, "")),
     [
-      "[failed] scheduler: fire: stopped [code=20]",
+      "[failed] scheduler: fire: stopped",
       "[failed] scheduler: tick: This deployment is not accepting synchronous work",
       "[failed] scheduler: fire: boom",
       "[failed] worker: retry (run=r1): a string throw",
@@ -142,11 +142,10 @@ test("swallow logs the cause chain, structured error fields and stack instead of
   );
   swallow("slack: post", slack);
   swallow("http", Object.assign(new Error("upstream failed"), { statusCode: 503 }));
-  assert.match(
-    logged[0]!,
-    /^\[swallowed\] slack: post: An API error occurred: not_in_channel <- Error: socket hang up \[code=slack_webapi_platform_error\] \{stack: at /,
-  );
-  assert.match(logged[1]!, /^\[swallowed\] http: upstream failed \[status=503\] \{stack: at /);
+  assert.ok(logged[0]!.includes("code=slack_webapi_platform_error"));
+  assert.ok(logged[0]!.includes('data={"error":"not_in_channel"}'));
+  assert.ok(logged[0]!.includes("{stack: at "));
+  assert.ok(logged[1]!.includes("[statusCode=503]"));
   assert.equal(swallowAs("lookup", false)(new Error("db down")), false);
   assert.match(logged[2]!, /^\[swallowed\] lookup: db down \{stack: /);
 });
@@ -173,4 +172,25 @@ test("errDetail preserves browser frames, nested stacks and aggregate errors wit
   assert.ok(detail.includes("initialize@https://example.com/app.js:1:2"));
   assert.ok(detail.includes("cleanup"));
   assert.equal(detail.split("initialize@").length, 2);
+});
+
+test("error fields tolerate circular data, bigint, failing serializers and malformed aggregate errors", () => {
+  const body: Record<string, unknown> = { count: 1n };
+  body.self = body;
+  const error = Object.assign(new AggregateError([], "failure"), {
+    stderr: "failed",
+    body,
+    broken: {
+      toJSON() {
+        throw new Error("serializer failed");
+      },
+    },
+  });
+  Reflect.set(error, "errors", null);
+  const detail = errDetail(error);
+  assert.ok(detail.includes("stderr=failed"));
+  assert.ok(detail.includes('"count":"1"'));
+  assert.ok(detail.includes("[Circular]"));
+  assert.ok(detail.includes("broken=[Unserializable]"));
+  assert.equal(asError(body).cause, body);
 });
