@@ -474,3 +474,14 @@ test("monitor wakes persist engagement after the reply gate", async () => {
     await built.runtime.stop();
   }
 });
+
+test("a retried run that begins again during the grace window keeps its stream", async () => {
+  const s = createTurnStream({ graceMs: 20 });
+  s.begin("r1");
+  s.end("r1");
+  s.begin("r1");
+  s.markSurfacePosted("r1");
+  await sleep(40);
+  assert.equal(s.replying("r1"), true);
+  assert.equal(s.surfacePosted("r1"), true);
+});
