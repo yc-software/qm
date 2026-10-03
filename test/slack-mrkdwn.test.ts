@@ -277,3 +277,18 @@ test("a label-less wire mention is disarmed to the person's name when the direct
     setMentionIndex(new Map());
   }
 });
+
+test("toSlackMrkdwn: bold butted against CJK or emoji gets zero-width boundaries so Slack renders it (#651)", () => {
+  assert.equal(toSlackMrkdwn("中文**粗体**中文"), "中文\u200b*粗体*\u200b中文");
+  assert.equal(toSlackMrkdwn("日本語の**太字**です"), "日本語の\u200b*太字*\u200bです");
+  assert.equal(toSlackMrkdwn("🎉**done**🎉"), "🎉\u200b*done*\u200b🎉");
+  assert.equal(toSlackMrkdwn("**粗体**。"), "*粗体*。");
+  assert.equal(toSlackMrkdwn("（**粗体**）"), "（*粗体*）");
+});
+
+test("toSlackMrkdwn: Latin bold output is unchanged by the CJK boundary fix (#651)", () => {
+  assert.equal(toSlackMrkdwn("use **bold** here"), "use *bold* here");
+  assert.equal(toSlackMrkdwn("**bold**, then text."), "*bold*, then text.");
+  assert.equal(toSlackMrkdwn("# Heading"), "*Heading*");
+  assert.equal(toSlackMrkdwn("(**x**)"), "(*x*)");
+});

@@ -27,6 +27,9 @@ export function stripMention(text: string, botUserId: string): string {
 
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
+const BOLD_SPAN = new RegExp(`${BOLD_SENTINEL}([^${BOLD_SENTINEL}\n]+)${BOLD_SENTINEL}`, "g");
+const WORD_NEIGHBOR = /[\p{L}\p{N}\p{Extended_Pictographic}]/u;
+const boundaryPad = (ch: string | undefined): string => (ch && WORD_NEIGHBOR.test(ch) ? "\u200b" : "");
 
 const MASS_MENTION = /<!(here|channel|everyone)(?:\|[^>]*)?>/gi;
 export function neutralizeMassMentions(text: string): string {
@@ -173,6 +176,11 @@ export function toSlackMrkdwn(md: string): string {
 
   text = text.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![*\w])/g, "$1_$2_");
 
+  text = text.replace(BOLD_SPAN, (span, inner: string, offset: number, whole: string) => {
+    const before = Array.from(whole.slice(Math.max(0, offset - 2), offset)).pop();
+    const after = Array.from(whole.slice(offset + span.length, offset + span.length + 2))[0];
+    return `${boundaryPad(before)}*${inner}*${boundaryPad(after)}`;
+  });
   text = text.replaceAll(BOLD_SENTINEL, "*");
   text = text.replace(new RegExp(`${STASH_OPEN}(\\d+)${STASH_OPEN}`, "g"), (_m, i) => stash[Number(i)] ?? "");
 
