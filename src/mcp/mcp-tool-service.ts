@@ -6,6 +6,7 @@
 // namespaced `<serverId>_<toolName>` so two servers can't collide with each
 // other or with built-in tools.
 
+import { createHash } from "node:crypto";
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage } from "../util/errors.ts";
@@ -36,6 +37,63 @@ export interface McpToolService {
   /** Probe a server config without persisting it. Returns its tool names. */
   probe(server: McpServer): Promise<string[]>;
   close(): void;
+}
+
+/** Anthropic and OpenAI both reject a request whose tool names exceed 64 chars of [a-zA-Z0-9_-]. */
+const MAX_TOOL_NAME = 64;
+
+/**
+ * Namespaced model-facing name. Sanitizing can make two remote names collide (`list.items` vs
+ * `list_items`) and long server ids push names past the provider limit, which fails EVERY turn
+ * that carries the tool — so over-long or colliding names get a short stable hash suffix.
+ */
+export function mcpToolName(serverId: string, remoteName: string, taken: ReadonlySet<string>): string {
+  const plain = `${serverId}_${remoteName}`.replace(/[^a-zA-Z0-9_-]/g, "_");
+  if (plain.length <= MAX_TOOL_NAME && !taken.has(plain)) return plain;
+  const hash = createHash("sha256").update(`${serverId}\0${remoteName}`).digest("hex").slice(0, 8);
+  return `${plain.slice(0, MAX_TOOL_NAME - hash.length - 1)}_${hash}`;
+}
+
+type JsonSchema = Record<string, unknown>;
+
+function asSchema(value: unknown): JsonSchema | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonSchema) : undefined;
+}
+
+function resolveLocalRef(schema: JsonSchema, root: JsonSchema): JsonSchema {
+  const ref = typeof schema.$ref === "string" ? schema.$ref : undefined;
+  const m = ref && /^#\/(\$defs|definitions)\/([^/]+)$/.exec(ref);
+  const target = m ? asSchema(asSchema(root[m[1]!])?.[decodeURIComponent(m[2]!)]) : undefined;
+  return target ?? schema;
+}
+
+/**
+ * Providers require a tool's top-level input schema to be `type: "object"`, and Anthropic rejects
+ * top-level `anyOf`/`oneOf`/`allOf`. MCP servers ship all of these; one such tool used to make
+ * every request carrying it 400. Nested schemas pass through untouched.
+ */
+export function providerSafeInputSchema(input: JsonSchema): JsonSchema {
+  const top = resolveLocalRef(input, input);
+  const branches = ["anyOf", "oneOf", "allOf"].flatMap((k) =>
+    Array.isArray(top[k]) ? (top[k] as unknown[]).map(asSchema).filter((b): b is JsonSchema => !!b) : [],
+  );
+  const hasCombinator = ["anyOf", "oneOf", "allOf"].some((k) => k in top);
+  if (top.type === "object" && !hasCombinator && top === input) return input;
+  const properties: JsonSchema = { ...asSchema(top.properties) };
+  for (const branch of branches) Object.assign(properties, asSchema(resolveLocalRef(branch, input).properties));
+  let required: unknown[] = [];
+  if (Array.isArray(top.allOf)) {
+    required = branches.flatMap((b) => {
+      const r = resolveLocalRef(b, input).required;
+      return Array.isArray(r) ? (r as unknown[]) : [];
+    });
+  } else if (Array.isArray(top.required) && !hasCombinator) required = top.required;
+  const out: JsonSchema = { type: "object", properties };
+  if (required.length) out.required = [...new Set(required.filter((r): r is string => typeof r === "string"))];
+  for (const key of ["$defs", "definitions"]) if (asSchema(input[key])) out[key] = input[key];
+  if (typeof top.description === "string") out.description = top.description;
+  if (hasCombinator) out.additionalProperties = true;
+  return out;
 }
 
 function authOf(server: McpServer): McpAuth {
@@ -105,16 +163,20 @@ export function createMcpToolService(opts: {
   async function refresh(): Promise<void> {
     const servers = (await opts.servers.list()).filter((s) => s.enabled);
     const next: McpToolDescriptor[] = [];
+    const taken = new Set<string>();
     for (const server of servers) {
       try {
         const tools = (await clientFor(server).listTools()).slice(0, MAX_TOOLS_PER_SERVER);
         for (const tool of tools) {
+          const name = mcpToolName(server.id, tool.name, taken);
+          if (taken.has(name)) continue;
+          taken.add(name);
           next.push({
-            name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+            name,
             serverId: server.id,
             remoteName: tool.name,
             description: tool.description || `${tool.name} on ${server.name}`,
-            inputSchema: tool.inputSchema,
+            inputSchema: providerSafeInputSchema(tool.inputSchema),
             readOnly: server.readOnly,
           });
         }
