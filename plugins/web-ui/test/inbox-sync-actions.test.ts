@@ -21,10 +21,10 @@ test("a pending inbox migration lives in the sync line instead of a banner", () 
   assert.doesNotMatch(source, /migrationPending \? html`<div class="inbox-notice"/);
   assert.match(
     source,
-    /const moving = inboxState\.migrationPending;\s*if \(!crons\.length && !moving\) return nothing;/,
+    /const moving = inboxState\.migrationPending;\s*if \(!crons\.length && !moving\) return nothing;\s*const syncHint/,
   );
   assert.match(source, /disabled: moving,/);
-  assert.match(source, /tooltip: moving \? MIGRATION_HINT : "Sync now"/);
+  assert.match(source, /tooltip: moving \? MIGRATION_HINT : syncHint,/);
   assert.match(
     source,
     /<span class="inbox-sync-status" role=\$\{moving \? "status" : nothing\}>\$\{moving \? MIGRATION_STATUS : status\}<\/span>/,
@@ -35,5 +35,12 @@ test("a pending inbox migration lives in the sync line instead of a banner", () 
   assert.match(
     css,
     /\.inbox-surface\.compact \.inbox-sync-line > \.inbox-sync-status:not\(\[role="status"\]\) \{\s*display: none;/,
+  );
+});
+
+test("syncing a paused source turns its sync back on before running it", () => {
+  assert.match(
+    source,
+    /if \(!loop\.syncCron!\.enabled\)\s*await api\("\/api\/inbox\/sync-cron", \{ method: "POST", body: JSON\.stringify\(\{ enabled: true, loopId: loop\.id \}\) \}\);\s*await api\(`\/api\/crons\/\$\{encodeURIComponent\(loop\.syncCron!\.id\)\}\/run`/,
   );
 });
