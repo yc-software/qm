@@ -10,6 +10,7 @@ import {
   flyBin,
   isInvalidSecret,
   readEnvFile,
+  which,
   writeEnvValue,
 } from "../src/util.ts";
 
@@ -202,4 +203,19 @@ test("promptHidden treats Ctrl-D as enter on a non-empty buffer and as cancel on
 test("async inherited processes reject spawn errors and signal termination", async () => {
   await assert.rejects(runInheritAsync("/definitely-missing-qm-command", []), /ENOENT/);
   await assert.rejects(runInheritAsync(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")']), /SIGTERM/);
+});
+
+test("which finds binaries by searching PATH, including Windows PATHEXT", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-which-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "flyctl.exe"), "");
+  writeFileSync(join(dir, "tool"), "#!/bin/sh\n");
+  chmodSync(join(dir, "tool"), 0o755);
+  writeFileSync(join(dir, "notexec"), "");
+  const win = { Path: `C:\\nowhere;${dir}`, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+  assert.equal(which("flyctl", win, "win32"), true);
+  assert.equal(which("fly", win, "win32"), false);
+  assert.equal(which("tool", { PATH: `/nowhere:${dir}` }, "linux"), true);
+  assert.equal(which("notexec", { PATH: dir }, "linux"), false);
+  assert.equal(which("tool", { PATH: "" }, "linux"), false);
 });
