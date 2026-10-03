@@ -173,6 +173,17 @@ function template(rel: string): string {
   return readFileSync(existsSync(source) ? source : packaged, "utf8");
 }
 
+function isOrdinaryRegistryDependencySpec(spec: string): boolean {
+  const normalized = spec.trim();
+  return !(
+    /[\\/]/.test(normalized) ||
+    /^(?:\.|[a-z]:)/i.test(normalized) ||
+    /\.(?:tgz|tar\.gz|tar)$/i.test(normalized) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(normalized) ||
+    /^[^@\s]+@[^:\s]+:/.test(normalized)
+  );
+}
+
 function packageContent(dir: string, orgId: string): string {
   const packagePath = join(dir, "package.json");
   let existing: Record<string, unknown> = {};
@@ -206,7 +217,9 @@ function packageContent(dir: string, orgId: string): string {
   const engines = { ...objectField("engines"), node: ">=24.0.0" };
   const packageName = cliPackageName();
   const dependencies = objectField("dependencies");
-  const installedPackage = typeof dependencies[packageName] === "string" ? dependencies[packageName] : cliVersion();
+  const existingSpec = dependencies[packageName];
+  const installedPackage =
+    typeof existingSpec === "string" && !isOrdinaryRegistryDependencySpec(existingSpec) ? existingSpec : cliVersion();
   delete dependencies["qm-cli"];
   delete dependencies[packageName];
   for (const group of ["devDependencies", "optionalDependencies"] as const) {
