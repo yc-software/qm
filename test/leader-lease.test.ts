@@ -147,7 +147,7 @@ test(
 
       const killed = await standbyPool.q(
         `WITH k AS (SELECT hashtextextended('leader-lease:failover:key', 0) AS v)
-       SELECT pg_terminate_backend(l.pid) AS ok
+       SELECT pg_terminate_backend(l.pid, 5000) AS ok
          FROM pg_locks l, k
         WHERE l.locktype = 'advisory' AND l.granted
           AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
