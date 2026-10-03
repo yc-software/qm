@@ -1308,13 +1308,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const retiredScreenEnv = RETIRED_SECURITY_SCREEN_ENV.filter((name) => env[name]?.trim());
-  const retiredScreenOff =
-    retiredScreenEnv.length === 1 &&
-    env.SECURITY_SCREEN_BACKEND?.trim().toLowerCase() === "off" &&
-    !env.SECURITY_SCREEN?.trim();
-  if (retiredScreenOff) {
-    console.warn("[config] SECURITY_SCREEN_BACKEND=off is retired and read as SECURITY_SCREEN=off. Replace it.");
-  } else if (retiredScreenEnv.length) {
+  if (retiredScreenEnv.length) {
     throw new Error(
       `${retiredScreenEnv.join(", ")} ${retiredScreenEnv.length === 1 ? "is" : "are"} retired — set SECURITY_SCREEN=off|observe|enforce and SECURITY_SCREEN_CLASSIFIER=model|proxy instead, and remove the old variables.`,
     );

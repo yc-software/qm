@@ -37,7 +37,7 @@ describe("deployment redeploy route", () => {
       currentVersion: 1,
       status: "running" as const,
       endpoint: null,
-      versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/tmp" }],
+      versions: [{ commit: "a".repeat(40), version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/tmp" }],
     };
     const app = {
       listDeployments: async () => [deployment],
@@ -68,7 +68,11 @@ describe("deployment redeploy route", () => {
     assert.equal(response.status, 200);
     assert.deepEqual(received, body);
     const { deployment } = (await response.json()) as { deployment: { versions: Record<string, unknown>[] } };
-    assert.deepEqual(Object.keys(deployment.versions[0]!), ["version", "createdAt"], "no snapshot paths or env");
+    assert.deepEqual(
+      Object.keys(deployment.versions[0]!),
+      ["version", "createdAt", "commit"],
+      "no snapshot paths or env",
+    );
   });
 
   it("still requires an entrypoint and files", async () => {

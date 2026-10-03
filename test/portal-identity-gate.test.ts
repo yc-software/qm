@@ -313,7 +313,9 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       currentVersion: 1,
       status: "running" as const,
       endpoint: null,
-      versions: [{ version: 1, createdAt: Date.now(), entrypoint: "node app.js", snapshotDir: "" }],
+      versions: [
+        { commit: "a".repeat(40), version: 1, createdAt: Date.now(), entrypoint: "node app.js", snapshotDir: "" },
+      ],
     };
     built.app.listDeployments = async () => [deployment];
     built.app.listDeploymentsForViewer = async () => [];

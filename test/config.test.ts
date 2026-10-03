@@ -157,9 +157,9 @@ test("harness security posture defaults to auto and validates named modes", () =
   }
 });
 
-test("retired security screen variables fail loudly unless they only said off", () => {
-  assert.equal(loadConfig({ SECURITY_SCREEN_BACKEND: "off" }).securityScreen, "off");
+test("retired security screen variables fail loudly", () => {
   for (const env of [
+    { SECURITY_SCREEN_BACKEND: "off" },
     { SECURITY_SCREEN_BACKEND: "proxy" },
     { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN: "observe" },
     { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN_ALL_POSTURES: "false" },

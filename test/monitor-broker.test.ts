@@ -18,6 +18,7 @@ async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTai
   const store = createMonitorStore();
   const registry = createMemoryProcessRegistry();
   const rec = await registry.register({
+    sandboxId: "sandbox-test",
     processId: "p-1",
     scopeId: SCOPE,
     kind: "background",
@@ -85,6 +86,7 @@ test("a repeat watch re-arms with the new settings instead of silently keeping s
 test("watch refuses a job from another scope and an unknown job", async () => {
   const { broker, registry } = await harness();
   await registry.register({
+    sandboxId: "sandbox-test",
     processId: "p-other",
     scopeId: "personal:U2",
     kind: "background",

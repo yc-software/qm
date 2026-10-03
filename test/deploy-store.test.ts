@@ -24,16 +24,16 @@ test("deploy versions are immutable and rollback flips the pointer", async () =>
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "v1",
-    snapshotDir: "/snap/v1",
+    files: [],
   });
   assert.equal(d.currentVersion, 1);
   assert.equal(d.versions.length, 1);
 
-  await s.addVersion(d.id, { entrypoint: "v2", snapshotDir: "/snap/v2" });
+  await s.addVersion(d.id, { entrypoint: "v2", files: [] });
   const after = (await s.get(d.id))!;
   assert.equal(after.versions.length, 2, "v1 is retained — versions are append-only");
   assert.equal(after.currentVersion, 2);
-  assert.equal((await s.versionOf(d.id, 1))!.snapshotDir, "/snap/v1");
+  assert.ok((await s.versionOf(d.id, 1))!.commit);
 
   await s.setCurrentVersion(d.id, 1);
   assert.equal((await s.get(d.id))!.currentVersion, 1);
@@ -44,7 +44,7 @@ test("deploy versions are immutable and rollback flips the pointer", async () =>
 
 test("addVersion on an unknown deployment throws", async () => {
   const s = createDeployStore();
-  await assert.rejects(s.addVersion("nope", { entrypoint: "x", snapshotDir: "/x" }), /unknown deployment/);
+  await assert.rejects(s.addVersion("nope", { entrypoint: "x", files: [] }), /unknown deployment/);
 });
 
 test("addVersionFromCommit registers a pushed commit as a new version inheriting entrypoint/env", async () => {
@@ -54,7 +54,7 @@ test("addVersionFromCommit registers a pushed commit as a new version inheriting
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/v1",
+
     env: { FOO: "bar" },
     files: [{ path: "server.js", data: "1" }],
   });
@@ -124,13 +124,13 @@ test("homeDir (resident-auth snapshot) round-trips through create + addVersion",
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "v1",
-    snapshotDir: "/snap/v1",
+    files: [],
     homeDir: "/home/v1",
   });
   assert.equal((await s.versionOf(d.id, 1))!.homeDir, "/home/v1");
-  await s.addVersion(d.id, { entrypoint: "v2", snapshotDir: "/snap/v2", homeDir: "/home/v2" });
+  await s.addVersion(d.id, { entrypoint: "v2", files: [], homeDir: "/home/v2" });
   assert.equal((await s.versionOf(d.id, 2))!.homeDir, "/home/v2");
-  await s.addVersion(d.id, { entrypoint: "v3", snapshotDir: "/snap/v3" });
+  await s.addVersion(d.id, { entrypoint: "v3", files: [] });
   assert.equal("homeDir" in (await s.versionOf(d.id, 3))!, false);
 });
 
@@ -140,13 +140,13 @@ test("setVersionImage records the built image ref onto a version (the durable ar
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "v1",
-    snapshotDir: "/snap/v1",
+    files: [],
   });
   assert.equal("image" in (await s.versionOf(d.id, 1))!, false, "no image until one is recorded");
   await s.setVersionImage(d.id, 1, "registry.fly.io/app:v1");
   assert.equal((await s.versionOf(d.id, 1))!.image, "registry.fly.io/app:v1");
 
-  await s.addVersion(d.id, { entrypoint: "v2", snapshotDir: "/snap/v2" });
+  await s.addVersion(d.id, { entrypoint: "v2", files: [] });
   await s.setVersionImage(d.id, 2, "registry.fly.io/app:v2");
   assert.equal((await s.versionOf(d.id, 1))!.image, "registry.fly.io/app:v1", "v1 image unchanged");
   assert.equal((await s.versionOf(d.id, 2))!.image, "registry.fly.io/app:v2");
@@ -160,7 +160,7 @@ test("setDisplayName sets the free-form label and clearing leaves no undefined n
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "x",
-    snapshotDir: "/snap",
+    files: [],
     name: "slug",
   });
   assert.equal((await s.get(d.id))!.displayName, undefined, "no display label until one is set");
@@ -177,7 +177,7 @@ test("touch records last-access for scale-to-zero (C3)", async () => {
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node s.js",
-    snapshotDir: "/snap",
+    files: [],
   });
   assert.equal((await s.get(d.id))!.lastAccessAt, undefined);
   await s.touch(d.id, 12345);
@@ -200,7 +200,7 @@ test("touch is debounced per id within the window", async () => {
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node s.js",
-    snapshotDir: "/snap",
+    files: [],
   });
   await s.touch(d.id, 1_000);
   await s.touch(d.id, 5_000);
@@ -216,7 +216,7 @@ test("touch does not rewrite the deployment blob and falls back to the blob's le
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node s.js",
-    snapshotDir: "/snap",
+    files: [],
   });
   await deployments.merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
 
@@ -235,7 +235,7 @@ test("deploy versions carry git commits for app files and rollback moves the cur
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/v1",
+
     files: [
       { path: "server.js", data: "console.log('v1')" },
       { path: "data.json", data: '{"n":1}' },
@@ -246,7 +246,7 @@ test("deploy versions carry git commits for app files and rollback moves the cur
 
   await s1.addVersion(d.id, {
     entrypoint: "node server.js",
-    snapshotDir: "/snap/v2",
+
     files: [
       { path: "server.js", data: "console.log('v1')" },
       { path: "data.json", data: '{"n":2}' },
@@ -325,7 +325,7 @@ test("an upload cannot smuggle files into the deployment repo's own git director
       ownerScopeId: scopeId("personal", "U1"),
       createdBy: "U1",
       entrypoint: "node app.js",
-      snapshotDir: "/snap/v1",
+
       files: [
         { path: "app.js", data: "console.log('hi')" },
         { path: ".git/config", data: '[core]\n\tfsmonitor = "touch /tmp/qm-should-not-run"\n' },
@@ -348,7 +348,7 @@ test("an upload cannot smuggle files into the deployment repo's own git director
         ownerScopeId: scopeId("personal", "U1"),
         createdBy: "U1",
         entrypoint: "node app.js",
-        snapshotDir: "/snap/v1",
+
         files: [{ path: bad, data: "x" }],
       }),
       /invalid deploy path/,
@@ -360,7 +360,7 @@ test("an upload cannot smuggle files into the deployment repo's own git director
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node app.js",
-    snapshotDir: "/snap/v1",
+
     files: [
       { path: "app.js", data: "x" },
       { path: "wrap.git/config", data: "x" },
@@ -383,7 +383,7 @@ test("uploaded files a .gitignore would exclude still reach the deployment's git
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.cjs",
-    snapshotDir: "/snap/v1",
+
     files: [
       { path: ".gitignore", data: "node_modules\ndist\n" },
       { path: "server.cjs", data: "require('http')" },
@@ -404,7 +404,7 @@ test("uploaded files a .gitignore would exclude still reach the deployment's git
 
   await s.addVersion(d.id, {
     entrypoint: "node server.cjs",
-    snapshotDir: "/snap/v2",
+
     files: [
       { path: ".gitignore", data: "node_modules\ndist\n" },
       { path: "server.cjs", data: "require('http')" },
@@ -430,13 +430,13 @@ test("deploy git repos restore from the durable archive into a fresh repo root",
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/v1",
+
     files: [{ path: "server.js", data: "console.log('v1')" }],
   });
   const v1 = (await s1.versionOf(d.id, 1))!;
   await s1.addVersion(d.id, {
     entrypoint: "node server.js",
-    snapshotDir: "/snap/v2",
+
     files: [{ path: "server.js", data: "console.log('v2')" }],
   });
 
@@ -478,7 +478,7 @@ test("deploy git archives keep bundle bytes in the byte store, not the row", asy
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/v1",
+
     files: [{ path: "server.js", data: "console.log('v1')" }],
   });
 
@@ -498,7 +498,7 @@ test("deploy git archives keep bundle bytes in the byte store, not the row", asy
 
   await s2.addVersion(d.id, {
     entrypoint: "node server.js",
-    snapshotDir: "/snap/v2",
+
     files: [{ path: "server.js", data: "console.log('v2')" }],
   });
   const row2 = (await archiveStore.get(d.id))!;
@@ -520,7 +520,7 @@ test("legacy inline-bundle rows still restore and migrate to blob refs on read",
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/v1",
+
     files: [{ path: "server.js", data: "console.log('v1')" }],
   });
   const legacy = (await archiveStore.get(d.id))!;

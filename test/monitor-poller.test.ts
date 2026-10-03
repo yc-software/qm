@@ -126,6 +126,7 @@ async function harness(opts?: {
 
   fake.seed("p-1");
   await processes.register({
+    sandboxId: "sandbox-test",
     processId: "p-1",
     scopeId: SCOPE,
     kind: "background",

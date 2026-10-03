@@ -1,3 +1,4 @@
+import type { MaterializedVersion } from "../src/deploy/deploy-provider.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
@@ -12,7 +13,7 @@ import {
   type FlyMachineConfig,
 } from "../src/deploy/fly-deploy-provider.ts";
 import { parseTar } from "../src/sandbox/tar.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
@@ -209,8 +210,16 @@ function snapshot(files: Record<string, string | Uint8Array>): string {
   return dir;
 }
 
-function version(snapshotDir: string, over: Partial<DeploymentVersion> = {}): DeploymentVersion {
-  return { version: 1, createdAt: 0, entrypoint: "node server.js", snapshotDir, env: { API_KEY: "secret" }, ...over };
+function version(snapshotDir: string, over: Partial<MaterializedVersion> = {}): MaterializedVersion {
+  return {
+    commit: "a".repeat(40),
+    version: 1,
+    createdAt: 0,
+    entrypoint: "node server.js",
+    snapshotDir,
+    env: { API_KEY: "secret" },
+    ...over,
+  };
 }
 
 const machineCreate = (

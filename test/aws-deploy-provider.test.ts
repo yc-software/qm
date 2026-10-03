@@ -1,3 +1,4 @@
+import type { MaterializedVersion } from "../src/deploy/deploy-provider.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -12,7 +13,7 @@ import {
   type MicrovmLifecycleState,
 } from "../src/sandbox/aws-microvm-api.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 
 const REGION = "us-west-2";
@@ -212,8 +213,16 @@ function localSnapshot(file: string, contents: string): string {
   return dir;
 }
 
-function version(snapshotDir: string, over: Partial<DeploymentVersion> = {}): DeploymentVersion {
-  return { version: 1, createdAt: 0, entrypoint: "node server.js", snapshotDir, env: { API_KEY: "secret" }, ...over };
+function version(snapshotDir: string, over: Partial<MaterializedVersion> = {}): MaterializedVersion {
+  return {
+    commit: "a".repeat(40),
+    version: 1,
+    createdAt: 0,
+    entrypoint: "node server.js",
+    snapshotDir,
+    env: { API_KEY: "secret" },
+    ...over,
+  };
 }
 
 const ID = "550e8400-e29b-41d4-a716-446655440000";

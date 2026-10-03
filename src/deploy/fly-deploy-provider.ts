@@ -1,6 +1,7 @@
+import type { MaterializedVersion } from "./deploy-provider.ts";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
+import type { Deployment } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { readTree } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
@@ -374,7 +375,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     throw new Error("Fly shared app has no available deployment ports");
   }
 
-  async function bundleBase64(version: DeploymentVersion): Promise<string> {
+  async function bundleBase64(version: MaterializedVersion): Promise<string> {
     const tree = await readTree(version.snapshotDir, { tolerateMissing: true });
     const sourceBytes = tree.reduce((total, file) => total + file.data.byteLength, 0);
     if (sourceBytes > MAX_BUNDLE_SOURCE_BYTES) {
@@ -394,7 +395,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
 
   const machineConfig = (
     d: Deployment,
-    version: DeploymentVersion,
+    version: MaterializedVersion,
     bundle: string,
     port: number,
   ): FlyMachineConfig => ({
@@ -499,7 +500,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       }
     },
 
-    async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
+    async apply(d: Deployment, version: MaterializedVersion): Promise<DeployEndpoint> {
       ensureConfigured();
       const appName = appNameFor(d);
       const bundle = await bundleBase64(version);

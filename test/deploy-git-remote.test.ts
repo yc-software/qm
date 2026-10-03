@@ -33,7 +33,7 @@ async function fixture(): Promise<{
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/unused",
+
     files: [
       { path: "server.js", data: "console.log('hello')" },
       { path: "data.json", data: '{"n":1}' },

@@ -1,3 +1,4 @@
+import type { MaterializedVersion } from "../src/deploy/deploy-provider.ts";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
 import { createMicrovmApi, vmFetch } from "../src/sandbox/aws-microvm-api.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { swallow } from "../src/util/errors.ts";
 import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
@@ -19,7 +20,7 @@ const api = createMicrovmApi({ region, ...(awsDeploy.profile ? { profile: awsDep
 const store = createMemoryMap<StoredDeployBody>();
 const provider = createAwsDeployProvider({ ...awsDeploy, store });
 
-function makeVersion(v: number): DeploymentVersion {
+function makeVersion(v: number): MaterializedVersion {
   const snapshotDir = mkdtempSync(join(tmpdir(), `aws-deploy-app-v${v}-`));
   writeFileSync(
     join(snapshotDir, "server.js"),
@@ -31,7 +32,15 @@ function makeVersion(v: number): DeploymentVersion {
     join(homeDir, ".aws", "credentials"),
     "[default]\naws_access_key_id=AKIA-SMOKE\naws_secret_access_key=smoke-secret\n",
   );
-  return { version: v, createdAt: 0, entrypoint: "node server.js", snapshotDir, homeDir, env: { SMOKE: "1" } };
+  return {
+    commit: "a".repeat(40),
+    version: v,
+    createdAt: 0,
+    entrypoint: "node server.js",
+    snapshotDir,
+    homeDir,
+    env: { SMOKE: "1" },
+  };
 }
 
 const d: Deployment = {

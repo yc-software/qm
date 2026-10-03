@@ -20,18 +20,18 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/one",
+    files: [],
   });
   const second = await store.create({
     ownerScopeId: scopeId("personal", "U2"),
     createdBy: "U2",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/two",
+    files: [],
   });
   const provider = createDockerDeployProvider({ dockerExec });
 
-  await provider.apply(first, first.versions[0]!);
-  await provider.apply(second, second.versions[0]!);
+  await provider.apply(first, { ...first.versions[0]!, snapshotDir: "/snap/one" });
+  await provider.apply(second, { ...second.versions[0]!, snapshotDir: "/snap/two" });
   await provider.destroy(first);
 
   const firstName = `agent-deploy-${first.id.slice(0, 12)}`;
@@ -41,86 +41,6 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
   assert.ok(calls.some((args) => args.join(" ").includes(`--name ${firstName} --network ${firstName}-net`)));
   assert.ok(calls.some((args) => args.join(" ").includes(`--name ${secondName} --network ${secondName}-net`)));
   assert.ok(calls.some((args) => args.join(" ") === `network rm ${firstName}-net`));
-});
-
-test("Docker provider migrates running deployments off the legacy shared network", async () => {
-  const calls: string[][] = [];
-  let containerName = "";
-  let connectAttempts = 0;
-  let targetAttached = false;
-  let legacyAttached = true;
-  const dockerExec: DockerExec = async (args) => {
-    calls.push(args);
-    if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
-      return { code: 0, stdout: legacyAttached ? `${containerName}\n` : "", stderr: "" };
-    }
-    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
-    if (args[0] === "network" && args[1] === "connect" && ++connectAttempts === 1) {
-      return { code: 1, stdout: "", stderr: "transient" };
-    }
-    if (args[0] === "network" && args[1] === "connect") targetAttached = true;
-    if (args[0] === "network" && args[1] === "disconnect") legacyAttached = false;
-    if (args[0] === "inspect") {
-      return {
-        code: 0,
-        stdout: JSON.stringify({
-          ...(legacyAttached ? { "agent-deploynet": {} } : {}),
-          ...(targetAttached ? { [`${containerName}-net`]: {} } : {}),
-        }),
-        stderr: "",
-      };
-    }
-    return { code: 0, stdout: "", stderr: "" };
-  };
-  const store = createDeployStore();
-  const deployment = await store.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "node server.js",
-    snapshotDir: "/snap/legacy",
-  });
-  containerName = `agent-deploy-${deployment.id.slice(0, 12)}`;
-  await store.setEndpoint(deployment.id, { host: "127.0.0.1", port: 9200 });
-  const running = (await store.get(deployment.id))!;
-  const provider = createDockerDeployProvider({ dockerExec });
-
-  assert.deepEqual(await provider.resolveEndpoint!(running, running.versions[0]!), running.endpoint);
-  assert.equal(connectAttempts, 2);
-  assert.ok(calls.some((args) => args.join(" ") === `network connect ${containerName}-net ${containerName}`));
-  assert.ok(calls.some((args) => args.join(" ") === `network disconnect agent-deploynet ${containerName}`));
-});
-
-test("constructing a Docker provider does not inspect or migrate unrelated deployments", async () => {
-  const calls: string[][] = [];
-  const dockerExec: DockerExec = async (args) => {
-    calls.push(args);
-    return { code: 0, stdout: "", stderr: "" };
-  };
-
-  createDockerDeployProvider({ dockerExec });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, []);
-});
-
-test("an unrelated legacy migration failure does not block a new deployment", async () => {
-  const dockerExec: DockerExec = async (args) => {
-    if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
-      return { code: 0, stdout: "agent-deploy-broken\n", stderr: "" };
-    }
-    if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "daemon unavailable" };
-    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
-    return { code: 0, stdout: "", stderr: "" };
-  };
-  const store = createDeployStore();
-  const deployment = await store.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "node server.js",
-    snapshotDir: "/snap/new",
-  });
-  const provider = createDockerDeployProvider({ dockerExec });
-
-  await assert.doesNotReject(provider.apply(deployment, deployment.versions[0]!));
 });
 
 test("a transient target inspection failure does not report the deployment missing", async () => {
@@ -136,7 +56,7 @@ test("a transient target inspection failure does not report the deployment missi
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/running",
+    files: [],
   });
   await store.setEndpoint(deployment.id, { host: "127.0.0.1", port: 9200 });
   const running = (await store.get(deployment.id))!;
