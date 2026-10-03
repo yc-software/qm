@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
-import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
+import {
+  APIError,
+  FilesystemError,
+  SpritesClient,
+  type Checkpoint,
+  type SpriteCheck,
+  type StreamMessage,
+} from "@fly/sprites";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -97,6 +104,26 @@ export async function retrySpritesControl<T>(operation: () => Promise<T>, timeou
     }
   }
 }
+
+const WRITE_ATTEMPTS = 3;
+const TRANSIENT_NET = new Set([
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+const causeCode = (cause: unknown): string => {
+  if (cause instanceof AggregateError) return cause.errors.map(causeCode).find((code) => TRANSIENT_NET.has(code)) ?? "";
+  const code = (cause as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? code : "";
+};
+
+const transientFsError = (e: unknown): boolean =>
+  (e instanceof FilesystemError && e.code === "UNKNOWN") ||
+  (e instanceof TypeError && TRANSIENT_NET.has(causeCode(e.cause)));
 
 const isMissing = (e: unknown): boolean => e instanceof APIError && e.statusCode === 404;
 
@@ -288,8 +315,16 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const fs = sprite(name).filesystem();
     const tmp = `${absPath}.part.${randomUUID()}`;
     await attempt(`write ${absPath} failed`, async () => {
-      await fs.writeFile(tmp, Buffer.from(data));
-      await fs.rename(tmp, absPath);
+      for (let n = 1; ; n++) {
+        try {
+          await fs.writeFile(tmp, Buffer.from(data));
+          await fs.rename(tmp, absPath);
+          return;
+        } catch (e) {
+          if (n >= WRITE_ATTEMPTS || !transientFsError(e)) throw e;
+          await wait(jitteredBackoffMs(n));
+        }
+      }
     });
   }
 
