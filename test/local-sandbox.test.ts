@@ -1,4 +1,5 @@
 import { test, before, after } from "node:test";
+import { loadConfig } from "../src/config.ts";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -283,7 +284,10 @@ test("a replacement core reattaches to an already-running sandbox", async () => 
     if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
     return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
   };
-  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const sb = makeSandbox(fake, {
+    ...loadConfig({ SANDBOX_BACKEND: "local", QM_CORE_CONTAINER: "qm-test-core" }).localSandbox,
+    fetchImpl,
+  });
   const layers = rw(scopeId("personal", "U39"));
   const first = await sb.provision(layers);
   const connection = `${localNetworkName(first.id)}|qm-test-core`;
@@ -305,7 +309,10 @@ test("containerized core joins each sandbox network and reaches the daemon by co
     if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
     return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
   };
-  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const sb = makeSandbox(fake, {
+    ...loadConfig({ SANDBOX_BACKEND: "local", QM_CORE_CONTAINER: "qm-test-core" }).localSandbox,
+    fetchImpl,
+  });
   const h = await sb.provision(rw(scopeId("personal", "U40")));
   const args = fake.containers.get(h.id)!.args;
   assert.equal(args.includes("-p"), false);
