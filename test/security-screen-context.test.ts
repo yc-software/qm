@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { buildApp } from "../src/wiring.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 
 for (const surface of ["web", "slack", "swarm"]) {
@@ -19,6 +20,7 @@ for (const surface of ["web", "slack", "swarm"]) {
         },
       },
     });
+    await selectDefaultSandbox(built, "U1", "personal:U1");
     const server = createInsecureTestServer(built.app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
