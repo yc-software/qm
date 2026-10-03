@@ -43,11 +43,15 @@ export function builtInModelCatalog(): ModelCatalogEntry[] {
       : [];
   });
   const known = new Set(builtIns.map((model) => model.id));
+  // Admin-registered custom models lead the catalog: an operator registers a
+  // provider precisely because those models are the ones they want reached,
+  // and the picker order follows catalog order. Built-in ids still shadow a
+  // colliding custom id at resolution, so leading here changes only ordering.
   return [
-    ...builtIns,
     ...[...overlayModelCatalog(), ...customModelCatalog(), ...gatewayModelCatalog()].filter(
       (model) => !known.has(model.id),
     ),
+    ...builtIns,
   ];
 }
 
