@@ -1121,13 +1121,13 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   await ctx.deps.refreshModels?.();
   const { res, deps } = ctx;
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
-  const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
+  const [webuiModels, externalSlackParticipants, branding, runtime] = await Promise.all([
     deps.config.getWebuiModelsDurable(orgScope(deps)),
-    deps.config.getBaseModelDurable(orgScope(deps)),
     deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
+    runtimeConfigBody({ deps }, orgScope(deps)),
   ]);
-  const harnessId = deps.harnessId ?? "pi";
+  const harnessId = runtime.effective.harnessId;
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
   const configuredKeys = deps.providerKeys ?? managedKeys;
   const providerStatus = harnessId === "pi" && managedKeys ? managedKeys : configuredKeys;
@@ -1138,8 +1138,8 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     .filter((model) => modelOfferedInWebui(model.id))
     .map((model) => model.id);
   const configuredPicker = webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId)) ?? [];
-  const resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
-    ? baseModel!
+  const resolvedBase = modelSupportedByHarness(runtime.effective.modelId, harnessId)
+    ? runtime.effective.modelId
     : defaultModelForHarness(harnessId, deps.baseModelDefault);
   const resolvedBranding = {
     ...(branding.orgName ? { orgName: branding.orgName } : {}),
