@@ -1779,3 +1779,133 @@ test("manifest inventories are canonical across discovery order without mutating
   reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
   assert.notEqual(renderKeychainManifest(reversed, 1000), first);
 });
+
+test("a failed connector refresh keeps using the stored token while it is still outside the expiry skew", async () => {
+  let fail = true;
+  const k = createKeychain({
+    creds: createMemoryMap(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+    oauthSkewMs: 60_000,
+    oauthRefreshMarginMs: 10 * 60_000,
+    refreshConnector: async () => {
+      if (fail) throw new TypeError("fetch failed");
+      return { accessToken: "refreshed-token", expiresAt: Date.now() + 3_600_000 };
+    },
+  });
+  await k.setConnectorToken("gmail.googleapis.com", "U1", {
+    accessToken: "still-valid-token",
+    refreshToken: "refresh",
+    expiresAt: Date.now() + 5 * 60_000,
+  });
+  const cid = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!.credentialId;
+  const grant = await k.createGrant({
+    credentialId: cid,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "refresh fallback",
+  });
+  const envValue = async () => {
+    const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+    await prepared.commit();
+    return prepared.materialized.kind === "env" ? prepared.materialized.env[0]?.value : undefined;
+  };
+  assert.equal(await envValue(), "still-valid-token");
+  fail = false;
+  assert.equal(await envValue(), "refreshed-token");
+});
+
+test("a failed connector refresh does not hand out a token inside the expiry skew", async () => {
+  const k = createKeychain({
+    creds: createMemoryMap(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+    oauthSkewMs: 60_000,
+    refreshConnector: async () => {
+      throw new TypeError("fetch failed");
+    },
+  });
+  await k.setConnectorToken("gmail.googleapis.com", "U1", {
+    accessToken: "nearly-expired-token",
+    refreshToken: "refresh",
+    expiresAt: Date.now() + 30_000,
+  });
+  const cid = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!.credentialId;
+  const grant = await k.createGrant({
+    credentialId: cid,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "refresh fallback",
+  });
+  await assert.rejects(k.prepareMaterialize(grant.id, "channel:C1", "U2"));
+});
+
+for (const [label, failure] of [
+  ["revoked grant", new Error("invalid_grant: Token has been expired or revoked.")],
+  ["400 rejection", new Error("google token refresh failed (400)")],
+  ["401 rejection", new Error("slack token refresh failed (401)")],
+] as const) {
+  test(`a connector refresh rejected by the provider (${label}) does not fall back to the stored token`, async () => {
+    const k = createKeychain({
+      creds: createMemoryMap(),
+      grants: createMemoryMap(),
+      asks: createMemoryMap(),
+      key: KEY,
+      oauthSkewMs: 60_000,
+      refreshConnector: async () => {
+        throw failure;
+      },
+    });
+    await k.setConnectorToken("gmail.googleapis.com", "U1", {
+      accessToken: "revoked-but-unexpired",
+      refreshToken: "refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+    });
+    const cid = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!.credentialId;
+    const grant = await k.createGrant({
+      credentialId: cid,
+      ownerId: "U1",
+      audienceScopeId: "channel:C1",
+      mode: "standing",
+      purpose: "refresh fallback",
+    });
+    await assert.rejects(k.prepareMaterialize(grant.id, "channel:C1", "U2"));
+  });
+}
+
+test("a provider 503 or 429 on refresh is transient and keeps the stored token", async () => {
+  for (const failure of [new Error("google token refresh failed (503)"), new Error("x token refresh failed (429)")]) {
+    const k = createKeychain({
+      creds: createMemoryMap(),
+      grants: createMemoryMap(),
+      asks: createMemoryMap(),
+      key: KEY,
+      oauthSkewMs: 60_000,
+      refreshConnector: async () => {
+        throw failure;
+      },
+    });
+    await k.setConnectorToken("gmail.googleapis.com", "U1", {
+      accessToken: "still-valid-token",
+      refreshToken: "refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+    });
+    const cid = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!.credentialId;
+    const grant = await k.createGrant({
+      credentialId: cid,
+      ownerId: "U1",
+      audienceScopeId: "channel:C1",
+      mode: "standing",
+      purpose: "refresh fallback",
+    });
+    const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+    assert.equal(
+      prepared.materialized.kind === "env" ? prepared.materialized.env[0]?.value : undefined,
+      "still-valid-token",
+    );
+  }
+});

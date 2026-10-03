@@ -488,6 +488,24 @@ function consumedGrant(grant: KeychainGrant): boolean {
   return grant.status === "used" || (grant.mode === "once" && grant.usedAt !== undefined);
 }
 
+function isTransientRefreshFailure(e: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (let cur: unknown = e; cur && !seen.has(cur); cur = (cur as { cause?: unknown }).cause) {
+    seen.add(cur);
+    const err = cur as { name?: unknown; code?: unknown; message?: unknown };
+    if (err.name === "AbortError" || err.name === "TimeoutError") return true;
+    if (
+      typeof err.code === "string" &&
+      /^(?:ECONN\w*|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EPIPE|UND_ERR_\w+)$/.test(err.code)
+    )
+      return true;
+    const message = typeof err.message === "string" ? err.message : "";
+    if (err instanceof TypeError && /fetch failed|network/i.test(message)) return true;
+    if (/\((?:5\d\d|429)\)/.test(message)) return true;
+  }
+  return false;
+}
+
 function expired(rec: { expiresAt?: number }, now: number): boolean {
   return typeof rec.expiresAt === "number" && rec.expiresAt < now;
 }
@@ -775,6 +793,8 @@ export function createKeychain(deps: {
     });
   }
 
+  const transientRefreshFailures = new Set<string>();
+
   async function refreshAndStore(
     host: string,
     principalId: string,
@@ -810,6 +830,7 @@ export function createKeychain(deps: {
     } catch (e) {
       const message = storedRefreshError(e);
       console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
+      if (isTransientRefreshFailure(e)) transientRefreshFailures.add(rec.id);
       try {
         await markConnectorRefreshFailure(rec, message);
       } catch (writeErr) {
@@ -832,9 +853,16 @@ export function createKeychain(deps: {
       if (!pending) {
         pending = refreshAndStore(refreshable, rec.ownerId, rec.refresh?.accountType, rec);
         inflightRefreshes.set(rec.id, pending);
+        transientRefreshFailures.delete(rec.id);
         void pending.finally(() => inflightRefreshes.delete(rec.id));
       }
-      return pending;
+      const refreshed = await pending;
+      if (refreshed !== null) return refreshed;
+      if (!transientRefreshFailures.has(rec.id)) return null;
+      const current = await deps.creds.get(rec.id);
+      if (!current || current.fingerprint !== rec.fingerprint) return null;
+      if (oauthExpired(current, now())) return null;
+      return tryDecrypt(current, (r) => decryptSecret(r.secretEnc, deps.key));
     }
     if (oauthExpired(rec, t) && !refreshable) return null;
     return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
