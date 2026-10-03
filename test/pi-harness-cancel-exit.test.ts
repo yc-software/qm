@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createGoalRecord, latestGoalRecord } from "../src/harness/goal.ts";
+import { createHarnessRouter } from "../src/harness/harness-router.ts";
+import { createMockHarness } from "../src/harness/mock-harness.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { defaultModelForHarness } from "../src/model/pi-models.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry, NewTapeRecord } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
@@ -228,7 +231,11 @@ test("a second '(stopped)' in one session is still re-taped for replay", async (
 });
 
 test("Pi rehydrates a durable receipt and preserves its active goal when the worker cancels", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createHarnessRouter(
+    new Map([["pi", createPiHarness({ apiKey: "sk-test" })]]),
+    createMockHarness(),
+    async () => ({ harnessId: "pi", modelId: defaultModelForHarness("pi") }),
+  );
   const controller = new AbortController();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
   const realFetch = globalThis.fetch;

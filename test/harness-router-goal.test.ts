@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createGoalRecord, latestGoalRecord, rehydrateOpenGoal } from "../src/harness/goal.ts";
+import { createGoalRecord, goalFloorUnmet, latestGoalRecord, rehydrateOpenGoal } from "../src/harness/goal.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
+import { meterGrindUsage } from "../src/harness/grind.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
@@ -12,12 +13,17 @@ const scope = "personal:goal@example.com" as ScopeId;
 
 type Round = (turn: HarnessTurnInput, round: number) => Promise<HarnessTurnResult>;
 
-function fakeAdapter(rounds: Round, selfEnforcing = false): { harness: Harness; calls: HarnessTurnInput[] } {
+type Capabilities = Harness["profile"]["capabilities"];
+
+function fakeAdapter(
+  rounds: Round,
+  capabilities: Capabilities = new Set(),
+): { harness: Harness; calls: HarnessTurnInput[] } {
   const calls: HarnessTurnInput[] = [];
   const mock = createMockHarness();
   const harness: Harness = {
     ...mock,
-    profile: { ...mock.profile, capabilities: new Set(selfEnforcing ? ["goal-enforcement"] : []) },
+    profile: { ...mock.profile, capabilities },
     turns: {
       async runTurn(turn) {
         calls.push(turn);
@@ -105,17 +111,36 @@ test("an active goal left open by a non-enforcing harness is continued until the
   );
 });
 
-test("a harness that enforces goals itself is left alone", async () => {
-  const emitted: SessionEntry[] = [];
-  const { harness, calls } = fakeAdapter(async (turn) => {
-    await emitGoalCreate(turn, "self-enforced");
-    return { reply: "pi handles it" };
-  }, true);
-  const result = await router(harness).turns.runTurn(stubTurn(emitted));
-  assert.equal(calls.length, 1);
-  assert.equal(result.reply, "pi handles it");
-  assert.ok(!emitted.some((entry) => entry.type === "system"));
-});
+for (const capabilities of [new Set(), new Set(["native-tape"])] as Capabilities[]) {
+  test(`goal floors spend the recorded usage cost on every harness (${[...capabilities].join() || "foreign"})`, async () => {
+    const emitted: SessionEntry[] = [];
+    const recorded: unknown[] = [];
+    const taped: Array<{ payload: { entry?: { payload?: { kind?: string } } } }> = [];
+    const { harness, calls } = fakeAdapter(async (turn, round) => {
+      if (round === 0) {
+        const goal = createGoalRecord({ objective: "spend a dollar", floor: { minUsd: 1 } });
+        await turn.emit({ type: "tool_result", payload: { tool: "goal", goal, callId: "c1" }, scopeLabel: scope });
+      }
+      const usage = { input: 70, output: 30, cacheRead: 0, cacheWrite: 0, totalTokens: 100, costUsd: 0.4 };
+      meterGrindUsage(turn.goalMeter, usage);
+      await turn.recordLlmRequest?.({ turnSeq: null, step: 0, model: "unpriced-elsewhere", truncated: false, usage });
+      if (round > 0 && !goalFloorUnmet(turn.goal!, turn.goalMeter!)) turn.goal!.status = "complete";
+      return round > 5 ? { reply: "", stopped: true, stoppedByUser: true } : { reply: `round ${round}` };
+    }, capabilities);
+    const turn = stubTurn(emitted, {
+      recordLlmRequest: (rec: unknown) => void recorded.push(rec),
+      tape: async (rec: never) => void taped.push(rec),
+    });
+    await router(harness).turns.runTurn(turn);
+    assert.equal(calls.length, 3, "$0.40 a round meets the $1 floor on the third round");
+    assert.equal(recorded.length, 3);
+    assert.equal(calls[0]!.goalMeter!.turns, 3);
+    assert.ok(calls.every((call) => call.goalMeter === calls[0]!.goalMeter));
+    assert.equal(calls[0]!.goalMeter!.usd.toFixed(2), "1.20");
+    assert.equal(latestGoalRecord(emitted)?.tokensUsed, 300, "the round that completes the goal still counts");
+    assert.equal(taped.filter((rec) => rec.payload.entry?.payload?.kind === "goal").length, 1);
+  });
+}
 
 test("a stopped turn pauses the goal instead of continuing it", async () => {
   const emitted: SessionEntry[] = [];

@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createGoalRecord, latestGoalRecord } from "../src/harness/goal.ts";
+import { createHarnessRouter } from "../src/harness/harness-router.ts";
+import { createMockHarness } from "../src/harness/mock-harness.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { defaultModelForHarness } from "../src/model/pi-models.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { promptEnvelopeBody, type NewEntry, type NewTapeRecord } from "../src/sessions/session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
@@ -579,3 +583,53 @@ for (const failure of ["acknowledge", "tape"] as const) {
     }
   });
 }
+
+test("Pi goals run through the router loop and meter the recorded usage until the token cap", async () => {
+  const router = createHarnessRouter(
+    new Map([["pi", createPiHarness({ apiKey: "sk-test" })]]),
+    createMockHarness(),
+    async () => ({ harnessId: "pi", modelId: defaultModelForHarness("pi") }),
+  );
+  const sink: Sink = { entries: [], tape: [] };
+  const goal = createGoalRecord({ objective: "ship it", capTokens: 10 });
+  const prompts: string[] = [];
+  const contexts: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content: unknown }> };
+    prompts.push(JSON.stringify(body.messages?.at(-1)?.content ?? ""));
+    contexts.push(JSON.stringify(body.messages ?? []));
+    return sse(textReplyEvents(`round ${prompts.length}`));
+  }) as typeof globalThis.fetch;
+  try {
+    const result = await router.turns.runTurn(
+      turnInput("pi-goal-router", sink, {
+        history: [
+          {
+            type: "tool_result",
+            payload: { tool: "goal", action: "create", goal },
+            seq: 0,
+            sessionId: "pi-goal-router",
+            parentSeq: null,
+            createdAt: 1,
+            scopeLabel: "personal:tester" as ScopeId,
+          },
+        ],
+        recordLlmRequest: () => {},
+        tapeRows: [],
+        tapeMode: "serve",
+      }),
+    );
+    assert.equal(result.reply, "round 3");
+    assert.equal(prompts.length, 3);
+    assert.match(prompts[1]!, /The active goal is not marked complete/);
+    assert.match(prompts[2]!, /token cap is exhausted/);
+    assert.match(contexts[2]!, /round 1[\s\S]*round 2/, "each round is served the tape the earlier rounds wrote");
+    const persisted = latestGoalRecord(sink.entries)!;
+    assert.equal(persisted.status, "active");
+    assert.equal(persisted.tokensUsed, 24);
+    assert.ok(sink.tape.some((rec) => (rec.payload as { entry?: { type?: string } }).entry?.type === "system"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

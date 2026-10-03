@@ -6,6 +6,7 @@ import {
   type HarnessTurnInput,
   type HarnessTurnResult,
 } from "./harness.ts";
+import { meterGrindUsage } from "./grind.ts";
 import { classifyScopeLabel } from "../classify/scope-classifier.ts";
 import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
@@ -897,6 +898,7 @@ export function createMockHarness(): Harness {
         await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
         const modelCalls = usedTool ? 2 : 1;
         const steps = Array.from({ length: modelCalls }, (_, step) => callUsage(step));
+        for (const step of steps) meterGrindUsage(turn.goalMeter, step);
         const cacheUsage = steps.reduce(
           (acc, u) => ({
             cacheRead: acc.cacheRead + u.cacheRead,

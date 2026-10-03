@@ -95,8 +95,6 @@ export interface ToolContextRef {
 
   goal?: GoalRecord | null;
 
-  goalRound?: number;
-
   goalMeter?: import("./grind.ts").GrindMeter;
   verifyGoal?: GoalVerifier;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;

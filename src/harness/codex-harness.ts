@@ -1,4 +1,5 @@
 import { documentsFallbackText } from "../core/document-inputs.ts";
+import { meterGrindUsage } from "./grind.ts";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -1129,6 +1130,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     };
     const startedAt = Date.now();
     const recordRequest = async (): Promise<void> => {
+      const usage = sumUsage(state.usageByThread);
+      meterGrindUsage(turn.goalMeter, usage);
       if (!turn.recordLlmRequest) return;
       const recordAbort = new AbortController();
       let recordTimer: NodeJS.Timeout | undefined;
@@ -1144,7 +1147,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               transport: { modelId: selectedModel },
               ttftMs: state.firstOutputAt ? state.firstOutputAt - startedAt : null,
               durationMs: Date.now() - startedAt,
-              usage: sumUsage(state.usageByThread),
+              usage,
             },
             recordAbort.signal,
           ),
