@@ -575,14 +575,21 @@ function requirementFor(config: QmConfig, spec: SecretSpec): boolean | null {
   return spec.required.optionalOtherwise ? false : null;
 }
 
+export const SMTP_SECRET_NAMES = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"];
+const RESEND_SECRET_NAMES = ["RESEND_API_KEY"];
+
 export function emailSecretNames(config: QmConfig): string[] {
   if (!config.services.includes("auth")) return [];
   return [
     "AUTH_EMAIL_FROM",
-    ...(config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp"
-      ? ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]
-      : ["RESEND_API_KEY"]),
+    ...(config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? SMTP_SECRET_NAMES : RESEND_SECRET_NAMES),
   ];
+}
+
+// Both transports' names: keys for the transport that is not selected are still local email config.
+export function everyEmailSecretName(config: QmConfig): string[] {
+  if (!config.services.includes("auth")) return [];
+  return [...new Set([...emailSecretNames(config), ...SMTP_SECRET_NAMES, ...RESEND_SECRET_NAMES])];
 }
 
 export function computedSecrets(config: QmConfig): ComputedSecret[] {
