@@ -146,18 +146,24 @@ async function withStatementTimeout<T>(
   }
 }
 
-export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withPgTransaction<T>(
+  pool: Pick<Pool, "connect">,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
   const client = await pool.connect();
+  let broken: Error | undefined;
   try {
     await client.query("BEGIN");
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+      broken = rollbackError instanceof Error ? rollbackError : new Error(errMessage(rollbackError));
+    });
     throw error;
   } finally {
-    client.release();
+    client.release(broken);
   }
 }
 

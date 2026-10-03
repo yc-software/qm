@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type {
   OpenTaskFilter,
   Task,
@@ -97,9 +97,7 @@ export function createPostgresTaskStore(connectionString: string, opts: { now?: 
       const id = input.id ?? randomUUID();
       const at = now();
       const status = input.status ?? "pending";
-      const client = await (await pg.pool()).connect();
-      try {
-        await client.query("BEGIN");
+      return withPgTransaction(await pg.pool(), async (client) => {
         const inserted = await client.query(
           `INSERT INTO tasks(id, session_id, origin_run_id, title, status, created_at, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6,$6) RETURNING *`,
@@ -110,14 +108,8 @@ export function createPostgresTaskStore(connectionString: string, opts: { now?: 
            VALUES ($1,$2,'created',NULL,$3,$4)`,
           [id, input.originRunId, status, at],
         );
-        await client.query("COMMIT");
         return rowToTask(inserted.rows[0] as Record<string, unknown>);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+      });
     },
 
     async get(id): Promise<Task | null> {
@@ -139,32 +131,21 @@ export function createPostgresTaskStore(connectionString: string, opts: { now?: 
 
     async transitionStatus(id, expectedStatus, nextStatus, runId): Promise<Task | null> {
       const at = now();
-      const client = await (await pg.pool()).connect();
-      try {
-        await client.query("BEGIN");
+      return withPgTransaction(await pg.pool(), async (client) => {
         const updated = await client.query(
           `UPDATE tasks SET status = $3, updated_at = $4
            WHERE id = $1 AND status = $2 RETURNING *`,
           [id, expectedStatus, nextStatus, at],
         );
         const row = updated.rows[0] as Record<string, unknown> | undefined;
-        if (!row) {
-          await client.query("ROLLBACK");
-          return null;
-        }
+        if (!row) return null;
         await client.query(
           `INSERT INTO task_events(task_id, run_id, type, from_status, to_status, created_at)
            VALUES ($1,$2,'status_changed',$3,$4,$5)`,
           [id, runId, expectedStatus, nextStatus, at],
         );
-        await client.query("COMMIT");
         return rowToTask(row);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+      });
     },
 
     async listEvents(taskId): Promise<TaskEvent[]> {
