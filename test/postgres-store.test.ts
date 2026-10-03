@@ -1428,7 +1428,7 @@ test("pg scopeHasSessions + listByScope answer scope questions without a table s
   assert.deepEqual(new Set(listed.map((x) => x.id)), new Set([a.id, b.id]), "only the asked-for scope comes back");
 });
 
-test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => {
+test("pg JSON function repair runs once and preserves dependent indexes", { skip }, async () => {
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -1439,8 +1439,9 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
       BEGIN RETURN t::jsonb; EXCEPTION WHEN others THEN RETURN NULL; END $safe_jsonb$`);
     await raw.query("CREATE INDEX safe_jsonb_parallel_repair_test ON session_entries ((safe_jsonb(payload) ->> 'ts'))");
 
-    const s = createPostgresSessionStore(URL!);
-    await s.scanAll();
+    await raw.query("ALTER FUNCTION entry_search_text(text) PARALLEL SAFE");
+    await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0024-json-functions-parallel'");
+    await migrateRegisteredPgSchemas(URL!);
 
     const result = await raw.query(
       `SELECT proname, proparallel
@@ -1463,6 +1464,16 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
       (await raw.query("SELECT to_regclass('safe_jsonb_parallel_repair_test') AS index")).rows[0]!.index,
       "safe_jsonb_parallel_repair_test",
     );
+    const versions = async () =>
+      (
+        await raw.query(
+          "SELECT oid, xmin::text FROM pg_proc WHERE oid IN ('safe_jsonb(text)'::regprocedure, 'entry_search_text(text)'::regprocedure) ORDER BY oid",
+        )
+      ).rows;
+    const before = await versions();
+    await createPostgresSessionStore(URL!).scanAll();
+    await migrateRegisteredPgSchemas(URL!);
+    assert.deepEqual(await versions(), before);
   } finally {
     await raw.query("DROP INDEX IF EXISTS safe_jsonb_parallel_repair_test");
     await raw.query("DROP FUNCTION IF EXISTS safe_jsonb(text)");

@@ -735,31 +735,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ON CONFLICT DO NOTHING`,
         ],
       },
-    ],
-    [
       {
-        id: "sessions/maintenance/safe-jsonb-parallel",
+        id: "sessions/store/0024-json-functions-parallel",
         statements: [
-          `DO $safe_jsonb_parallel$
-        BEGIN
-          IF to_regprocedure('safe_jsonb(text)') IS NOT NULL THEN
-            ALTER FUNCTION safe_jsonb(text) PARALLEL UNSAFE;
-          END IF;
-        END $safe_jsonb_parallel$`,
-        ],
-      },
-      {
-        id: "sessions/maintenance/entry-search-text-parallel",
-        statements: [
-          `DO $entry_search_text_parallel$
-        BEGIN
-          IF to_regprocedure('entry_search_text(text)') IS NOT NULL THEN
-            ALTER FUNCTION entry_search_text(text) PARALLEL UNSAFE;
-          END IF;
-        END $entry_search_text_parallel$`,
+          `DO $json_functions_parallel$
+           BEGIN
+             IF to_regprocedure('safe_jsonb(text)') IS NOT NULL THEN
+               ALTER FUNCTION safe_jsonb(text) PARALLEL UNSAFE;
+             END IF;
+             ALTER FUNCTION entry_search_text(text) PARALLEL UNSAFE;
+           END $json_functions_parallel$`,
         ],
       },
     ],
+    [],
   );
 
   const lockSession = (client: PoolClient, sessionId: string) =>
