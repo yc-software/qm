@@ -545,8 +545,8 @@ export interface App {
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean },
-  ): Promise<Skill | "trigger_blocked" | null>;
+    opts?: { liveActor?: boolean; baseVersion?: number },
+  ): Promise<Skill | "trigger_blocked" | "version_conflict" | null>;
   restoreOwnedSkill(id: string, principalId: string): Promise<Skill | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;

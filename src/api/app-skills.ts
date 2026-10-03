@@ -267,6 +267,7 @@ export function createSkillMethods(
       if (!skill || !(await canManageSkill(skill, principalId))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       if (skill.status === "archived") return null;
+      if (opts?.baseVersion !== undefined && opts.baseVersion !== skill.version) return "version_conflict";
       const manifest = {
         ...skill.manifest,
         description: patch.description ?? skill.manifest.description,

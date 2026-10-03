@@ -1831,11 +1831,12 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       const id = c.params.id!;
-      const p = await readJson<{ description?: unknown; body?: unknown }>(req, res);
+      const p = await readJson<{ description?: unknown; body?: unknown; baseVersion?: unknown }>(req, res);
       if (!p) return;
-      const patch: { description?: string; body?: string } = {};
+      const patch: { description?: string; body?: string; baseVersion?: number } = {};
       if (typeof p.description === "string") patch.description = p.description;
       if (typeof p.body === "string") patch.body = p.body;
+      if (typeof p.baseVersion === "number") patch.baseVersion = p.baseVersion;
       return relayCore(
         res,
         "PUT",
