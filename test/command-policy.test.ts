@@ -51,6 +51,125 @@ test("fork bomb is denied", () => {
   assert.equal(evaluateCommand(":() { :|:& };:", p).decision, "deny");
 });
 
+test("newly recognizable recursive syntax cannot replace an existing hard denial", () => {
+  const policy = defaultOrgPolicy();
+  for (const command of [
+    "rm '-r x'; mkfs.ext4 /dev/example",
+    "rm -rf victim <<EOF\ntext\nEOF\nmkfs.ext4 /dev/example",
+  ]) {
+    assert.equal(evaluateCommand(command, policy).decision, "deny", command);
+    assert.equal(
+      evaluateCommandWithLayer(command, { mode: "denylist", rules: [] }, policy.rules).decision,
+      "deny",
+      command,
+    );
+  }
+  assert.equal(evaluateCommand("rm -rf victim <<EOF\ntext\nEOF", { ...policy, mode: "allowlist" }).decision, "deny");
+});
+
+test("recursive-delete options respect filenames, command boundaries and end-of-options without changing saved rule identity", () => {
+  const pattern = "\\brm\\b[^\\n]*(?:-[a-zA-Z]*r|--recursive)";
+  const rule: CommandRule = { pattern, decision: "require_approval", reason: "recursive delete" };
+  const policy: CommandPolicy = { mode: "denylist", rules: [JSON.parse(JSON.stringify(rule))] };
+  const commands = [
+    "rm -f controls/evidence/valid-rec-grand-meridian-dev-a-drained/answer.json",
+    "rm -f report-rerun.json",
+    "rm -f answer.json && node --require helper.js",
+    "rm -f answer.json; python -r probe.py",
+    "rm -- -rf --recursive",
+    'rm -f "valid-rec/answer.json"',
+    "rm -f 'valid-rec/answer.json'",
+  ];
+  for (const command of [...commands, ...commands.slice(0, 5).map((value) => `bash -c '${value}'`)]) {
+    assert.equal(evaluateCommand(command, defaultOrgPolicy()).decision, "allow", command);
+    assert.equal(evaluateCommand(command, policy).decision, "allow", command);
+    assert.equal(evaluateCommandWithLayer(command, { mode: "denylist", rules: [] }, [rule]).decision, "allow", command);
+  }
+  for (const evaluate of [
+    (command: string) => evaluateCommand(command, policy),
+    (command: string) => evaluateCommandWithLayer(command, { mode: "denylist", rules: [] }, [rule]),
+  ]) {
+    const result = evaluate("rm -rf dir");
+    assert.equal(result.decision, "require_approval");
+    assert.equal(result.approvalKey, pattern);
+    assert.equal(result.reason, rule.reason);
+  }
+});
+
+test("recursive-delete matching preserves guards for raw quoting, rewritten arguments and uncertain shell syntax", () => {
+  const commands = [
+    "rm dir -r",
+    "rm --r dir",
+    "rm --rec dir",
+    "rm -f -R dir",
+    "rm>/dev/null -rf dir",
+    "rm -f > -- -r dir",
+    "rm '>' -r dir",
+    "rm ${target} -rf dir",
+    "find . -exec rm {} -rf \\;",
+    "rm <(printf x) -rf dir",
+    `r=rm; "$r" '>' -rf dir`,
+    `r=rm; "$r" ';' -rf dir`,
+    `env -S 'rm' '>' -rf dir`,
+    `rm '"--"' -rf dir`,
+    `bash -O extglob -c 'rm @(a|b) -rf dir'`,
+    "rm dir(N) -rf dir",
+    `printf 'rm %s;' -- '-rf dir' | bash`,
+    "xargs -a inputs.txt -I -- rm -- -rf dir",
+    "xargs -I-- rm -- -rf dir",
+    "xargs --replace=-- rm -- -rf dir",
+    "RM -rf dir; rm -- -r",
+    "/bin/RM -rf dir; rm -- -r",
+    "bash rm -rf dir; rm -- -r",
+    "bash -c -- 'rm -rf victim'; rm -- -r",
+    "sh -c -- 'rm -rf victim'; rm -- -r",
+    "bash -c -e 'rm -rf victim'; rm -- -r",
+    "bash -c +e 'rm -rf victim'; rm -- -r",
+    "bash -c -x 'rm -rf victim'; rm -- -r",
+    "bash -c -O extglob 'rm -rf victim'; rm -- -r",
+    "bash --noprofile -c 'rm -rf victim'; rm -- -r",
+    "BASH -c 'rm -rf victim'; rm -- -r",
+    "/bin/BASH -c 'rm -rf victim'; rm -- -r",
+    "SH -c 'rm -rf victim'; rm -- -r",
+    "Bash -c 'rm -rf victim'; rm -- -r",
+    `bash -c -- 'r""m -rf victim'; rm -- -r`,
+    `bash -c -e 'r""m -rf victim'; rm -- -r`,
+    `BASH -c 'r""m -rf victim'; rm -- -r`,
+    `env bash -c -- 'r""m -rf victim'; rm -- -r`,
+    `stdbuf -oL bash -c -- 'r""m -rf victim'; rm -- -r`,
+    `setsid bash -c -- 'r""m -rf victim'; rm -- -r`,
+    `builtin eval 'r""m -rf victim'; rm -- -r`,
+    "custom-wrapper rm -- -rf dir; rm -- -r",
+    "/tmp/rm-wrapper -rf dir; rm -- -r",
+    "rm *-rf victim",
+    "sh -c 'rm *-rf victim'",
+    "rm -f harmless; r[m] -rf victim",
+    "rm -f harmless; r? -rf victim",
+    "rm x\r-- -rf dir",
+    "rm x\u00a0-- -rf dir",
+    "sudo -u root rm -rf dir",
+    "env TASK=1 rm -rf dir",
+    "timeout 5 rm -rf dir",
+    "cat <<EOF # '\ntext\nEOF\nrm -rf victim\n# '",
+    "cat <<'EOF' # '\ntext\nEOF\nrm -rf victim\n# '",
+    "cat <<EOF # '\n$(rm -rf victim)\nEOF\n# '",
+    "zsh -o extendedglob -c 'rm ^x-rf victim'",
+    "zsh -o extendedglob -c 'rm x#-rf victim'",
+    "HOME=-rf; rm ~ victim-rerun",
+  ];
+  const policy = defaultOrgPolicy();
+  const rule = JSON.parse(JSON.stringify(policy.rules[0])) as CommandRule;
+  for (const command of commands) {
+    for (const result of [
+      evaluateCommand(command, policy),
+      evaluateCommandWithLayer(command, { mode: "denylist", rules: [] }, [rule]),
+    ]) {
+      assert.equal(result.decision, "require_approval", command);
+      assert.equal(result.approvalKey, rule.pattern, command);
+    }
+  }
+});
+
 test("benign command is allowed in denylist mode", () => {
   assert.equal(evaluateCommand("echo hello", defaultOrgPolicy()).decision, "allow");
 });
