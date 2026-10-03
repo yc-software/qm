@@ -74,3 +74,70 @@ test("an active goal stops continuing once a model round fails at the provider",
     globalThis.fetch = realFetch;
   }
 });
+
+function textStream(text: string): Response {
+  const event = (name: string, data: unknown) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+  return new Response(
+    event("message_start", {
+      type: "message_start",
+      message: {
+        id: "m",
+        type: "message",
+        role: "assistant",
+        content: [],
+        model: "x",
+        stop_reason: null,
+        usage: { input_tokens: 5, output_tokens: 0 },
+      },
+    }) +
+      event("content_block_start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      }) +
+      event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }) +
+      event("content_block_stop", { type: "content_block_stop", index: 0 }) +
+      event("message_delta", {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 3 },
+      }) +
+      event("message_stop", { type: "message_stop" }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+test("a refused goal round falls back to another model and the goal keeps going", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const controller = new AbortController();
+  const entries: Array<{ type: string; payload: unknown }> = [];
+  const realFetch = globalThis.fetch;
+  const models: string[] = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const model = (JSON.parse(String(init?.body ?? "{}")) as { model: string }).model;
+    models.push(model);
+    if (models.length >= 5) controller.abort();
+    if (models.length >= 2 && model === models[0])
+      return new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "API integrators: you can reduce refusals for your users by configuring a fallback model",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    return textStream(`reply ${models.length}`);
+  }) as typeof globalThis.fetch;
+  try {
+    await harness.turns.runTurn(goalTurn("goal-refusal-fallback", controller.signal, entries)).catch(() => undefined);
+    const [primary, refused, fallback, continued] = models;
+    assert.equal(refused, primary, "the second round goes to the primary model and is refused");
+    assert.notEqual(fallback, primary, "the refused round is answered by a fallback model");
+    assert.equal(continued, fallback, "the goal keeps going on the fallback model instead of stopping");
+    assert.equal(latestGoalRecord(entries)?.status, "active");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

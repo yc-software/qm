@@ -2261,6 +2261,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
             return true;
           };
+          const recoverRefusedRound = async (): Promise<void> => {
+            if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
+            const refusal = providerRefusalError(entry.agentSession, messagesBefore);
+            if (!refusal) return;
+            try {
+              await attemptRefusalFallback(refusal);
+            } catch (e) {
+              swallow("pi: refusal fallback", e);
+              throw new NonRetryableTurnError(refusal);
+            }
+          };
           try {
             const images = turn.images?.length
               ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
@@ -2273,6 +2284,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 abort: () => entry.agentSession.abort(),
               },
             );
+            if (wallClock === "ok") await recoverRefusedRound();
             const goalAfterPrompt = entry.ref.goal;
             if (
               wallClock === "ok" &&
@@ -2302,27 +2314,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   entry.ref.silentRequested = false;
                   await thinkTail;
                 },
-                prompt: (note) => {
-                  if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS)
-                    return Promise.resolve<TurnWallClockOutcome>("aborted");
-                  return raceTurnWallClock(entry.agentSession.prompt(note), {
+                prompt: async (note) => {
+                  if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
+                  const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
                     capMs: raceCapMs(),
                     extendMs: extendCapMs,
                     abort: () => entry.agentSession.abort(),
                   });
+                  if (outcome === "ok") await recoverRefusedRound();
+                  return outcome;
                 },
               });
-            }
-            if (wallClock === "ok" && !entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
-              const refusal = providerRefusalError(entry.agentSession, messagesBefore);
-              if (refusal) {
-                try {
-                  await attemptRefusalFallback(refusal);
-                } catch (e) {
-                  swallow("pi: refusal fallback", e);
-                  throw new NonRetryableTurnError(refusal);
-                }
-              }
             }
             const note = emptyEndingNote({
               wallClock,
