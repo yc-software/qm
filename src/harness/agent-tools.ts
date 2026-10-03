@@ -742,7 +742,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...sandboxLog({ tool: "execute", ...scopeNote }),
         callId,
         isError: true,
-        result: "Command execution failed.",
+        result: `Command execution failed: ${redactSecrets(errMessage(e))}`,
       });
       throw e;
     }

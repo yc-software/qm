@@ -9,6 +9,7 @@ import {
   type TimingResult,
   type TransactionEvent,
 } from "../../chassis/src/timing.ts";
+import { errDetail, failureCode } from "../../chassis/src/errors.ts";
 
 const ERROR_TYPES = new Set([
   "Error",
@@ -74,6 +75,11 @@ function safeFrame(frame: StackFrame, origin: string): StackFrame[] {
   }
 }
 
+function mechanismType(mechanism: { type?: string; handled?: boolean } | undefined): string {
+  if (mechanism?.handled === true) return "handled";
+  return mechanism?.type === "auto.browser.global_handlers.onunhandledrejection" ? "onunhandledrejection" : "onerror";
+}
+
 export function sanitizeBrowserError(event: ErrorEvent, origin: string, release?: string): ErrorEvent {
   const sanitized: ErrorEvent = {
     type: undefined,
@@ -82,7 +88,10 @@ export function sanitizeBrowserError(event: ErrorEvent, origin: string, release?
     platform: "javascript",
     level: "error",
     release,
-    tags: { service: "web-ui-browser" },
+    tags: {
+      service: "web-ui-browser",
+      ...(typeof event.tags?.error_code === "string" ? { error_code: failureCode(event.tags.error_code) } : {}),
+    },
     exception: {
       values: (event.exception?.values?.slice(-5) ?? [{}]).map((exception) => ({
         type: ERROR_TYPES.has(exception.type ?? "") ? exception.type : "Error",
@@ -90,13 +99,7 @@ export function sanitizeBrowserError(event: ErrorEvent, origin: string, release?
         stacktrace: {
           frames: exception.stacktrace?.frames?.slice(-50).flatMap((frame) => safeFrame(frame, origin)) ?? [],
         },
-        mechanism: {
-          handled: false,
-          type:
-            exception.mechanism?.type === "auto.browser.global_handlers.onunhandledrejection"
-              ? "onunhandledrejection"
-              : "onerror",
-        },
+        mechanism: { handled: exception.mechanism?.handled === true, type: mechanismType(exception.mechanism) },
       })),
     },
   };
@@ -196,6 +199,12 @@ function startTiming(rate: number): void {
   }
 }
 
+export function reportHandledError(context: string, error: unknown): void {
+  console.warn(`[handled] ${context}: ${errDetail(error)}`);
+  if (!client || !sdk) return;
+  sdk.captureException(error, { tags: { error_code: context } });
+}
+
 export function stopBrowserErrors(): void {
   generation++;
   timingBudget = 0;
@@ -218,7 +227,7 @@ export async function initializeBrowserErrors(me: Me): Promise<void> {
       dsn,
       release,
       defaultIntegrations: false,
-      integrations: [browser.globalHandlersIntegration()],
+      integrations: [browser.globalHandlersIntegration(), browser.linkedErrorsIntegration()],
       sendDefaultPii: false,
       maxBreadcrumbs: 0,
       attachStacktrace: true,

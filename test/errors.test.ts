@@ -6,6 +6,8 @@ import {
   errorAlreadyReported,
   failureCode,
   reportFailure,
+  swallow,
+  swallowAs,
   httpFailure,
   withRequestId,
 } from "../src/util/errors.ts";
@@ -114,12 +116,39 @@ test("reportFailure logs every failure but marks only reportable ones as reporte
   reportFailure("scheduler: fire", boom);
   assert.equal(errorAlreadyReported(boom), true);
   reportFailure("worker: retry", "a string throw", "run=r1");
-  assert.deepEqual(logged, [
-    "[failed] scheduler: fire: stopped",
-    "[failed] scheduler: tick: This deployment is not accepting synchronous work",
-    "[failed] scheduler: fire: boom",
-    "[failed] worker: retry (run=r1): a string throw",
-  ]);
+  assert.deepEqual(
+    logged.map((line) => line.replace(/ \{stack: .*\}$/, "")),
+    [
+      "[failed] scheduler: fire: stopped [code=20]",
+      "[failed] scheduler: tick: This deployment is not accepting synchronous work",
+      "[failed] scheduler: fire: boom",
+      "[failed] worker: retry (run=r1): a string throw",
+    ],
+  );
+  assert.match(logged[2]!, /\{stack: at .*errors\.test\.ts/);
+});
+
+test("swallow logs the cause chain, structured error fields and stack instead of only the message", (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  });
+  const slack = Object.assign(
+    new Error("An API error occurred: not_in_channel", { cause: new Error("socket hang up") }),
+    {
+      code: "slack_webapi_platform_error",
+      data: { error: "not_in_channel" },
+    },
+  );
+  swallow("slack: post", slack);
+  swallow("http", Object.assign(new Error("upstream failed"), { statusCode: 503 }));
+  assert.match(
+    logged[0]!,
+    /^\[swallowed\] slack: post: An API error occurred: not_in_channel <- Error: socket hang up \[code=slack_webapi_platform_error upstream=not_in_channel\] \{stack: at /,
+  );
+  assert.match(logged[1]!, /^\[swallowed\] http: upstream failed \[status=503\] \{stack: at /);
+  assert.equal(swallowAs("lookup", false)(new Error("db down")), false);
+  assert.match(logged[2]!, /^\[swallowed\] lookup: db down \{stack: /);
 });
 
 test("httpFailure names the status, a clipped body, and the provider request id", async () => {

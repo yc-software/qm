@@ -919,7 +919,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           } catch (error) {
             const message = errMessage(error);
             const masked = mask(message);
-            if (masked !== message) throw new MaskedExecutionError(masked);
+            if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
             throw error;
           }
           return reached ? { ...r, reached } : r;

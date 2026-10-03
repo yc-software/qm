@@ -1,4 +1,4 @@
-import { swallow } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
 
 export interface SandboxHandle {
@@ -30,11 +30,22 @@ export class SandboxProvisionCleanupError extends Error {
   }
 }
 
-export async function cleanupFailedProvision(sandbox: Pick<Sandbox, "teardown">, handle: SandboxHandle): Promise<void> {
+export async function cleanupFailedProvision(
+  sandbox: Pick<Sandbox, "teardown">,
+  handle: SandboxHandle,
+  provisionError: unknown,
+): Promise<void> {
   try {
     await sandbox.teardown(handle, handle.scratch ? { destroy: true } : undefined);
   } catch (error) {
-    if (handle.scratch) throw new SandboxProvisionCleanupError(handle);
+    if (handle.scratch) {
+      reportFailure(
+        "sandbox: scratch cleanup after failed provision",
+        error,
+        `provision: ${errMessage(provisionError)}`,
+      );
+      throw new SandboxProvisionCleanupError(handle);
+    }
     swallow("sandbox: teardown after failed provision", error);
   }
 }

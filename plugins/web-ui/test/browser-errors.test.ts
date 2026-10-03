@@ -171,3 +171,20 @@ test("SDK processing failures cannot bypass browser event redaction", async () =
     else Reflect.deleteProperty(globalThis, "window");
   }
 });
+
+test("handled browser errors keep their catch-site code and handled status without content", () => {
+  const event = sanitizeBrowserError(
+    {
+      type: undefined,
+      tags: { error_code: "web:approvals_fetch", secret: "secret" },
+      exception: {
+        values: [{ type: "TypeError", value: "secret", mechanism: { type: "generic", handled: true } }],
+      },
+    },
+    origin,
+  );
+  assert.equal(JSON.stringify(event).includes("secret"), false);
+  assert.deepEqual(event.tags, { service: "web-ui-browser", error_code: "web:approvals_fetch" });
+  assert.deepEqual(event.exception?.values?.[0]?.mechanism, { handled: true, type: "handled" });
+  assert.equal(event.exception?.values?.[0]?.value, "Browser error; details omitted");
+});

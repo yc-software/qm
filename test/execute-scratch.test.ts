@@ -712,8 +712,9 @@ for (const recovers of [true, false]) {
     const partial = { ...scratchHandle, backend: "local", env: { TOKEN: "sentinel-secret" } };
     const sandbox: Partial<Sandbox> = {
       async provision() {
-        await cleanupFailedProvision({ teardown: sandbox.teardown! }, partial);
-        throw new Error("initialization failed");
+        const failure = new Error("initialization failed");
+        await cleanupFailedProvision({ teardown: sandbox.teardown! }, partial, failure);
+        throw failure;
       },
       async teardown(handle, opts) {
         assert.equal(handle.id, partial.id);

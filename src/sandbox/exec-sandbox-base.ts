@@ -88,6 +88,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
           await cleanupFailedProvision(
             { teardown: () => deps.deleteInstance(name) },
             { id: name, rootDir: workspaceDir, scratch: true, backend: label },
+            error,
           );
           scratchKeyByName.delete(name);
           throw error;
@@ -206,7 +207,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
 
       return handle;
     } catch (err) {
-      await cleanupFailedProvision({ teardown }, handle);
+      await cleanupFailedProvision({ teardown }, handle, err);
       throw err;
     }
   }

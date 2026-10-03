@@ -746,7 +746,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
         return handle;
       } catch (err) {
-        await cleanupFailedProvision(sandbox, handle);
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },

@@ -71,7 +71,7 @@ export function initializeErrorReporting(
     release: env.SENTRY_RELEASE ?? env.GIT_SHA,
     serverName: "",
     defaultIntegrations: false,
-    integrations: [sdk.onUncaughtExceptionIntegration()],
+    integrations: [sdk.onUncaughtExceptionIntegration(), sdk.linkedErrorsIntegration()],
     skipOpenTelemetrySetup: tracesSampleRate === 0,
     ...(tracesSampleRate > 0 ? { tracesSampleRate } : {}),
     tracePropagationTargets: [],
@@ -98,8 +98,10 @@ export function initializeErrorReporting(
   });
 }
 
-export function reportBackendError(error: unknown, code?: string): void {
-  client?.captureException(error, { tags: code && /^[a-zA-Z0-9_.:-]{1,120}$/.test(code) ? { error_code: code } : {} });
+export function reportBackendError(error: unknown, code?: string): string | undefined {
+  return client?.captureException(error, {
+    tags: code && /^[a-zA-Z0-9_.:-]{1,120}$/.test(code) ? { error_code: code } : {},
+  });
 }
 
 export type FinishTiming = (result: TimingResult) => void;

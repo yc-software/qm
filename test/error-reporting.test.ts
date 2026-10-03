@@ -354,7 +354,8 @@ test("real SDK sends sanitized sampled transactions only when a sample rate is c
 });
 
 test("reportFailure sends one classified event per distinct failure and skips cancellations and recorded errors", async () => {
-  const { events, code } = await runReporting(`
+  const { events, code, output } = await runReporting(`
+    console.error = (line) => console.log(line);
     const { reportFailure } = await import('./src/util/errors.ts');
     const { createErrorLog, withErrorReporting } = await import('./src/admin/error-log.ts');
     const errors = withErrorReporting(createErrorLog());
@@ -378,4 +379,6 @@ test("reportFailure sends one classified event per distinct failure and skips ca
   );
   assert.doesNotMatch(JSON.stringify(events), /private-/);
   assert.equal(events[1]!.exception.values[0].value, "scheduler:tick");
+  const tick = output.split("\n").find((line) => line.startsWith("[failed] scheduler: tick"));
+  assert.match(tick ?? "", new RegExp(`\\[sentry=${events[1]!.event_id}\\]: private-db-down \\{stack: `));
 });

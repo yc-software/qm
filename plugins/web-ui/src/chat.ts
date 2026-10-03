@@ -207,6 +207,7 @@ import { decorateTextCodeBlocks } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
 import { suggestedActivities } from "./suggested-activities";
+import { reportHandledError } from "./browser-errors.ts";
 
 installMarkdownSanitizer();
 
@@ -883,8 +884,8 @@ export function createChatSurface(
       const rawEarlier = page.earlierEntries ?? 0;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawEarlier);
       chatState.transcriptAnchorSeq = rawEarlier > 0 ? (page.entries?.[0]?.seq ?? null) : null;
-    } catch {
-      void 0;
+    } catch (error) {
+      reportHandledError("web:transcript_refresh", error);
     }
     drawActiveChat(agent);
   }
@@ -908,7 +909,8 @@ export function createChatSurface(
     let active: Awaited<ReturnType<typeof activeRunForThread>>;
     try {
       active = await activeRunForThread(threadRef);
-    } catch {
+    } catch (error) {
+      reportHandledError("web:reattach_active_run", error);
       return;
     }
     if (agent !== chatState.agent || threadRef !== chatState.threadRef || agent.state.isStreaming) return;
@@ -940,7 +942,8 @@ export function createChatSurface(
     let activeRun: Awaited<ReturnType<typeof activeRunForThread>>;
     try {
       activeRun = await activeRunForThread(threadRef);
-    } catch {
+    } catch (error) {
+      reportHandledError("web:resume_active_run", error);
       return false;
     }
     if (agent === chatState.agent && threadRef === chatState.threadRef)
@@ -1404,8 +1407,8 @@ export function createChatSurface(
         scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
         scrollerNow.style.scrollBehavior = prev;
       });
-    } catch {
-      void 0;
+    } catch (error) {
+      reportHandledError("web:load_earlier", error);
     } finally {
       if (agent === chatState.agent && sessionId === chatState.sessionId && chatState.loadingEarlier) {
         chatState.loadingEarlier = false;

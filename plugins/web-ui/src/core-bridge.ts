@@ -1,4 +1,4 @@
-import { reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
+import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { EventType } from "@tanstack/ai/client";
@@ -364,7 +364,10 @@ export function unresolvedApprovals(approvals: PendingApproval[]): PendingApprov
 export function fetchSessionApprovals(id: string): Promise<{ approvals: PendingApproval[] } | null> {
   return api<{ approvals: PendingApproval[] }>(`/api/sessions/${encodeURIComponent(id)}/approvals`)
     .then((result) => ({ approvals: unresolvedApprovals(result.approvals) }))
-    .catch(() => null);
+    .catch((error: unknown) => {
+      reportHandledError("web:approvals_fetch", error);
+      return null;
+    });
 }
 
 export async function fetchEntry(sessionId: string, seq: number): Promise<SessionEntry> {
