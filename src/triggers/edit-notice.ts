@@ -72,6 +72,8 @@ export function composeCronEditNotice(args: {
   return `Heads up: ${args.editorName} ${body}.`;
 }
 
+const slackText = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 export interface CronEditNoticeSink {
   enqueueDelivery(input: { destination: Destination; text: string; idempotencyKey: string }): Promise<unknown>;
   directoryMember(
@@ -96,10 +98,10 @@ export async function notifyOwnerOfCronEdit(
     const ownerKeys = personKeys(owner, cron.owner);
     if ([...personKeys(editor, args.editorId)].some((k) => ownerKeys.has(k))) return;
     const url = sink.cronAdminUrl(cron);
-    const label = cron.title ?? "shared";
+    const label = cron.title ? slackText(cron.title) : "shared";
     let ref = "shared";
     if (url) ref = `<${url}|${label}>`;
-    else if (cron.title) ref = `"${cron.title}"`;
+    else if (cron.title) ref = `"${label}"`;
     const [kind, scopeRef] = String(cron.ownerScopeId).split(":", 2) as [string, string | undefined];
     const place =
       kind === "channel" && scopeRef && sink.channelName
@@ -108,9 +110,9 @@ export async function notifyOwnerOfCronEdit(
     await sink.enqueueDelivery({
       destination: principalDestination(cron.owner, args.editorId),
       text: composeCronEditNotice({
-        editorName: editor?.displayName ?? args.editorId,
+        editorName: slackText(editor?.displayName ?? args.editorId),
         ref,
-        ...(place ? { place } : {}),
+        ...(place ? { place: slackText(place) } : {}),
         changes: args.changeSummary,
         ...(args.detail ? { detail: args.detail } : {}),
       }),
