@@ -4129,13 +4129,6 @@ qm-markdown .tok-in {
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-}
-.loadout-row:hover .loadout-make-default,
-.loadout-row:has(:focus-visible) .loadout-make-default {
-  opacity: 1;
-  pointer-events: auto;
 }
 .loadout-make-default:hover,
 .loadout-make-default:focus-visible {
@@ -4148,8 +4141,6 @@ qm-markdown .tok-in {
 }
 .loadout-make-default[data-default="true"],
 .loadout-default-star {
-  opacity: 1;
-  pointer-events: auto;
   color: #eab308;
 }
 .loadout-default-star {
@@ -4158,13 +4149,6 @@ qm-markdown .tok-in {
 .loadout-make-default[data-default="true"] svg,
 .loadout-default-star svg {
   fill: currentColor;
-}
-@media (hover: none) {
-  .loadout-make-default,
-  .loadout-default-star {
-    opacity: 1;
-    pointer-events: auto;
-  }
 }
 .loadout-remove {
   position: absolute;
