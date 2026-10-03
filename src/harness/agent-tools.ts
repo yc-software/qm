@@ -150,8 +150,8 @@ function capPayloadStrings(v: unknown): unknown {
   return v;
 }
 
-function capText(t: string): string {
-  return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
+export function capText(t: string): string {
+  return t.length > MAX_TOOL_RESULT_CHARS ? `${headSlice(t, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
 }
 
 function contentFactLines(content: string): string[] {

@@ -3,7 +3,7 @@ import { createGoalRecord } from "../src/harness/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { capText, createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -4074,4 +4074,10 @@ test("background process guidance reflects the configured sandbox token lifetime
   const unlimited = guidance({ sandboxCapabilityTtlMs: 0 });
   assert.match(unlimited, /does not expire those turn tokens/);
   assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
+});
+
+test("capText never leaves half an emoji at the cut", () => {
+  const capped = capText(`${"a".repeat(99_999)}😀😀`);
+  assert.ok(capped.isWellFormed());
+  assert.ok(capped.endsWith("…[truncated]"));
 });
