@@ -8,33 +8,6 @@ export const MAX_PANES = 12;
 
 const WALK_BUDGET = 10_000;
 
-export interface PaneSeed {
-  sessionId: string | null;
-  threadRef: string | null;
-}
-
-export function v1PaneSeeds(raw: unknown): PaneSeed[] | null {
-  if (!raw || typeof raw !== "object" || (raw as { active?: unknown }).active !== true) return null;
-  const seeds: PaneSeed[] = [];
-  const stack: unknown[] = [(raw as { root?: unknown }).root];
-  for (let budget = WALK_BUDGET; stack.length; budget--) {
-    if (budget <= 0) return null;
-    const node = stack.pop();
-    if (!node || typeof node !== "object" || seeds.length > MAX_TILES) return null;
-    const o = node as Record<string, unknown>;
-    if (o.kind === "leaf") {
-      seeds.push({
-        sessionId: typeof o.sessionId === "string" && o.sessionId ? o.sessionId : null,
-        threadRef: typeof o.threadRef === "string" && o.threadRef ? o.threadRef : null,
-      });
-      continue;
-    }
-    if (o.kind !== "split") return null;
-    stack.push(o.b, o.a);
-  }
-  return seeds.length >= 2 && seeds.length <= MAX_TILES ? seeds : null;
-}
-
 export function serializedTileCount(layout: unknown): number {
   const stack: unknown[] = [(layout as { grid?: { root?: unknown } } | null)?.grid?.root];
   let tiles = 0;

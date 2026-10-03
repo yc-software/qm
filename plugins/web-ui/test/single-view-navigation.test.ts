@@ -229,3 +229,24 @@ test("single-pane toolbar and split menu put Crons and Apps first", () => {
     ["crons", "apps", "files", "skills", "memory", "keychain"],
   );
 });
+
+test("saved canvas restores only current layouts", () => {
+  const state = { active: false };
+  const ctx = {
+    splitState: state,
+    pendingLayout: null,
+    persistedUpdatedAt: 0,
+    isPhone: () => false,
+    MAX_PANES: 12,
+    MAX_TILES: 4,
+    serializedTileCount: () => 1,
+  };
+  const adopt = runInNewContext(compile(`${functionSource(split, "adoptPersisted")}\nadoptPersisted;`), ctx);
+  const layout = { panels: { p: { params: { sessionId: "s" } } } };
+  adopt({ v: 2, active: true, layout, updatedAt: 10 });
+  assert.equal(state.active, true);
+  assert.equal(ctx.pendingLayout, layout);
+  adopt({ v: 1, active: true, root: { kind: "leaf", sessionId: "old" } });
+  assert.equal(state.active, false);
+  assert.equal(ctx.pendingLayout, null);
+});

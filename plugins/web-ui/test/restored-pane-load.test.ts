@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness, SESSION } from "./deep-link-boot-fixture.ts";
+import { harness, savedCanvas, SESSION } from "./deep-link-boot-fixture.ts";
 import type { CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 const session: CoreSession = { ...SESSION, threadRef: "dm:sample", type: "dm", createdAt: 1 };
@@ -12,15 +12,9 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 function restore(): void {
   localStorage.setItem(
     "web-ui:split-canvas:v1",
-    JSON.stringify({
-      v: 1,
-      active: true,
-      root: {
-        kind: "split",
-        a: { kind: "leaf", sessionId: session.id, threadRef: session.threadRef },
-        b: { kind: "leaf", threadRef: "web:tester:other" },
-      },
-    }),
+    JSON.stringify(
+      savedCanvas([{ sessionId: session.id, threadRef: session.threadRef }, { threadRef: "web:tester:other" }]),
+    ),
   );
 }
 
