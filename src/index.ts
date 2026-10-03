@@ -165,7 +165,6 @@ if (built.backgroundOwnership) {
       for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
         if (signal.aborted) return;
         runtime.start();
-        await runtime.reconcile();
       }
     },
     fence: stopPeriodic,
