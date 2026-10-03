@@ -435,3 +435,26 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("wired stores: subtasks left open when a run ends are closed, not stuck in progress", async () => {
+  const { createMemoryTaskStore } = await import("../src/tasks/memory-task-store.ts");
+  const { runs } = createMemoryRunStore();
+  const tasks = createMemoryTaskStore();
+  wireRunResultDeliveries(runs, createDeliveryStore(), tasks);
+
+  const failed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9") })).run;
+  const open = await tasks.create({ sessionId: "sA", originRunId: failed.id, title: "child", status: "in_progress" });
+  const done = await tasks.create({ sessionId: "sA", originRunId: failed.id, title: "done", status: "completed" });
+  const c1 = await runs.claim("w1", 5_000);
+  await runs.fail(failed.id, c1!.leaseToken!, "boom", { retry: false });
+
+  const ok = (await runs.enqueue({ sessionId: "sB", request: turn("b", "C9") })).run;
+  const pending = await tasks.create({ sessionId: "sB", originRunId: ok.id, title: "never started" });
+  const c2 = await runs.claim("w2", 5_000);
+  await runs.complete(ok.id, c2!.leaseToken!, { status: "ok", reply: "fine" });
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal((await tasks.get(open.id))!.status, "failed");
+  assert.equal((await tasks.get(done.id))!.status, "completed", "finished tasks are untouched");
+  assert.equal((await tasks.get(pending.id))!.status, "skipped");
+});
