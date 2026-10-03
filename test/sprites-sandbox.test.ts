@@ -549,6 +549,45 @@ test("a configured memory limit is applied as a resources policy and advertised 
   assert.equal(fake.resources(sandboxScopeName("qmt", scope))?.limitMB, 4096);
 });
 
+test("a sized sandbox sends its RAM and CPU count at creation and still waits for capacity, catching a sized create call that trades waitForCapacity for the sprite config", async () => {
+  const s = make({ memoryMb: 16384, cpus: 4 });
+  const h = await s.provision(layers);
+  assert.deepEqual(fake.creation(h.id), {
+    name: h.id,
+    wait_for_capacity: true,
+    config: { ram_mb: 16384, cpus: 4 },
+  });
+});
+
+test("a RAM-only sandbox still sends its RAM at creation, catching a size sent only when both knobs are set", async () => {
+  const s = make({ memoryMb: 16384 });
+  const h = await s.provision(layers);
+  assert.deepEqual(fake.creation(h.id)?.config, { ram_mb: 16384 });
+});
+
+test("a CPU-only sandbox still sends its CPU count at creation, catching a CPU count sent only alongside RAM", async () => {
+  const s = make({ cpus: 4 });
+  const h = await s.provision(layers);
+  assert.deepEqual(fake.creation(h.id)?.config, { cpus: 4 });
+});
+
+test("a sized scratch sandbox sends its size at creation too, catching a scratch create call left unsized", async () => {
+  const s = make({ memoryMb: 16384, cpus: 4 });
+  const h = await s.provision(layers, { scratch: { key: "sized" } });
+  assert.deepEqual(fake.creation(h.id)?.config, { ram_mb: 16384, cpus: 4 });
+});
+
+test("an unsized sandbox's create request is unchanged at both call sites, catching a create call that grows a sprite config or loses waitForCapacity", async () => {
+  const resident = await sandbox.provision(layers);
+  assert.deepEqual(fake.creation(resident.id), { name: resident.id, wait_for_capacity: true });
+  const scratch = await sandbox.provision(layers, { scratch: { key: "unsized" } });
+  assert.deepEqual(fake.creation(scratch.id), { name: scratch.id, wait_for_capacity: true });
+});
+
+test("a configured CPU count is advertised in the profile, catching a profile that still claims the default vCPU count", () => {
+  assert.equal(make({ cpus: 4 }).profile.spec?.cpus, 4);
+});
+
 test("the profile is honest about the base release and what survives sleep", () => {
   const os = sandbox.profile.spec?.os ?? "";
   assert.match(os, /Ubuntu \(25\.10 for newly created sprites/);

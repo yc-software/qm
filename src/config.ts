@@ -360,6 +360,7 @@ interface SpritesSandboxEnv {
   egressProxyAdditionalUrls?: string[];
   snapshotS3Bucket?: string;
   memoryMb?: number;
+  cpus?: number;
   defaultTimeoutSec?: number;
 }
 
@@ -377,8 +378,11 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
         }
       : {}),
     ...(env.SPRITES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SPRITES_SNAPSHOT_S3_BUCKET } : {}),
-    ...(numEnvStrict("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) }
+    ...(positiveIntEnv("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) !== undefined
+      ? { memoryMb: positiveIntEnv("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) }
+      : {}),
+    ...(positiveIntEnv("SPRITES_CPUS", env.SPRITES_CPUS) !== undefined
+      ? { cpus: positiveIntEnv("SPRITES_CPUS", env.SPRITES_CPUS) }
       : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
@@ -970,6 +974,17 @@ function numEnvStrict(name: string, value: string | undefined): number | undefin
   const parsed = numEnv(value);
   if (parsed === undefined) {
     throw new Error(`${name}=${JSON.stringify(value)} is not a number — set a finite numeric value, or unset it.`);
+  }
+  return parsed;
+}
+
+function positiveIntEnv(name: string, value: string | undefined): number | undefined {
+  const parsed = numEnvStrict(name, value);
+  if (parsed === undefined) return undefined;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `${name}=${JSON.stringify(value)} is not a positive integer — set a whole count above zero, or unset it.`,
+    );
   }
   return parsed;
 }

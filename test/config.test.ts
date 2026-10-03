@@ -34,6 +34,17 @@ test("Sprites proxy transition URLs are optional and parsed independently of the
   ]);
 });
 
+test("the sprite CPU count is read from the environment, catching a config that drops the CPU knob", () => {
+  assert.equal(loadConfig({}).spritesSandbox.cpus, undefined);
+  assert.equal(loadConfig({ SPRITES_CPUS: "4" }).spritesSandbox.cpus, 4);
+});
+
+test("a sprite size that is not a positive integer is refused, catching validation that takes any finite number", () => {
+  assert.throws(() => loadConfig({ SPRITES_CPUS: "0" }), /SPRITES_CPUS="0" is not a positive integer/);
+  assert.throws(() => loadConfig({ SPRITES_CPUS: "2.5" }), /SPRITES_CPUS="2.5" is not a positive integer/);
+  assert.throws(() => loadConfig({ SPRITES_MEMORY_MB: "-1" }), /SPRITES_MEMORY_MB="-1" is not a positive integer/);
+});
+
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
