@@ -31,6 +31,8 @@ export function configurePgPooling(config: PgPoolingConfig): void {
   poolingConfig = { ...config };
 }
 
+const PG_KEEPALIVE = { keepAlive: true, keepAliveInitialDelayMillis: 10_000 } as const;
+
 const migrationQueue = createKeyedQueue();
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
@@ -55,7 +57,9 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     url = parsed.toString();
     ssl = { ssl: { ca: poolingConfig.caCert } };
   }
-  const pool = guardedPool(new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 }));
+  const pool = guardedPool(
+    new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000, ...PG_KEEPALIVE }),
+  );
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -382,7 +386,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
       const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() }));
+      const pool = guardedPool(new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions(), ...PG_KEEPALIVE }));
       try {
         await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
         await applyPgMigrations(
