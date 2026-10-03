@@ -2,6 +2,11 @@ name: Build signed QM images
 
 on:
   workflow_call:
+    inputs:
+      version:
+        description: Release version baked into the images
+        required: false
+        type: string
   workflow_dispatch:
 
 permissions:
@@ -52,6 +57,7 @@ jobs:
           build-args: |
             ${{ matrix.build-args }}
             GIT_SHA=${{ github.sha }}
+            QM_VERSION=${{ inputs.version }}
           tags: ghcr.io/yc-software/qm/${{ matrix.name }}:${{ github.sha }}
           cache-from: type=gha,scope=qm-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=qm-${{ matrix.name }}

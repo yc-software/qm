@@ -316,6 +316,13 @@ results and pending approvals do not emit outcomes. Retries emit only at the fin
 run state. Stable insert IDs support deduplication. These best-effort events are
 not a complete reliability ledger and contain no response text or raw errors.
 
+## Version
+
+Release images bake `QM_VERSION` alongside `GIT_SHA`. The authenticated `/me`
+response reports both as `build`, and Settings shows them as `QM v0.1.13 · 9143874`,
+linked to the upstream release and commit. Source builds without `QM_VERSION` show
+the commit unlinked, and the row is hidden when neither is set.
+
 ## Optional browser error reporting
 
 Set `SENTRY_BROWSER_DSN` on the web server to enable browser error reporting.

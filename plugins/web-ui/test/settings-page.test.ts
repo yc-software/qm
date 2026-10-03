@@ -103,3 +103,15 @@ test("the chat greeting rotates across reloads, not just within one page session
   assert.match(next, /% CHAT_CTAS\.length/);
   assert.doesNotMatch(chat, /let ctaIndex = -1;/, "the per-surface counter always restarted at the first line");
 });
+
+test("settings ends with the running QM version linked to its release and commit", () => {
+  assert.match(shellState, /build\?: \{ version\?: string; sha\?: string \};/);
+  assert.match(settings, /releases\/tag\/v\$\{build\.version\}/);
+  assert.match(settings, /commit\/\$\{build\.sha\.replace\(\/-dirty\$\/, ""\)\}/);
+  assert.match(
+    settings,
+    /build\.version \? html`<a href=\$\{href\}[^`]*`\s*: label/,
+    "only release builds link upstream",
+  );
+  assert.match(settings, /<\/qm-onboarding-welcome>\s*<\/div>\s*\$\{versionRow\(\)\}\s*<\/div>/);
+});
