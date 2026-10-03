@@ -716,6 +716,7 @@ export function createTurnMethods(
       if (!run) return null;
       if (viewer && !(await viewerMayUseRun(run, viewer))) return null;
       const partial = deps.turnStream?.snapshot(runId);
+      const partialEpoch = deps.turnStream?.epoch(runId) ?? 0;
       const firstBlock = deps.turnStream?.firstBlock(runId);
       const surfacePosted = deps.turnStream?.surfacePosted(runId) ?? false;
       const alive = run.status === "running" && !leaseLapsed(run, Date.now());
@@ -754,6 +755,7 @@ export function createTurnMethods(
         startedAt: run.startedAt,
         finishedAt: run.finishedAt,
         ...(partial ? { partial } : {}),
+        ...(partialEpoch ? { partialEpoch } : {}),
         ...(firstBlock
           ? { firstBlock: firstBlock.text, ...(firstBlock.closed ? { firstBlockClosed: true } : {}) }
           : {}),

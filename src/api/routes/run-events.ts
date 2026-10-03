@@ -39,6 +39,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
   if (res.destroyed) return;
   let closed = false;
   let offset = 0;
+  let epoch = 0;
   let syncing = false;
   let refreshing = false;
   let refreshAgain = false;
@@ -82,7 +83,11 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
   const snapshot = async (run: NonNullable<typeof initial>): Promise<void> => {
     const toolEntries = await app.getRunToolEntries(runId, actor?.p, toolCursor);
     if (closed) return;
-    offset = Math.max(offset, run.partial?.length ?? 0);
+    const runEpoch = run.partialEpoch ?? 0;
+    if (runEpoch !== epoch) {
+      epoch = runEpoch;
+      offset = run.partial?.length ?? 0;
+    } else offset = Math.max(offset, run.partial?.length ?? 0);
     for (const entry of toolEntries) {
       const event = toolEvent(entry);
       if (event && !sentToolEvents.has(event.id)) {

@@ -2011,6 +2011,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
               curStart = Date.now();
               curFirst = undefined;
+              turn.onMessageStart?.();
               try {
                 const calls = entry.ref.modelDispatch;
                 const last = calls?.[calls.length - 1];
@@ -2018,6 +2019,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               } catch (e) {
                 swallow("pi: stream-open capture", e);
               }
+            } else if (event.type === "auto_retry_start") {
+              turn.onMessageRetracted?.();
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
               turn.onTextBlockStart?.();
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
