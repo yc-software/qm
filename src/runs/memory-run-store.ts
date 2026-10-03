@@ -281,14 +281,18 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
     ) {
       const now = Date.now();
-      const expired = [...runs.values()].filter((run) => leaseLapsed(run, now));
+      const overAge = (run: Run): boolean =>
+        opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
+      const expired = [...runs.values()].filter(
+        (run) => leaseLapsed(run, now) || (run.status === "running" && run.leaseExpiresAt !== null && overAge(run)),
+      );
       let requeued = 0;
       let parked = 0;
       for (const run of expired) {
-        const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
+        const tooOld = overAge(run);
         const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
         const workerId = run.workerId;
-        if (run.status !== "running" || run.leaseExpiresAt === null || run.leaseExpiresAt > now) continue;
+        if (run.status !== "running" || run.leaseExpiresAt === null || (run.leaseExpiresAt > now && !tooOld)) continue;
         run.leaseToken = randomUUID();
         run.leaseExpiresAt = now + FENCE_HOLD_MS;
         if (onRetired) await onRetired([run.sessionId]);

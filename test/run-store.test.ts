@@ -330,6 +330,22 @@ for (const backend of backends) {
     assert.equal(events[0]?.errorAttempts, 0);
   });
 
+  test(`[${backend.name}] reaper parks an over-age run even while its lease keeps renewing`, async () => {
+    const { runs } = backend.make();
+    const r = (await runs.enqueue({ sessionId: "s1", request: turn("stuck") })).run;
+    const token = (await runs.claim("w1", 60_000))?.leaseToken ?? "";
+    assert.ok(token);
+    await sleep(15);
+    assert.equal(await runs.heartbeat(r.id, token, 60_000), true);
+
+    assert.deepEqual(await runs.reapExpired(undefined, { maxAgeMs: 60_000 }), { requeued: 0, parked: 0 });
+    assert.deepEqual(await runs.reapExpired(undefined, { maxAgeMs: 5 }), { requeued: 0, parked: 1 });
+    const parked = await runs.get(r.id);
+    assert.equal(parked?.status, "failed");
+    assert.match(parked?.result?.reason ?? "", /max age/);
+    assert.equal(await runs.heartbeat(r.id, token, 60_000), false, "the old worker loses its lease");
+  });
+
   test(`[${backend.name}] reaper requeues (not parks) a run younger than the age cap, and reports it`, async () => {
     const { runs } = backend.make();
     const r = (await runs.enqueue({ sessionId: "s1", request: turn("normal") })).run;

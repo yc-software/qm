@@ -2095,6 +2095,26 @@ test("pg run store: reaper cannot clobber a run that completed or renewed its le
   }
 });
 
+test("pg run store: reaper parks an over-age run whose lease is still renewing", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
+  try {
+    const r = (await runs.enqueue({ sessionId: "ageRenewed", request: turn("stuck") })).run;
+    const token = (await runs.claimById(r.id, "wRenewed", 60_000))?.leaseToken ?? "";
+    assert.ok(token);
+    await new Promise((res) => setTimeout(res, 20));
+    assert.equal(await runs.heartbeat(r.id, token, 60_000), true);
+    await runs.reapExpired(undefined, { maxAgeMs: 600_000 });
+    assert.equal((await runs.get(r.id))?.status, "running", "a young renewed run survives");
+    await runs.reapExpired(undefined, { maxAgeMs: 5 });
+    const parked = await runs.get(r.id);
+    assert.equal(parked?.status, "failed");
+    assert.match(parked?.result?.reason ?? "", /max age/);
+    assert.equal(await runs.heartbeat(r.id, token, 60_000), false);
+  } finally {
+    await close();
+  }
+});
+
 test("pg run store: reaper parks over-age runs, requeues young ones, and audits every reap", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
   try {
