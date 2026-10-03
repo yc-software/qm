@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 export interface GoalView {
   objective: string;
   status: "active" | "paused" | "complete" | "blocked";
@@ -74,21 +75,38 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
   const runs = new Map<string, Entry>();
   const listeners = new Map<string, Set<TurnStreamListener>>();
+  const ended = new LRUCache<string, true>({ max: 10_000 });
+
+  const expire = (runId: string, entry: Entry): void => {
+    if (entry.timer) return;
+    const timer = setTimeout(() => {
+      if (runs.get(runId) === entry) runs.delete(runId);
+    }, graceMs);
+    timer.unref?.();
+    entry.timer = timer;
+  };
 
   const ensure = (runId: string): Entry => {
     let entry = runs.get(runId);
     if (!entry) {
       entry = makeEntry();
       runs.set(runId, entry);
+      if (ended.has(runId)) expire(runId, entry);
     }
     return entry;
   };
 
   return {
     begin(runId) {
+      ended.delete(runId);
       const entry = runs.get(runId);
-      if (entry) entry.replying = true;
-      else runs.set(runId, makeEntry());
+      if (entry) {
+        entry.replying = true;
+        if (entry.timer) {
+          clearTimeout(entry.timer);
+          entry.timer = null;
+        }
+      } else runs.set(runId, makeEntry());
       opts.onChange?.(runId);
     },
 
@@ -103,6 +121,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (entry.timer) {
         clearTimeout(entry.timer);
         entry.timer = null;
+        ended.delete(runId);
       }
       if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
         entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
@@ -168,7 +187,11 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     markReplyDone(runId) {
       const entry = runs.get(runId);
       if (entry) entry.replyDone = true;
-      else runs.set(runId, makeEntry({ replyDone: true }));
+      else {
+        const created = makeEntry({ replyDone: true });
+        runs.set(runId, created);
+        if (ended.has(runId)) expire(runId, created);
+      }
       opts.onChange?.(runId);
     },
 
@@ -177,12 +200,9 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     end(runId) {
+      ended.set(runId, true);
       const entry = runs.get(runId);
-      if (!entry) return;
-      if (entry.timer) return;
-      const timer = setTimeout(() => runs.delete(runId), graceMs);
-      timer.unref?.();
-      entry.timer = timer;
+      if (entry) expire(runId, entry);
     },
 
     subscribe(runId, listener) {
