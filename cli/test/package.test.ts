@@ -204,8 +204,13 @@ test(
       execFileSync(bin, ["slack", "render"], { cwd: deployment, stdio: "pipe", env });
       execFileSync(bin, ["conformance", "--static"], { cwd: deployment, stdio: "pipe", env });
       assert.match(execFileSync(awsBin, ["check"], { cwd: awsDeployment, encoding: "utf8", env }), /check passed/);
-      execFileSync(awsBin, ["infra", "render"], { cwd: awsDeployment, stdio: "pipe", env });
+      assert.throws(
+        () => execFileSync(awsBin, ["infra", "render"], { cwd: awsDeployment, stdio: "pipe", env }),
+        /replace the scaffolded aws\.accountId "000000000000"/,
+      );
       const awsConfigPath = join(awsDeployment, "qm.config.jsonc");
+      writeFileSync(awsConfigPath, readFileSync(awsConfigPath, "utf8").replaceAll("000000000000", "123456789012"));
+      execFileSync(awsBin, ["infra", "render"], { cwd: awsDeployment, stdio: "pipe", env });
       writeFileSync(
         awsConfigPath,
         readFileSync(awsConfigPath, "utf8").replace(
@@ -214,7 +219,7 @@ test(
         ),
       );
       const cluster = "acme-aws-qm";
-      const portalTarget = `arn:aws:elasticloadbalancing:us-west-2:000000000000:targetgroup/${cluster}-port-${createHash("sha1").update(`${cluster}:portal`).digest("hex").slice(0, 6)}/1`;
+      const portalTarget = `arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/${cluster}-port-${createHash("sha1").update(`${cluster}:portal`).digest("hex").slice(0, 6)}/1`;
       const fakeAws = join(dir, "aws");
       writeFileSync(
         fakeAws,
@@ -223,7 +228,7 @@ const args = process.argv.slice(2);
 const command = args.slice(0, 2).join(" ");
 const option = (name) => args[args.indexOf(name) + 1];
 const json = (value) => process.stdout.write(JSON.stringify(value));
-if (command === "sts get-caller-identity") process.stdout.write("000000000000\\n");
+if (command === "sts get-caller-identity") process.stdout.write("123456789012\\n");
 else if (command === "elbv2 describe-load-balancers") json({ LoadBalancers: [{ LoadBalancerArn: "arn:alb", DNSName: "replace-with-alb-hostname", State: { Code: "active" } }] });
 else if (command === "elbv2 describe-listeners") json({ Listeners: [{ ListenerArn: "arn:listener", Protocol: "HTTP", Port: 80, DefaultActions: [{ Type: "forward", TargetGroupArn: ${JSON.stringify(portalTarget)} }] }] });
 else if (command === "elbv2 describe-target-groups") json({ TargetGroups: [{ TargetGroupArn: ${JSON.stringify(portalTarget)}, TargetGroupName: ${JSON.stringify(portalTarget.split("/")[1])} }] });
@@ -240,7 +245,7 @@ else if (command === "ecs describe-services") {
     tags: [{ key: "Deployment", value: "acme-aws" }, { key: "ManagedBy", value: "terraform" }],
   })) });
 } else if (command === "ecs describe-task-definition") json({ taskDefinition: { family: "legacy", containerDefinitions: [] } });
-else if (command === "lambda-microvms get-microvm-image") json({ imageArn: "arn:aws:lambda:us-west-2:000000000000:microvm-image:acme-aws-qm-sandbox" });
+else if (command === "lambda-microvms get-microvm-image") json({ imageArn: "arn:aws:lambda:us-west-2:123456789012:microvm-image:acme-aws-qm-sandbox" });
 else if (command === "lambda-microvms list-microvm-image-versions") json({ items: [{ imageVersion: "1", state: "SUCCESSFUL", status: "ACTIVE" }] });
 else if (command === "secretsmanager get-secret-value") {
   const name = option("--secret-id").split("/").at(-1);
@@ -260,7 +265,7 @@ else if (command === "secretsmanager get-secret-value") {
         env: { ...env, AWS_BIN: fakeAws },
       });
       assert.match(awsPlan, /Plan only/);
-      assert.match(awsPlan, /000000000000\.dkr\.ecr\.us-west-2\.amazonaws\.com\/acme-aws-qm-core@sha256:a{64}/);
+      assert.match(awsPlan, /123456789012\.dkr\.ecr\.us-west-2\.amazonaws\.com\/acme-aws-qm-core@sha256:a{64}/);
       assert.doesNotMatch(awsPlan, /\bPI_(?:MODEL|DETECT_MODEL)\b/);
       execFileSync(awsBin, ["conformance", "--static"], { cwd: awsDeployment, stdio: "pipe", env });
 
