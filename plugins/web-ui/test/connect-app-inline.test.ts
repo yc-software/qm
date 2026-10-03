@@ -27,7 +27,15 @@ test("an app-scoped picker shows only the requested app and continues the chat a
       returnKey: "reply:1:0:0",
       onConnected: (name: string) => connected.push(name),
     });
-    document.querySelector(".message-stack")!.append(other, scoped);
+    const twin = Object.assign(document.createElement("qm-onboarding-welcome"), {
+      me: { org: "test", user: "tester" },
+      widget: "apps",
+      setupOnly: true,
+      toolkit: "gmail",
+      returnKey: "reply:1:0:0",
+      onConnected: (name: string) => connected.push(`twin:${name}`),
+    });
+    document.querySelector(".message-stack")!.append(other, scoped, twin);
     for (let i = 0; i < 100 && sessionStorage.getItem("qm-connection-return:test:tester"); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
     await new Promise((resolve) => setTimeout(resolve, 20));

@@ -30,6 +30,8 @@ import {
   type PickerState,
 } from "./connection-preview";
 
+const continuedAttempts = new Set<string>();
+
 export class OnboardingWelcome extends LitElement {
   static properties = {
     me: { attribute: false },
@@ -263,7 +265,10 @@ export class OnboardingWelcome extends LitElement {
         if (this.connectionOutcome === "success") {
           completeConnectionReturn(this.previewUser(), attempt.state);
           this.realReturn = null;
-          if (attempt.service.id === this.toolkit) this.onConnected?.(attempt.service.name);
+          if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
+            continuedAttempts.add(attempt.state);
+            this.onConnected?.(attempt.service.name);
+          }
         }
       }
       await this.updateComplete;
