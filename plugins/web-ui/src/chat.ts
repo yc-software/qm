@@ -741,7 +741,9 @@ export function createChatSurface(
     const agent = chatState.agent;
     if (!agent || agent.state.isStreaming || !chatState.threadRef || !chatState.normalStreamFn || !chatState.onWork)
       return;
-    void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork);
+    void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork, {
+      refetchWhenSettled: true,
+    });
   }
 
   function syncLocation(): void {
@@ -936,6 +938,7 @@ export function createChatSurface(
     threadRef: string,
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
+    opts: { refetchWhenSettled?: boolean } = {},
   ): Promise<boolean> {
     let activeRun: Awaited<ReturnType<typeof activeRunForThread>>;
     try {
@@ -945,7 +948,16 @@ export function createChatSurface(
     }
     if (agent === chatState.agent && threadRef === chatState.threadRef)
       ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
-    if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) return false;
+    if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) {
+      if (
+        opts.refetchWhenSettled &&
+        agent === chatState.agent &&
+        threadRef === chatState.threadRef &&
+        !agent.state.isStreaming
+      )
+        void refreshTranscriptFromEntries(agent);
+      return false;
+    }
     return resumeRun(agent, threadRef, normalStreamFn, onWork, activeRun.runId, activeRun.run);
   }
 
