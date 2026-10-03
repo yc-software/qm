@@ -36,7 +36,7 @@ test("disabled and impersonated reporting never requires a browser SDK", async (
   stopBrowserErrors();
 });
 
-test("browser errors reach Sentry with message, cause, catch-site code and user", async () => {
+test("browser errors keep HTTP failures and their context while dropping network failures and aborts", async () => {
   const realFetch = globalThis.fetch;
   const realWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const sent: string[] = [];
@@ -52,6 +52,12 @@ test("browser errors reach Sentry with message, cause, catch-site code and user"
       browserErrors: { dsn: "https://public@sentry.example.com/1" },
     });
     const sdk = await import("@sentry/browser");
+    for (const message of ["Failed to fetch", "NetworkError when attempting to fetch resource.", "Load failed"]) {
+      reportHandledError("web:network", new TypeError(message));
+      sdk.captureException(new TypeError(message));
+    }
+    reportHandledError("web:network", new DOMException("request cancelled", "AbortError"));
+    sdk.captureException(new DOMException("request cancelled", "AbortError"));
     reportHandledError("web:approvals_fetch", new TypeError("approvals 500", { cause: new Error("db down") }));
     await sdk.flush(1000);
     assert.equal(sent.length, 1);

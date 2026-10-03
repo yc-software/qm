@@ -19,3 +19,5 @@ Set `SENTRY_TRACES_SAMPLE_RATE` (a fraction between 0 and 1; unset, 0, or an inv
 The core reports one transaction per sampled HTTP request except `/healthz` (`http.server`, named by the registered route template such as `GET /v1/sessions/:id`; unregistered or pattern-matched paths are reported as `METHOD /*` and deployment subdomain proxying as `/deployment-proxy/*`) and one per terminal run (`queue.task` `run`, with a `queue_wait` measurement and `surface` and `origin` attributes). Transactions are sent without scrubbing: URLs including query strings, span descriptions and attributes, child spans, measurements, and any attached request or user context reach Sentry unchanged. Route names remain grouped by the registered template; the original request URL is retained as a span attribute.
 
 Browser timing uses `SENTRY_BROWSER_TRACES_SAMPLE_RATE` on the web server together with `SENTRY_BROWSER_DSN`; see the web-ui README.
+
+Browser Sentry ignores plain network `TypeError` failures (`Failed to fetch`, `NetworkError when attempting to fetch resource.`, `Load failed`) and `AbortError` cancellations; HTTP 4xx/5xx failures still report.

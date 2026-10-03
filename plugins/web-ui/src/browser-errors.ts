@@ -162,7 +162,18 @@ export async function initializeBrowserErrors(me: Me): Promise<void> {
       tracesSampleRate: rate,
       tracePropagationTargets: [],
       initialScope: { tags: { service: "web-ui-browser", org: me.org }, user: { username: me.user } },
-      beforeSend: (event) => (current === generation ? event : null),
+      beforeSend: (event, hint) => {
+        const error = hint.originalException;
+        return current !== generation ||
+          (error instanceof Error &&
+            (error.name === "AbortError" ||
+              (error.name === "TypeError" &&
+                ["Failed to fetch", "NetworkError when attempting to fetch resource.", "Load failed"].includes(
+                  error.message,
+                ))))
+          ? null
+          : event;
+      },
       beforeSendTransaction: (event) => (current === generation ? event : null),
     });
   } catch (error) {
