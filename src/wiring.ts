@@ -230,7 +230,7 @@ import {
 import { createSdkSuperserveClient } from "./sandbox/superserve-client.ts";
 import { createE2bSandbox, type StoredE2bSandbox } from "./sandbox/e2b-sandbox.ts";
 import { createSdkE2bClient } from "./sandbox/e2b-client.ts";
-import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
+import { createS3SnapshotStore, type SnapshotBookkeeping } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
@@ -861,6 +861,7 @@ export function buildApp(
     return createSpritesSandbox(workspace, {
       ...sprites,
       initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
+      checkpointBooks: artifactMap<SnapshotBookkeeping>("sprites_checkpoint_books"),
       advisoryLock,
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }

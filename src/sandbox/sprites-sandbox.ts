@@ -6,7 +6,7 @@ import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts"
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
-import { swallow, errMessage } from "../util/errors.ts";
+import { swallow, swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, processSessionDir, type ExecProcessIo } from "./exec-process-session.ts";
 import {
@@ -25,6 +25,8 @@ import {
   createHomeSnapshotOps,
   HOME_SNAPSHOT_PRUNE,
   snapshotDue,
+  snapshotFailed,
+  snapshotSucceeded,
   type HomeSnapshotStore,
   type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
@@ -127,6 +129,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
   initializationStore?: DurableMap<{ pending: boolean }>;
+  checkpointBooks?: DurableMap<SnapshotBookkeeping>;
   advisoryLock?: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -161,7 +164,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   const resourcesApplied = new Set<string>();
   const egressPolicyByName = new Map<string, string>();
   const pressureEpisodes = new Set<string>();
-  const checkpointBooks = new Map<string, SnapshotBookkeeping>();
+  const checkpointBooks = opts.checkpointBooks ?? createMemoryMap<SnapshotBookkeeping>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -417,25 +420,33 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   async function checkpointIfDue(name: string, tdOpts?: TeardownOptions): Promise<void> {
     await requireInitialized(name);
-    const book = checkpointBooks.get(name) ?? {};
-    checkpointBooks.set(name, book);
-    if (!tdOpts?.homeUnchanged) book.homeDirty = true;
-    if (!snapshotDue(book, tdOpts, checkpointIntervalMs)) return;
-    try {
-      await createCheckpoint(name);
-      book.lastSnapshotMs = Date.now();
-      book.homeDirty = false;
-    } catch (e) {
-      reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), base.scopeFor(name));
+    const stored =
+      (await checkpointBooks.get(name).catch(swallowAs("sprites-sandbox: read checkpoint book", null))) ?? {};
+    const book = tdOpts?.homeUnchanged || stored.homeDirty ? stored : { ...stored, homeDirty: true };
+    const save = (next: SnapshotBookkeeping): Promise<void> =>
+      checkpointBooks.put(name, next).catch(swallowAs("sprites-sandbox: save checkpoint book", undefined));
+    if (!snapshotDue(book, tdOpts, checkpointIntervalMs)) {
+      if (book !== stored) await save(book);
+      return;
     }
+    const outcome = await createCheckpoint(name).then(
+      () => snapshotSucceeded(),
+      (e) => {
+        reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), base.scopeFor(name));
+        return snapshotFailed(book, checkpointIntervalMs);
+      },
+    );
+    await save({ ...book, ...outcome });
   }
+
+  const resetCheckpointBook = (name: string): Promise<void> =>
+    checkpointBooks.delete(name).catch(swallowAs("sprites-sandbox: reset checkpoint book", undefined));
 
   const forget = (name: string): void => {
     ensured.delete(name);
     resourcesApplied.delete(name);
     pressureEpisodes.delete(name);
     egressPolicyByName.delete(name);
-    checkpointBooks.delete(name);
   };
 
   const base = createExecSandboxBase({
@@ -475,7 +486,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         }
         const scope = base.scopeFor(name);
         try {
-          if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+          if (!exists) {
+            await resetCheckpointBook(name);
+            await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+          }
           await applyResources(name);
           const hydrated = homeSnapshots && scope ? await homeSnapshots.hydrateHome(scope, name) : false;
           await initializationStore.delete(name);
@@ -594,6 +608,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           if (!(await initializationStore.get(name))?.pending) await exportHome(name, scopeId);
           await deleteSprite(name);
           forget(name);
+          await resetCheckpointBook(name);
         }),
       );
     },
@@ -659,6 +674,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         withLifecycle(name, async () => {
           await requireInitialized(name);
           forget(name);
+          await resetCheckpointBook(name);
           const s = sprite(name);
           const restartFailure = await s.restart().then(
             () => undefined,
@@ -709,6 +725,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           if (tdOpts?.destroy) {
             if (!(await initializationStore.get(handle.id))?.pending)
               await exportHome(handle.id, base.scopeFor(handle.id) ?? handle.id);
+            await resetCheckpointBook(handle.id);
           } else await checkpointIfDue(handle.id, tdOpts);
         }
         return base.teardown(handle, tdOpts);

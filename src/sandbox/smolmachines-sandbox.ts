@@ -17,7 +17,15 @@ import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
-import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  HOME_SNAPSHOT_PRUNE,
+  snapshotDue,
+  snapshotFailed,
+  snapshotSucceeded,
+  type HomeSnapshotStore,
+  type SnapshotBookkeeping,
+} from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type { AgentComputerProfile, ComputerStatus, ExecResult, Sandbox, TeardownOptions } from "./sandbox.ts";
 
@@ -59,10 +67,8 @@ interface MachineExecResponse {
   stderrTruncated?: boolean;
 }
 
-export interface StoredSmolmachinesSandbox {
+export interface StoredSmolmachinesSandbox extends SnapshotBookkeeping {
   initializationPending?: boolean;
-  lastSnapshotMs?: number;
-  homeDirty?: boolean;
   snapshotError?: string;
 }
 
@@ -373,7 +379,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   async function snapshotHome(scope: string, name: string): Promise<void> {
     try {
       await homeSnapshots!.snapshotHome(scope, name);
-      await mergeStored(scope, { lastSnapshotMs: Date.now(), homeDirty: false, snapshotError: undefined });
+      await mergeStored(scope, { ...snapshotSucceeded(), snapshotError: undefined });
     } catch (e) {
       await mergeStored(scope, { snapshotError: errMessage(e) });
       throw e;
@@ -617,6 +623,9 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
                 message: errMessage(e),
                 scopeLabel: scope,
               });
+              await mergeStored(scope, snapshotFailed(stored, snapshotIntervalMs)).catch(
+                swallowAs("smolmachines-sandbox: record snapshot failure", undefined),
+              );
             }
           }),
         );
