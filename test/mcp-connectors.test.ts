@@ -262,3 +262,26 @@ test("per-user connectors select an explicit account slot without falling back t
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
+
+test("mcp client re-mints a client-credentials token after the server rejects it", async () => {
+  let minted = 0;
+  let valid = "";
+  const fetch: McpFetch = async (url, init) => {
+    if (url.endsWith("/token")) {
+      valid = `tok-${++minted}`;
+      return jsonResponse({ access_token: valid });
+    }
+    if (init.headers.authorization !== `Bearer ${valid}`) return jsonResponse({ error: "unauthorized" }, 401);
+    const req = JSON.parse(init.body) as { id: number };
+    return jsonResponse({ jsonrpc: "2.0", id: req.id, result: { tools: TOOLS } });
+  };
+  const client = createMcpClient({
+    url: "https://mcp.example.com/mcp",
+    auth: { mode: "client-credentials", clientId: "c", clientSecret: "s" },
+    fetchImpl: fetch,
+  });
+  assert.equal((await client.listTools()).length, 2);
+  valid = "rotated";
+  assert.equal((await client.listTools()).length, 2);
+  assert.equal(minted, 2);
+});
