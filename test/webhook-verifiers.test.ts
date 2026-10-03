@@ -92,7 +92,7 @@ test("slack dedup key is the signed body's event_id, not the unsigned x-slack-ev
 test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id for dedup", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_123", type: "charge.failed" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const v1 = hmac(`${t}.${rawBody}`);
   const input = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=${v1}` }, rawBody };
   assert.equal(v.verify(input), true);
@@ -103,11 +103,36 @@ test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id
 test("stripe verifier accepts any valid v1 signature during key rotation", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_rot" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const valid = hmac(`${t}.${rawBody}`);
   const rotated = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=oldkeysig,v1=${valid}` }, rawBody };
   assert.equal(v.verify(rotated), true);
   assert.equal(v.verify({ ...rotated, headers: { "stripe-signature": `t=${t},v1=oldkeysig,v1=alsobad` } }), false);
+});
+
+test("stripe verifier enforces the five-minute window for correctly signed timestamps", (t) => {
+  const now = 1_800_000_000;
+  t.mock.method(Date, "now", () => now * 1000);
+  const v = getVerifier("stripe")!;
+  const rawBody = JSON.stringify({ id: "evt_123" });
+  for (const [ts, accepted] of [
+    [now, true],
+    [now - 300, true],
+    [now + 300, true],
+    [now - 301, false],
+    [now + 301, false],
+    ["1700000000", false],
+    ["nonsense", false],
+    ["NaN", false],
+    ["Infinity", false],
+    ["-Infinity", false],
+  ] as const) {
+    assert.equal(
+      v.verify({ secret: SECRET, headers: { "stripe-signature": `t=${ts},v1=${hmac(`${ts}.${rawBody}`)}` }, rawBody }),
+      accepted,
+      String(ts),
+    );
+  }
 });
 
 test("hmac-sha256 verifier accepts bare hex or sha256= prefixed signatures", () => {
