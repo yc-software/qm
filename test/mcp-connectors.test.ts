@@ -262,3 +262,25 @@ test("per-user connectors select an explicit account slot without falling back t
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
+
+test("non-text MCP result blocks are described instead of dropped", () => {
+  const png = Buffer.alloc(34 * 1024).toString("base64");
+  assert.equal(
+    mcpResultText({
+      content: [
+        { type: "image", data: png, mimeType: "image/png" },
+        { type: "resource", resource: { uri: "file:///notes.md", mimeType: "text/markdown", text: "# Notes" } },
+        { type: "resource", resource: { uri: "file:///a.pdf", mimeType: "application/pdf", blob: "AAAA" } },
+        { type: "resource_link", uri: "https://x.example/doc", name: "Doc" },
+        { type: "text", text: "done" },
+      ],
+    }),
+    [
+      "[image: image/png, 34 KB]",
+      "[resource file:///notes.md]\n# Notes",
+      "[resource: file:///a.pdf, application/pdf, 3 B]",
+      "[resource link: Doc https://x.example/doc]",
+      "done",
+    ].join("\n"),
+  );
+});
