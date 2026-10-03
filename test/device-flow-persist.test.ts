@@ -1133,3 +1133,90 @@ test("removed layer tools retain quarantine, capture exclusion and reset-to-lega
     assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
   }
 });
+
+test("restore heals a dangling credential-lease symlink instead of failing every turn", async () => {
+  const sb = sprites();
+  const k = kc();
+  const layers = rw(scopeId("personal", "U1"));
+  const h1 = await sb.provision(layers);
+  await sb.run(h1, "mkdir -p ~/.leasecli && printf 'tok' > ~/.leasecli/tools.json");
+  await registerLoginPaths({
+    sandbox: sb,
+    handle: h1,
+    keychain: k,
+    ownerId: "U1",
+    service: "leasecli",
+    paths: [{ path: ".leasecli", kind: "directory" }],
+  });
+
+  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
+  const h2 = await sb.provision(layers);
+  const gone = "/tmp/agent-creds/.leasecli";
+  await sb.run(h2, `rm -rf ${gone} ~/.leasecli && ln -s ${gone} ~/.leasecli`);
+  const anomalies: string[] = [];
+  const restored = await materializeDeviceFlowLogins({
+    sandbox: sb,
+    handle: h2,
+    keychain: k,
+    ownerId: "U1",
+    onAnomaly: (s, d) => anomalies.push(`${s}: ${d}`),
+  });
+  assert.deepEqual(anomalies, []);
+  assert.deepEqual(restored, ["leasecli"]);
+  assert.equal((await sb.run(h2, "cat ~/.leasecli/tools.json")).stdout, "tok");
+  await sb.run(h2, `rm -rf ${gone}`);
+});
+
+test("restore writes through a dangling FILE lease link instead of replacing it with a real file", async () => {
+  const sb = sprites();
+  const k = kc();
+  const layers = rw(scopeId("personal", "U1"));
+  const h1 = await sb.provision(layers);
+  await sb.run(h1, "printf 'tok' > ~/.leasefile");
+  await registerLoginPaths({
+    sandbox: sb,
+    handle: h1,
+    keychain: k,
+    ownerId: "U1",
+    service: "leasefile",
+    paths: [{ path: ".leasefile", kind: "file" }],
+  });
+
+  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
+  const h2 = await sb.provision(layers);
+  await sb.run(h2, "rm -f /tmp/agent-creds/.leasefile ~/.leasefile && ln -s /tmp/agent-creds/.leasefile ~/.leasefile");
+  const restored = await materializeDeviceFlowLogins({ sandbox: sb, handle: h2, keychain: k, ownerId: "U1" });
+  assert.deepEqual(restored, ["leasefile"]);
+  assert.equal((await sb.run(h2, "[ -L ~/.leasefile ] && cat ~/.leasefile")).stdout, "tok");
+  await sb.run(h2, "rm -f /tmp/agent-creds/.leasefile");
+});
+
+test("a link whose target only shares the lease-dir prefix is not followed", async () => {
+  const sb = sprites();
+  const k = kc();
+  const layers = rw(scopeId("personal", "U1"));
+  const h1 = await sb.provision(layers);
+  await sb.run(h1, "mkdir -p ~/.escapecli && printf 'tok' > ~/.escapecli/t.json");
+  await registerLoginPaths({
+    sandbox: sb,
+    handle: h1,
+    keychain: k,
+    ownerId: "U1",
+    service: "escapecli",
+    paths: [{ path: ".escapecli", kind: "directory" }],
+  });
+  rmSync(ff.homeDir(h1.id), { recursive: true, force: true });
+  const h2 = await sb.provision(layers);
+  const outside = `/tmp/agent-creds/../escape-${process.pid}-${Date.now()}`;
+  await sb.run(h2, `rm -rf ~/.escapecli && ln -s ${outside} ~/.escapecli`);
+  const anomalies: string[] = [];
+  await materializeDeviceFlowLogins({
+    sandbox: sb,
+    handle: h2,
+    keychain: k,
+    ownerId: "U1",
+    onAnomaly: (s, d) => anomalies.push(`${s}: ${d}`),
+  });
+  assert.match(anomalies.join("\n"), /escapecli: restore failed mid-bundle at \.escapecli\/t\.json/);
+  assert.equal((await sb.run(h2, `[ -e ${outside} ] && echo made || echo absent`)).stdout.trim(), "absent");
+});

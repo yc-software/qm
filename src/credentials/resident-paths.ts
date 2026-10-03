@@ -137,3 +137,23 @@ export function ephemeralCredLinkScript(home: string, extraPaths: readonly Crede
 }
 
 export const EPHEMERAL_CRED_PATHS: ReadonlyArray<{ rel: string; kind: "dir" | "file" }> = ephemeralCredLinkPaths();
+
+const isLeaseRel = (rel: string): boolean =>
+  !!rel && posix.join(EPHEMERAL_CRED_DIR, rel) === `${EPHEMERAL_CRED_DIR}/${rel}`;
+
+export function leaseRestoreDestScript(rel: string, leaseDirVar: string): string {
+  const parts = rel.split("/");
+  const steps: string[] = [`dest=${shq(rel)}`];
+  for (let i = 1; i <= parts.length; i++) {
+    const prefix = parts.slice(0, i).join("/");
+    if (!isLeaseRel(prefix)) continue;
+    const target = `"$${leaseDirVar}"/${shq(prefix)}`;
+    const isFile = i === parts.length;
+    steps.push(
+      `if [ -L ${shq(prefix)} ] && [ "$(readlink -- ${shq(prefix)})" = ${target} ]; then ` +
+        (isFile ? `mkdir -p "$(dirname -- ${target})" && dest=${target}` : `mkdir -p ${target}`) +
+        `; fi`,
+    );
+  }
+  return steps.join("; ");
+}

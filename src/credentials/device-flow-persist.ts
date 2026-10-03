@@ -13,7 +13,7 @@ import { makeTar, parseTar } from "../sandbox/tar.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 import { shq } from "../util/shell.ts";
 import { hashId } from "../util/crypto.ts";
-import { DISPLACED_DIR_REL, EPHEMERAL_CRED_DIR } from "./resident-paths.ts";
+import { DISPLACED_DIR_REL, EPHEMERAL_CRED_DIR, leaseRestoreDestScript } from "./resident-paths.ts";
 import {
   CREDENTIAL_PATH_RE,
   builtInCredentialPaths,
@@ -614,8 +614,9 @@ export async function materializeDeviceFlowLogins(
         `if [ -z "$mvd" ]; then printf 'FAIL\\t%s\\n' ${shq(service)}; ok=""; else ` +
           `for p in ${files.map((f) => shq(f.path)).join(" ")}; do ` +
           `[ -e "$p" ] && continue; [ -f "$stage/$p" ] || continue; ` +
-          `if mkdir -p "$(dirname -- "$p")" && mv "$stage/$p" "$p"; then printf '%s\\n' "$p" >> "$mvd"; moved=1; ` +
-          `else while IFS= read -r q; do rm -f "$q"; done < "$mvd"; printf 'FAIL\\t%s\\n' ${shq(service)}; ok=""; break; fi; done; ` +
+          `case "$p" in ${files.map((f) => `${shq(f.path)}) ${leaseRestoreDestScript(f.path, "lease_dir")} ;;`).join(" ")} esac; ` +
+          `if mkdir -p "$(dirname -- "$dest")" && mv "$stage/$p" "$dest"; then printf '%s\\n' "$dest" >> "$mvd"; moved=1; ` +
+          `else while IFS= read -r q; do rm -f "$q"; done < "$mvd"; printf 'FAIL\\t%s\\t%s\\n' ${shq(service)} "$p"; ok=""; break; fi; done; ` +
           `rm -f "$mvd"; fi`,
         `[ -n "$ok" ] && [ -n "$moved" ] && printf 'OK\\t%s\\n' ${shq(service)}`,
       ].join("; "),
@@ -634,16 +635,19 @@ export async function materializeDeviceFlowLogins(
     await input.sandbox.writeFileBytes(homeHandle, scriptRel, Buffer.from(restoreCmd, "utf8"));
     const run = await input.sandbox.run(
       input.handle,
-      `sh "$HOME/${scriptRel}"; rc=$?; rm -f "$HOME/${scriptRel}"; exit $rc`,
+      `lease_dir=${shq(EPHEMERAL_CRED_DIR)} sh "$HOME/${scriptRel}"; rc=$?; rm -f "$HOME/${scriptRel}"; exit $rc`,
       { timeoutMs: 120_000 },
     );
     if (run.code !== 0) throw new Error(`device-flow credential restore failed: ${run.stderr || `exit ${run.code}`}`);
     const restored: string[] = [];
     for (const line of run.stdout.split("\n")) {
-      const [tag, service] = line.split("\t");
+      const [tag, service, path] = line.split("\t");
       if (tag === "OK" && service) restored.push(service);
       else if (tag === "FAIL" && service)
-        input.onAnomaly?.(service, "restore failed mid-bundle — that bundle's files were rolled back");
+        input.onAnomaly?.(
+          service,
+          `restore failed mid-bundle${path ? ` at ${path}` : ""} — that bundle's files were rolled back`,
+        );
     }
     return restored;
   } catch (err) {
