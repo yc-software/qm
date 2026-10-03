@@ -141,3 +141,42 @@ test("a refused goal round falls back to another model and the goal keeps going"
     globalThis.fetch = realFetch;
   }
 });
+
+test("a goal never falls back to a model that already refused in the same turn", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const controller = new AbortController();
+  const entries: Array<{ type: string; payload: unknown }> = [];
+  const realFetch = globalThis.fetch;
+  const models: string[] = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body ?? "{}")) as { model: string; messages: unknown[] };
+    models.push(request.model);
+    if (models.length >= 8) controller.abort();
+    const latest = JSON.stringify(request.messages.at(-1));
+    if (models.length === 1 || latest.includes("could not answer this request"))
+      return textStream(`reply ${models.length}`);
+    return new Response(
+      JSON.stringify({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message: "API integrators: you can reduce refusals for your users by configuring a fallback model",
+        },
+      }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof globalThis.fetch;
+  try {
+    const outcome = await harness.turns.runTurn(goalTurn("goal-refusal-alternation", controller.signal, entries)).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    const [primary, refused, fallback, refusedAgain] = models;
+    assert.deepEqual([refused, refusedAgain], [primary, fallback]);
+    assert.equal(models.length, 4, "the turn ends instead of bouncing back to the model that already refused");
+    assert.ok("error" in outcome && outcome.error instanceof NonRetryableTurnError);
+    assert.equal(latestGoalRecord(entries)?.status, "active");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
