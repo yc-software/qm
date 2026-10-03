@@ -181,7 +181,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   };
   const limit = Math.min(
     SESSIONS_PAGE_LIMIT_MAX,
-    Math.max(1, Number(url.searchParams.get("limit")) || SESSIONS_PAGE_LIMIT_DEFAULT),
+    Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || SESSIONS_PAGE_LIMIT_DEFAULT),
   );
   if (originFilter === "cron" && !cronId) {
     const groups = (await deps.sessions?.scopeCronGroups(scope, orgWide)) ?? [];
@@ -230,7 +230,9 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const cursorParam = url.searchParams.get("cursor");
   const cursorMatch = cursorParam ? /^(\d+)~(.+)$/.exec(cursorParam) : null;
   const before = cursorMatch ? { lastActivity: Number(cursorMatch[1]), id: cursorMatch[2]! } : undefined;
-  const offset = before ? 0 : Math.min(Math.max(0, Number(url.searchParams.get("offset")) || 0), lastOffset);
+  const offset = before
+    ? 0
+    : Math.min(Math.max(0, Math.floor(Number(url.searchParams.get("offset"))) || 0), lastOffset);
   const summaries =
     (await deps.sessions?.scopeSessionSummaries(scope, orgWide, {
       limit,
@@ -325,7 +327,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   if (!scoped) return;
   const { actor, scope, record: session } = scoped;
   audit(deps, { principalId: actor.id, action: "session.read", resource: id, scopeLabel: session.scopeId });
-  const want = Math.max(1, Number(url.searchParams.get("limit")) || TRANSCRIPT_LIMIT_DEFAULT);
+  const want = Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || TRANSCRIPT_LIMIT_DEFAULT);
   const all = want >= TRANSCRIPT_LIMIT_MAX;
   const limit = Math.min(want, TRANSCRIPT_LIMIT_MAX);
   const raw = deps.sessions

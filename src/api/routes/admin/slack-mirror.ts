@@ -55,7 +55,7 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
   if (!container && !q) return sendJson(res, 400, { error: "bad_request", message: "container or q required" });
   const limit = Math.min(
     SLACK_MIRROR_PAGE_MAX,
-    Math.max(1, Number(url.searchParams.get("limit")) || SLACK_MIRROR_PAGE_DEFAULT),
+    Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || SLACK_MIRROR_PAGE_DEFAULT),
   );
   audit(deps, {
     principalId: actor.id,
@@ -113,9 +113,9 @@ export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
     .split(",")
     .map((d) => d.trim())
     .filter((d): d is "act" | "ignore" | "fastlane" => d === "act" || d === "ignore" || d === "fastlane");
-  const before = Number(url.searchParams.get("before")) || undefined;
-  const beforeId = Number(url.searchParams.get("beforeId")) || undefined;
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 100));
+  const before = Math.floor(Number(url.searchParams.get("before"))) || undefined;
+  const beforeId = Math.floor(Number(url.searchParams.get("beforeId"))) || undefined;
+  const limit = Math.min(200, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || 100));
   const [judgments, counts] = await Promise.all([
     store.list({
       ...(container ? { container } : {}),
@@ -156,9 +156,9 @@ export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
     .split(",")
     .map((d) => d.trim())
     .filter((d): d is "picked" | "declined" => d === "picked" || d === "declined");
-  const before = Number(url.searchParams.get("before")) || undefined;
-  const beforeId = Number(url.searchParams.get("beforeId")) || undefined;
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 100));
+  const before = Math.floor(Number(url.searchParams.get("before"))) || undefined;
+  const beforeId = Math.floor(Number(url.searchParams.get("beforeId"))) || undefined;
+  const limit = Math.min(200, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || 100));
   const [picks, counts] = await Promise.all([
     store.list({
       ...(channel ? { channel } : {}),
