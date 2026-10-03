@@ -136,7 +136,12 @@ export async function resolvePackAuth(
   const host = connectorHostFor(pack.url);
   if (host) {
     const token = await sources.connectorToken(host, pack.createdBy);
-    if (token) return { header: "Authorization", value: `Bearer ${token}`, secret: token };
+    if (token)
+      return {
+        header: "Authorization",
+        value: `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+        secret: token,
+      };
   }
   return undefined;
 }
