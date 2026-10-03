@@ -11,6 +11,8 @@
 
 const TOKEN_SKEW_MS = 60_000;
 const MCP_ACCEPT = "application/json, text/event-stream";
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+const MCP_REQUEST_TIMEOUT_MS = 120_000;
 
 interface McpHttpResponse {
   ok: boolean;
@@ -24,7 +26,9 @@ export type McpFetch = (
   init: { method: string; headers: Record<string, string>; body: string },
 ) => Promise<McpHttpResponse>;
 
-const realFetch: McpFetch = (url, init) => fetch(url, { ...init, redirect: "error" });
+// A hung server must not hang the turn: every request is bounded.
+const realFetch: McpFetch = (url, init) =>
+  fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS) });
 
 function baseUrl(mcpUrl: string): string {
   return mcpUrl.replace(/\/+$/g, "").replace(/\/mcp$/g, "");
@@ -131,6 +135,9 @@ export function createMcpClient(opts: {
   const host = hostOf(base);
   let cached: CachedToken | null = null;
   let rpcId = 0;
+  // Streamable HTTP lifecycle: `initialize` first, then echo the server's Mcp-Session-Id on
+  // every request. Stateful servers (the official SDK's default) reject anything else with 400.
+  let session: Promise<string | undefined> | null = null;
 
   async function mintToken(clientId: string, clientSecret: string): Promise<string> {
     if (cached && now() < cached.expiresAt - TOKEN_SKEW_MS) return cached.accessToken;
@@ -159,17 +166,73 @@ export function createMcpClient(opts: {
     return { authorization: `Bearer ${await mintToken(auth.clientId, auth.clientSecret)}` };
   }
 
-  async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const id = ++rpcId;
-    const res = await fetchImpl(`${base}/mcp`, {
+  async function post(body: Record<string, unknown>, sessionId: string | undefined): Promise<McpHttpResponse> {
+    return fetchImpl(`${base}/mcp`, {
       method: "POST",
       headers: {
         ...(await authHeaders()),
         "content-type": "application/json",
         accept: MCP_ACCEPT,
+        "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+        ...(sessionId ? { "mcp-session-id": sessionId } : {}),
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      body: JSON.stringify({ jsonrpc: "2.0", ...body }),
     });
+  }
+
+  async function initialize(): Promise<string | undefined> {
+    const id = ++rpcId;
+    const res = await post(
+      {
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: MCP_PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: "qm", version: "1" },
+        },
+      },
+      undefined,
+    );
+    if (res.status === 401 || res.status === 403) throw new Error(`mcp initialize failed (HTTP ${res.status})`);
+    // Servers predating the lifecycle (plain JSON-RPC endpoints) may reject initialize; carry on sessionless.
+    if (!res.ok) return undefined;
+    const sessionId = res.headers?.get("mcp-session-id")?.trim() || undefined;
+    await res.text().catch(() => "");
+    try {
+      const ack = await post({ method: "notifications/initialized" }, sessionId);
+      await ack.text().catch(() => "");
+    } catch {
+      // The ack is a notification; a server that can't take it still serves requests.
+    }
+    return sessionId;
+  }
+
+  function sessionId(): Promise<string | undefined> {
+    if (!session) {
+      session = initialize();
+      session.catch(() => {
+        session = null;
+      });
+    }
+    return session;
+  }
+
+  async function rpc(method: string, params: Record<string, unknown>, retried = false): Promise<unknown> {
+    const sid = await sessionId();
+    const id = ++rpcId;
+    const res = await post({ id, method, params }, sid);
+    // 404 on a session request means the server dropped it (expiry, restart): start a new one once.
+    if (res.status === 404 && sid && !retried) {
+      session = null;
+      return rpc(method, params, true);
+    }
+    // A minted token can be revoked before its expiry (or had none): mint a fresh one once.
+    if (res.status === 401 && cached && !retried) {
+      cached = null;
+      session = null;
+      return rpc(method, params, true);
+    }
     if (!res.ok) throw new Error(`mcp ${method} failed (HTTP ${res.status})`);
     const parsed = parseMcpEnvelope(await res.text(), res.headers?.get("content-type"), id);
     if (!parsed) throw new Error(`mcp ${method} returned non-JSON`);
