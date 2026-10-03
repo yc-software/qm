@@ -158,7 +158,7 @@ test("toSlackMrkdwn disarms encoded mass mentions outside code, leaves real ment
   );
   assert.equal(
     toSlackMrkdwn("code stays verbatim: `<!here>` and\n```\nnotify '<!channel>'\n```"),
-    "code stays verbatim: `<!here>` and\n```\nnotify '<!channel>'\n```",
+    "code stays verbatim: `&lt;!here&gt;` and\n```\nnotify '&lt;!channel&gt;'\n```",
   );
 });
 
@@ -276,4 +276,29 @@ test("a label-less wire mention is disarmed to the person's name when the direct
   } finally {
     setMentionIndex(new Map());
   }
+});
+
+test("toSlackMrkdwn: a markdown link whose URL contains parentheses becomes a Slack link", () => {
+  assert.equal(
+    toSlackMrkdwn("see [Rust](https://en.wikipedia.org/wiki/Rust_(programming_language)) now"),
+    "see <https://en.wikipedia.org/wiki/Rust_(programming_language)|Rust> now",
+  );
+});
+
+test("toSlackMrkdwn: ***bold italic*** nests correctly", () => {
+  assert.equal(toSlackMrkdwn("a ***both*** b"), "a *_both_* b");
+  assert.equal(toSlackMrkdwn("**bold** and *it*"), "*bold* and _it_");
+});
+
+test("toSlackMrkdwn: escapes &, <, > in text and code but keeps Slack links, mentions and quotes", () => {
+  assert.equal(toSlackMrkdwn("use Vec<T> & Box<T>"), "use Vec&lt;T&gt; &amp; Box&lt;T&gt;");
+  assert.equal(toSlackMrkdwn("`a < b && c`"), "`a &lt; b &amp;&amp; c`");
+  assert.equal(toSlackMrkdwn("```\nif (a > b) {}\n```"), "```\nif (a &gt; b) {}\n```");
+  assert.equal(
+    toSlackMrkdwn("hi <@U123> see <https://x.com?a=1&b=2|docs>"),
+    "hi <@U123> see <https://x.com?a=1&b=2|docs>",
+  );
+  assert.equal(toSlackMrkdwn("[R&D](https://e.com)"), "<https://e.com|R&amp;D>");
+  assert.equal(toSlackMrkdwn("> quoted a<b\n>> nested"), "> quoted a&lt;b\n>> nested");
+  assert.equal(toSlackMrkdwn("x -> y"), "x -&gt; y");
 });
