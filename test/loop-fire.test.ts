@@ -991,7 +991,7 @@ test("triage groups a flood read-only so only the representative is worked, with
       return `\`\`\`json\n${JSON.stringify({
         items: ids.map((id, index) => ({
           id,
-          priority: index === 0 ? "urgent" : "low",
+          priority: "urgent",
           reason: "checkout is down",
           ...(index > 0 ? { groupWith: ids[0] } : {}),
         })),
