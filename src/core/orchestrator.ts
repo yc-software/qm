@@ -209,7 +209,7 @@ import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
-import type { EgressPolicy } from "../types.ts";
+import type { AttachmentMeta, EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
@@ -2930,6 +2930,33 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (await deps.sessions.getContextWindow(session.id)).entries,
           );
         }
+        const backfillUserPayload = (attachments: AttachmentMeta[]): Record<string, unknown> | undefined =>
+          input.text.trim() || attachments.length
+            ? {
+                text: input.text,
+                ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
+                ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
+                ...(input.displayText?.trim() ? { display: input.displayText } : {}),
+                ...(attachments.length ? { attachments } : {}),
+              }
+            : undefined;
+        if (
+          input.attachments?.length &&
+          !automatedTurn &&
+          !input.approval &&
+          !input.proactiveOpener &&
+          !releasedToolOutput &&
+          !(isRetry && recordedTurn)
+        )
+          failureUserPayload = backfillUserPayload(
+            input.attachments.map((a) => ({
+              name: a.name,
+              mimetype: a.mimetype,
+              sizeBytes: a.sizeBytes,
+              direction: "in" as const,
+              ...(a.sourceId ? { sourceId: a.sourceId } : {}),
+            })),
+          );
         const inbound =
           input.attachments?.length && !strictReadOnly
             ? await materializeInbound(
@@ -3307,15 +3334,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           partial ||
           approvalReplay ||
           !!releasedToolOutput;
-        failureUserPayload =
-          !syntheticPrompt && input.text.trim()
-            ? {
-                text: input.text,
-                ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
-                ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
-                ...(input.displayText?.trim() ? { display: input.displayText } : {}),
-              }
-            : undefined;
+        failureUserPayload = syntheticPrompt ? undefined : backfillUserPayload(inbound.metas);
         const titleText = input.displayText?.trim() || input.text;
         const fallbackTitle = !session.title && !syntheticPrompt ? fallbackSessionTitle(titleText) : undefined;
         const fallbackTitleWrite = fallbackTitle ? deps.sessions.updateTitle(session.id, fallbackTitle) : undefined;

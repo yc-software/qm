@@ -1,3 +1,4 @@
+import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -4522,3 +4523,103 @@ for (const [securityPosture, securityScreen] of [
     assert.doesNotMatch(prompts, /NOT security-screened/);
   });
 }
+
+test("a message with a file whose sandbox fails to start still lands above its failure", async () => {
+  const { app, sandbox, blobTransfer } = freshApp();
+  const t1 = await app.turn(dm("hello"));
+  assert.equal(t1.status, "ok");
+  const blob = await blobTransfer.put(Buffer.from("inbound"));
+  sandbox.provision = async () => {
+    throw new NonRetryableTurnError("sandbox unavailable");
+  };
+  await assert.rejects(
+    app.turn(
+      dm("please read this file", {
+        attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+      }),
+    ),
+    /sandbox unavailable/,
+  );
+  const found = await app.getSession(t1.sessionId!);
+  const failureIdx = found!.entries.findIndex((e) => turnFailure(e));
+  assert.ok(failureIdx > 0, "the failure is recorded durably");
+  const prior = found!.entries[failureIdx - 1]!;
+  assert.equal(prior.type, "user", "the message the person sent is not lost");
+  assert.equal((prior.payload as { text?: string }).text, "please read this file");
+  assert.equal(found!.entries.filter((e) => e.type === "user").length, 2);
+  assert.deepEqual(
+    (prior.payload as { attachments?: Array<{ name: string; sizeBytes: number }> }).attachments?.map((a) => [
+      a.name,
+      a.sizeBytes,
+    ]),
+    [["notes.txt", blob.sizeBytes]],
+    "the file chip stays with the message",
+  );
+});
+
+test("a file message whose sandbox keeps failing is back-filled once, after the last retry", async () => {
+  const { app, sandbox, blobTransfer } = freshApp();
+  const t1 = await app.turn(dm("hello"));
+  const blob = await blobTransfer.put(Buffer.from("inbound"));
+  sandbox.provision = async () => {
+    throw new Error("docker daemon unreachable");
+  };
+  const req = dm("read this please", {
+    idempotencyKey: "attach-retry-1",
+    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+  });
+  for (let i = 0; i < 3; i++) await assert.rejects(app.turn(req), /docker daemon unreachable/);
+  const found = await app.getSession(t1.sessionId!);
+  const sent = found!.entries.filter(
+    (e) => e.type === "user" && (e.payload as { text?: string }).text === "read this please",
+  );
+  assert.equal(sent.length, 1, "the message is kept exactly once across the retry cycle");
+  assert.equal(found!.entries.filter((e) => turnFailure(e)).length, 1);
+});
+
+test("a file sent with no text is still kept when its sandbox fails", async () => {
+  const { app, sandbox, blobTransfer } = freshApp();
+  const t1 = await app.turn(dm("hello"));
+  const blob = await blobTransfer.put(Buffer.from("inbound"));
+  sandbox.provision = async () => {
+    throw new NonRetryableTurnError("sandbox unavailable");
+  };
+  await assert.rejects(
+    app.turn(
+      dm("", {
+        attachments: [{ name: "photo.png", mimetype: "image/png", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+      }),
+    ),
+    /sandbox unavailable/,
+  );
+  const found = await app.getSession(t1.sessionId!);
+  const failureIdx = found!.entries.findIndex((e) => turnFailure(e));
+  const prior = found!.entries[failureIdx - 1]!;
+  assert.equal(prior.type, "user");
+  assert.deepEqual(
+    (prior.payload as { attachments?: Array<{ name: string }> }).attachments?.map((a) => a.name),
+    ["photo.png"],
+  );
+});
+
+test("a text message that fails after its file was staged keeps the staged file's chip", async () => {
+  const { app, blobTransfer } = freshApp();
+  const t1 = await app.turn(dm("hello"));
+  const blob = await blobTransfer.put(Buffer.from("inbound"));
+  await assert.rejects(
+    app.turn(
+      dm("use the fancy model", {
+        model: "not-a-real-model",
+        attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+      }),
+    ),
+    /not approved/,
+  );
+  const found = await app.getSession(t1.sessionId!);
+  const prior = found!.entries[found!.entries.findIndex((e) => turnFailure(e)) - 1]!;
+  assert.equal((prior.payload as { text?: string }).text, "use the fancy model");
+  assert.deepEqual(
+    (prior.payload as { attachments?: Array<{ name: string }> }).attachments?.map((a) => a.name),
+    ["notes.txt"],
+  );
+});
