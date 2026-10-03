@@ -1358,6 +1358,11 @@ function isRenderableThinking(payload: unknown): boolean {
   return !!p && !p.redacted && typeof p.thinking === "string" && p.thinking.trim().length > 0;
 }
 
+function attachesFiles(payload: unknown): boolean {
+  const p = payload as { tool?: unknown; action?: unknown } | null;
+  return p?.tool === "attach" || (p?.tool === "files" && p.action === "share");
+}
+
 function parseActivity(raw: unknown): ToolActivity[] {
   if (!Array.isArray(raw)) return [];
   const out: ToolActivity[] = [];
@@ -2081,11 +2086,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
         }
         continue;
       }
-      if (
-        e.type === "tool_result" &&
-        (e.payload as { tool?: unknown } | null)?.tool === "attach" &&
-        postResultOk(e.payload)
-      ) {
+      if (e.type === "tool_result" && attachesFiles(e.payload) && postResultOk(e.payload)) {
         appendAttachedFiles(e.payload);
       }
       if (e.type !== "thinking" || isRenderableThinking(e.payload)) {
