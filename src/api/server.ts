@@ -541,7 +541,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         finishTiming({
           name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
           status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
-          data: { http_status: res.writableFinished ? String(res.statusCode) : undefined },
+          data: { url: req.url, http_status: res.writableFinished ? String(res.statusCode) : undefined },
         }),
       );
     req.on("error", () => res.destroy());

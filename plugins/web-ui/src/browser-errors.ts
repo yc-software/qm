@@ -2,8 +2,8 @@ import type * as Browser from "@sentry/browser";
 import type { init } from "@sentry/browser";
 import type { Me } from "./shell-state";
 import { parseDeepLink, UI_BASE } from "./deep-link.ts";
-import { finishTiming, sanitizeTransactionEvent, traceStatus, type TimingResult } from "../../chassis/src/timing.ts";
-import { errDetail } from "../../chassis/src/errors.ts";
+import { finishTiming, traceStatus, type TimingResult } from "../../chassis/src/timing.ts";
+import { errDetail, swallow } from "../../chassis/src/errors.ts";
 
 const MAX_TIMINGS_PER_PAGE = 200;
 const API_RESOURCES = new Set([
@@ -81,7 +81,7 @@ export function reportRequestTiming(url: string, method: string, startMs: number
   if (target.origin !== window.location.origin) return;
   timing("http.client", `${/^[A-Z]{3,7}$/.test(method) ? method : "GET"} ${apiRouteName(target.pathname)}`, startMs, {
     status: status === null ? "internal_error" : traceStatus(status),
-    data: { http_status: status === null ? "network" : String(status) },
+    data: { url: target.href, http_status: status === null ? "network" : String(status) },
   });
 }
 
@@ -94,7 +94,7 @@ function reportPageLoad(): void {
     timing("pageload", "pageload", performance.timeOrigin, {
       status: "ok",
       endMs: performance.timeOrigin + navigation.loadEventEnd,
-      data: { page: view ?? "other" },
+      data: { page: view ?? "other", url: navigation.name },
       measurements: {
         ttfb: navigation.responseStart,
         dom_content_loaded: navigation.domContentLoadedEventEnd,
@@ -163,10 +163,10 @@ export async function initializeBrowserErrors(me: Me): Promise<void> {
       tracePropagationTargets: [],
       initialScope: { tags: { service: "web-ui-browser", org: me.org }, user: { username: me.user } },
       beforeSend: (event) => (current === generation ? event : null),
-      beforeSendTransaction: (event) =>
-        current === generation ? (sanitizeTransactionEvent(event, "javascript") as typeof event | null) : null,
+      beforeSendTransaction: (event) => (current === generation ? event : null),
     });
-  } catch {
+  } catch (error) {
+    swallow("browser error reporting initialization", error);
     if (current === generation) client = undefined;
   }
   if (client) startTiming(rate);

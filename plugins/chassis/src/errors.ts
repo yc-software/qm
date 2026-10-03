@@ -38,19 +38,31 @@ export function errChain(e: unknown): string {
 
 function errorFields(e: unknown): string {
   if (typeof e !== "object" || e === null) return "";
-  const record = e as { code?: unknown; status?: unknown; statusCode?: unknown; data?: { error?: unknown } };
+  const record = e as { code?: unknown; status?: unknown; statusCode?: unknown };
   const fields = Object.entries({
     code: record.code,
     status: record.status ?? record.statusCode,
-    upstream: record.data?.error,
   }).filter(([, value]) => typeof value === "string" || typeof value === "number");
   return fields.length ? ` [${fields.map(([key, value]) => `${key}=${String(value)}`).join(" ")}]` : "";
 }
 
-export function errDetail(e: unknown): string {
-  const frames = e instanceof Error ? (e.stack?.split("\n").map((line) => line.trim()) ?? []) : [];
-  const stack = frames.filter((frame) => frame.startsWith("at ")).join(" | ");
-  return `${errChain(e)}${errorFields(e)}${stack ? ` {stack: ${stack}}` : ""}`;
+export function errDetail(e: unknown, seen = new Set<unknown>()): string {
+  if (seen.has(e)) return "";
+  seen.add(e);
+  const frames =
+    e instanceof Error
+      ? (e.stack
+          ?.split("\n")
+          .slice(1)
+          .map((line) => line.trim()) ?? [])
+      : [];
+  const stack = frames.filter(Boolean).join(" | ");
+  const nested = e instanceof Error ? [e.cause, ...(e instanceof AggregateError ? e.errors : [])] : [];
+  const details = nested
+    .filter((error) => error != null)
+    .map((error) => errDetail(error, seen))
+    .filter(Boolean);
+  return `${errChain(e)}${errorFields(e)}${stack ? ` {stack: ${stack}}` : ""}${details.length ? ` {causes: ${details.join(" | ")}}` : ""}`;
 }
 
 export function swallow(context: string, e: unknown): void {

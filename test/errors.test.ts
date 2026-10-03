@@ -12,7 +12,7 @@ import {
   withRequestId,
 } from "../src/util/errors.ts";
 import { WorkAdmissionClosed } from "../src/util/admitted-work.ts";
-import { errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
+import { errDetail, errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
 import { runInNewContext } from "node:vm";
 
 test("errMessage keeps the cause chain that fetch failures hide behind their generic message", () => {
@@ -144,7 +144,7 @@ test("swallow logs the cause chain, structured error fields and stack instead of
   swallow("http", Object.assign(new Error("upstream failed"), { statusCode: 503 }));
   assert.match(
     logged[0]!,
-    /^\[swallowed\] slack: post: An API error occurred: not_in_channel <- Error: socket hang up \[code=slack_webapi_platform_error upstream=not_in_channel\] \{stack: at /,
+    /^\[swallowed\] slack: post: An API error occurred: not_in_channel <- Error: socket hang up \[code=slack_webapi_platform_error\] \{stack: at /,
   );
   assert.match(logged[1]!, /^\[swallowed\] http: upstream failed \[status=503\] \{stack: at /);
   assert.equal(swallowAs("lookup", false)(new Error("db down")), false);
@@ -161,4 +161,16 @@ test("httpFailure names the status, a clipped body, and the provider request id"
     "lambda -> 429: throttled [request id aws-1]",
   );
   assert.equal(withRequestId("fine", new Headers()), "fine");
+});
+
+test("errDetail preserves browser frames, nested stacks and aggregate errors without cycles", () => {
+  const provision = new Error("provision");
+  provision.stack = "Error: provision\ninitialize@https://example.com/app.js:1:2";
+  const cleanup = new Error("cleanup", { cause: provision });
+  const error = new AggregateError([provision, cleanup], "both", { cause: cleanup });
+  provision.cause = error;
+  const detail = errDetail(error);
+  assert.ok(detail.includes("initialize@https://example.com/app.js:1:2"));
+  assert.ok(detail.includes("cleanup"));
+  assert.equal(detail.split("initialize@").length, 2);
 });

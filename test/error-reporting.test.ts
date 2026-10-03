@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { sanitizeTransactionEvent, traceStatus } from "../plugins/chassis/src/timing.ts";
+import { traceStatus } from "../plugins/chassis/src/timing.ts";
 
 async function runReporting(body: string, enabled = true, env: Record<string, string> = {}) {
   const events: Record<string, any>[] = [];
@@ -143,105 +143,6 @@ test("operator error records send one classified event with the record details",
   assert.equal(events[0]!.extra.scopeLabel, "private-scope");
 });
 
-test("transaction allowlist keeps timing shape only and rejects unsafe names", () => {
-  const clean = sanitizeTransactionEvent(
-    {
-      type: "transaction",
-      event_id: "b".repeat(32),
-      transaction: "GET /v1/sessions/:id",
-      transaction_info: { source: "url" },
-      start_timestamp: 10,
-      timestamp: 10.5,
-      environment: "verification",
-      release: "test-release",
-      user: { id: "private-user" },
-      request: { url: "https://private-host/v1/sessions/private-id", headers: { authorization: "private-token" } },
-      breadcrumbs: [{ message: "private-breadcrumb" }],
-      extra: { sql: "private-sql" },
-      server_name: "private-host",
-      spans: [
-        { span_id: "1", trace_id: "2", description: "SELECT private", start_timestamp: 10, timestamp: 10.1, data: {} },
-      ],
-      tags: { service: "core", http_status: "private", private: "private-tag", surface: "private-tag" },
-      measurements: { queue_wait: { value: 5, unit: "millisecond" }, private: { value: 1, unit: "millisecond" } },
-      contexts: {
-        trace: {
-          trace_id: "a".repeat(32),
-          span_id: "c".repeat(16),
-          op: "http.server",
-          status: "ok",
-          data: { private: 1, http_status: "200", surface: "web", page: "private id", "sentry.sample_rate": 1 },
-        },
-        otel: { resource: { "service.name": "private-host" } },
-        runtime: { name: "node" },
-        private: { value: "private-context" },
-      },
-    },
-    "node",
-  );
-  assert.doesNotMatch(JSON.stringify(clean), /private/);
-  assert.equal(clean?.transaction, "GET /v1/sessions/:id");
-  assert.deepEqual(clean?.transaction_info, { source: "route" });
-  assert.deepEqual(clean?.tags, { service: "core", http_status: "200", surface: "web", page: "other" });
-  assert.deepEqual(clean?.measurements, { queue_wait: { value: 5, unit: "millisecond" } });
-  assert.deepEqual(clean?.spans, []);
-  assert.deepEqual(clean?.contexts?.trace, {
-    trace_id: "a".repeat(32),
-    span_id: "c".repeat(16),
-    op: "http.server",
-    status: "ok",
-    origin: "manual",
-  });
-  const base = {
-    type: "transaction" as const,
-    start_timestamp: 1,
-    timestamp: 2,
-    contexts: { trace: { trace_id: "a".repeat(32), span_id: "c".repeat(16), op: "queue.task", status: "ok" } },
-  };
-  for (const transaction of ["GET /v1/sessions/1234?token=private", "private text", "GET https://x/", undefined])
-    assert.equal(sanitizeTransactionEvent({ ...base, transaction }, "node"), null);
-  assert.equal(sanitizeTransactionEvent({ ...base, transaction: "run", timestamp: 0 }, "node"), null);
-  assert.equal(sanitizeTransactionEvent({ ...base, transaction: "run", contexts: {} }, "node"), null);
-  const traced = (op: string, status: string) => ({
-    ...base,
-    transaction: "run",
-    contexts: { trace: { ...base.contexts.trace, op, status } },
-  });
-  assert.equal(sanitizeTransactionEvent(traced("private.op", "ok"), "node"), null);
-  assert.equal(sanitizeTransactionEvent(traced("queue.task", "private status"), "node"), null);
-  assert.equal(sanitizeTransactionEvent(traced("queue.task", "ok"), "node")?.contexts?.trace?.op, "queue.task");
-  const bucketed = sanitizeTransactionEvent(
-    {
-      ...traced("queue.task", "ok"),
-      contexts: {
-        trace: {
-          ...base.contexts.trace,
-          op: "queue.task",
-          status: "ok",
-          data: { surface: "private-surface", origin: "private-origin", http_status: "private", page: "private" },
-        },
-      },
-    },
-    "node",
-  );
-  assert.deepEqual(bucketed?.tags, { surface: "other", origin: "other", http_status: "other", page: "other" });
-  const inherited = sanitizeTransactionEvent(
-    {
-      ...traced("queue.task", "ok"),
-      contexts: {
-        trace: {
-          ...base.contexts.trace,
-          op: "queue.task",
-          status: "ok",
-          data: { toString: "private prompt", constructor: "private-user", hasOwnProperty: "private" },
-        },
-      },
-    },
-    "node",
-  );
-  assert.deepEqual(inherited?.tags, {});
-});
-
 test("trace statuses map HTTP outcomes", () => {
   assert.deepEqual([200, 302, 401, 403, 404, 429, 422, 500].map(traceStatus), [
     "ok",
@@ -255,7 +156,7 @@ test("trace statuses map HTTP outcomes", () => {
   ]);
 });
 
-test("real SDK sends sanitized sampled transactions only when a sample rate is configured", async () => {
+test("real SDK preserves sampled transaction data only when a sample rate is configured", async () => {
   const body = `
     startTiming('queue.task', 'run', Date.now() - 500)?.({ status: 'ok', endMs: Date.now(),
       data: { surface: 'web', origin: 'human', private: 'private-tag', page: 'private-page' },
@@ -276,40 +177,26 @@ test("real SDK sends sanitized sampled transactions only when a sample rate is c
   assert.equal(on.code, 0);
   assert.equal(on.events.length, 1);
   assert.equal(on.transactions.length, 2);
-  assert.doesNotMatch(JSON.stringify(on.transactions), /private/);
+  assert.match(JSON.stringify(on.transactions), /private-tag/);
   const [run, request] = on.transactions;
   assert.equal(run!.transaction, "run");
   assert.ok(Math.abs(run!.timestamp - run!.start_timestamp - 0.5) < 0.05);
   assert.deepEqual(run!.tags, {
     service: "test",
     deployment: "test-deployment",
-    surface: "web",
-    origin: "human",
-    page: "other",
   });
-  assert.deepEqual(run!.measurements, { queue_wait: { value: 20, unit: "millisecond" } });
+  assert.deepEqual(run!.measurements, {
+    queue_wait: { value: 20, unit: "millisecond" },
+    private: { value: 5, unit: "millisecond" },
+  });
+  assert.equal(run!.contexts.trace.data.private, "private-tag");
+  assert.equal(run!.contexts.trace.data.page, "private-page");
   assert.equal(run!.contexts.trace.op, "queue.task");
   assert.equal(run!.release, "test-release");
   assert.equal(run!.environment, "verification");
   assert.equal(request!.transaction, "GET /v1/sessions/:id");
   assert.equal(request!.contexts.trace.status, "not_found");
-  assert.equal(request!.tags.http_status, "404");
-  assert.deepEqual(Object.keys(run!).sort(), [
-    "contexts",
-    "environment",
-    "event_id",
-    "measurements",
-    "platform",
-    "release",
-    "sdk",
-    "spans",
-    "start_timestamp",
-    "tags",
-    "timestamp",
-    "transaction",
-    "transaction_info",
-    "type",
-  ]);
+  assert.equal(request!.contexts.trace.data.http_status, "404");
 });
 
 test("reportFailure sends one classified event per distinct failure and skips cancellations and recorded errors", async () => {
@@ -339,4 +226,20 @@ test("reportFailure sends one classified event per distinct failure and skips ca
   assert.equal(events[1]!.exception.values[0].value, "private-db-down");
   const tick = output.split("\n").find((line) => line.startsWith("[failed] scheduler: tick"));
   assert.match(tick ?? "", new RegExp(`\\[sentry=${events[1]!.event_id}\\]: private-db-down \\{stack: `));
+});
+
+test("sandbox cleanup errors send both original failures and their stacks", async () => {
+  const { events, code } = await runReporting(`
+    const { SandboxProvisionCleanupError } = await import('./src/sandbox/sandbox.ts');
+    const provision = new Error('provision failed', { cause: new Error('provision root') });
+    const cleanup = new Error('cleanup failed');
+    reportBackendError(new SandboxProvisionCleanupError({ id: 'test', rootDir: '/tmp' }, cleanup, provision));
+    await flushErrorReporting();
+  `);
+  assert.equal(code, 0);
+  const values = events[0]!.exception.values;
+  for (const message of ["provision failed", "provision root", "cleanup failed"]) {
+    const value = values.find((entry: { value: string }) => entry.value === message);
+    assert.ok(value?.stacktrace.frames.length, message);
+  }
 });

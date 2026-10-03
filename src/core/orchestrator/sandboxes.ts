@@ -721,7 +721,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const reclaimBox = async (): Promise<void> => {
     let ownerCleanupError: unknown;
     let scratchCleanupError: unknown;
-    if (ownerAuthProvisionInFlight) await ownerAuthProvisionInFlight.catch(() => {});
+    if (ownerAuthProvisionInFlight)
+      await ownerAuthProvisionInFlight.catch(swallowAs("orchestrator: owner auth provision", undefined));
     ownerAuthProvisionInFlight = null;
     const reachEntries = [...reachBoxes.entries()];
     reachBoxes.clear();
@@ -737,10 +738,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           }
         }
         if (keepReachWarm) {
-          await deps.sandbox.teardown(h, { keepWarm: true }).catch(() => {});
+          await deps.sandbox
+            .teardown(h, { keepWarm: true })
+            .catch(swallowAs("orchestrator: keep warm teardown", undefined));
           return;
         }
-        await deps.sandbox.teardown(h).catch(() => {});
+        await deps.sandbox.teardown(h).catch(swallowAs("orchestrator: teardown", undefined));
       }),
     );
     const ownerHandle = ownerAuthBox.handle ?? ownerAuthBox.pending;
@@ -775,7 +778,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         );
       }
     }
-    if (scratchProvisionInFlight) await scratchProvisionInFlight.catch(() => {});
+    if (scratchProvisionInFlight)
+      await scratchProvisionInFlight.catch(swallowAs("orchestrator: scratch provision", undefined));
     scratchProvisionInFlight = null;
     const scratchHandle = scratchBox.handle ?? scratchBox.pending;
     if (scratchHandle) {
@@ -822,7 +826,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
               await clearTurnFiles(handle);
           } finally {
             await deps.sandbox.teardown(handle, {
-              keepWarm: await hasLiveProcesses(handle, memoryScopeId).catch(() => true),
+              keepWarm: await hasLiveProcesses(handle, memoryScopeId).catch(
+                swallowAs("orchestrator: live process check", true),
+              ),
             });
           }
         })(),
@@ -833,7 +839,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       if (result.status === "rejected") swallow("resource sandbox release", result.reason);
     resourceHandles.clear();
     resourcePendingHandles.clear();
-    if (provisionInFlight) await provisionInFlight.catch(() => {});
+    if (provisionInFlight) await provisionInFlight.catch(swallowAs("orchestrator: provision", undefined));
     provisionInFlight = null;
     const handle = box.handle ?? box.pending;
     box.handle = null;

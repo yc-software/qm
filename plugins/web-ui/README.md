@@ -337,13 +337,14 @@ signed-in user. Delivery is best effort.
 Set `SENTRY_BROWSER_TRACES_SAMPLE_RATE` (0 to 1, default 0) alongside `SENTRY_BROWSER_DSN` to sample
 browser timings; `0.1` is a reasonable start. Each timing is sampled independently at that rate
 and carries its own random trace id. A page reports one `pageload` transaction (time to first
-byte, DOM content loaded, load, first and largest contentful paint, and a `page` tag drawn from
-the fixed list of application views) and one `http.client` transaction per same-origin request
+byte, DOM content loaded, load, first and largest contentful paint, and a `page` attribute for
+the application view) and one `http.client` transaction per same-origin request
 made through the web client's shared fetch helper, measured to response headers and named by a
 fixed `/api/<resource>` allowlist (`GET /api/sessions/*`) with the HTTP status. At most 200
-timings are sent per page. URLs, query strings, identifiers, and request or response content are
-never included; timings stop with error reporting on sign-out, authentication failure, and
-impersonation.
+timings are sent per page. The full page/request URL, including query strings, is retained as a
+span attribute. Transactions, child spans, descriptions, attributes, and any attached request or
+user context are sent without scrubbing. Timings stop with error reporting on sign-out,
+authentication failure, and impersonation.
 
 ## Personal AI accounts
 

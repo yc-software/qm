@@ -14,17 +14,19 @@ export interface SandboxHandle {
   scopeId?: string;
 }
 
-export class SandboxProvisionCleanupError extends Error {
+export class SandboxProvisionCleanupError extends AggregateError {
   readonly handle: SandboxHandle;
-  readonly provisionError: unknown;
 
   constructor(handle: SandboxHandle, cleanupError: unknown, provisionError: unknown) {
-    super(`Disposable sandbox cleanup failed after initialization failed (${errMessage(provisionError)})`, {
-      cause: cleanupError,
-    });
+    super(
+      [provisionError, cleanupError],
+      `Disposable sandbox cleanup failed after initialization failed (${errMessage(provisionError)})`,
+      {
+        cause: cleanupError,
+      },
+    );
     this.name = "SandboxProvisionCleanupError";
     this.handle = { ...handle, scratch: true };
-    this.provisionError = provisionError;
   }
 }
 

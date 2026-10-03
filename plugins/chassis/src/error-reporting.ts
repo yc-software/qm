@@ -1,5 +1,5 @@
 import type * as Sentry from "@sentry/node";
-import { finishTiming, parseSampleRate, sanitizeTransactionEvent, type TimingResult } from "./timing.ts";
+import { finishTiming, parseSampleRate, type TimingResult } from "./timing.ts";
 import { swallow } from "./errors.ts";
 
 const FLUSH_MS = 2_000;
@@ -26,7 +26,6 @@ export function initializeErrorReporting(
     attachStacktrace: true,
     sendClientReports: false,
     initialScope: { tags: { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID } },
-    beforeSendTransaction: (event) => sanitizeTransactionEvent(event, "node"),
     shutdownTimeout: FLUSH_MS,
   });
   client = sdk;
