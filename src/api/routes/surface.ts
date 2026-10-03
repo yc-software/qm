@@ -778,13 +778,29 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       resource: "memory",
       scopeLabel: write,
     });
-    return sendJson(res, 200, { scopeId: write, content: await memory.read(write) });
+    const head = memory.readHead ? await memory.readHead(write) : { content: await memory.read(write), revision: "" };
+    return sendJson(res, 200, {
+      scopeId: write,
+      content: head.content,
+      ...(head.revision ? { revision: head.revision } : {}),
+    });
   }
   if (method === "PUT" && pathname === "/v1/memory/self") {
-    const b = body as { content?: unknown };
+    const b = body as { content?: unknown; revision?: unknown };
     if (typeof b.content !== "string")
       return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    await memory.replace(write, b.content, capability.actorId);
+    if (b.revision !== undefined && (typeof b.revision !== "string" || !memory.replaceIfRevision))
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "revision must be a string from GET /v1/memory/self",
+      });
+    if (typeof b.revision === "string") {
+      if (!(await memory.replaceIfRevision!(write, b.content, b.revision, capability.actorId)))
+        return sendJson(res, 409, {
+          error: "revision_conflict",
+          message: "memory changed since it was read; GET it again and reapply your edit",
+        });
+    } else await memory.replace(write, b.content, capability.actorId);
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.curate",

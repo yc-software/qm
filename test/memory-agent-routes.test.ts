@@ -173,6 +173,28 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     assert.doesNotMatch(self.content, /speaker attribution/);
   });
 
+  it("refuses a PUT whose revision is stale so concurrent captures are not lost", async () => {
+    const cap = await capFor("U1", { write: U1, read: [U1] });
+    const read = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
+    assert.ok(read.revision);
+    await post("/v1/memory/facts", { facts: ["captured mid-curate"] }, { "x-agent-capability": cap });
+    const stale = await put(
+      "/v1/memory/self",
+      { content: `${read.content}\n\n- curated edit`, revision: read.revision },
+      { "x-agent-capability": cap },
+    );
+    assert.equal(stale.status, 409);
+    assert.match(await built.memory.read(U1), /captured mid-curate/);
+    const fresh = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
+    const ok = await put(
+      "/v1/memory/self",
+      { content: `${fresh.content}\n\n- curated edit`, revision: fresh.revision },
+      { "x-agent-capability": cap },
+    );
+    assert.equal(ok.status, 200);
+    assert.match(await built.memory.read(U1), /captured mid-curate[\s\S]*curated edit/);
+  });
+
   it('scope:"org" writes the org notebook when the token carries orgWrite (admin turn)', async () => {
     await built.memory.replace(ORG, "");
     const cap = await capFor("A1", { write: scopeId("personal", "A1"), orgWrite: ORG, read: [ORG] });

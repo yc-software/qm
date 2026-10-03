@@ -630,6 +630,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     return cache ? once(call, cache) : call();
   }
 
+  let memoryReadRevision: string | undefined;
   return {
     ...(deps.registerLogin ? { registerLogin: deps.registerLogin } : {}),
     ...(deps.commandCredentials?.length
@@ -1158,7 +1159,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryRead(): Promise<string | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
-      return timed("recall", () => memory!.read(write));
+      return timed("recall", async () => {
+        if (!memory!.readHead) return memory!.read(write);
+        const head = await memory!.readHead(write);
+        memoryReadRevision = head.revision || undefined;
+        return head.content;
+      });
     },
 
     async memoryRemember(facts: string[]): Promise<number | null> {
@@ -1181,7 +1187,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!memory || !write) return null;
       return once(() =>
         timed("memory_write", async () => {
-          await memory!.replace(write, content, deps.createdBy);
+          const revision = memoryReadRevision;
+          if (revision && memory!.replaceIfRevision) {
+            if (!(await memory!.replaceIfRevision(write, content, revision, deps.createdBy)))
+              throw new Error("Memory changed since you read it; read it again and reapply your edit.");
+          } else await memory!.replace(write, content, deps.createdBy);
+          memoryReadRevision = undefined;
           return true as const;
         }),
       );
