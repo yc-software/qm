@@ -704,7 +704,7 @@ export function createMockHarness(): Harness {
           const msg = cmd.slice(cmd.indexOf("!post ") + "!post ".length);
           await turn.emit({
             type: "tool_call",
-            payload: { tool: "slack", action: "post", bytes: msg.length },
+            payload: { tool: "slack", action: "post", text: msg, bytes: msg.length },
             scopeLabel: turn.scopeLabel,
           });
           const r = await turn.tools.post(msg);

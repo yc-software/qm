@@ -915,7 +915,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           return parseDetectVerdict((out ?? "").trim(), Boolean(detect.reactionGuidance?.trim()));
         } catch (error) {
           swallow("claude: detect", error);
-          return { respond: false };
+          return { respond: true, reason: "detection failed" };
         }
       },
       async compactHistory(input) {

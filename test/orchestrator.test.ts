@@ -2373,6 +2373,27 @@ test("a reply in a thread the agent STARTED chimes in, even as a bare statement 
   assert.equal(withOpener.status, "ok");
 });
 
+test("an unprompted answer to the agent's own outstanding question gets a reply, not a silent decline", async () => {
+  const { app } = freshApp();
+  const asked = await app.turn(channel("ask admin: has John's insurance enrolment gone through?"));
+  assert.equal(asked.status, "ok");
+  assert.match(asked.reply ?? "", /\?/);
+  const answer = await app.turn(
+    channel("Sorry, didn't see the notification. Filed Friday, effective 8/17, all good.", { unprompted: true }),
+  );
+  assert.equal(answer.status, "ok");
+});
+
+test("an unprompted answer to a question the agent posted via the post tool gets a reply", async () => {
+  const { app } = freshApp();
+  const asked = await app.turn(channel("!post Which day should the announcement go out?"));
+  assert.equal(asked.status, "ok");
+  const answer = await app.turn(
+    channel("Sorry, didn't see the notification. Friday works, all good.", { unprompted: true }),
+  );
+  assert.equal(answer.status, "ok");
+});
+
 test("detectOpener drives turn detection but is NOT rendered into the prompt", async () => {
   const { app } = freshApp();
   const res = await app.turn(
