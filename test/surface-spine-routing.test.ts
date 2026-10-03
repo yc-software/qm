@@ -665,3 +665,20 @@ test("a shared web project turn answers with its final text, not surface tools",
     await built.runtime.stop();
   }
 });
+
+test("an addressed turn paused on approval is not nudged or direct-replied; it waits for the approval", async () => {
+  const built = freshApp();
+  const result = await built.app.turn({
+    ...mention("!paused-approval gated-check", "C-paused", "720.1"),
+    async: false,
+  });
+  assert.equal(result.pendingApprovals?.length, 1);
+  const session = await built.sessions.getByThread("ch:C-paused:720.1");
+  const requests = await built.sessions.listLlmRequests(session!.id);
+  assert.ok(
+    !requests.some((r) => JSON.stringify(r.promptEnvelope).includes("[system] You were addressed directly")),
+    "no reply-or-decline continuation while the turn waits on approval",
+  );
+  const posted = ((await built.deliveries.pending("slack")) as any[]).filter((d) => d.text === "about to run it");
+  assert.equal(posted.length, 0, "the paused turn's interim text is not delivered as a final reply");
+});

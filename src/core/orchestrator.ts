@@ -4093,7 +4093,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !input.cancel?.aborted &&
           spine.surfaceOutboundCount === 0 &&
           !result.silent &&
-          !result.stopped
+          !result.stopped &&
+          result.pausedOnApproval !== true
         ) {
           await latchCoverage();
           // The model already wrote a reply as plain assistant text — deliver that text
