@@ -293,7 +293,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, model`;
 
-  const { pool, q } = createPgPool(
+  const pg = createPgPool(
     connectionString,
     [
       {
@@ -761,6 +761,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       },
     ],
   );
+  const { pool, q } = pg;
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
@@ -816,6 +817,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   };
 
   return {
+    close: pg.close,
     leaseTtlMs,
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {

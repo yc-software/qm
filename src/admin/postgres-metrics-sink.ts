@@ -81,6 +81,8 @@ export function createPostgresMetricsSink(connectionString: string): MetricsSink
 
   return {
     record: sink.record,
+    flush: sink.flush,
+    close: sink.close,
     async updateByRunId(runId, patch) {
       const sets: string[] = [];
       const params: unknown[] = [];

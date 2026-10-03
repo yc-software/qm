@@ -45,6 +45,7 @@ const server = createServer(built.app, {
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
 await built.identity.hydrate();
+await built.mcpToolService.ready();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();

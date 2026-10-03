@@ -33,6 +33,7 @@ export interface McpToolService {
   call(name: string, args: Record<string, unknown>, principalId?: string): Promise<string>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
+  ready(): Promise<void>;
   /** Probe a server config without persisting it. Returns its tool names. */
   probe(server: McpServer): Promise<string[]>;
   close(): void;
@@ -57,6 +58,7 @@ export function createMcpToolService(opts: {
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
   let closed = false;
+  let readyP: Promise<void> | null = null;
 
   function record(action: string, resource: string, status: string, principalId?: string): void {
     opts.audit?.record({
@@ -135,7 +137,7 @@ export function createMcpToolService(opts: {
     if (!closed) void refresh();
   }, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
   timer.unref?.();
-  void refresh();
+  const ready = (): Promise<void> => (readyP ??= refresh());
 
   return {
     toolDefs: () => snapshot,
@@ -155,6 +157,7 @@ export function createMcpToolService(opts: {
       }
     },
     refresh,
+    ready,
     async probe(server) {
       const client = createMcpClient({
         url: server.url,
