@@ -108,6 +108,13 @@ export function runChecks(
   for (const [service, env] of Object.entries(config.env)) flagSecretValue(service, env);
   for (const plugin of config.plugins) flagSecretValue(`plugins.${plugin.name}`, plugin.env);
   flagSecretValue("sandbox", config.sandbox?.env);
+  const undelivered = [...Object.keys(config.sandbox?.env ?? {}), ...(config.sandbox?.secretEnv ?? [])];
+  if (report && undelivered.length) {
+    warn(
+      `sandbox.env / sandbox.secretEnv (${undelivered.join(", ")}) are not delivered to agent computers yet — ` +
+        "add each value as an org service credential with env delivery in the admin UI instead",
+    );
+  }
   for (const [service, spec] of Object.entries(config.aws?.services ?? {})) {
     flagSecretValue(`aws.services.${service}.buildArgs`, spec.buildArgs);
   }
