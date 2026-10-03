@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { shq } from "../util/shell.ts";
+import { takeTimeoutMarker, withGroupTimeout } from "./exec-timeout.ts";
 import { isIP } from "node:net";
 import { resolveModalImage } from "./modal-image.ts";
 
@@ -6,6 +8,8 @@ export interface ModalCommandResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /** Set when the run was ended by its timeout (watchdog marker or the SDK deadline). */
+  timedOut?: boolean;
 }
 
 interface ModalRunOpts {
@@ -178,21 +182,25 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       const commandMs = wholeSeconds(runOpts?.timeoutMs ?? maxCommandMs);
       const timeoutMs = commandMs + MODAL_EXEC_GRACE_MS;
       try {
-        let args = ["timeout", String(commandMs / 1000), "sh", "-c", command];
+        let guard = withGroupTimeout(command, commandMs / 1000);
+        let args = ["sh", "-c", guard.script];
         if (Buffer.byteLength(command, "utf8") > MODAL_MAX_EXEC_ARG_BYTES) {
           const spooled = `/tmp/.qm-exec-${randomUUID()}.sh`;
+          guard = withGroupTimeout(`sh ${spooled}`, commandMs / 1000);
           await sbx.filesystem.writeBytes(Buffer.from(command, "utf8"), spooled);
-          args = ["sh", "-c", `timeout ${commandMs / 1000} sh ${spooled}; rc=$?; rm -f ${spooled}; exit $rc`];
+          // The guard script ends in `exit`, so run it in its own shell to keep the cleanup reachable.
+          args = ["sh", "-c", `sh -c ${shq(guard.script)}; rc=$?; rm -f ${spooled}; exit $rc`];
         }
         const p = await sbx.exec(args, {
           mode: "text",
           timeoutMs,
           ...(runOpts?.env && Object.keys(runOpts.env).length ? { env: runOpts.env } : {}),
         });
-        const [stdout, stderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
-        return { stdout, stderr, exitCode };
+        const [stdout, rawStderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
+        const { stderr, timedOut } = takeTimeoutMarker(rawStderr, guard.nonce);
+        return { stdout, stderr, exitCode, ...(timedOut ? { timedOut } : {}) };
       } catch (err) {
-        if (isDeadlineError(err)) return { stdout: "", stderr: errText(err), exitCode: 124 };
+        if (isDeadlineError(err)) return { stdout: "", stderr: errText(err), exitCode: 124, timedOut: true };
         if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
         throw err;
       }
