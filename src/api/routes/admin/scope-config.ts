@@ -432,7 +432,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
 }
 
 export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
-  const { res, deps, params, url } = ctx;
+  const { res, app, deps, params, url } = ctx;
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const targetScope = params.scope!;
   if (!targetScope || targetScope.includes("/")) return sendJson(res, 404, { error: "not_found" });
@@ -479,7 +479,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     view === "connectors" ? {} : read("environment", () => scopeEnvironmentMetadata(deps, targetScope)),
     includes("credentials") ? read("credentials", () => scopeServiceCredentials(deps, targetScope)) : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
-      ? read("people", () => deps.directory?.list())
+      ? read("people", () => app.directoryMembers())
       : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
       ? read("channels", () => deps.directory?.listChannels?.())

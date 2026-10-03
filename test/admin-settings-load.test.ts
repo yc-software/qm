@@ -209,3 +209,19 @@ test("cached model catalogs refresh in the background and retain dynamic entries
   await selectableModelCatalog(fetcher);
   assert.ok(cachedModelCatalog(fetcher).models.some((m) => m.id === "testing/settings-fast"));
 });
+
+test("the credential people picker lists web users, not only the Slack directory", async (t) => {
+  const config = testConfig({ emailAuthPrincipals: ["bob@example.com"] });
+  const built = buildApp(config);
+  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  server.listen(0);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const projected = (await (await fetch(base + scopePath + "?view=credentials", { headers: ADMIN })).json()) as {
+    directoryMembers: Array<{ principalId: string }>;
+  };
+  assert.ok(
+    projected.directoryMembers.some((m) => m.principalId === "bob@example.com"),
+    "a person who signs in on the web can be granted a credential",
+  );
+});
