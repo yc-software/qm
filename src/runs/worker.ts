@@ -9,7 +9,7 @@ import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
 import { errMessage, errorAlreadyReported, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { retryDelay } from "./retry-delay.ts";
+import { runRetryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
 
 export interface ProcessDeps {
@@ -109,7 +109,7 @@ export async function processRun(
       );
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !(err instanceof NonRetryableTurnError),
-      retryAfterMs: retryDelay(run.errorAttempts),
+      retryAfterMs: runRetryDelay(run.errorAttempts, err),
     });
     throw err;
   } finally {

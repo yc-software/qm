@@ -54,7 +54,7 @@ import type {
   TapeRecord,
 } from "../sessions/session-store.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
-import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError, retryAfterHintMs, TitleRejected } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -983,7 +983,9 @@ function piAssistantFailure(session: AssistantTextSession): Error | null {
   const failed = piFailedAssistant(session);
   if (!failed) return null;
   const message = formatPiAssistantError(failed.errorMessage);
-  return piErrorRetryable(failed) ? new ProviderTurnError(message) : new NonRetryableTurnError(message);
+  return piErrorRetryable(failed)
+    ? new ProviderTurnError(message, retryAfterHintMs(failed.errorMessage ?? ""))
+    : new NonRetryableTurnError(message);
 }
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
