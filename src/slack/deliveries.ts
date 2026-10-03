@@ -42,6 +42,13 @@ const PERMANENT_POST_ERRORS = new Set([
   "user_not_found",
   "cannot_reply_to_message",
   "message_not_found",
+  // Membership, policy and auth failures: retrying the same post can't fix them.
+  "not_in_channel",
+  "restricted_action",
+  "team_access_not_granted",
+  "ekm_access_denied",
+  "not_allowed_token_type",
+  "invalid_auth",
 ]);
 
 const DELIVERY_CLAIM_MARGIN_MS = 2_000;
