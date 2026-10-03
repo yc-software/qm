@@ -999,7 +999,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (appSuffix && (requestHost.endsWith(appSuffix) || requestHost === APPS_DOMAIN?.toLowerCase())) {
     const label = requestHost.slice(0, -appSuffix.length);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
-    return proxyToAppHost(req, res, CORE);
+    return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }
 
   const crossOrigin = prepareCors(req, res, pathname, API_ALLOWED_ORIGINS.origins);
