@@ -158,7 +158,7 @@ export async function initializeBrowserErrors(me: Me): Promise<void> {
       integrations: [
         browser.globalHandlersIntegration(),
         browser.linkedErrorsIntegration(),
-        browser.extraErrorDataIntegration(),
+        browser.extraErrorDataIntegration({ depth: 8 }),
       ],
       attachStacktrace: true,
       sendClientReports: false,
