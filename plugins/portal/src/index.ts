@@ -1604,6 +1604,15 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       url.searchParams.get("returnTo") ??
       openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ??
       null;
+    const existing = currentSession(req);
+    const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
+    if (existing && !existing.anon && !existing.appOnly && existing.sub.startsWith(trustedPrefix)) {
+      res.writeHead(302, {
+        location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
+        "cache-control": "no-store",
+      });
+      return void res.end();
+    }
     const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
     setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
     res.writeHead(302, { location: login.location, "cache-control": "no-store" });
