@@ -282,13 +282,15 @@ export function createCronStore(
       return true;
     },
     async unclaimSlot(id, scheduledAt, at, priorLastFiredAt) {
+      const claimedNext = (cron: Cron): number | undefined =>
+        advanceNextFireAt(cron.schedule, isCalendarSchedule(cron.schedule) ? scheduledAt : at);
       const restore = (cron: Cron): Cron => {
         if (cron.lastFiredAt !== at) return cron;
         const { lastFiredAt: _dropped, ...rest } = cron;
         return {
           ...rest,
           ...(priorLastFiredAt !== undefined ? { lastFiredAt: priorLastFiredAt } : {}),
-          nextFireAt: scheduledAt,
+          ...(cron.nextFireAt === claimedNext(cron) ? { nextFireAt: scheduledAt } : {}),
         };
       };
       if (backing.update) {
@@ -297,7 +299,10 @@ export function createCronStore(
       }
       const cron = await backing.get(id);
       if (!cron || cron.lastFiredAt !== at) return;
-      await backing.merge(id, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt });
+      await backing.merge(id, {
+        lastFiredAt: priorLastFiredAt,
+        ...(cron.nextFireAt === claimedNext(cron) ? { nextFireAt: scheduledAt } : {}),
+      });
     },
     async markAttempted(id, at) {
       await backing.merge(id, { lastAttemptAt: at });

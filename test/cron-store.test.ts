@@ -961,3 +961,14 @@ test("cron runtime rejects malformed settings and tasks that would ignore them",
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 }, runtime });
   await assert.rejects(store.update(cron.id, { action: "" }), /runtime overrides require/);
 });
+
+test("unclaimSlot after a schedule patch keeps the patched next fire instead of the old slot", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } });
+  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), true);
+  const patched = (await store.update(cron.id, { schedule: { everyMs: 3_600_000, firstFireAt: 9_000_000 } }))!;
+  await store.unclaimSlot(cron.id, 1_000_000, 1_000_500, undefined);
+  const after = (await store.get(cron.id))!;
+  assert.equal(after.lastFiredAt, undefined, "the failed fire is still undone");
+  assert.equal(after.nextFireAt, patched.nextFireAt, "the edit made during the fire wins over the old slot");
+});
