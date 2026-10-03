@@ -1828,3 +1828,40 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
     await f.stop();
   }
 });
+
+test("two bots answering each other in a thread stop starting turns after the bot budget", async () => {
+  const f = await fixture();
+  try {
+    f.client.usersById.set("B1", {
+      id: "B1",
+      team_id: "T1",
+      is_bot: true,
+      name: "peerbot",
+      profile: { display_name: "Peer Bot" },
+    });
+    f.client.membersByChannel.set("C1", ["U1", "U2", "B1", "UBOT"]);
+    for (let i = 0; i < 20; i++) {
+      await f.app.emitEvent("app_mention", {
+        channel: "C1",
+        channel_type: "channel",
+        user: "B1",
+        bot_id: "B-PEER",
+        text: `<@UBOT> round ${i}`,
+        ts: `500.${String(i + 1).padStart(2, "0")}`,
+        thread_ts: "500.00",
+      });
+    }
+    assert.equal(f.core.turns.length, 8, "the peer bot's ping-pong is cut off at the per-thread budget");
+    await f.app.emitEvent("app_mention", {
+      channel: "C1",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@UBOT> still there?",
+      ts: "500.99",
+      thread_ts: "500.00",
+    });
+    assert.equal(f.core.turns.length, 9, "a human in the same thread still gets through");
+  } finally {
+    await f.stop();
+  }
+});
