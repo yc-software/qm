@@ -11,6 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { titleAborts } from "../src/harness/mock-harness.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-title-"));
@@ -213,4 +214,22 @@ test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample
   assert.ok(p.startsWith("<transcript>"));
   assert.ok(p.includes("</transcript>"));
   assert.ok(p.trimEnd().endsWith("(2–6 words, or exactly NONE)."));
+});
+
+test("a hung title model is cut off so regeneration falls back instead of waiting forever", async () => {
+  const { app, errors } = freshApp();
+  const turn = await app.turn(dm("Simulate title hang please", "web:U1:title-hang"));
+  assert.equal(turn.status, "ok");
+  const started = Date.now();
+  const refreshed = await app.regenerateTitle(turn.sessionId!, "U1");
+  assert.ok(Date.now() - started < 9_500, "regeneration returns once the title timeout fires");
+  assert.equal(refreshed?.title, "Simulate title hang please");
+  const failures = (await errors.list({ sessionId: turn.sessionId! })).filter(
+    (error) => error.category === "session_title" && /timed out/.test(error.message),
+  );
+  assert.ok(failures.length >= 1);
+  assert.ok(
+    titleAborts.some((t) => t.includes("Simulate title hang")),
+    "the hung model request was aborted",
+  );
 });

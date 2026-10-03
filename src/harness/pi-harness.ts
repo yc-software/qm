@@ -2652,7 +2652,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         }
       },
 
-      async generateTitle(transcript: string): Promise<string | undefined> {
+      async generateTitle(transcript: string, signal?: AbortSignal): Promise<string | undefined> {
         if (!transcript.trim()) return undefined;
         const model = getRequiredModel(titleModelId());
         const providerKeys = await resolveProviderKeys();
@@ -2663,7 +2663,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           providerKeys,
           TITLE_GENERATION_PROMPT,
           titleUserPrompt(transcript),
-          { modelGateway },
+          { modelGateway, ...(signal ? { signal } : {}) },
         );
         return sanitizeTitle(out);
       },

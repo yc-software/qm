@@ -80,6 +80,8 @@ function mockProviderMessages(
   });
 }
 
+export const titleAborts: string[] = [];
+
 export function createMockHarness(): Harness {
   const shedSessions = new Set<string>();
   const boomAlwaysSessions = new Set<string>();
@@ -1011,12 +1013,19 @@ export function createMockHarness(): Harness {
         );
       },
 
-      generateTitle(transcript: string): Promise<string | undefined> {
+      generateTitle(transcript: string, signal?: AbortSignal): Promise<string | undefined> {
         if (transcript.includes("Simulate title provider exception"))
           return Promise.reject(new Error("title model overloaded"));
         if (transcript.includes("Simulate reply-shaped title"))
           return Promise.reject(new TitleRejected("reply_opener", "Sorry, I can't title this one"));
         if (transcript.includes("Simulate four-way title outage")) return Promise.resolve(undefined);
+        if (transcript.includes("Simulate title hang"))
+          return new Promise((_, reject) =>
+            signal?.addEventListener("abort", () => {
+              titleAborts.push(transcript);
+              reject(new Error("title aborted"));
+            }),
+          );
         const line = transcript
           .split("\n")
           .map((l) => l.trim())

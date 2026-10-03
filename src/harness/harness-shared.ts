@@ -246,8 +246,8 @@ export function oneShotModelUtilities(
             : {}),
         }),
       ),
-    generateTitle: async (transcript) =>
-      sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
+    generateTitle: async (transcript, signal) =>
+      sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), signal)),
     summarizeApproval: (command, reason, purpose) =>
       single(
         "Explain this command in one plain-English sentence for an approver.",
