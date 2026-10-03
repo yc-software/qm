@@ -749,6 +749,8 @@ export interface SessionStore {
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
+  /** Distinct scopes of the sessions this principal participates in, without loading the sessions. */
+  participantScopes?(principalId: string): Promise<ScopeId[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 
   deleteSession(sessionId: string): Promise<void>;

@@ -511,6 +511,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       }
     },
 
+    async participantScopes(principalId) {
+      const scopes = new Set<ScopeId>();
+      for (const id of participants.get(principalId) ?? []) {
+        const session = sessions.get(id);
+        if (session) scopes.add(session.scopeId);
+      }
+      return [...scopes];
+    },
+
     async listByParticipant(principalId, opts) {
       const ids = participants.get(principalId);
       if (!ids) return [];

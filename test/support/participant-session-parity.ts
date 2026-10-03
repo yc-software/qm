@@ -100,4 +100,10 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
 
   await store.deleteSession(owned.id);
   assert.equal(await store.getForParticipant(owned.id, owner), null, "a deleted session stops being readable");
+
+  for (const principalId of [owner, guest, stranger]) {
+    const expected = [...new Set((await store.listByParticipant(principalId)).map((s) => s.scopeId))].sort();
+    assert.deepEqual([...((await store.participantScopes?.(principalId)) ?? [])].sort(), expected, principalId);
+  }
+  assert.deepEqual([...((await store.participantScopes?.(owner)) ?? [])].sort(), [channel, personal].sort());
 }
