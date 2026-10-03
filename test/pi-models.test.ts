@@ -1,4 +1,5 @@
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { calculateCost } from "@earendil-works/pi-ai";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -10,6 +11,8 @@ import {
   modelSupportedByHarness,
   onlyProvider,
   resolveModel,
+  MODEL_REGISTRY,
+  registerOpenRouterCatalogModel,
   getRequiredModel,
   MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
@@ -284,4 +287,65 @@ test("registered OpenAI clones retain exact model identity on the Codex subscrip
   }
   assert.equal(resolveModel("codex/claude-opus-5"), undefined);
   assert.equal(resolveModel("codex/unregistered-model"), undefined);
+});
+
+test("variable-priced OpenRouter routers never book negative spend", () => {
+  const usage = () => ({
+    input: 1_000,
+    output: 1_000,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2_000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+  const auto = resolveModel("openrouter/auto")!;
+  assert.ok(calculateCost(auto, usage()).total >= 0, JSON.stringify(auto.cost));
+  const routed = registerOpenRouterCatalogModel({
+    id: "acme/variable-router",
+    name: "Variable router",
+    contextWindow: 100_000,
+    maxTokens: 8_000,
+    input: ["text"],
+    reasoning: false,
+    cost: { input: -1_000_000, output: -1_000_000 },
+  })!;
+  assert.equal(calculateCost(routed, usage()).total, 0);
+});
+
+test("every registry model prices usage at its published rates, tiers included", () => {
+  for (const entry of MODEL_REGISTRY) {
+    const model = resolveModel(entry.id);
+    if (!model?.cost) continue;
+    const rates = model.cost as {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      tiers?: Array<{ inputTokensAbove: number; input: number; output: number; cacheRead: number; cacheWrite: number }>;
+    };
+    for (const v of [rates.input, rates.output, rates.cacheRead, rates.cacheWrite])
+      assert.ok(v >= 0, `${entry.id} has a negative rate`);
+    for (let i = 0; i < 25; i++) {
+      const u = {
+        input: Math.floor(Math.random() * 400_000),
+        output: Math.floor(Math.random() * 50_000),
+        cacheRead: Math.floor(Math.random() * 400_000),
+        cacheWrite: Math.floor(Math.random() * 50_000),
+      };
+      const prompt = u.input + u.cacheRead + u.cacheWrite;
+      const tier = (rates.tiers ?? []).filter((t) => prompt > t.inputTokensAbove).at(-1) ?? rates;
+      const expected =
+        (tier.input * u.input +
+          tier.output * u.output +
+          tier.cacheRead * u.cacheRead +
+          tier.cacheWrite * u.cacheWrite) /
+        1e6;
+      const got = calculateCost(model, {
+        ...u,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      }).total;
+      assert.ok(Math.abs(got - expected) < 1e-9, `${entry.id} ${JSON.stringify(u)}: ${got} != ${expected}`);
+    }
+  }
 });
