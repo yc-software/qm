@@ -87,7 +87,7 @@ export function createMemoryProcessRegistry(): ProcessRegistry {
     },
     async markStatus(processId, status) {
       const row = rows.get(processId);
-      if (!row) return false;
+      if (row?.status !== "running") return false;
       row.status = status;
       return true;
     },
@@ -181,10 +181,10 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       return rows.map(pgRowToRecord);
     },
     async markStatus(processId, status) {
-      const updated = await q("UPDATE process_sessions SET status = $1 WHERE process_id = $2 RETURNING process_id", [
-        status,
-        processId,
-      ]);
+      const updated = await q(
+        "UPDATE process_sessions SET status = $1 WHERE process_id = $2 AND status = 'running' RETURNING process_id",
+        [status, processId],
+      );
       return updated.length > 0;
     },
     async listExpired(now = Date.now()) {
