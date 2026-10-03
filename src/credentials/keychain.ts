@@ -292,6 +292,8 @@ export interface ConnectorTokenStore {
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
+  /** The person's own stored token, never an operator fallback. Used where acting on the wrong token would hurt. */
+  ownConnectorAccessToken?(host: string, principalId: string, accountType?: string): Promise<string | null>;
   /**
    * Fresh derived material for the connector token (access + id token +
    * account id), refreshing single-flight if stale. The refresh token never
