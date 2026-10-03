@@ -1,3 +1,4 @@
+import { UnknownSkillPackError } from "../skills/skill-pack-store.ts";
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
@@ -375,6 +376,11 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
   if (err instanceof MemoryDisclosureDenied) {
     if (!res.headersSent) sendJson(res, 403, { error: "forbidden", message: err.message });
+    else res.destroy();
+    return;
+  }
+  if (err instanceof UnknownSkillPackError) {
+    if (!res.headersSent) sendJson(res, 404, { error: "not_found", message: err.message });
     else res.destroy();
     return;
   }

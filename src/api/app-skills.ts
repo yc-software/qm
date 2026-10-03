@@ -2,7 +2,7 @@ import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { SkillManifest } from "../skills/skill-store.ts";
-import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
+import { UnknownSkillPackError, type SkillPack, type SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
@@ -133,7 +133,7 @@ async function reconcilePack(
   targets: ReconcileTarget[],
 ): Promise<ImportResult> {
   const pack = await packs.get(id);
-  if (!pack) throw new Error(`unknown skill pack: ${id}`);
+  if (!pack) throw new UnknownSkillPackError(id);
   let repo: Awaited<ReturnType<SkillPackFetcher["fetch"]>>;
   try {
     repo = await fetcher.fetch(pack);
@@ -148,7 +148,7 @@ async function reconcilePack(
   }
   const applyFetched = async (): Promise<ImportResult> => {
     const current = await packs.get(id);
-    if (!current) throw new Error(`unknown skill pack: ${id}`);
+    if (!current) throw new UnknownSkillPackError(id);
     if (skillPackSourceIdentity(current) !== skillPackSourceIdentity(pack)) {
       throw new Error(`skill pack changed while fetching: ${id}`);
     }
@@ -328,7 +328,7 @@ export function createSkillMethods(
     async skillPackCatalog(id) {
       const { packs, fetcher } = requireRegistry(deps);
       const pack = await packs.get(id);
-      if (!pack) throw new Error(`unknown skill pack: ${id}`);
+      if (!pack) throw new UnknownSkillPackError(id);
       const repo = await fetcher.fetch(pack);
       const nativeNames = await nativeNamesFor(deps, id, pack.targetScopeId);
       const plan = planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
@@ -351,7 +351,7 @@ export function createSkillMethods(
     async importSkillPack(id, selected, scopeIds) {
       const { packs, fetcher } = requireRegistry(deps);
       const pack = await packs.get(id);
-      if (!pack) throw new Error(`unknown skill pack: ${id}`);
+      if (!pack) throw new UnknownSkillPackError(id);
       const scopes = scopeIds && scopeIds.length ? scopeIds : [pack.targetScopeId];
       return reconcilePack(
         deps,
@@ -364,7 +364,7 @@ export function createSkillMethods(
     async syncSkillPack(id) {
       const { packs, fetcher } = requireRegistry(deps);
       const pack = await packs.get(id);
-      if (!pack) throw new Error(`unknown skill pack: ${id}`);
+      if (!pack) throw new UnknownSkillPackError(id);
       const importedByScope = new Map<ScopeId, string[]>();
       for (const { scopeId, upstreamName } of await importedPackSkills(deps, id)) {
         const arr = importedByScope.get(scopeId) ?? [];
