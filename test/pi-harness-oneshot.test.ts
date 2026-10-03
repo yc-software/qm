@@ -1009,3 +1009,20 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
 });
+
+test("dropped provider streams tell the user the connection dropped instead of a bare transport word", () => {
+  for (const raw of ["terminated", "Connection error."]) {
+    const session = {
+      getLastAssistantText: () => "Partial",
+      messages: [
+        { role: "assistant", stopReason: "error", errorMessage: raw, content: [{ type: "text", text: "Partial" }] },
+      ],
+    } as unknown as Parameters<typeof piLastAssistantTextOrThrow>[0];
+    assert.throws(
+      () => piLastAssistantTextOrThrow(session),
+      (err: Error) =>
+        err instanceof ProviderTurnError &&
+        turnFailureMessage(err) === `The connection to the model provider dropped before the reply finished (${raw}).`,
+    );
+  }
+});
