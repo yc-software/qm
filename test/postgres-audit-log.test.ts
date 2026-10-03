@@ -1,7 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
-import type { AuditEvent } from "../src/audit/audit-log.ts";
+import { createAuditLog, type AuditEvent, type AuditLog } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -86,4 +86,68 @@ test("pg audit log: recordOnce is durable and idempotent across instances", { sk
   const events = await first.events();
   assert.equal(events.length, 1);
   assert.equal(events[0]?.action, "layer-updated");
+});
+
+test("pg audit log: scoped action pages preserve filters, payloads and tied ordering", { skip }, async () => {
+  await reset(true);
+  const log = createPostgresAuditLog(URL!);
+  const memory = createAuditLog();
+  const scope = scopeId("personal", "U1");
+  const rows: AuditEvent[] = [
+    { ...ev(1, "read", scope), resource: "keep-old", detail: "old payload" },
+    { ...ev(2, "read", scopeId("personal", "U2")), resource: "keep-foreign" },
+    { ...ev(3, "read", scope), resource: "keep-a", status: "ok", detail: '{"complete":true}' },
+    { ...ev(3, "read", scope), resource: "keep-b", status: "", detail: "" },
+    { ...ev(4, "other", scope), resource: "keep-other" },
+    { ...ev(5, "read", scope), resource: "skip-new" },
+    { ...ev(6, "", scope), resource: "keep-empty" },
+  ];
+  for (const [i, row] of rows.entries()) {
+    await log.recordOnce!(`page:${i}`, row);
+    memory.record(row);
+  }
+  const queries: Parameters<AuditLog["tail"]>[0][] = [
+    { limit: 2, scopeLabel: scope, action: "read" },
+    { limit: 1, scopeLabel: scope, action: "read", since: 3, resourceContains: "keep" },
+    { limit: 20, scopeLabel: scope, action: "read", since: 4, resourceContains: "keep" },
+    { limit: 0, scopeLabel: scope, action: "read" },
+    { limit: 1, scopeLabel: scope, action: "" },
+    { limit: 2000, scopeLabel: scope, action: "missing" },
+    { limit: 2000, scopeLabel: scopeId("personal", "missing"), action: "read" },
+    { limit: 20, scopeLabel: scope, action: "read", resourceContains: "" },
+    { limit: 20, scopeLabel: scope, action: "read", resourceContains: "' OR 1=1 --" },
+    { limit: 20, scopeLabel: scope },
+    { limit: 20, action: "read" },
+    { limit: 20 },
+  ];
+  for (const query of queries) assert.deepEqual(await log.tail(query), await memory.tail(query));
+
+  const pg = (await import("pg")).default;
+  const client = new pg.Client({ connectionString: URL });
+  await client.connect();
+  try {
+    const index = await client.query(
+      `SELECT i.indisvalid, i.indisready, pg_get_indexdef(i.indexrelid) AS definition
+       FROM pg_index i WHERE i.indexrelid = to_regclass('audit_log_by_scope_action_at_id')`,
+    );
+    assert.deepEqual(index.rows, [
+      {
+        indisvalid: true,
+        indisready: true,
+        definition:
+          "CREATE INDEX audit_log_by_scope_action_at_id ON public.audit_log USING btree (scope_label, action, at DESC, id DESC)",
+      },
+    ]);
+    await client.query(
+      `INSERT INTO audit_log(at, principal_id, action, resource, scope_label)
+       SELECT 10, 'U1', 'tied', 'tied-' || n, $1 FROM generate_series(1, 2005) AS n ORDER BY n`,
+      [scope],
+    );
+    const page = await log.tail({ limit: 2000, scopeLabel: scope, action: "tied" });
+    assert.equal(page.length, 2000);
+    assert.equal(page[0]?.resource, "tied-2005");
+    assert.equal(page.at(-1)?.resource, "tied-6");
+  } finally {
+    await client.end();
+  }
 });

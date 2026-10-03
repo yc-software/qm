@@ -57,6 +57,12 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       id: "admin/audit-log/0002",
       statements: [`CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`],
     },
+    {
+      id: "admin/audit-log/0003",
+      statements: [
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_by_scope_action_at_id ON audit_log(scope_label, action, at DESC, id DESC)`,
+      ],
+    },
   ]);
 
   const pendingWrites = new Set<Promise<void>>();
@@ -110,10 +116,15 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       }
       const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
       params.push(limit);
-      const rows = await q(
-        `SELECT ${COLS} FROM audit_log ${where} ORDER BY at DESC, id DESC LIMIT $${params.length}`,
-        params,
-      );
+      const sql =
+        scopeLabel !== undefined && action !== undefined
+          ? `SELECT ${COLS.split(", ")
+              .map((column) => `a.${column}`)
+              .join(", ")}
+             FROM (SELECT id, at FROM audit_log ${where} ORDER BY at DESC, id DESC LIMIT $${params.length}) AS page
+             JOIN audit_log AS a ON a.id = page.id ORDER BY page.at DESC, page.id DESC`
+          : `SELECT ${COLS} FROM audit_log ${where} ORDER BY at DESC, id DESC LIMIT $${params.length}`;
+      const rows = await q(sql, params);
       return rows.map(rowToEvent);
     },
     async tallyByResource(action) {
