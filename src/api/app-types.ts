@@ -380,6 +380,7 @@ export interface App {
   removeProjectMember(id: string, principalId: string, memberId: string): Promise<ProjectViewMutation>;
   setProjectSlackChannel(id: string, principalId: string, channel: string | null): Promise<ProjectViewMutation>;
   renameProject(id: string, principalId: string, name: string): Promise<ProjectViewMutation>;
+  deleteProject(id: string, principalId: string): Promise<ProjectViewMutation>;
   updateSession(
     sessionId: string,
     principalId: string,

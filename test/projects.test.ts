@@ -12,7 +12,8 @@ import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createProjectStore, projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
+import { createProjectStore, projectGroupRef, projectScopeId, type Project } from "../src/projects/project-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import {
   createCanManageScope,
   createCanReadScope,
@@ -1260,4 +1261,129 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.deepEqual(inactiveOwnerCron.participants, new Set(["owner"]));
   await runNowSettled(built.scheduler, inactiveCron.id);
   assert.equal((await built.crons.get(inactiveCron.id))?.enabled, false);
+});
+
+test("ProjectStore delete erases the record rather than emptying its roster, so the group ref stops answering", async () => {
+  const projects = createProjectStore(undefined, { id: () => "del" });
+  const project = await projects.create({ name: "Doomed", ownerId: "owner" });
+  await projects.addMember(project.id, "owner", "member");
+  const removed = await projects.remove(project.id, "owner");
+  assert.ok(removed.status === "ok" && removed.changed && removed.project.name === "Doomed");
+  assert.equal(await projects.get(project.id), null);
+  assert.deepEqual(await projects.listForMember("owner"), []);
+  assert.deepEqual(await projects.listForMember("member"), []);
+  assert.equal(await projects.name(projectGroupRef(project.id)), undefined);
+  assert.equal(await projects.membership(projectGroupRef(project.id), "owner"), undefined);
+});
+
+test("ProjectStore delete refuses a member who does not own the project", async () => {
+  const projects = createProjectStore(undefined, { id: () => "shared" });
+  const project = await projects.create({ name: "Shared", ownerId: "owner" });
+  await projects.addMember(project.id, "owner", "member");
+  assert.equal((await projects.remove(project.id, "member")).status, "forbidden");
+  assert.equal((await projects.get(project.id))?.name, "Shared");
+});
+
+test("ProjectStore delete reports not_found instead of ok for an id it never stored", async () => {
+  const projects = createProjectStore(undefined, { id: () => "absent" });
+  assert.equal((await projects.remove("missing", "owner")).status, "not_found");
+});
+
+test("ProjectStore delete refuses an owner who has been deactivated", async () => {
+  const active = new Set(["owner"]);
+  const projects = createProjectStore(undefined, { id: () => "frozen", isActiveMember: (p) => active.has(p) });
+  const project = await projects.create({ name: "Frozen", ownerId: "owner" });
+  active.delete("owner");
+  assert.equal((await projects.remove(project.id, "owner")).status, "forbidden");
+  assert.equal((await projects.get(project.id))?.name, "Frozen");
+});
+
+test("the delete-project route leaves the project unlisted instead of reporting success and keeping it", async (t) => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-delete-")) }));
+  const server = createInsecureTestServer(built.app, {});
+  const base = await listen(server);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  await built.app.upsertDirectory([{ principalId: "owner", displayName: "Owner", type: "internal" }]);
+  const project = (await built.app.createProject("owner", "Doomed"))!;
+
+  const removed = await fetch(`${base}/v1/projects/${project.id}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "owner" }),
+  });
+
+  assert.equal(removed.status, 200);
+  assert.deepEqual(await built.app.listProjects("owner"), []);
+});
+
+test("a delete-project request naming no principal is a bad request rather than a silent no-op", async (t) => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-delete-nobody-")) }));
+  const server = createInsecureTestServer(built.app, {});
+  const base = await listen(server);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  await built.app.upsertDirectory([{ principalId: "owner", displayName: "Owner", type: "internal" }]);
+  const project = (await built.app.createProject("owner", "Kept"))!;
+
+  const answer = await fetch(`${base}/v1/projects/${project.id}`, { method: "DELETE" });
+
+  assert.equal(answer.status, 400);
+  assert.equal((await built.app.listProjects("owner")).length, 1);
+});
+
+test("a non-owner's delete-project request is refused instead of removing someone else's project", async (t) => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-delete-intruder-")) }));
+  const server = createInsecureTestServer(built.app, {});
+  const base = await listen(server);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  await built.app.upsertDirectory([
+    { principalId: "owner", displayName: "Owner", type: "internal" },
+    { principalId: "member", displayName: "Member", type: "internal" },
+  ]);
+  const project = (await built.app.createProject("owner", "Shared"))!;
+  await built.app.addProjectMember(project.id, "owner", "member");
+
+  const refused = await fetch(`${base}/v1/projects/${project.id}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "member" }),
+  });
+
+  assert.equal(refused.status, 403);
+  assert.equal((await built.app.listProjects("owner")).length, 1);
+});
+
+test("ProjectStore delete reports not_found for a project that belongs to another org", async () => {
+  const backing = createMemoryMap<Project>();
+  const foreign: Project = {
+    id: "elsewhere",
+    orgId: "some-other-org",
+    name: "Theirs",
+    ownerId: "owner",
+    memberIds: ["owner"],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await backing.put(foreign.id, foreign);
+  const projects = createProjectStore(backing);
+
+  assert.equal((await projects.remove(foreign.id, "owner")).status, "not_found");
+  assert.equal((await backing.get(foreign.id))?.name, "Theirs");
+});
+
+test("deleting a project records who deleted it in the audit log", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-delete-audit-")) }));
+  try {
+    await built.app.upsertDirectory([{ principalId: "owner", displayName: "Owner", type: "internal" }]);
+    const project = (await built.app.createProject("owner", "Doomed"))!;
+
+    assert.equal((await built.app.deleteProject(project.id, "owner")).status, "ok");
+
+    const deletions = (await built.auditLog.events()).filter((event) => event.action === "project.delete");
+    assert.deepEqual(
+      deletions.map((event) => [event.principalId, event.resource, event.scopeLabel]),
+      [["owner", project.id, projectScopeId(project.id)]],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
 });

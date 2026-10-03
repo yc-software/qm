@@ -6265,18 +6265,24 @@ a.connector-widget:focus-visible {
 .context-row {
   display: flex;
   align-items: center;
-  gap: 10px;
   width: 100%;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.context-row-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
   padding: 7px 6px;
   border: 0;
-  border-bottom: 1px solid var(--border);
   border-radius: 0;
   background: transparent;
   color: var(--foreground);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  white-space: nowrap;
 }
 .context-row:hover {
   background: color-mix(in srgb, var(--background) 88%, var(--secondary));

@@ -10,6 +10,7 @@ import {
   Lock,
   Plus,
   Search,
+  Trash2,
   User,
   UserPlus,
   Users,
@@ -30,7 +31,15 @@ import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
+import {
+  groupDmTitle,
+  openSession,
+  refreshSessions,
+  renderList,
+  sessionsState,
+  slackLogo,
+  surfaceOf,
+} from "./sessions";
 import { activityOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
@@ -402,12 +411,28 @@ function contextRow(c: CoreContext): TemplateResult {
     .filter(Boolean)
     .join(" · ");
   return html`
-    <button class="context-row" type="button" ${tip(sub)} @click=${() => selectContext(c.scopeId)}>
-      <span class="context-glyph">${icon(glyph, 15)}</span>
-      <span class="context-row-title" dir="auto">${title}</span>
-      ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 12)}</span>` : nothing}
-      <span class="context-row-meta">${meta}</span>
-    </button>
+    <div class="context-row">
+      <button class="context-row-open" type="button" ${tip(sub)} @click=${() => selectContext(c.scopeId)}>
+        <span class="context-glyph">${icon(glyph, 15)}</span>
+        <span class="context-row-title" dir="auto">${title}</span>
+        ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 12)}</span>` : nothing}
+        <span class="context-row-meta">${meta}</span>
+      </button>
+      ${
+        c.project && isProjectOwner(c)
+          ? html`<button
+              class="project-icon-button danger"
+              type="button"
+              aria-label=${`Delete ${title}`}
+              ${tip("Delete project")}
+              ?disabled=${resourceBusy.has(`project:${c.project.id}`)}
+              @click=${() => void deleteProject(c)}
+            >
+              ${icon(Trash2, 15)}
+            </button>`
+          : nothing
+      }
+    </div>
   `;
 }
 
@@ -1100,6 +1125,27 @@ export async function renameProject(project: CoreProject, name: string): Promise
     return true;
   } catch {
     return false;
+  }
+}
+
+async function deleteProject(context: CoreContext): Promise<void> {
+  const project = context.project;
+  if (!project) return;
+  const key = `project:${project.id}`;
+  if (!window.confirm(`Delete ${project.name}? This can't be undone.`)) return;
+  resourceBusy.add(key);
+  contextsNotice = "";
+  drawContexts();
+  try {
+    await api(`/api/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+    contextsFetchSeq++;
+    contextsState.list = contextsState.list.filter((c) => c.scopeId !== context.scopeId);
+    renderList();
+  } catch (error) {
+    contextsNotice = errMessage(error, "Couldn't delete that project.");
+  } finally {
+    resourceBusy.delete(key);
+    drawContexts();
   }
 }
 
