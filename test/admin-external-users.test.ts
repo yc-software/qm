@@ -59,7 +59,11 @@ function start(
     config: built.config,
     portalUrl: PORTAL,
     portalIdentitySecret: SECRET,
-    replayDedupe: { durable: true, claim: built.replayDedupe!.claim.bind(built.replayDedupe!) },
+    replayDedupe: {
+      durable: true,
+      claim: built.replayDedupe!.claim.bind(built.replayDedupe!),
+      release: built.replayDedupe!.release.bind(built.replayDedupe!),
+    },
     brandingDefault: { selfLabel: "Acme Bot" },
     ...(opts.mailer ? { inviteMailer: opts.mailer } : {}),
     ...(opts.emailAuthDomain ? { emailAuthDomain: opts.emailAuthDomain } : {}),

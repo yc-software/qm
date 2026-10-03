@@ -4,6 +4,7 @@ import { getVerifier, type VerifierInput } from "./verifiers.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
 import { errMessage, reportFailure } from "../util/errors.ts";
+import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 
 export type DeliverResult = { status: 202 } | { status: 200; body: string } | { status: 401 } | { status: 404 };
 
@@ -13,7 +14,10 @@ export interface WebhookReceiver {
 
 export interface WebhookReceiverDeps extends TriggerDeps {
   webhooks: WebhookStore;
+  inflight?: ReplayDedupe;
 }
+
+const INFLIGHT_CLAIM_MS = 60 * 60_000;
 
 const MAX_EVENT_CHARS = 16_000;
 
@@ -112,6 +116,14 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         payload: event.securityScreenData,
       });
 
+      const inflight = deps.inflight;
+      if (inflight && !(await inflight.claim(fireKey, Date.now() + INFLIGHT_CLAIM_MS)))
+        return { status: 200, body: "duplicate" };
+      const releaseClaim = (): void => {
+        if (inflight)
+          void inflight.release(fireKey).catch((e: unknown) => reportFailure("webhook: release claim", e, fireKey));
+      };
+
       void runTrigger(triggerDeps, {
         owner: wh.owner,
         ownerScopeId: wh.ownerScopeId,
@@ -125,6 +137,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
       })
         .then(async (outcome) => {
+          if (!outcome.ran) releaseClaim();
           if (outcome.authzFailed) {
             await deps.webhooks.setEnabled(wh.id, false);
             await deps.webhooks.recordFire(wh.id, { at: Date.now(), error: outcome.note ?? "fail-closed" });
@@ -137,6 +150,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
           });
         })
         .catch((e: unknown) => {
+          releaseClaim();
           const msg = errMessage(e);
           void deps.webhooks.recordFire(wh.id, { at: Date.now(), error: msg });
           reportFailure("webhook: fire", e, `webhook=${wh.id}`);
