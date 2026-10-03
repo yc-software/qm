@@ -35,6 +35,8 @@ export interface DurableMap<T> {
  */
 function jsonbSafe(value: unknown): unknown {
   if (typeof value === "string") return pgTextSafe(value);
+  if (value && typeof (value as { toJSON?: unknown }).toJSON === "function")
+    return jsonbSafe((value as { toJSON: () => unknown }).toJSON());
   if (Array.isArray(value)) return value.map(jsonbSafe);
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = Object.create(null);
