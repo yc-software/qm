@@ -651,7 +651,7 @@ test("reclaim waits for in-flight scratch creation before destroying its handle"
   assert.equal(boxes.scratchBox.handle, null);
 });
 
-test("scratch destruction failures remain visible and retain the handle for retry", async () => {
+test("scratch destruction failures keep their cause and retain the handle for retry", async () => {
   let attempts = 0;
   let fail = true;
   const { boxes, events, errors } = turnBoxes({
@@ -660,37 +660,39 @@ test("scratch destruction failures remain visible and retain the handle for retr
     },
     async teardown() {
       attempts++;
-      if (fail) throw new Error("sentinel-secret");
+      if (fail) throw new Error("teardown-boom");
     },
   });
   await boxes.provisionScratch();
   await assert.rejects(boxes.reclaimBox(), (error: Error) => {
     assert.equal(error.message, "Disposable sandbox destruction failed");
-    assert.equal(error.cause, undefined);
-    assert.ok(!error.stack?.includes("sentinel-secret"));
+    assert.equal((error.cause as Error).message, "teardown-boom");
     return true;
   });
   assert.equal(attempts, 3);
   assert.equal(boxes.scratchBox.handle, scratchHandle);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.release_failed").length, 1);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.released").length, 0);
-  assert.ok(!JSON.stringify({ events, errors }).includes("sentinel-secret"));
+  assert.equal(
+    JSON.parse(events.find((event) => event.action === "sandbox.scratch.release_failed")!.detail!).error,
+    "Disposable sandbox destruction failed <- Error: teardown-boom",
+  );
   assert.equal(errors.length, 1);
   fail = false;
   await boxes.reclaimBox();
   assert.equal(boxes.scratchBox.handle, null);
 });
 
-test("failed scratch provisioning is audited safely and can retry", async () => {
+test("failed scratch provisioning is audited with its error and can retry", async () => {
   let attempts = 0;
   const { boxes, events } = turnBoxes({
     async provision() {
-      if (attempts++ === 0) throw new Error("sentinel-secret");
+      if (attempts++ === 0) throw new Error("provision-boom");
       return scratchHandle;
     },
     async teardown() {},
   });
-  await assert.rejects(boxes.provisionScratch(), /sentinel-secret/);
+  await assert.rejects(boxes.provisionScratch(), /provision-boom/);
   await boxes.provisionScratch();
   await boxes.reclaimBox();
   assert.deepEqual(
@@ -703,13 +705,13 @@ test("failed scratch provisioning is audited safely and can retry", async () => 
       "sandbox.scratch.released",
     ],
   );
-  assert.ok(!JSON.stringify(events).includes("sentinel-secret"));
+  assert.equal(JSON.parse(events[1]!.detail!).error, "provision-boom");
 });
 
 for (const recovers of [true, false]) {
-  test(`failed scratch initialization preserves safe cleanup identity; recovery=${recovers}`, async () => {
+  test(`failed scratch initialization keeps both errors and the cleanup identity; recovery=${recovers}`, async () => {
     let destroys = 0;
-    const partial = { ...scratchHandle, backend: "local", env: { TOKEN: "sentinel-secret" } };
+    const partial = { ...scratchHandle, backend: "local", env: { TOKEN: "token" } };
     const sandbox: Partial<Sandbox> = {
       async provision() {
         const failure = new Error("initialization failed");
@@ -719,16 +721,15 @@ for (const recovers of [true, false]) {
       async teardown(handle, opts) {
         assert.equal(handle.id, partial.id);
         assert.equal(opts?.destroy, true);
-        if (destroys++ === 0 || !recovers) throw new Error("sentinel-secret");
+        if (destroys++ === 0 || !recovers) throw new Error("teardown-boom");
       },
     };
-    const { boxes, events, errors } = turnBoxes(sandbox);
+    const { boxes, events } = turnBoxes(sandbox);
     await assert.rejects(boxes.provisionScratch(), (error: Error) => {
       assert.ok(error instanceof SandboxProvisionCleanupError);
       assert.equal(error.handle.id, partial.id);
-      assert.equal(error.handle.env, undefined);
-      assert.equal(error.cause, undefined);
-      assert.ok(!JSON.stringify(error).includes("sentinel-secret"));
+      assert.match(error.message, /initialization failed/);
+      assert.equal((error.cause as Error).message, "teardown-boom");
       return true;
     });
     await assert.rejects(boxes.provisionScratch(), /cleanup is still pending/);
@@ -740,7 +741,6 @@ for (const recovers of [true, false]) {
     assert.equal(JSON.parse(failure.detail!).sandboxId, partial.id);
     assert.equal(JSON.parse(failure.detail!).backend, "local");
     assert.equal(events.at(-1)?.action, `sandbox.scratch.${recovers ? "released" : "release_failed"}`);
-    assert.ok(!JSON.stringify({ events, errors }).includes("sentinel-secret"));
     assert.equal(boxes.scratchBox.pending === null, recovers);
   });
 }

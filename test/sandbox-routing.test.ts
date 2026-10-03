@@ -377,7 +377,11 @@ test("failed scratch initialization keeps its routed backend for cleanup", async
   const { router, sprites, seed } = build({ "personal:partial": { backend: "sprites" } });
   await seed();
   sprites.provision = async () => {
-    throw new SandboxProvisionCleanupError({ id: "partial", rootDir: "/workspace", scratch: true });
+    throw new SandboxProvisionCleanupError(
+      { id: "partial", rootDir: "/workspace", scratch: true },
+      new Error("cleanup"),
+      new Error("provision"),
+    );
   };
   let pending: SandboxHandle | undefined;
   await assert.rejects(

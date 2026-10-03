@@ -25,7 +25,9 @@ function isExpectedInterruption(e: unknown): boolean {
 export function reportFailure(context: string, e: unknown, detail?: string): void {
   const reportable = !isExpectedInterruption(e) && !errorAlreadyReported(e);
   if (reportable) markErrorReported(e);
-  const eventId = reportable ? reportBackendError(asError(e), failureCode(context)) : undefined;
+  const eventId = reportable
+    ? reportBackendError(asError(e), failureCode(context), detail ? { detail } : undefined)
+    : undefined;
   console.error(
     `[failed] ${context}${detail ? ` (${detail})` : ""}${eventId ? ` [sentry=${eventId}]` : ""}: ${errDetail(e)}`,
   );

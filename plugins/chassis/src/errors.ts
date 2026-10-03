@@ -36,8 +36,6 @@ export function errChain(e: unknown): string {
   return parts.join(" <- ");
 }
 
-const STACK_FRAMES = 12;
-
 function errorFields(e: unknown): string {
   if (typeof e !== "object" || e === null) return "";
   const record = e as { code?: unknown; status?: unknown; statusCode?: unknown; data?: { error?: unknown } };
@@ -50,8 +48,8 @@ function errorFields(e: unknown): string {
 }
 
 export function errDetail(e: unknown): string {
-  const frames = e instanceof Error ? (e.stack?.split("\n").slice(1, STACK_FRAMES + 1) ?? []) : [];
-  const stack = frames.map((frame) => frame.trim()).join(" | ");
+  const frames = e instanceof Error ? (e.stack?.split("\n").map((line) => line.trim()) ?? []) : [];
+  const stack = frames.filter((frame) => frame.startsWith("at ")).join(" | ");
   return `${errChain(e)}${errorFields(e)}${stack ? ` {stack: ${stack}}` : ""}`;
 }
 

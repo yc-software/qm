@@ -135,7 +135,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const recordScratchLifecycle = (
     action: string,
     handle?: SandboxHandle,
-    timing?: { releasedAt: number; cleanupMs: number },
+    extra?: { releasedAt?: number; cleanupMs?: number; error?: string },
   ): void => {
     deps.auditLog?.record({
       at: Date.now(),
@@ -151,7 +151,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         startedAt: scratchStartedAt,
         readyAt: scratchReadyAt,
         provisionMs: scratchBox.provisionMs,
-        ...timing,
+        ...extra,
       }),
     });
   };
@@ -161,15 +161,17 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   let ownerAuthProvisionInFlight: Promise<SandboxHandle> | null = null;
   const destroyEphemeralHandle = async (handle: SandboxHandle): Promise<void> => {
+    let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await deps.sandbox.teardown(handle, { destroy: true });
         return;
-      } catch {
+      } catch (error) {
+        lastError = error;
         if (attempt < 3) await sleep(50 * attempt);
       }
     }
-    throw new Error("Disposable sandbox destruction failed");
+    throw new Error("Disposable sandbox destruction failed", { cause: lastError });
   };
   const scrubOwnerAuthHandle = async (handle: SandboxHandle): Promise<void> => {
     if (!deps.keychain || !isolateOwnerKeychain) return;
@@ -557,7 +559,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     })().catch((error) => {
       scratchProvisionInFlight = null;
       if (error instanceof SandboxProvisionCleanupError) scratchBox.pending = error.handle;
-      recordScratchLifecycle("provision_failed", scratchBox.pending ?? undefined);
+      recordScratchLifecycle("provision_failed", scratchBox.pending ?? undefined, { error: errMessage(error) });
       throw error;
     });
     return scratchProvisionInFlight;
@@ -786,17 +788,18 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           releasedAt: Date.now(),
           cleanupMs: Date.now() - cleanupStart,
         });
-      } catch {
-        scratchCleanupError = new Error("Disposable sandbox destruction failed");
+      } catch (error) {
+        scratchCleanupError = error instanceof Error ? error : new Error(errMessage(error));
         recordScratchLifecycle("release_failed", scratchHandle, {
           releasedAt: Date.now(),
           cleanupMs: Date.now() - cleanupStart,
+          error: errMessage(error),
         });
         deps.errors?.record(
           {
             category: "sandbox",
             code: "scratch_destroy_failed",
-            message: "Disposable sandbox destruction failed",
+            message: errMessage(error),
             scopeLabel: scopeId,
             sessionId: session.id,
           },

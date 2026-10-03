@@ -3,54 +3,7 @@ import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { sanitizeErrorEvent } from "../plugins/chassis/src/error-reporting.ts";
 import { sanitizeTransactionEvent, traceStatus } from "../plugins/chassis/src/timing.ts";
-
-test("error event allowlist excludes content, credentials, paths and ambient scope", () => {
-  const clean = sanitizeErrorEvent({
-    type: undefined,
-    message: "private-prompt",
-    logentry: { message: "private-prompt" },
-    user: { email: "private-email" },
-    request: { data: "private-body", headers: { authorization: "private-token" } },
-    breadcrumbs: [{ message: "private-breadcrumb" }],
-    extra: { payload: "private-payload" },
-    contexts: { private: { value: "private-context" } },
-    server_name: "private-host",
-    transaction: "private-url",
-    tags: { service: "core", deployment: "test", private: "private-tag", error_code: "run:failed" },
-    exception: {
-      values: [
-        {
-          type: "TypeError",
-          value: "private-message",
-          stacktrace: {
-            frames: [
-              {
-                filename: "/private-user/src/server.ts?private-query",
-                function: "serve",
-                lineno: 42,
-                vars: { token: "private-local" },
-                context_line: "private-source",
-                pre_context: ["private-before"],
-              },
-            ],
-          },
-        },
-      ],
-    },
-  });
-  assert.doesNotMatch(JSON.stringify(clean), /private/);
-  assert.equal(clean.exception?.values?.[0]?.type, "TypeError");
-  assert.deepEqual(clean.exception?.values?.[0]?.stacktrace?.frames?.[0], {
-    filename: "server.ts",
-    function: "serve",
-    lineno: 42,
-    colno: undefined,
-    in_app: undefined,
-  });
-  assert.deepEqual(clean.fingerprint, ["{{ default }}", "run:failed"]);
-});
 
 async function runReporting(body: string, enabled = true, env: Record<string, string> = {}) {
   const events: Record<string, any>[] = [];
@@ -115,21 +68,26 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
   }
 }
 
-test("real SDK sends one redacted exception when captured and logged, plus a classified record", async () => {
+test("real SDK sends full exception details, causes and classification", async () => {
   const { events, code } = await runReporting(`
-    const error = new TypeError('private-message');
+    const error = new TypeError('top-message', { cause: new Error('root-cause') });
     reportBackendError(error);
-    console.error('private-request-url', error);
-    reportBackendError(new Error('private-record'), 'run:failed');
+    console.error('request-url', error);
+    reportBackendError(new Error('record-message'), 'run:failed', { detail: 'extra-detail' });
     await flushErrorReporting();
   `);
   assert.equal(code, 0);
   assert.equal(events.length, 2);
-  assert.doesNotMatch(JSON.stringify(events), /private-/);
-  assert.ok(events[0]!.exception.values[0].stacktrace.frames.length);
+  const values = events[0]!.exception.values.map((value: { value: string }) => value.value);
+  assert.ok(values.includes("top-message"));
+  assert.ok(values.includes("root-cause"));
+  assert.ok(events[0]!.exception.values.at(-1).stacktrace.frames.length);
   assert.equal(events[0]!.tags.deployment, "test-deployment");
   assert.equal(events[0]!.release, "test-release");
   assert.equal(events[1]!.tags.error_code, "run:failed");
+  assert.deepEqual(events[1]!.fingerprint, ["{{ default }}", "run:failed"]);
+  assert.equal(events[1]!.extra.detail, "extra-detail");
+  assert.equal(events[1]!.exception.values[0].value, "record-message");
 });
 
 test("disabled reporting leaves process listeners and logging alone", async () => {
@@ -167,7 +125,7 @@ test("fatal reporting preserves the core drain handler and avoids duplicate cons
   assert.equal(events.length, 1);
 });
 
-test("operator error records retain local details and send one classified event after safe logging", async () => {
+test("operator error records send one classified event with the record details", async () => {
   const { events, code, output } = await runReporting(`
     const { createErrorLog, withErrorReporting } = await import('./src/admin/error-log.ts');
     const errors = withErrorReporting(createErrorLog());
@@ -181,7 +139,8 @@ test("operator error records retain local details and send one classified event 
   assert.equal(output.trim(), "private-job-failure");
   assert.equal(events.length, 1);
   assert.equal(events[0]!.tags.error_code, "turn:failed");
-  assert.doesNotMatch(JSON.stringify(events), /private-/);
+  assert.equal(events[0]!.exception.values[0].value, "private-job-failure");
+  assert.equal(events[0]!.extra.scopeLabel, "private-scope");
 });
 
 test("transaction allowlist keeps timing shape only and rejects unsafe names", () => {
@@ -377,8 +336,7 @@ test("reportFailure sends one classified event per distinct failure and skips ca
     events.map((event) => event.tags.error_code),
     ["turn:error", "scheduler:tick", "audit:persist_event", "tools:persist_artifact"],
   );
-  assert.doesNotMatch(JSON.stringify(events), /private-/);
-  assert.equal(events[1]!.exception.values[0].value, "scheduler:tick");
+  assert.equal(events[1]!.exception.values[0].value, "private-db-down");
   const tick = output.split("\n").find((line) => line.startsWith("[failed] scheduler: tick"));
   assert.match(tick ?? "", new RegExp(`\\[sentry=${events[1]!.event_id}\\]: private-db-down \\{stack: `));
 });

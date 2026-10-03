@@ -744,7 +744,7 @@ test("failed scratch preparation retains the live session when rollback fails", 
             throw new Error("preparation failed");
           },
           async kill() {
-            if (kills++ === 0) throw new Error("sentinel-secret");
+            if (kills++ === 0) throw new Error("kill-boom");
             await session.kill();
           },
         };
@@ -755,8 +755,8 @@ test("failed scratch preparation retains the live session when rollback fails", 
   await assert.rejects(box.provision(layers, { scratch: { key: "failed-preparation" } }), (error: Error) => {
     assert.ok(error instanceof SandboxProvisionCleanupError);
     pending = error.handle;
-    assert.equal(error.cause, undefined);
-    assert.ok(!error.message.includes("sentinel-secret"));
+    assert.equal((error.cause as Error).message, "kill-boom");
+    assert.match(error.message, /preparation failed/);
     return true;
   });
   assert.ok(pending);

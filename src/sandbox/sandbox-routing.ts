@@ -187,8 +187,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       try {
         handle = await sandbox.provision(layers, provOpts);
       } catch (error) {
-        if (error instanceof SandboxProvisionCleanupError)
-          throw new SandboxProvisionCleanupError({ ...error.handle, backend: name });
+        if (error instanceof SandboxProvisionCleanupError) error.handle.backend = name;
         throw error;
       }
       const resourceId =
