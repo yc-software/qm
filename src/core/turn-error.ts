@@ -1,3 +1,4 @@
+import { redactSecrets } from "../harness/redact-secrets.ts";
 import { headSlice } from "../util/text.ts";
 
 export class NonRetryableTurnError extends Error {
@@ -29,6 +30,6 @@ const GENERIC_TURN_FAILURE = "That turn failed and couldn't be completed. The de
 
 export function turnFailureMessage(err: unknown): string {
   return (err instanceof NonRetryableTurnError || err instanceof ProviderTurnError) && err.message.trim()
-    ? err.message
+    ? redactSecrets(err.message)
     : GENERIC_TURN_FAILURE;
 }
