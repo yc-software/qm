@@ -124,35 +124,99 @@ export function createPostgresAdvisoryLock(
       if (--context.references === 0) context.client.release();
     }
   };
+  const intentKey = (key: string): string => `${key}:writer-intent`;
+  const tryTake = async (client: PoolClient, key: string, shared: boolean): Promise<boolean> =>
+    (
+      await client.query<{ locked: boolean }>(
+        `SELECT pg_try_advisory_lock${shared ? "_shared" : ""}(hashtextextended($1, 0)) AS locked`,
+        [key],
+      )
+    ).rows[0]?.locked === true;
+  const unlock = async (client: PoolClient, key: string, shared: boolean): Promise<void> => {
+    await client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [key]);
+  };
+  type Intent = { client: PoolClient; owned: boolean };
+  const claimIntent = async (key: string): Promise<Intent | null> => {
+    const probe = await withClient(async ({ client }) => {
+      if (!(await tryTake(client, key, true))) return false;
+      await unlock(client, key, true);
+      return true;
+    });
+    if (!probe) return null;
+    const parent = sessions.getStore();
+    if (parent?.active) {
+      return (await tryTake(parent.context.client, intentKey(key), false))
+        ? { client: parent.context.client, owned: false }
+        : null;
+    }
+    let client: PoolClient;
+    try {
+      client = await (await pg.sessionPool()).connect();
+    } catch {
+      return null;
+    }
+    try {
+      if (await tryTake(client, intentKey(key), false)) return { client, owned: true };
+    } catch (error) {
+      client.release(true);
+      throw error;
+    }
+    client.release();
+    return null;
+  };
+  const releaseIntent = async ({ client, owned }: Intent, key: string): Promise<void> => {
+    try {
+      await unlock(client, intentKey(key), false);
+      if (owned) client.release();
+    } catch (error) {
+      if (!owned) throw error;
+      client.release(true);
+    }
+  };
   const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean, wait: boolean): Promise<T | null> => {
     const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const attempt = await withClient(async (context): Promise<{ acquired: false } | { acquired: true; value: T }> => {
-        const { client, keys } = context;
-        const held = keys.get(key);
-        if (held && !(shared && held.shared)) return { acquired: false };
-        const reservation = held ?? { shared, count: 0 };
-        reservation.count++;
-        keys.set(key, reservation);
-        try {
-          const res = await client.query<{ locked: boolean }>(
-            `SELECT pg_try_advisory_lock${shared ? "_shared" : ""}(hashtextextended($1, 0)) AS locked`,
-            [key],
-          );
-          if (res.rows[0]?.locked !== true) return { acquired: false };
-          try {
-            return { acquired: true, value: await fn() };
-          } finally {
-            await client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [key]);
-          }
-        } finally {
-          if (--reservation.count === 0) keys.delete(key);
-        }
-      });
-      if (attempt.acquired) return attempt.value;
-      if (!wait) return null;
-      if (Date.now() >= deadline) throw new Error(`timeout acquiring advisory lock for ${key}`);
-      await sleep(pollMs);
+    let intent: Intent | null = null;
+    const dropIntent = async (): Promise<void> => {
+      if (!intent) return;
+      const held = intent;
+      intent = null;
+      await releaseIntent(held, key);
+    };
+    try {
+      for (;;) {
+        const attempt = await withClient(
+          async (context): Promise<{ acquired: false } | { acquired: true; value: T }> => {
+            const { client, keys } = context;
+            const held = keys.get(key);
+            if (held && !(shared && held.shared)) return { acquired: false };
+            const reservation = held ?? { shared, count: 0 };
+            reservation.count++;
+            keys.set(key, reservation);
+            try {
+              if (shared && !held) {
+                if (!(await tryTake(client, intentKey(key), true))) return { acquired: false };
+                await unlock(client, intentKey(key), true);
+              }
+              if (!(await tryTake(client, key, shared))) return { acquired: false };
+              try {
+                await dropIntent();
+                return { acquired: true, value: await fn() };
+              } finally {
+                await unlock(client, key, shared);
+              }
+            } finally {
+              if (--reservation.count === 0) keys.delete(key);
+            }
+          },
+        );
+        if (attempt.acquired) return attempt.value;
+        if (!wait) return null;
+        if (Date.now() >= deadline) throw new Error(`timeout acquiring advisory lock for ${key}`);
+        if (!shared && !intent) intent = await claimIntent(key);
+        await sleep(pollMs);
+      }
+    } finally {
+      await dropIntent();
     }
   };
   return withMultiLocks({
