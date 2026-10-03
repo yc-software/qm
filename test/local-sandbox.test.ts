@@ -73,6 +73,27 @@ test("profile declares the local Docker substrate honestly", () => {
   assert.equal(supportsProcessSessions(sb), true);
 });
 
+test("deployment-layer tools are advertised live and their credential paths link into the ephemeral store", async () => {
+  const extraTools = ["acmecli — synthetic tool"];
+  const sb = makeSandbox(installFakeDocker(daemonPort), {
+    extraTools,
+    credentialPaths: [{ path: ".acmecli", kind: "directory" }],
+  });
+  assert.ok(sb.profile.spec!.tools!.includes("acmecli — synthetic tool"));
+  extraTools.push("gcloud — layer-installed");
+  assert.ok(
+    sb.profile.spec!.tools!.includes("gcloud — layer-installed"),
+    "a hydrated layer is visible without a rebuild",
+  );
+  assert.equal(sb.profile.spec!.notInstalled!.includes("gcloud"), false);
+
+  const h = await sb.provision(rw(scopeId("personal", "layer-tools")));
+  const linked = await sb.run(h, `readlink "$HOME/.acmecli"`);
+  assert.equal(linked.code, 0);
+  assert.equal(linked.stdout.trim(), "/tmp/agent-creds/.acmecli");
+  await sb.teardown(h, { destroy: true });
+});
+
 test("a stopped Docker daemon fails provision with the actionable message", async () => {
   const fake = installFakeDocker(daemonPort);
   fake.daemonDown = true;
