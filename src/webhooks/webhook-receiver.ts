@@ -138,8 +138,12 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         })
         .catch((e: unknown) => {
           const msg = errMessage(e);
-          void deps.webhooks.recordFire(wh.id, { at: Date.now(), error: msg });
           reportFailure("webhook: fire", e, `webhook=${wh.id}`);
+          void deps.webhooks
+            .recordFire(wh.id, { at: Date.now(), error: msg })
+            .catch((recordError: unknown) =>
+              reportFailure("webhook: record failed fire", recordError, `webhook=${wh.id}`),
+            );
         });
 
       return { status: 202 };
