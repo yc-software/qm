@@ -1585,13 +1585,15 @@ function notePaneSession(paneId: string, sessionId: string | null, threadRef: st
   const panel = dockApi?.getPanel(paneId);
   if (!panel) return;
   const params = panelParams(panel);
-  if (params.sessionId || (!sessionId && (!threadRef || threadRef === params.threadRef))) return;
+  const sameThread = !threadRef || threadRef === params.threadRef;
+  if (sessionId ? sessionId === params.sessionId && sameThread : params.sessionId || sameThread) return;
   panel.api.updateParameters({
     ...(sessionId ? { sessionId } : {}),
     ...(threadRef ? { threadRef } : {}),
   });
   persist();
   refreshHeaders();
+  if (appState.currentView === "chats") syncUrlFromState();
 }
 
 document.addEventListener("keydown", (e) => {
