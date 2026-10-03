@@ -1,3 +1,4 @@
+import { interleaveHits } from "../memory/notebook.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { buildMemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
@@ -135,7 +136,7 @@ export async function resolveTurnContext(input: ContextInput) {
           return facts.map((fact) => (read.length > 1 ? `[${scope}] ${fact}` : fact));
         }),
       );
-      return hits.flat().slice(0, limit);
+      return interleaveHits(hits, limit);
     },
     listFiles: () => handles,
     listSkills: async () => (await input.skills?.visibleFor(skillScopes, grantedSkills)) ?? [],

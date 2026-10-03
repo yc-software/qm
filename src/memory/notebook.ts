@@ -59,3 +59,11 @@ export function memoryBlocks(body: string): string[] {
   flush();
   return result;
 }
+
+/** Merge per-notebook hits round-robin so the first notebook can't fill the whole limit. */
+export function interleaveHits(perScope: readonly string[][], limit: number): string[] {
+  const out: string[] = [];
+  for (let i = 0; out.length < limit && perScope.some((hits) => i < hits.length); i++)
+    for (const hits of perScope) if (i < hits.length && out.length < limit) out.push(hits[i]!);
+  return out;
+}

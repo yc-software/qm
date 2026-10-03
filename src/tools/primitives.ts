@@ -1,3 +1,4 @@
+import { interleaveHits } from "../memory/notebook.ts";
 import type { MemoryCaptureMetadata } from "../memory/records.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
@@ -1151,7 +1152,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               read.length > 1 ? `[${scope}] ${fact}` : fact,
             ),
           ),
-        ).then((rows) => rows.flat().slice(0, limit ?? 20)),
+        ).then((rows) => interleaveHits(rows, limit ?? 20)),
       );
     },
 
