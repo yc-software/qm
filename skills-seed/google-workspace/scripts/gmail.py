@@ -9,9 +9,11 @@ Usage (token from $VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM):
   gmail.py search 'newer_than:7d is:unread' [--limit 10]
   gmail.py read MESSAGE_ID [--full]
   gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
-  gmail.py draft --to EMAIL --subject TEXT --body-file FILE
-  gmail.py reply MESSAGE_ID --body-file FILE [--all]   # reply-draft anchored to the
-                                                       # thread's latest sent message
+  gmail.py draft --to EMAIL --subject TEXT --body-file FILE [--bcc EMAILS]
+  gmail.py reply MESSAGE_ID --body-file FILE [--all] [--bcc EMAILS]
+                                    # reply-draft anchored to the thread's latest
+                                    # sent message; --bcc moves those addresses
+                                    # off To/Cc onto Bcc ("moving X to bcc")
   gmail.py update-draft DRAFT_ID --body-file FILE      # keeps recipients/threading
   gmail.py send-draft DRAFT_ID
 
@@ -191,10 +193,12 @@ def main() -> None:
     d.add_argument("--to", required=True)
     d.add_argument("--subject", required=True)
     d.add_argument("--body-file", required=True)
+    d.add_argument("--bcc", default="")
     rp = sub.add_parser("reply")
     rp.add_argument("id")
     rp.add_argument("--body-file", required=True)
     rp.add_argument("--all", action="store_true", help="reply-all (keep every recipient)")
+    rp.add_argument("--bcc", default="", help="addresses to move to Bcc (removed from To/Cc)")
     u = sub.add_parser("update-draft")
     u.add_argument("draft_id")
     u.add_argument("--body-file", required=True)
@@ -246,7 +250,7 @@ def main() -> None:
         print(json.dumps({"threadId": a.id, "lastFromMe": bool(msgs) and msgs[-1]["fromMe"],
                           "messages": msgs}))
     elif a.cmd == "draft":
-        message = build_raw({"To": a.to, "Subject": a.subject}, read_body(a.body_file))
+        message = build_raw({"To": a.to, "Bcc": a.bcc, "Subject": a.subject}, read_body(a.body_file))
         print(json.dumps(call("POST", "drafts", {"message": message})))
     elif a.cmd == "reply":
         orig = call("GET", f"messages/{a.id}", query={"format": "metadata"})
@@ -270,6 +274,14 @@ def main() -> None:
         }
         if a.all:
             headers["Cc"] = strip_addrs(f"{h.get('to', '')}, {h.get('cc', '')}", f"{me}, {headers['To']}")
+        if a.bcc:
+            headers["To"] = strip_addrs(headers["To"], a.bcc)
+            headers["Cc"] = strip_addrs(headers.get("Cc", ""), a.bcc)
+            if not headers["To"]:
+                headers["To"], headers["Cc"] = headers["Cc"], ""
+            if not headers["To"]:
+                sys.exit("--bcc would leave the reply with no visible recipient")
+            headers["Bcc"] = a.bcc
         message = build_raw(headers, read_body(a.body_file), orig["threadId"])
         print(json.dumps(call("POST", "drafts", {"message": message})))
     elif a.cmd == "update-draft":
