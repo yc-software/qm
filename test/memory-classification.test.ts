@@ -173,7 +173,7 @@ test("automatic CC preserves trusted sources and sensitivity, opaque stores do n
   const { memory, base, snapshots } = await fixture();
   const strategy = createPerTurnStrategy({
     memory,
-    harness: { oneShot: async () => "SENSITIVITY: sensitive\n- Confidential fact" },
+    harness: { oneShot: async () => "SENSITIVITY: sensitive\n- Confidential fact [personal]" },
   });
   await strategy.onTurnEnd!({ ...turn, scopeId: "group:private", inheritedRecords: [] });
   const record = snapshots.get(scope)!.records.find((record) => record.text.includes("Confidential"))!;

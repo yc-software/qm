@@ -940,16 +940,21 @@ export function createMockHarness(): Harness {
       oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
         if (systemPrompt.startsWith("You extract durable facts worth remembering")) {
           const facts: string[] = [];
+          const firstPerson = /^(my|i'm|i am|i prefer|i work|i use|i like|call me)\b/i;
           for (const match of prompt.matchAll(/User said:\n([\s\S]*?)\n\nAssistant replied:/g)) {
             for (const raw of (match[1] ?? "").split(/[\n.!?]+/)) {
               const sentence = raw.trim();
               if (!sentence || sentence.startsWith("!")) continue;
               const remembered = /\bremember(?:\s+that)?\b[:,]?\s*(.+)/i.exec(sentence)?.[1];
               if (remembered) facts.push(remembered.trim());
-              else if (/^(my|i'm|i am|i prefer|i work|i use|i like|call me)\b/i.test(sentence)) facts.push(sentence);
+              else if (firstPerson.test(sentence)) facts.push(sentence);
             }
           }
-          return Promise.resolve(facts.length ? facts.map((fact) => `- ${fact}`).join("\n") : "NONE");
+          return Promise.resolve(
+            facts.length
+              ? facts.map((fact) => `- ${fact} [${firstPerson.test(fact) ? "personal" : "project"}]`).join("\n")
+              : "NONE",
+          );
         }
         return Promise.resolve(`mock one-shot reply to: ${prompt.slice(0, 200)}`);
       },
