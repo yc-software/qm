@@ -5,6 +5,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  childCodexAuthFromDerived,
   childCodexOAuthAuth,
   codexOAuthAccessTokenExpiresAt,
   codexOAuthAuthFromValue,
@@ -12,6 +13,7 @@ import {
   keychainCodexAuthStore,
 } from "../src/harness/codex-auth-store.ts";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../src/credentials/keychain.ts";
+import { sanitizedCodexOAuthAuth } from "../src/harness/codex-auth-file.ts";
 
 function jwt(payload: Record<string, unknown>, header: Record<string, unknown> = { alg: "RS256" }): string {
   const enc = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
@@ -248,4 +250,20 @@ test("installed Codex accepts child auth without a usable refresh token", () => 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("per-user derived auth carries last_refresh so Codex reads the tokens instead of refreshing", () => {
+  const auth = childCodexAuthFromDerived({
+    accessToken: accessToken("acct-user", FRESH_EXP),
+    idToken: idToken("acct-user"),
+    accountId: "acct-user",
+  });
+  assert.ok(auth);
+  const tokens = auth!.tokens as Record<string, unknown>;
+  assert.equal(tokens.refresh_token, "");
+  assert.equal(tokens.account_id, "acct-user");
+  assert.equal(typeof auth!.last_refresh, "string");
+  assert.ok(Number.isFinite(Date.parse(auth!.last_refresh as string)));
+  // The child home is written through the sanitizer; it must keep the stamp.
+  assert.equal(sanitizedCodexOAuthAuth(auth!).last_refresh, auth!.last_refresh);
 });
