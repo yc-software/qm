@@ -258,8 +258,17 @@ export function createMessagingMethods(
           scopeLabel: before.ownerScopeId,
         });
     },
-    setCronEnabled(id, enabled) {
-      return deps.crons.setEnabled(id, enabled);
+    async setCronEnabled(id, enabled, by) {
+      const before = await deps.crons.get(id);
+      await deps.crons.setEnabled(id, enabled);
+      if (before && before.enabled !== enabled)
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: by ?? before.owner,
+          action: enabled ? "cron_enable" : "cron_disable",
+          resource: id,
+          scopeLabel: before.ownerScopeId,
+        });
     },
     async setCronFireNote(id, note) {
       const before = await deps.crons.get(id);
@@ -295,8 +304,18 @@ export function createMessagingMethods(
       });
       return deps.crons.get(id);
     },
-    setCronRecipientConsent(id, recipientConsent) {
-      return deps.crons.setRecipientConsent(id, recipientConsent);
+    async setCronRecipientConsent(id, recipientConsent, by) {
+      const before = await deps.crons.get(id);
+      await deps.crons.setRecipientConsent(id, recipientConsent);
+      if (before)
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: by ?? before.owner,
+          action: "cron_recipient_consent",
+          resource: id,
+          scopeLabel: before.ownerScopeId,
+          status: recipientConsent.status,
+        });
     },
     async createWebhook(input) {
       const webhook = await deps.webhooks.create(input);
@@ -325,11 +344,30 @@ export function createMessagingMethods(
     listWebhooks() {
       return deps.webhooks.list();
     },
-    setWebhookEnabled(id, enabled) {
-      return deps.webhooks.setEnabled(id, enabled);
+    async setWebhookEnabled(id, enabled, by) {
+      const before = await deps.webhooks.get(id);
+      await deps.webhooks.setEnabled(id, enabled);
+      if (before && before.enabled !== enabled)
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: by ?? before.owner,
+          action: enabled ? "webhook_enable" : "webhook_disable",
+          resource: id,
+          scopeLabel: before.ownerScopeId,
+        });
     },
-    setWebhookRecipientConsent(id, recipientConsent) {
-      return deps.webhooks.setRecipientConsent(id, recipientConsent);
+    async setWebhookRecipientConsent(id, recipientConsent, by) {
+      const before = await deps.webhooks.get(id);
+      await deps.webhooks.setRecipientConsent(id, recipientConsent);
+      if (before)
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: by ?? before.owner,
+          action: "webhook_recipient_consent",
+          resource: id,
+          scopeLabel: before.ownerScopeId,
+          status: recipientConsent.status,
+        });
     },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);

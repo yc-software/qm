@@ -749,7 +749,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         if (refusal) return { ok: false, code: "forbidden", message: refusal };
       }
       if (cron.enabled === enabled) return { ok: true, cron };
-      await app.setCronEnabled(id, enabled);
+      await app.setCronEnabled(id, enabled, capability.actorId);
       await notifyEdit(cron, capability, [`enabled=${enabled}`]);
       const after = await app.getCron(id);
       return { ok: true, cron: after ?? cron };
@@ -884,7 +884,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
       if (!(await canAdministerWebhook(app, webhook, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your webhook" };
-      await app.setWebhookEnabled(id, false);
+      await app.setWebhookEnabled(id, false, capability.actorId);
       return { ok: true };
     },
 
