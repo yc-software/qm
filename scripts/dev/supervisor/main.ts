@@ -433,7 +433,13 @@ async function startChildren(inputs: SpecInputs): Promise<{ ok: boolean; failedC
     let child = children.get(spec.name);
     if (child) child.update(spec);
     else {
-      child = new Child(spec, lock, log, () => {});
+      child = new Child(
+        spec,
+        lock,
+        log,
+        () => {},
+        () => !shuttingDown,
+      );
       children.set(spec.name, child);
     }
     const res = await child.start();
@@ -457,6 +463,7 @@ async function boot(): Promise<void> {
     currentEnvSha = computeEnvSha(specInputs.baseEnv);
     currentGitSha = gitHead(worktree);
     const started = await startChildren(specInputs);
+    if (shuttingDown) return;
     if (!started.ok) {
       bootResult = {
         ok: false,
@@ -473,7 +480,9 @@ async function boot(): Promise<void> {
     let verified: { ok: boolean; result: Partial<BootResult> } = { ok: true, result: {} };
     if (slackOn(spec)) {
       await resolveCanaryChannel(spec);
+      if (shuttingDown) return;
       verified = await verifySlack(spec);
+      if (shuttingDown) return;
       if (!verified.ok) {
         bootResult = { ok: false, slackEnabled: true, slot, ...verified.result } as BootResult;
         phase("verify", "fail", bootResult.reason);
@@ -506,6 +515,7 @@ async function boot(): Promise<void> {
     startLoops();
     log(slackOn(spec) ? `live -- @${handle} on slot ${slot}` : `live -- browser only (Slack off) on slot ${slot}`);
   } catch (err) {
+    if (shuttingDown) return;
     bootResult = { ok: false, reason: errMessage(err), slot };
     phase(phaseName, "fail", errMessage(err));
     finishBoot();

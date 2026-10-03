@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
@@ -54,6 +54,7 @@ function parseCli() {
       options: {
         json: { type: "boolean", default: false },
         force: { type: "boolean", default: false },
+        foreground: { type: "boolean", default: false },
         strict: { type: "boolean", default: false },
         rotate: { type: "boolean", default: false },
         follow: { type: "boolean", short: "f", default: false },
@@ -77,7 +78,7 @@ const command = positionals[0] ?? "up";
 const store = poolStore();
 
 const commandOptions: Record<string, readonly string[]> = {
-  up: ["json", "force", "strict", "rotate", "sandbox", "surface", "no-slack", "no-watch", "org"],
+  up: ["json", "force", "foreground", "strict", "rotate", "sandbox", "surface", "no-slack", "no-watch", "org"],
   down: ["json"],
   status: ["json"],
   restart: ["json"],
@@ -131,6 +132,9 @@ if (opts.surface && opts["no-slack"] && opts.surface !== "web") {
 let withSlack = requestedSurface === "slack" || requestedSurface === "both";
 let withWeb = requestedSurface !== "slack";
 const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
+let foregroundSupervisor: ChildProcess | undefined;
+let foregroundExit: Promise<number> | undefined;
+let stopping = false;
 
 async function legacyTeardown(lease: LeaseInfo): Promise<void> {
   for (const name of ["portal", "admin", "web", "web-build", "slack", "core", "tunnel", "supervisor"]) {
@@ -262,20 +266,42 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
   );
 
   const supervisorScript = join(worktree, "scripts/dev/supervisor/main.ts");
-  spawnDetached({
-    cwd: worktree,
-    logFile: join(lock, "supervisor.log"),
-    argv: ["node", supervisorScript, "--slot", slot, "--worktree", worktree, "--store", store],
-    env: callerEnv,
-  });
+  const args = [supervisorScript, "--slot", slot, "--worktree", worktree, "--store", store];
+  if (opts.foreground) {
+    const child = spawn(process.execPath, args, { cwd: worktree, env: callerEnv, stdio: ["inherit", 2, 2] });
+    foregroundSupervisor = child;
+    const forward = (signal: NodeJS.Signals) => {
+      stopping = true;
+      child.kill(signal);
+    };
+    process.on("SIGTERM", forward);
+    process.on("SIGINT", forward);
+    foregroundExit = new Promise<number>((resolve) => {
+      child.once("exit", (code) => resolve(stopping ? EXIT.ok : code || EXIT.internal));
+      child.once("error", (error) => {
+        console.error(`dev: ${errMessage(error)}`);
+        resolve(EXIT.internal);
+      });
+    }).finally(() => {
+      process.off("SIGTERM", forward);
+      process.off("SIGINT", forward);
+    });
+  } else {
+    spawnDetached({ cwd: worktree, logFile: join(lock, "supervisor.log"), argv: ["node", ...args], env: callerEnv });
+  }
 
   const sock = resolveSocketPath(lock);
-  if (!(await waitForSupervisor(sock, 60_000))) {
+  if (
+    !(await Promise.race([
+      waitForSupervisor(sock, 60_000),
+      ...(foregroundExit ? [foregroundExit.then(() => false)] : []),
+    ]))
+  ) {
     let tail: string[] = [];
     bestEffort(() => {
       tail = readFileSync(join(lock, "supervisor.log"), "utf8").trimEnd().split("\n").slice(-15);
     });
-    const supPid = readPidFile(lock, "supervisor.pid");
+    const supPid = foregroundSupervisor?.pid ?? readPidFile(lock, "supervisor.pid");
     if (supPid) await killTree(supPid, 5000);
     return {
       ok: false,
@@ -291,10 +317,13 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       : `booting on slot ${slot} (Slack off -- browser only)...`,
   );
   let result: BootResult | null = null;
-  await streamBootEvents(sock, (e) => {
-    renderPhase(e);
-    if (e.event === "done" && e.result) result = e.result;
-  }).catch(() => {});
+  await Promise.race([
+    streamBootEvents(sock, (e) => {
+      renderPhase(e);
+      if (e.event === "done" && e.result) result = e.result;
+    }).catch(() => {}),
+    ...(foregroundExit ? [foregroundExit] : []),
+  ]);
   return result ?? { ok: false, reason: "boot event stream ended without a result", slot };
 }
 
@@ -339,6 +368,10 @@ async function cmdUp(): Promise<number> {
     }
     const sock = resolveSocketPath(mine.lockDir);
     if (await supervisorReachable(sock)) {
+      if (opts.foreground) {
+        out(`slot ${mine.slot} is already running; run 'dev down' before 'dev up --foreground'.`);
+        return EXIT.leaseConflict;
+      }
       if (withSlack !== (mine.meta.slack !== "0") || withWeb !== (mine.meta.web !== "0")) {
         out(`switching surfaces on ${mine.slot}...`);
         await teardownLease(mine);
@@ -364,7 +397,7 @@ async function cmdUp(): Promise<number> {
       }
     } else if (mine.meta.booting === "1" && pidAlive(Number(mine.meta.owner_pid ?? 0))) {
       out(`an 'up' is already in progress for this worktree (slot ${mine.slot}); not starting another.`);
-      return EXIT.ok;
+      return opts.foreground ? EXIT.leaseConflict : EXIT.ok;
     } else {
       await teardownLease(mine);
     }
@@ -408,10 +441,15 @@ async function cmdUp(): Promise<number> {
     if (result.ok) {
       emitJson(result);
       printSuccess(result, branch);
-      return EXIT.ok;
+      return foregroundExit ? await foregroundExit : EXIT.ok;
     }
 
+    if (foregroundSupervisor && foregroundExit) {
+      foregroundSupervisor.kill("SIGTERM");
+      await foregroundExit;
+    }
     releaseSlotLock(slot, store);
+    if (stopping) return EXIT.ok;
     if (result.reason === "slot-stolen") {
       writeSlotFlag(
         slot,
@@ -671,7 +709,7 @@ async function main(): Promise<number> {
       });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--foreground] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }
@@ -679,7 +717,9 @@ async function main(): Promise<number> {
 
 main()
   .then((code) => process.exit(code))
-  .catch((err) => {
+  .catch(async (err) => {
     console.error(`dev: ${errMessage(err)}`);
+    foregroundSupervisor?.kill("SIGTERM");
+    await foregroundExit;
     process.exit(EXIT.internal);
   });
