@@ -92,3 +92,19 @@ test("system approvals stay pending without enqueuing or reviving an impossible 
   assert.deepEqual(await deliveries.pending("principal"), []);
   assert.equal((await deliveries.get(stale.id))?.expiredAt, expiredAt, "a sweep must not revive the stale DM");
 });
+
+test("one approval that fails to enqueue does not block redelivery of the others", async () => {
+  const backing = createMemoryMap<PendingApprovalRecord>();
+  await backing.put("A1", record("dm:D1", 1));
+  await backing.put("A2", record("dm:D2", 2));
+  const delivered: string[] = [];
+  const approvals = createApprovalStore(backing, {
+    enqueue: async (d) => {
+      if (d.destination.commandApprovalId === "A1") throw new Error("bad record");
+      delivered.push(d.destination.commandApprovalId!);
+      return { id: "d" } as never;
+    },
+  });
+  await approvals.deliverPending();
+  assert.deepEqual(delivered, ["A2"]);
+});
