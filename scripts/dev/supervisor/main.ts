@@ -354,7 +354,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   let durableAdminPrincipal = "";
   if (!databaseUrl) {
     try {
-      const pg = await ensureLocalPostgres(worktree, log);
+      const pg = await ensureLocalPostgres(worktree, log, assembled.env);
       databaseUrl = pg.url;
       localPg = true;
     } catch (err) {
