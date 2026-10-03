@@ -549,6 +549,8 @@ async function getUiState(ctx: ApiCtx): Promise<void> {
 
 async function putUiState(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
+  if (!body || typeof body !== "object")
+    return sendJson(res, 400, { error: "bad_request", message: "expected a JSON object body" });
   const b = body as { principalId?: unknown; key?: unknown; value?: unknown; updatedAt?: unknown };
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   const key = typeof b.key === "string" ? b.key : "";
@@ -578,6 +580,8 @@ async function getSelfMemory(ctx: ApiCtx): Promise<void> {
 
 async function putSelfMemory(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
+  if (!body || typeof body !== "object")
+    return sendJson(res, 400, { error: "bad_request", message: "expected a JSON object body" });
   const b = body as { principalId?: unknown; content?: unknown; revision?: unknown };
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
@@ -1030,6 +1034,8 @@ async function createGrant(ctx: ApiCtx): Promise<void> {
 
 async function revokeGrant(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
+  if (!body || typeof body !== "object")
+    return sendJson(res, 400, { error: "bad_request", message: "expected a JSON object body" });
   const b = body as { ownerScopeId?: string; ref?: string; granteeScopeId?: string; revokedBy?: string };
   if (!b.ownerScopeId || !b.ref || !b.granteeScopeId || typeof b.revokedBy !== "string" || !b.revokedBy) {
     return sendJson(res, 400, {
@@ -1303,6 +1309,8 @@ function getSoul(ctx: ApiCtx): void {
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
+  if (!body || typeof body !== "object")
+    return sendJson(res, 400, { error: "bad_request", message: "expected a JSON object body" });
   let scopeIdVal: string;
   let content: string;
   let actorId: string;

@@ -37,6 +37,8 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
 
 async function pushDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
+  if (!body || typeof body !== "object")
+    return sendJson(res, 400, { error: "bad_request", message: "expected a JSON object body" });
   const b = body as {
     members?: unknown;
     channels?: unknown;
