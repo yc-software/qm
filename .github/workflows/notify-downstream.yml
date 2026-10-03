@@ -1,0 +1,69 @@
+name: Notify configured downstream
+
+on:
+  workflow_run:
+    workflows: [CI/CD, CodeQL, Push on main]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: notify-downstream-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    if: >-
+      vars.DOWNSTREAM_NOTIFY_ENABLED == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.actor.type == 'User' &&
+      ((github.event.workflow_run.path == '.github/workflows/cicd.yml' &&
+        github.event.workflow_run.event == 'push') ||
+       (github.event.workflow_run.path == 'dynamic/github-code-scanning/codeql' &&
+        github.event.workflow_run.event == 'dynamic'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Send a wakeup without executing candidate code
+        env:
+          SOURCE_TOKEN: ${{ github.token }}
+          DOWNSTREAM_REPOSITORY: ${{ secrets.DOWNSTREAM_REPOSITORY }}
+          DOWNSTREAM_DISPATCH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
+        run: |
+          node <<'NODE'
+          const { readFileSync } = require('node:fs');
+          (async () => {
+            const { DOWNSTREAM_REPOSITORY: target, DOWNSTREAM_DISPATCH_TOKEN: token, GITHUB_REPOSITORY: source } = process.env;
+            if (!target || !token) return console.log('Downstream notification is not configured');
+            if (!/^[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/.test(target) || ['.', '..'].includes(target.split('/')[1])) throw new Error('Invalid downstream repository');
+            const run = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).workflow_run;
+            const get = async path => {
+              const response = await fetch(`${process.env.GITHUB_API_URL}/repos/${source}/${path}`, {
+                headers: { Authorization: `Bearer ${process.env.SOURCE_TOKEN}`, Accept: 'application/vnd.github+json' },
+                redirect: 'error', signal: AbortSignal.timeout(15000),
+              });
+              if (!response.ok) throw new Error(`Source verification failed (${response.status})`);
+              return response.json();
+            };
+            const main = await get('git/ref/heads/main');
+            if (main.object.sha !== run.head_sha) return console.log('Source main advanced; notification skipped');
+            const { workflow_runs: runs } = await get(`actions/workflows/cicd.yml/runs?head_sha=${run.head_sha}&event=push&branch=main&per_page=1`);
+            const ci = runs[0];
+            if (!ci || ci.path !== '.github/workflows/cicd.yml' || ci.event !== 'push' ||
+                ci.head_branch !== 'main' || ci.head_sha !== run.head_sha || ci.head_repository?.full_name !== source ||
+                ci.status !== 'completed' || ci.conclusion !== 'success' || ci.actor?.type !== 'User') return console.log('Current main push CI is not successful; notification skipped');
+            const response = await fetch(`${process.env.GITHUB_API_URL}/repos/${target}/dispatches`, {
+              method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
+              headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+              body: JSON.stringify({ event_type: 'upstream-main-completed' }),
+            });
+            if (response.status !== 204) throw new Error(`Downstream notification failed (${response.status})`);
+            console.log('Downstream reconciliation notified');
+          })().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE
