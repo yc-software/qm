@@ -1,9 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import {
-  backfillDeliverySourceCronIdBatch,
-  createPostgresDeliveryStore,
-} from "../src/delivery/postgres-delivery-store.ts";
+import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
@@ -84,7 +81,7 @@ test("pg delivery store: once-ever keys revive after a TTL drop instead of deadl
 });
 
 test(
-  "pg delivery store: source_cron_id is stamped at insert and the read path survives unstamped rows",
+  "pg delivery store: source_cron_id is stamped at insert and the reads require stored provenance",
   { skip },
   async () => {
     const pg = (await import("pg")).default;
@@ -136,8 +133,8 @@ test(
       });
       await p.query("UPDATE deliveries SET source_cron_id = NULL WHERE idempotency_key = ANY($1)", [unstamped]);
       const before = await store.sentRunCountsByCron(["col-a", "col-b"]);
-      assert.equal(before.get("col-a"), 2, "an unstamped row still counts through the regex fallback");
-      assert.equal(before.get("col-b"), 1);
+      assert.equal(before.get("col-a"), 1);
+      assert.equal(before.get("col-b"), undefined);
 
       const q = async (text: string, params?: unknown[]) =>
         (await p.query(text, params)).rows as Record<string, unknown>[];
@@ -168,11 +165,15 @@ test(
       );
       assert.deepEqual(
         await store.sentRunCountsByCron(["col-a", "col-b"]),
-        before,
-        "backfilled rows count identically",
+        new Map([
+          ["col-a", 2],
+          ["col-b", 1],
+        ]),
       );
     } finally {
       await p.end();
     }
   },
 );
+
+import { backfillDeliverySourceCronIdBatch } from "../scripts/lib/automation-origin-backfill.ts";

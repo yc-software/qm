@@ -36,11 +36,37 @@ checksums to bypass this check. A previously completed legacy webhook sweep is
 adopted into the checksum ledger without disabling webhooks that an operator has
 subsequently re-enabled.
 
-The cron journal imports existing `cron_fire_log` history into `cron_fires` and
-continues importing writes from older workers during a rolling upgrade. History
-retention also removes expired entries from the legacy table, preventing a later
-restart from importing them again. The legacy table remains available for older
-binaries.
+The cron journal uses only `cron_fires`. Before upgrading, stop all workers
+that write `crons.json.fireLog` or `cron_fire_log` and take a database recovery
+point. Do not roll these older binaries alongside the new readers. Run:
+
+```sh
+node scripts/retire-cron-fire-history.ts
+node scripts/retire-cron-fire-history.ts --apply
+node scripts/backfill-session-origin.ts
+```
+
+The first command is read-only and exits nonzero if retained old fires are missing
+or newer than the canonical journal. The second imports and verifies both legacy
+sources in one locked transaction, removes the JSON fields and mirroring trigger,
+and leaves the old table untouched. Run it once; re-importing an old table after
+retention has pruned canonical history would resurrect expired fires.
+
+Before serving the new readers, these read-only checks must return zero:
+
+```sql
+SELECT count(*) FROM crons WHERE json ? 'fireLog';
+SELECT count(*) FROM sessions WHERE origin IS NULL
+   OR (origin = 'cron' AND origin_id IS NULL);
+SELECT count(*) FROM deliveries WHERE source_cron_id IS NULL
+   AND COALESCE(substring(provenance->>'sourceThreadRef' FROM '^agent:main:cron:([^:]+)$'),
+                substring(provenance->>'sourceThreadRef' FROM '^cron:([^:]+)(:.+)?$')) IS NOT NULL;
+```
+
+Run the retirement script without `--apply` again before promotion to verify every
+retained legacy fire is present in `cron_fires`. Stored origin columns are now the
+only source for SQL classification and delivery counts; new writes already stamp
+them. There is no boot-time backfill or read-time inference.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those

@@ -294,7 +294,6 @@ export interface Cron extends TriggerBase {
   unattendedGrants?: string[];
   sessionRef?: string;
 
-  fireLog?: CronFireLogEntry[];
   lastFireNote?: CronFireNote;
 }
 

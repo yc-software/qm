@@ -238,7 +238,6 @@ test("recordFire appends compact durable fire log entries and replaces duplicate
   );
   assert.equal(runs[1]?.threadRef, "cron:c:fire:2b");
   assert.equal(runs[1]?.reply, "second updated");
-  assert.equal((await store.get(cron.id))?.fireLog, undefined, "the legacy json fireLog is never written");
 });
 
 test("create stores runAs + member snapshot for a scopeFloor cron", async () => {
@@ -677,99 +676,6 @@ test("a stranded-fire sweep is mirrored into the fire table", async () => {
   assert.equal(runs[0]!.note, STRANDED_FIRE_NOTE);
 });
 
-test("backfillFires copies legacy json fireLog entries into the fire table, idempotently", async () => {
-  const backing = createMemoryMap<Cron>();
-  await backing.put("legacy", {
-    ...base,
-    id: "legacy",
-    schedule: { everyMs: 1000 },
-    enabled: true,
-    createdAt: 1,
-    fireLog: [
-      { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok", reply: "one" },
-      { fireKey: "k2", threadRef: "t2", firedAt: 3_000, status: "running" },
-    ],
-  });
-  const store = createCronStore(backing);
-  assert.deepEqual(await store.listFires("legacy"), { runs: [], total: 0 });
-  assert.equal(await store.backfillFires(), 2);
-  const { runs, total } = await store.listFires("legacy");
-  assert.equal(total, 2);
-  assert.equal(runs[0]!.reply, "one");
-  assert.equal(runs[1]!.status, "running");
-  assert.equal((await backing.get("legacy"))!.fireLog, undefined, "the legacy key is stripped once copied");
-  assert.equal(await store.backfillFires(), 0, "a re-run finds nothing left to copy");
-  assert.equal((await store.listFires("legacy")).total, 2);
-});
-
-test("backfillFires strips an empty legacy fireLog key too", async () => {
-  const backing = createMemoryMap<Cron>();
-  await backing.put("empty", {
-    ...base,
-    id: "empty",
-    schedule: { everyMs: 1000 },
-    enabled: true,
-    createdAt: 1,
-    fireLog: [],
-  });
-  const store = createCronStore(backing);
-  assert.equal(await store.backfillFires(), 0);
-  const after = (await backing.get("empty"))!;
-  assert.equal(after.fireLog, undefined);
-  assert.equal(after.enabled, true, "stripping touches only the legacy key");
-});
-
-test("backfill never regresses an ended fire row back to running", async () => {
-  const backing = createMemoryMap<Cron>();
-  await backing.put("legacy", {
-    ...base,
-    id: "legacy",
-    schedule: { everyMs: 1000 },
-    enabled: true,
-    createdAt: 1,
-    fireLog: [{ fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" }],
-  });
-  const store = createCronStore(backing);
-  await store.recordFire("legacy", { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" });
-  await store.backfillFires();
-  const { runs } = await store.listFires("legacy");
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0]!.status, "ok", "the stale running snapshot must not clobber the ended row");
-  assert.equal(runs[0]!.endedAt, 2_000);
-});
-
-test("the stranded sweep works the fire table: an unbackfilled legacy json row is invisible to it", async () => {
-  const backing = createMemoryMap<Cron>();
-  const store = createCronStore(backing, { staleRunningMs: 10_000 });
-  const kept = await store.create({ ...base, schedule: { everyMs: 60_000 } });
-  await store.beginFire(kept.id, { fireKey: "kept-k", threadRef: "t1", firedAt: 1_000, status: "running" });
-  await backing.put("gone", {
-    ...base,
-    id: "gone",
-    schedule: { everyMs: 1000 },
-    enabled: true,
-    createdAt: 1,
-    fireLog: [{ fireKey: "gone-k", threadRef: "t2", firedAt: 1_000, status: "running" }],
-  });
-  assert.equal(await store.sweepStrandedFires(20_000), 1, "only the table row is swept");
-  assert.equal((await store.listFires("gone")).total, 0);
-  assert.equal((await store.listFires(kept.id)).runs[0]!.status, "failed");
-  assert.equal(await store.backfillFires(), 1, "the legacy row reaches the table via backfill");
-  assert.equal(await store.sweepStrandedFires(20_000), 1, "and only then can the sweep close it");
-});
-
-test("backfill cannot clobber a newer retry of the same fireKey with a stale snapshot", async () => {
-  const fires = createMemoryCronFireStore();
-  await fires.record("legacy", { fireKey: "slot-1", threadRef: "t1", firedAt: 3_000, status: "running" });
-  await fires.backfill("legacy", [
-    { fireKey: "slot-1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" },
-  ]);
-  const { runs } = await fires.listByCron("legacy");
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0]!.firedAt, 3_000, "the older snapshot must not clobber the live retry");
-  assert.equal(runs[0]!.status, "running");
-});
-
 test("the fire table is the journal of record — a write failure surfaces instead of being swallowed", async () => {
   const store = createCronStore(undefined, {
     fires: {
@@ -783,9 +689,6 @@ test("the fire table is the journal of record — a write failure surfaces inste
         throw new Error("table down");
       },
       pruneEnded: async () => {
-        throw new Error("table down");
-      },
-      backfill: async () => {
         throw new Error("table down");
       },
       listByCron: async () => ({ runs: [], total: 0 }),
@@ -802,7 +705,6 @@ test("the fire table is the journal of record — a write failure surfaces inste
     store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" }),
     /table down/,
   );
-  assert.equal((await store.get(cron.id))!.fireLog, undefined, "and nothing falls back to the json key");
 });
 
 test("a deferred cron is not due until its deferral passes, and firing clears the deferral", async () => {
@@ -870,29 +772,6 @@ test("beginExclusive re-begins the SAME fireKey without refusing itself", async 
     "a retry of the same fireKey is not blocked by its own running row",
   );
   assert.equal((await store.listFires(cron.id)).total, 1);
-});
-
-test("backfillFires survives a cron deleted mid-loop: entries still reach the table, others still strip", async () => {
-  const backing = createMemoryMap<Cron>();
-  const vanishing: DurableMap<Cron> = {
-    ...backing,
-    update: async (id, fn) => (id === "gone" ? null : backing.update!(id, fn)),
-  };
-  const legacyRow = (id: string): Cron => ({
-    ...base,
-    id,
-    schedule: { everyMs: 1000 },
-    enabled: true,
-    createdAt: 1,
-    fireLog: [{ fireKey: `${id}-k`, threadRef: `t-${id}`, firedAt: 1_000, endedAt: 2_000, status: "ok" }],
-  });
-  await backing.put("gone", legacyRow("gone"));
-  await backing.put("stays", legacyRow("stays"));
-  const store = createCronStore(vanishing);
-  assert.equal(await store.backfillFires(), 2, "a mid-loop deletion never aborts the backfill");
-  assert.equal((await store.listFires("gone")).total, 1, "the deleted cron's history still reaches the table");
-  assert.equal((await store.listFires("stays")).total, 1);
-  assert.equal((await backing.get("stays"))!.fireLog, undefined, "the surviving cron is still stripped");
 });
 
 test("Open owner authorization is durable, distinct from legacy mode, and cannot be cleared by a patch", async () => {

@@ -64,11 +64,6 @@ function exactText(b: CapabilityCronBody): string | undefined {
   return undefined;
 }
 
-function withoutFireLog<T extends Cron>(cron: T): Omit<T, "fireLog"> {
-  const { fireLog: _fireLog, ...rest } = cron;
-  return rest;
-}
-
 async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
   const { res, app, url } = ctx;
   const cron = await app.getCron(id);
@@ -232,7 +227,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
       });
     }
     return sendJson(res, 200, {
-      cron: withoutFireLog(result.cron),
+      cron: result.cron,
       ...(result.recipient ? { recipient: result.recipient } : {}),
       ...(result.channel ? { channel: result.channel } : {}),
       ...(result.group ? { group: result.group } : {}),
@@ -247,7 +242,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
     });
   try {
     const cron = await app.createCron(body);
-    return sendJson(res, 200, { cron: withoutFireLog(cron) });
+    return sendJson(res, 200, { cron });
   } catch (e) {
     return sendJson(res, 400, { error: "cron_create_failed", message: errMessage(e) });
   }
@@ -257,13 +252,13 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
   if (capability) {
     const { crons, visible } = await ctx.deps.control.listCrons(capability);
-    return sendJson(res, 200, { crons: crons.map(withoutFireLog), visible: visible.map(withoutFireLog) });
+    return sendJson(res, 200, { crons, visible });
   }
   const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 200, { crons: (await app.listCrons()).map(withoutFireLog) });
+  if (!viewer) return sendJson(res, 200, { crons: await app.listCrons() });
   const { owned, visible } = await app.listCronsForViewer(viewer);
   const decorate = async (cron: Cron) => ({
-    ...withoutFireLog(cron),
+    ...cron,
     permission: (await canAdministerCron(app, cron, viewer)) ? "manage" : "read",
   });
   return sendJson(res, 200, {
@@ -295,7 +290,7 @@ async function retargetCron(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "destinationKey (string) required" });
   const r = await ctx.deps.control.retargetCron(id, dk, capability);
   if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
-  return sendJson(res, 200, { cron: withoutFireLog(r.cron) });
+  return sendJson(res, 200, { cron: r.cron });
 }
 
 async function noteCron(ctx: ApiCtx): Promise<void> {
@@ -342,7 +337,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   if (capability) {
     const r = await ctx.deps.control.getCronRuns(id, limit !== undefined ? { limit } : {}, capability);
     if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
-    return sendJson(res, 200, { cron: withoutFireLog(r.cron), runs: r.runs, total: r.total });
+    return sendJson(res, 200, { cron: r.cron, runs: r.runs, total: r.total });
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
@@ -350,7 +345,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
   const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
-  return sendJson(res, 200, { cron: withoutFireLog(cron), runs, total });
+  return sendJson(res, 200, { cron, runs, total });
 }
 
 const CRON_PATCH_BAD_REQUEST =
@@ -363,7 +358,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     if (method === "GET") {
       const r = await ctx.deps.control.getCron(id, capability);
       return r.ok
-        ? sendJson(res, 200, { cron: withoutFireLog(r.cron) })
+        ? sendJson(res, 200, { cron: r.cron })
         : sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
     }
     if (method === "DELETE") {
@@ -396,13 +391,13 @@ async function cronById(ctx: ApiCtx): Promise<void> {
       capability,
     );
     return r.ok
-      ? sendJson(res, 200, { cron: withoutFireLog(r.cron) })
+      ? sendJson(res, 200, { cron: r.cron })
       : sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   }
   if (method === "GET") {
     const cron = await gateSourceCronRead(ctx, id);
     if (!cron) return;
-    return sendJson(res, 200, { cron: withoutFireLog(cron) });
+    return sendJson(res, 200, { cron });
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
@@ -446,7 +441,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   };
   try {
     const updated = await app.updateCron(id, patch);
-    return sendJson(res, 200, { cron: updated ? withoutFireLog(updated) : null });
+    return sendJson(res, 200, { cron: updated ?? null });
   } catch (e) {
     return sendJson(res, 400, { error: "cron_update_failed", message: errMessage(e) });
   }

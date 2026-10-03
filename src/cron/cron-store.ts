@@ -81,7 +81,6 @@ export interface CronStore {
   listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  backfillFires(): Promise<number>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
@@ -211,26 +210,6 @@ export function createCronStore(
     listFires: (id, opts) => fires.listByCron(id, opts),
     firesByThreadRefs: (threadRefs) => fires.listByThreadRefs(threadRefs),
     latestFireForThread: (id, threadRef) => fires.latestForThread(id, threadRef),
-    async backfillFires() {
-      let backfilled = 0;
-      for (const [id, cron] of await backing.entries()) {
-        const log = cron.fireLog;
-        if (log === undefined) continue;
-        if (log.length) {
-          await fires.backfill(id, log);
-          backfilled += log.length;
-        }
-        if (backing.update) {
-          await backing.update(id, (current) => {
-            const { fireLog: _legacy, ...rest } = current;
-            return rest;
-          });
-        } else {
-          await backing.merge(id, { fireLog: undefined });
-        }
-      }
-      return backfilled;
-    },
     async setFireNote(id, note) {
       let applied = false;
       const apply = (cron: Cron): Cron => {
