@@ -142,6 +142,9 @@ The auth module runs inside portal: move its environment and secrets to portal,
 set `AUTH_EMBEDDED=1`, and use `http://127.0.0.1:8099` for
 `AUTH_BROKER_UPSTREAM` and the OIDC token, userinfo, and JWKS endpoint base.
 Set `ADMIN_UPSTREAM` to the web-ui service URL followed by `/admin`.
+A separate auth broker reached by a bare container name (`http://auth:8080`) must be listed in
+`PORTAL_PRIVATE_UPSTREAM_HOSTS` (comma-separated exact hostnames); unlisted single-label names are refused
+because DNS search domains can resolve them to public hosts.
 See [the combined-service migration](combined-services.md) before upgrading existing apps.
 
 `src/deployment/secret-schema.ts` is the authoritative list of what each service
