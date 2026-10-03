@@ -92,3 +92,14 @@ test("system approvals stay pending without enqueuing or reviving an impossible 
   assert.deepEqual(await deliveries.pending("principal"), []);
   assert.equal((await deliveries.get(stale.id))?.expiredAt, expiredAt, "a sweep must not revive the stale DM");
 });
+
+test("scheduled-task approvals reach the task owner instead of failing silently", async () => {
+  const deliveries = createDeliveryStore();
+  const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), deliveries);
+  const approval = record("cron:K1");
+  approval.request!.surface = "cron";
+  await approvals.put("A1", approval);
+  const pending = await deliveries.pending("principal");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.destination.commandApprovalId, "A1");
+});

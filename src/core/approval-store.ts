@@ -18,7 +18,7 @@ export function createApprovalStore(
   deliveries: Pick<DeliveryStore, "enqueue">,
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
-    if (record.request?.surface !== "slack") return;
+    if (record.request?.surface !== "slack" && record.request?.surface !== "cron") return;
     const actorId = approvalDeliveryRecipient(record.request.actor);
     if (!actorId) return;
     await deliveries.enqueue({

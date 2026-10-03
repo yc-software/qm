@@ -1,3 +1,4 @@
+import { agentTurnCapability, VISIBILITY_APPROVAL_REQUIRED } from "../deploy/visibility-approval.ts";
 import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { Cron, CronFireLogEntry, CronSchedule, Destination, Principal, Webhook } from "../types.ts";
@@ -944,6 +945,9 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           message: `you can't ${req.move ? "move" : "share"} into ${target.label} — you're not a member of that context`,
         };
       }
+
+      if (isOrg && req.type === "deploy" && agentTurnCapability(capability) && req.visibilityApproved !== true)
+        return { ok: false, code: "approval_required", message: VISIBILITY_APPROVAL_REQUIRED };
 
       try {
         if (orgSkillCede) {

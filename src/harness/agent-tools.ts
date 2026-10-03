@@ -1258,6 +1258,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ),
         );
       } catch (e) {
+        if (e instanceof NeedsApproval) return blockOnApproval(callId, e, undefined, "apps");
         const msg = errMessage(e);
         return recordResult(
           callId,
@@ -3286,7 +3287,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               text("[error] set public, email, or toScope, not more than one"),
               true,
             );
-          const d = await tc.setDeploymentPublic(id, params.public);
+          let d: Awaited<ReturnType<typeof tc.setDeploymentPublic>>;
+          try {
+            d = await tc.setDeploymentPublic(id, params.public);
+          } catch (e) {
+            if (e instanceof NeedsApproval) return blockOnApproval(callId, e, undefined, tool);
+            throw e;
+          }
           return recordResult(
             callId,
             { tool, action, type, id: d.id, public: d.public },
@@ -3300,14 +3307,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             text("[error] toScope or email is required unless public is set"),
             true,
           );
-        const r = await tc.shareArtifact({
-          type,
-          id,
-          ...(params.toScope ? splitToScope(params.toScope) : {}),
-          ...(params.email !== undefined ? { email: params.email } : {}),
-          ...(params.permission !== undefined ? { permission: params.permission } : {}),
-          ...(move ? { move: true } : {}),
-        });
+        let r: Awaited<ReturnType<typeof tc.shareArtifact>>;
+        try {
+          r = await tc.shareArtifact({
+            type,
+            id,
+            ...(params.toScope ? splitToScope(params.toScope) : {}),
+            ...(params.email !== undefined ? { email: params.email } : {}),
+            ...(params.permission !== undefined ? { permission: params.permission } : {}),
+            ...(move ? { move: true } : {}),
+          });
+        } catch (e) {
+          if (e instanceof NeedsApproval) return blockOnApproval(callId, e, undefined, tool);
+          throw e;
+        }
         if (isUnavailable(r)) return unavailable(callId, tool);
         if (!r.ok) {
           const candidates = r.candidates?.length

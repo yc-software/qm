@@ -1,3 +1,4 @@
+import { agentTurnCapability, VISIBILITY_APPROVAL_REQUIRED } from "../../deploy/visibility-approval.ts";
 import { EXTERNAL_APP_SHARING_OFF, externalAppSharingAllowed } from "../../feature-flags.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
@@ -1578,6 +1579,11 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         error: "bad_request",
         message: "public access and person/scope access must be changed separately",
       });
+    if (b.public && agentTurnCapability(capability)) {
+      const current = await app.getDeployment(params.id!);
+      if (current && current.public !== true)
+        return sendJson(res, 403, { error: "approval_required", message: VISIBILITY_APPROVAL_REQUIRED });
+    }
     try {
       const deployment = await app.setDeploymentPublic(params.id!, b.public, { createdBy: capability.actorId });
       return sendJson(res, 200, {
@@ -1631,6 +1637,12 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       message: "more than one teammate matches",
       candidates: target.candidates,
     });
+  if (permission && parseScopeId(target.scope).kind === "org" && agentTurnCapability(capability)) {
+    const current = await app.getDeployment(params.id!);
+    const granted = current ? await app.deploymentGrantees(current.id) : [];
+    if (!granted.some((g) => g.scope === target.scope))
+      return sendJson(res, 403, { error: "approval_required", message: VISIBILITY_APPROVAL_REQUIRED });
+  }
   try {
     const invite =
       typeof b.email === "string" && permission === "read"

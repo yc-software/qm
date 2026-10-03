@@ -83,6 +83,7 @@ export interface ShareArtifactRequest {
   email?: string;
   permission?: Permission;
   move?: boolean;
+  visibilityApproved?: true;
 }
 
 export type ShareArtifactResult =
@@ -97,7 +98,14 @@ export type ShareArtifactResult =
     }
   | {
       ok: false;
-      code: "bad_request" | "not_found" | "forbidden" | "recipient_not_found" | "ambiguous_recipient" | "share_failed";
+      code:
+        | "bad_request"
+        | "not_found"
+        | "forbidden"
+        | "recipient_not_found"
+        | "ambiguous_recipient"
+        | "share_failed"
+        | "approval_required";
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };

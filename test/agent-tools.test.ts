@@ -4075,3 +4075,40 @@ test("background process guidance reflects the configured sandbox token lifetime
   assert.match(unlimited, /does not expire those turn tokens/);
   assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
 });
+
+test("apps visibility widening pauses the turn on an approval card instead of applying", async () => {
+  const held = (key: string) =>
+    new NeedsApproval(`apps share x ${key}`, "widen", "approval", undefined, key, { session: false, always: false });
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async publish() {
+        throw held("public");
+      },
+      async setDeploymentPublic() {
+        throw held("public-share");
+      },
+      async shareArtifact() {
+        throw held("org");
+      },
+    },
+    pendingApprovals: [],
+  };
+  const apps = createAgentTools(ref, { controlTools: true }).find((t) => t.name === "apps")!;
+  for (const args of [
+    { action: "publish", name: "x", entrypoint: "node s.js", public: true },
+    { action: "share", id: "x", public: true },
+    { action: "share", id: "x", toScope: "org" },
+  ]) {
+    assert.match(textOut(await call(apps, args)), /needs human approval/);
+  }
+  assert.equal(ref.pausedOnApproval, true);
+  assert.deepEqual(
+    ref.pendingApprovals!.map((a) => [a.approvalKey, a.grantModes]),
+    [
+      ["public", { session: false, always: false }],
+      ["public-share", { session: false, always: false }],
+      ["org", { session: false, always: false }],
+    ],
+  );
+});

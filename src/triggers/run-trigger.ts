@@ -356,7 +356,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       sessionId = res.sessionId;
       if (res.status === "silent") return;
       if (res.status === "pending_approval") {
-        note = "hit a require_approval command — failed closed (no human at fire/event time)";
+        note = "held a command for the owner's approval; it did not run";
         console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
         return;
       }
