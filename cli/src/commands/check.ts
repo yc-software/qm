@@ -128,7 +128,15 @@ export function runChecks(
         .join(", ");
       note(`     tools : ${toolDesc || "(none)"}`);
       note(`     skills: ${layer.skills.map((s) => s.frontmatter.name).join(", ") || "(none)"}`);
-      note(`     Dockerfile: ${layer.hasDockerfile ? "yes" : "no"}`);
+      const microvmSandboxes =
+        config.target === "aws" &&
+        (config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "aws") === "aws";
+      if (layer.hasDockerfile && microvmSandboxes) {
+        note("     Dockerfile: yes (not used by AWS MicroVM sandboxes)");
+        warn(
+          `${rel}/Dockerfile is ignored on AWS MicroVM sandboxes — qm infra build-image builds the CLI's packaged image template`,
+        );
+      } else note(`     Dockerfile: ${layer.hasDockerfile ? "yes" : "no"}`);
     }
     const pluginDesc = plugins.map((p) => `${p.name} (${p.kind})`).join(", ");
     step(`plugins: ${pluginDesc || "(none)"}`);
