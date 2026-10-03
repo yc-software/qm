@@ -992,12 +992,18 @@ export function piLastAssistantTextOrThrow(session: AssistantTextSession): strin
   return session.getLastAssistantText();
 }
 
+function messagesSince(session: AssistantTextSession, messagesBefore?: number): AssistantTextSession {
+  return messagesBefore === undefined
+    ? session
+    : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
+}
+
+function piRoundFailed(session: AssistantTextSession, messagesBefore: number): boolean {
+  return !!piFailedAssistant(messagesSince(session, messagesBefore));
+}
+
 export function piTurnError(session: AssistantTextSession, thrown: unknown, messagesBefore?: number): Error {
-  const fresh =
-    messagesBefore === undefined
-      ? session
-      : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-  const detailed = piAssistantFailure(fresh);
+  const detailed = piAssistantFailure(messagesSince(session, messagesBefore));
   if (detailed) return detailed;
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
@@ -1010,11 +1016,7 @@ export function isProviderRefusal(message: string | undefined): boolean {
 }
 
 export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
-  const fresh =
-    messagesBefore === undefined
-      ? session
-      : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-  const err = piAssistantError(fresh);
+  const err = piAssistantError(messagesSince(session, messagesBefore));
   return err && isProviderRefusal(err) ? err : null;
 }
 
@@ -2289,7 +2291,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   !!turn.cancel?.aborted ||
                   !!entry.ref.runtimeHandoff ||
                   !!entry.ref.pausedOnApproval ||
-                  !!entry.ref.pendingApprovals?.length,
+                  !!entry.ref.pendingApprovals?.length ||
+                  piRoundFailed(entry.agentSession, messagesBefore),
                 beforePrompt: async (note) => {
                   console.error(
                     `[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`,
