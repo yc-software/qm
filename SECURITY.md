@@ -181,6 +181,12 @@ these, not through them.
   to an intended recipient. The gateway removes the token from the address bar and
   places it in a one-day browser cookie, but copied links remain usable and app ACL
   changes do not revoke individual link holders.
+- **The spend export token is bearer authorization for org-wide spend.** When
+  `SPEND_EXPORT_TOKEN` is set, anyone holding it can read every scope's daily model-call
+  spend: per-person totals, channel and group names, and the model mix. It reads no
+  conversation content and changes nothing, and each export is audited, but the token is
+  not bound to a caller. Rotating it means replacing the secret in core and in every
+  consumer; core accepts only the current value after it restarts with the new one.
 - **Portal sessions have residual risk.** A signed portal session defaults to eight
   hours and renews on use. Logout clears the browser cookie but cannot revoke an
   already copied session token before its expiration.

@@ -1,14 +1,17 @@
 import { cacheHitRatio } from "../../../admin/metrics-sink.ts";
 import { canonicalPerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type ScopeId } from "../../../types.ts";
-import type { SessionOrigin, SpendRow } from "../../../sessions/session-store.ts";
+import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
+import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
-import { type ApiCtx } from "../route.ts";
+import { type ApiCtx, type BaseCtx } from "../route.ts";
 
 const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 30;
+const EXPORT_MAX_DAYS = 93;
+const SPEND_EXPORT_PRINCIPAL = "spend-export";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const EPOCH_MS = /^\d+$/;
 const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/;
@@ -76,6 +79,16 @@ export interface SpendReport {
   people: SpendEntity[];
   scopes: SpendEntity[];
   models: ({ model: string | null } & SpendTotals)[];
+}
+
+export interface SpendExportRow extends Tally {
+  day: string;
+  scopeId: ScopeId;
+  kind: string;
+  principalId: string | null;
+  displayName: string;
+  origin: OriginBucket;
+  model: string | null;
 }
 
 export interface SpendSummaryOptions {
@@ -290,6 +303,43 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   };
 }
 
+export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: ScopeId) => string): SpendExportRow[] {
+  const names = new Map<ScopeId, string>();
+  const merged = new Map<string, SpendExportRow>();
+  for (const row of rows) {
+    const parsed = parseScopeId(row.scopeId);
+    const person = parsed.kind === "personal" && parsed.ref ? canonicalPerson(parsed.ref) : null;
+    const scopeId = person === null ? row.scopeId : personalScope(person);
+    if (!names.get(scopeId)) names.set(scopeId, label(scopeId) || label(row.scopeId));
+    const origin = originBucket(row.origin);
+    const key = JSON.stringify([row.day, scopeId, origin, row.model]);
+    let out = merged.get(key);
+    if (!out) {
+      out = {
+        day: isoDay(row.day),
+        scopeId,
+        kind: person === null ? (parsed.kind ?? "unknown") : "person",
+        principalId: person,
+        displayName: "",
+        origin,
+        model: row.model,
+        ...emptyTally(),
+      };
+      merged.set(key, out);
+    }
+    addRow(out, row);
+  }
+  return [...merged.values()]
+    .map((out) => ({ ...out, displayName: names.get(out.scopeId) ?? "" }))
+    .sort(
+      (a, b) =>
+        a.day.localeCompare(b.day) ||
+        a.scopeId.localeCompare(b.scopeId) ||
+        ORIGIN_BUCKETS.indexOf(a.origin) - ORIGIN_BUCKETS.indexOf(b.origin) ||
+        (a.model ?? "").localeCompare(b.model ?? ""),
+    );
+}
+
 function csvCell(value: string | number | null): string {
   if (value === null) return "";
   if (typeof value === "number") return String(value);
@@ -339,6 +389,53 @@ function parseBound(raw: string): number | null {
   return Number.isSafeInteger(parsed) && Number.isFinite(new Date(parsed).getTime()) ? parsed : null;
 }
 
+async function loadSpendRows(
+  sessions: SessionStore,
+  range: { from: number; to: number },
+): Promise<{ rows: SpendRow[]; asOf?: number }> {
+  return sessions.spendReport ? sessions.spendReport(range) : { rows: await sessions.spendRollup(range) };
+}
+
+function exportBound(raw: string | null): number | null {
+  return raw !== null && DATE_ONLY.test(raw.trim()) ? parseBound(raw) : null;
+}
+
+export async function spendExport(ctx: BaseCtx): Promise<void> {
+  const { req, res, app, deps, url } = ctx;
+  const token = deps.spendExportToken;
+  if (!token) return sendJson(res, 404, { error: "not_found" });
+  const authorization = req.headers.authorization;
+  if (typeof authorization !== "string" || !constantTimeEqual(authorization, `Bearer ${token}`))
+    return sendJson(res, 401, { error: "unauthorized" });
+  if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
+  const from = exportBound(url.searchParams.get("from"));
+  const to = exportBound(url.searchParams.get("to"));
+  if (from === null || to === null)
+    return sendJson(res, 400, { error: "bad_request", message: "from and to must be YYYY-MM-DD dates (UTC)" });
+  if (to <= from || to - from > EXPORT_MAX_DAYS * DAY_MS)
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: `to must be later than from and at most ${EXPORT_MAX_DAYS} days after it`,
+    });
+  const { rows, asOf } = await loadSpendRows(deps.sessions, { from, to });
+  const labels = await discoverScopes(
+    app,
+    deps,
+    rows.map((r) => r.scopeId),
+  );
+  const scope = orgScope(deps);
+  const window = { from: isoDay(from / DAY_MS), to: isoDay(to / DAY_MS) };
+  const exported = spendExportRows(rows, (id) => labels.get(id) ?? "");
+  audit(deps, {
+    principalId: SPEND_EXPORT_PRINCIPAL,
+    action: "spend.export",
+    resource: "spend",
+    scopeLabel: scope,
+    detail: `${window.from}..${window.to} rows=${exported.length}`,
+  });
+  sendJson(res, 200, { scopeId: scope, window, ...(asOf === undefined ? {} : { asOf }), rows: exported });
+}
+
 export async function spend(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
   const scope = orgScope(deps);
@@ -363,9 +460,9 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   if (from === null) return bad("from must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
   if (to <= from) return bad("to must be later than from");
 
-  const { rows, asOf } = deps.sessions?.spendReport
-    ? await deps.sessions.spendReport({ from, to })
-    : { rows: (await deps.sessions?.spendRollup({ from, to })) ?? [], asOf: undefined };
+  const { rows, asOf } = deps.sessions
+    ? await loadSpendRows(deps.sessions, { from, to })
+    : { rows: [], asOf: undefined };
   const labels = await discoverScopes(
     app,
     deps,
