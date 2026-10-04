@@ -138,6 +138,15 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
   }
 }
 
+async function closeOpenTasks(tasks: TaskStore, run: Run): Promise<void> {
+  const next = run.status === "failed" ? "failed" : "skipped";
+  for (const task of await tasks.listOpen({ originRunId: run.id })) {
+    await tasks
+      .transitionStatus(task.id, task.status, next, run.id)
+      .catch(reportFailureAs("delivery: close open task", undefined, `run=${run.id} task=${task.id}`));
+  }
+}
+
 export function wireRunResultDeliveries(
   runs: RunStore,
   deliveries: DeliveryStore,
@@ -152,6 +161,7 @@ export function wireRunResultDeliveries(
       );
     }
     void (async () => {
+      if (tasks) await closeOpenTasks(tasks, run);
       const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
       const delivery = runResultDelivery(run, taskList, adminUrlFor);
       if (!delivery) return;
