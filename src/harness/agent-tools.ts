@@ -4236,7 +4236,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "context",
     label: "context",
     description:
-      "Reduce this conversation's model context without calling a summarizer. compact with mode recent keeps bounded recent entries, a saved summary if it fits, and structured goal state. Stored history is not deleted. This stops the current segment and resumes the unfinished request; do not repeat completed actions. Call this by itself after other tools finish.",
+      "Recovery only: reduce this conversation's model context without calling a summarizer, for when automatic compaction keeps failing and the conversation cannot continue. Do not use it to manage routine context growth: long work is compacted automatically with a summary, and this drops earlier entries from view without one. compact with mode recent keeps bounded recent entries, a saved summary if it fits, and structured goal state. Stored history is not deleted. This stops the current segment and resumes the unfinished request; do not repeat completed actions. Call this by itself after other tools finish.",
     parameters: Type.Object({ action: Type.Literal("compact"), mode: Type.Literal("recent") }),
     async execute(callId, params) {
       await recordCall(callId, { tool: "context", ...params });

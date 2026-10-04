@@ -154,7 +154,7 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { findTrailingPartialTurn, resumeNote, turnAtSeq } from "./turn-resume.ts";
+import { findTrailingPartialTurn, handoffNote, resumeNote, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   appendCoverageImport,
@@ -4021,8 +4021,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               : undefined;
             segment = await runHarnessSegment(
-              resumeNote() +
-                (recovery ? "\nContext reduced without a new summary." : "\nRuntime handoff completed.") +
+              handoffNote(recovery ? "context" : "runtime") +
                 " Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request." +
                 (recovery &&
                 !resumedHistory.some(

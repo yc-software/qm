@@ -85,3 +85,11 @@ export function resumeNote(opts?: { backgroundJobs?: boolean; workRecorded?: boo
   parts.push("Continue from where you left off; don't start over or repeat completed steps.)");
   return parts.join(" ");
 }
+
+export function handoffNote(kind: "context" | "runtime"): string {
+  const what =
+    kind === "context"
+      ? "you used the context tool, so the context was reduced without a new summary."
+      : "Runtime handoff completed.";
+  return `${NOTE_HEAD} ${what} Nothing was interrupted; do not tell the user it was.)`;
+}
