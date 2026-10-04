@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { retryDelay } from "../src/runs/retry-delay.ts";
+import { MAX_PROVIDER_RETRY_AFTER_MS, retryDelay, runRetryDelay } from "../src/runs/retry-delay.ts";
 import { processRun } from "../src/runs/worker.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError, retryAfterHintMs } from "../src/core/turn-error.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 
 const request: OrchestratorInput = {
@@ -67,5 +67,27 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
       assert.ok(await runs.claimById(run.id, "other", 60_000));
       await runs.fail(run.id, (await runs.get(run.id))!.leaseToken!, "done", { retry: false });
     }
+  }
+});
+
+test("provider retry hints are parsed from error text", () => {
+  const cases: Array<[string, number | undefined]> = [
+    ["Server requested 120s retry delay (max: 60s). 429 rate limit", 120_000],
+    ["Rate limit reached for gpt-5 on RPM. Please try again in 120ms.", 120],
+    ["Rate limit reached. Please try again in 1.5s.", 1_500],
+    ["litellm.RateLimitError: retry after 20 seconds", 20_000],
+    ["quota resets; try again in 2 minutes", 120_000],
+    ["500 Internal server error", undefined],
+  ];
+  for (const [message, want] of cases) assert.equal(retryAfterHintMs(message), want, message);
+});
+
+test("run retry waits at least as long as the provider asked, bounded", () => {
+  for (let i = 0; i < 50; i++) {
+    const plain = runRetryDelay(0, new Error("x"));
+    assert.ok(plain >= 15_000 && plain <= 18_000, String(plain));
+    assert.equal(runRetryDelay(0, new ProviderTurnError("x", 180_000)), 180_000);
+    assert.equal(runRetryDelay(0, new ProviderTurnError("x", 24 * 3_600_000)), MAX_PROVIDER_RETRY_AFTER_MS);
+    assert.ok(runRetryDelay(0, new ProviderTurnError("x", 100)) >= 15_000, "short hints keep the backoff floor");
   }
 });
