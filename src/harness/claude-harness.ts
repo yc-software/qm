@@ -409,6 +409,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     let settled = false;
     const steerPrompts: Array<{ message: SDKUserMessage; intake: SteerIntake }> = [];
     let streamedText = "";
+    const replies: string[] = [];
     let initialUserEchoSkipped = false;
     const seenUserMessages = new Set<string>();
     const appendTape = async (
@@ -753,9 +754,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               scopeLabel: turn.scopeLabel,
             });
             await tapeReplyCheckpoint(turn, finalEntry);
+            replies.push(text);
           }
           streamedText = "";
-          pendingPrompts = Math.max(0, pendingPrompts - 1);
+          pendingPrompts = steerPrompts.length;
           if (pendingPrompts > 0) continue;
           if (!signalsStopped) {
             await stopSignals?.();
@@ -782,18 +784,18 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       const finalResult = result as SDKResultMessage | null;
       const stoppedPartial = async (): Promise<HarnessTurnResult> => {
         const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
-        const reply = terminal ? "" : streamedText.trim();
+        const partial = terminal ? "" : streamedText.trim();
         await flushThinking();
-        if (reply && !terminal) {
+        if (partial) {
           const finalEntry = await turn.emit({
             type: "assistant",
-            payload: { text: reply, stopped: true },
+            payload: { text: partial, stopped: true },
             scopeLabel: turn.scopeLabel,
           });
           await tapeReplyCheckpoint(turn, finalEntry);
         }
         return {
-          reply,
+          reply: terminal ? "" : [...replies, partial].filter(Boolean).join("\n\n"),
           ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),
           ...(stopped ? { stoppedByUser: true as const } : {}),
           ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
@@ -819,7 +821,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         throw new Error(`Claude utility response did not complete (${finalResult.stop_reason ?? "error"})`);
       }
       const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
-      const reply = terminal ? "" : finalResult.result.trim();
+      const reply = terminal ? "" : replies.join("\n\n");
       const usageTotals = [...callUsage.values()].reduce(
         (acc, usage) => {
           acc.input += usage.input;
