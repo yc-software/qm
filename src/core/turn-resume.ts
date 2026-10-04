@@ -62,6 +62,7 @@ export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): Re
     if (e.type !== "user") continue;
     if (isSteerEntry(e)) {
       workEntries += 1;
+      answer = undefined;
       continue;
     }
     if (isOverheardEntry(e) || isResumeNote(entryText(e))) continue;

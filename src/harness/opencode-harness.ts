@@ -4,6 +4,7 @@ import {
   fitDocumentText,
   nativeDocumentIsReadable,
 } from "../core/document-inputs.ts";
+import { meterGrindUsage } from "./grind.ts";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -1066,6 +1067,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         const info = infoByCapture.get(capture);
         const created = info?.time?.created;
         const completed = info?.time?.completed;
+        const usage = usageFromInfo(info);
+        meterGrindUsage(turn.goalMeter, usage);
         try {
           await turn.recordLlmRequest({
             turnSeq: state.userSeq,
@@ -1079,7 +1082,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             stepGapMs: null,
             toolWallMs: null,
             gapPhases: null,
-            usage: usageFromInfo(info),
+            usage,
           });
         } catch (error) {
           swallow("opencode: llm request record", error);

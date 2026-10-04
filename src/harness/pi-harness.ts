@@ -53,7 +53,7 @@ import type {
   NewTapeRecord,
   TapeRecord,
 } from "../sessions/session-store.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
+import { tapeCheckpointPayload } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
@@ -110,18 +110,8 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
-import { createGrindMeter, meterGrindCall } from "./grind.ts";
-import {
-  createFloorCapPolicy,
-  bankGoalTurn,
-  enforceGoal,
-  goalFloorUnmet,
-  goalPausedNote,
-  goalSteeringNote,
-  meterGoalCall,
-  rehydrateOpenGoal,
-  goalSnapshotPayload,
-} from "./goal.ts";
+import { createGrindMeter, meterGrindUsage } from "./grind.ts";
+import { createFloorCapPolicy, goalPausedNote, goalSteeringNote, rehydrateOpenGoal } from "./goal.ts";
 
 export interface PiHarnessOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -1834,7 +1824,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         "fast-mode",
         "provider-sessions",
         "native-tape",
-        "goal-enforcement",
       ]),
     },
     {
@@ -1913,16 +1902,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             },
             scopeLabel: turn.scopeLabel,
           });
-          const grindMeter = createGrindMeter();
-
-          if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history);
+          const grindMeter = turn.goalMeter ?? createGrindMeter();
+          entry.ref.goal = turn.goal ?? rehydrateOpenGoal(turn.history);
           entry.ref.goalMeter = grindMeter;
-          entry.ref.goalRound = 0;
-          const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
-          const pausedGoalAtStart = entry.ref.goal?.status === "paused" ? entry.ref.goal : null;
           const goalNote = (() => {
-            if (activeGoalAtStart) return goalSteeringNote(activeGoalAtStart);
-            if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
+            if (turn.goal) return "";
+            if (entry.ref.goal?.status === "active") return goalSteeringNote(entry.ref.goal);
+            if (entry.ref.goal?.status === "paused") return goalPausedNote(entry.ref.goal);
             return "";
           })();
           const modelPrompt = [goalNote, turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
@@ -2031,9 +2017,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               const u = (event.message as { usage?: Partial<Usage> }).usage;
               const stepModel = entry.agentSession.model;
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
-              meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
-              const meteredGoal = entry.ref.goal;
-              if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
+              meterGrindUsage(grindMeter, usage);
               callStats.push({
                 ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
                 durationMs: curStart !== undefined ? end - curStart : null,
@@ -2109,16 +2093,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 swallow("pi: llm request record", e);
               }
             }
-          };
-          const tapeEntryMirror = async (mirrored: {
-            seq: number;
-            createdAt: number;
-            type: string;
-            payload: unknown;
-            scopeLabel: ScopeId;
-          }): Promise<void> => {
-            if (!turn.tape) return;
-            await turn.tape(tapeEntryMirrorRecord(mirrored));
           };
           const checkpointSubturn = async (
             finalEntry: { seq: number; createdAt: number },
@@ -2271,45 +2245,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 abort: () => entry.agentSession.abort(),
               },
             );
-            const goalAfterPrompt = entry.ref.goal;
-            if (
-              wallClock === "ok" &&
-              goalAfterPrompt &&
-              (goalAfterPrompt.status === "active" || goalFloorUnmet(goalAfterPrompt, grindMeter)) &&
-              !userAborted &&
-              !turn.cancel?.aborted
-            ) {
-              wallClock = await enforceGoal({
-                goal: goalAfterPrompt,
-                meter: grindMeter,
-                outcome: wallClock,
-                ok: "ok" as const,
-                blocked: () =>
-                  userAborted ||
-                  !!turn.cancel?.aborted ||
-                  !!entry.ref.runtimeHandoff ||
-                  !!entry.ref.pausedOnApproval ||
-                  !!entry.ref.pendingApprovals?.length,
-                beforePrompt: async (note) => {
-                  console.error(
-                    `[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`,
-                  );
-                  void note;
-                  entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
-                  entry.ref.silentRequested = false;
-                  await thinkTail;
-                },
-                prompt: (note) => {
-                  if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS)
-                    return Promise.resolve<TurnWallClockOutcome>("aborted");
-                  return raceTurnWallClock(entry.agentSession.prompt(note), {
-                    capMs: raceCapMs(),
-                    extendMs: extendCapMs,
-                    abort: () => entry.agentSession.abort(),
-                  });
-                },
-              });
-            }
             if (wallClock === "ok" && !entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
               const refusal = providerRefusalError(entry.agentSession, messagesBefore);
               if (refusal) {
@@ -2405,15 +2340,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             );
           }
           if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
-            if (entry.ref.goal) {
-              bankGoalTurn(entry.ref.goal, grindMeter.startedAt);
-              const goalEntry = await turn.emit({
-                type: "system",
-                payload: goalSnapshotPayload(entry.ref.goal),
-                scopeLabel: turn.scopeLabel,
-              });
-              await tapeEntryMirror(goalEntry);
-            }
             return {
               reply: "",
               runtimeHandoff: entry.ref.runtimeHandoff,
@@ -2434,22 +2360,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
               : "";
             const reply = partial.trim() ? partial : "(stopped)";
-            if (entry.ref.goal) {
-              const g = entry.ref.goal;
-
-              if (userAborted && g.status === "active") {
-                g.status = "paused";
-                g.updatedAt = Date.now();
-              }
-              bankGoalTurn(g, grindMeter.startedAt);
-              const goalEntry = await turn.emit({
-                type: "system",
-                payload: goalSnapshotPayload(g),
-                scopeLabel: turn.scopeLabel,
-              });
-              await tapeEntryMirror(goalEntry);
-              if (g.status === "complete") entry.ref.goal = null;
-            }
             const finalEntry = await turn.emit({
               type: "assistant",
               payload: { text: reply, stopped: true },
@@ -2469,6 +2379,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const base = {
               reply,
               stopped: true as const,
+              ...(userAborted ? { stoppedByUser: true as const } : {}),
               ...(turn.tape ? { stoppedTapeComplete: true as const } : {}),
               modelCalls: entry.ref.modelCalls ?? 0,
               compileMs,
@@ -2476,17 +2387,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             return cacheUsage ? { ...base, cacheUsage } : base;
           }
 
-          if (entry.ref.goal) {
-            const g = entry.ref.goal;
-            bankGoalTurn(g, grindMeter.startedAt);
-            const goalEntry = await turn.emit({
-              type: "system",
-              payload: goalSnapshotPayload(g),
-              scopeLabel: turn.scopeLabel,
-            });
-            await tapeEntryMirror(goalEntry);
-            if (g.status === "complete") entry.ref.goal = null;
-          }
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
           // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
           const reply = entry.ref.silentRequested ? "" : closingText;

@@ -29,6 +29,13 @@ function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
 const textOf = (r: { content: Array<{ type: string; text?: string }> }) =>
   r.content.map((c) => c.text ?? "").join("\n");
 
+test("create starts the goal's token count at zero, not at the tokens spent before it", async () => {
+  const { ref, create } = toolbox();
+  ref.goalMeter!.tokens = 500;
+  await create.execute("c1", { objective: "fresh start" });
+  assert.equal(ref.goalMeter!.tokens, 0);
+});
+
 test("create registers once; a second active goal is refused", async () => {
   const { ref, create } = toolbox();
   const first = await create.execute("c1", { objective: "make the suite green" });
@@ -97,7 +104,6 @@ for (const status of ["blocked", "paused", "active"]) {
     await create.execute("c1", { objective: "hopeless" });
     const before = structuredClone(ref.goal);
     for (let round = 0; round < 5; round++) {
-      ref.goalRound = round;
       const result = await update.execute(`u${round}`, { status, note: "api is down" });
       assert.match(textOf(result as never), /Invalid arguments/);
     }

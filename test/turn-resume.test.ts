@@ -186,6 +186,11 @@ test("turnAtSeq reads through a mid-turn steer, which is the person adding to th
   });
 });
 
+test("turnAtSeq does not treat a reply as the answer once a later steer or goal continuation arrives", () => {
+  const entries = [user("ship it", 10), assistant("round one", 11), steer("[goal] keep going", 12), toolCall(13)];
+  assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 2 });
+});
+
 test("turnAtSeq ignores an assistant entry that is another conversation's delivery", () => {
   const entries = [user("mine", 10), toolCall(11), delivered("Nightly report", 12)];
   assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 1 });
