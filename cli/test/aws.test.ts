@@ -5773,7 +5773,7 @@ test("AWS deployment progress rejects invalid options before AWS calls", async (
   }
 });
 
-test("inactive capacity proves exact drained unprotected cohorts without mutating deployment state", async () => {
+test("inactive capacity proves exact relinquished unprotected cohorts without mutating deployment state", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-capacity-"));
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
@@ -5857,11 +5857,12 @@ test("inactive capacity proves exact drained unprotected cohorts without mutatin
       /transact-write|put-item|delete-item|update-item|update-service|register-task-definition|run-task|update-task-protection|stop-task/,
     );
 
-    for (const state of ["admitted", "relinquished"]) {
-      ownership.members[0]!.state = state;
-      reset();
-      await assert.rejects(awsBackgroundWorkCapacity(configured, dir), /every member to drain/);
-    }
+    ownership.members[0]!.state = "admitted";
+    reset();
+    await assert.rejects(awsBackgroundWorkCapacity(configured, dir), /every member to relinquish/);
+    ownership.members[0]!.state = "relinquished";
+    reset();
+    assert.deepEqual(await awsBackgroundWorkCapacity(configured, dir), proof);
     ownership.members[0]!.state = "drained";
     ownership.desiredDeploymentId = manifest.backgroundDeploymentId;
     reset();
@@ -6211,9 +6212,10 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     assert.equal(retired.generation, 3);
     assert.equal(retired.members.at(-1)!.retired, true);
     await awsSetBackgroundWork(single, dir, false);
-    await assert.rejects(awsUp(single, dir, { yes: true, restart: ["core"] }), /every member to drain/);
-    await assert.rejects(awsRollback(single, manifest.id), /every member to drain/);
-    ownership.members[0]!.state = "drained";
+    ownership.members[0]!.state = "admitted";
+    await assert.rejects(awsUp(single, dir, { yes: true, restart: ["core"] }), /every member to relinquish/);
+    await assert.rejects(awsRollback(single, manifest.id), /every member to relinquish/);
+    ownership.members[0]!.state = "relinquished";
     await awsUp(single, dir, { yes: true, restart: ["core"] });
     const replacement = JSON.parse(readFileSync(fake.state, "utf8"));
     const replacementManifest = JSON.parse(

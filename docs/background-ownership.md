@@ -46,7 +46,7 @@ A process records `admitted` before starting background resources. The desired d
 
 `relinquished` acknowledges that the process stopped new claims and closed its Slack ingress. Already admitted turns may still run. Cron polling can resume after rollback while earlier callbacks keep their queue connection and heartbeats. Maintenance callbacks that cannot relinquish safely are joined before acknowledgment.
 
-`drained` means the process's admitted background work has finished. Releasing ownership and making a deployment safe to replace are separate gates. Do not terminate a relinquished but undrained process merely to meet a rollout time target.
+`drained` means the process's admitted background work has finished. Releasing ownership and making a deployment safe to replace are separate gates: `qm up` replaces a cohort once every member has relinquished, and members still finishing admitted work keep running beside the new tasks under their leases and task protection until they drain. The ECS service's `maximumPercent` must leave room for those lingering tasks. Do not terminate a relinquished but undrained process merely to meet a rollout time target.
 
 Database errors or an expired local validity watchdog fence new local work. They do not establish durable relinquishment or authorize another deployment to bypass an outstanding member.
 

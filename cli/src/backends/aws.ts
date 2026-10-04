@@ -3256,7 +3256,7 @@ export async function awsBackgroundWorkCapacity(
   const ownership = await readBackgroundWork(transport, cohort.deploymentId);
   if (!ownership.enabled || !ownership.desiredDeploymentId || ownership.desiredDeploymentId === cohort.deploymentId)
     throw new CliError("capacity requires enabled background ownership held by another deployment");
-  assertBackgroundMembersDrained(ownership, cohort.deploymentId);
+  assertBackgroundCohortRelinquished(ownership, cohort.deploymentId);
   if (
     cohort.taskArns.some(
       (taskArn) =>
@@ -3265,11 +3265,11 @@ export async function awsBackgroundWorkCapacity(
             member.taskArn === taskArn &&
             member.deploymentId === cohort.deploymentId &&
             !member.retired &&
-            member.state === "drained",
+            member.state !== "admitted",
         ),
     )
   )
-    throw new CliError("capacity requires every current core task to be enrolled and drained");
+    throw new CliError("capacity requires every current core task to be enrolled and relinquished");
   const states = describedServices(config, workloads);
   assertOwnedServices(config, states, workloads);
   const snapshot = serviceSnapshotFromStates(states, workloads);
@@ -3334,7 +3334,7 @@ export async function awsBackgroundWorkCapacity(
     finalOwnership.desiredDeploymentId !== proof.desiredDeploymentId
   )
     throw new CliError("background ownership changed while checking capacity");
-  assertBackgroundMembersDrained(finalOwnership, cohort.deploymentId);
+  assertBackgroundCohortRelinquished(finalOwnership, cohort.deploymentId);
   if (
     cohort.taskArns.some(
       (taskArn) =>
@@ -3343,7 +3343,7 @@ export async function awsBackgroundWorkCapacity(
             member.taskArn === taskArn &&
             member.deploymentId === cohort.deploymentId &&
             !member.retired &&
-            member.state === "drained",
+            member.state !== "admitted",
         ),
     )
   )
@@ -3488,18 +3488,18 @@ async function assertBackgroundCohortReplaceable(
 ): Promise<void> {
   if (!current?.backgroundDeploymentId) return;
   const status = await readBackgroundWork(awsBackgroundWorkTransport(config), current.backgroundDeploymentId);
-  if (status.enabled) assertBackgroundMembersDrained(status, current.backgroundDeploymentId);
+  if (status.enabled) assertBackgroundCohortRelinquished(status, current.backgroundDeploymentId);
 }
 
-function assertBackgroundMembersDrained(status: BackgroundWorkStatus, deploymentId: string): void {
+function assertBackgroundCohortRelinquished(status: BackgroundWorkStatus, deploymentId: string): void {
   if (
     status.desiredDeploymentId === deploymentId ||
     status.members.some(
-      (member) => !member.retired && member.deploymentId === deploymentId && member.state !== "drained",
+      (member) => !member.retired && member.deploymentId === deploymentId && member.state === "admitted",
     )
   )
     throw new CliError(
-      "pause or hand over background ownership and wait for every member to drain before replacing the current core cohort",
+      "pause or hand over background ownership and wait for every member to relinquish before replacing the current core cohort",
     );
 }
 
