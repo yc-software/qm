@@ -186,6 +186,7 @@ export async function startSlackPlugin(
   };
   const app = new App({
     token: BOT_TOKEN,
+    deferInitialization: true,
     ignoreSelf: false,
     receiver: receiver(),
     logLevel: parseLogLevel(cfg.logLevel),
@@ -347,9 +348,12 @@ export async function startSlackPlugin(
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
     onEngaged: (runId, channel, threadTs) => {
-      void core.sessionStatus?.start(statusClient, statusAccount(), runId, channel, threadTs).finally(() => {
-        void reconcileStatus();
-      });
+      void core.sessionStatus
+        ?.start(statusClient, statusAccount(), runId, channel, threadTs)
+        .catch(swallowAs("slack: session status start", undefined))
+        .finally(() => {
+          void reconcileStatus();
+        });
     },
     onSettled: () => {
       void reconcileStatus();
@@ -455,6 +459,7 @@ export async function startSlackPlugin(
 
   let auth: AuthTestResponse;
   try {
+    await app.init();
     auth = await app.client.auth.test();
     ids.ownTeamId = auth.team_id ?? "";
     ids.botUserId = auth.user_id ?? "";
@@ -543,6 +548,7 @@ export async function startSlackPlugin(
           followerRetry.unref?.();
         }
       })
+      .catch(swallowAs("slack: delivery drain", undefined))
       .finally(() => {
         deliveriesPollInFlight = false;
         if (deliveriesPollAgain) {
@@ -565,7 +571,10 @@ export async function startSlackPlugin(
   const serviceContextRequest = (r: SurfaceContextRequest): void => {
     if (stopped || !r?.id || contextRequestsInFlight.has(r.id)) return;
     contextRequestsInFlight.add(r.id);
-    void surfaceContext.fulfillSurfaceContext(app.client, r).finally(() => contextRequestsInFlight.delete(r.id));
+    void surfaceContext
+      .fulfillSurfaceContext(app.client, r)
+      .catch(swallowAs("slack: context request fulfillment", undefined))
+      .finally(() => contextRequestsInFlight.delete(r.id));
   };
   let unsubscribeContextRequests = (): void => {};
   if (CORE_SINGLETON) {

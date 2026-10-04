@@ -7,7 +7,7 @@ import type { Orchestrator } from "../core/orchestrator.ts";
 import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
-import { errMessage, errorAlreadyReported, swallow } from "../util/errors.ts";
+import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
@@ -22,7 +22,7 @@ export interface ProcessDeps {
 
 export const LEASE_LOST_CONSECUTIVE = 3;
 
-const CLAIM_FAIL_CRASH_CONSECUTIVE = 20;
+const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
 export async function processRun(
   deps: ProcessDeps,
@@ -192,7 +192,7 @@ export function createWorker(deps: WorkerDeps): Worker {
         claimed();
         claimDone = null;
         claimFailures += 1;
-        if (claimFailures >= CLAIM_FAIL_CRASH_CONSECUTIVE) throw e;
+        if (claimFailures === CLAIM_FAIL_REPORT_CONSECUTIVE) reportFailure("worker: persistent claim failure", e);
         swallow("worker: claim failed (transient, retrying)", e);
         await sleep(Math.min(pollMs * 2 ** Math.min(claimFailures, 5), 5_000));
         continue;

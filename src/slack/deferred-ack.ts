@@ -1,6 +1,7 @@
 import { SocketModeClient } from "@slack/socket-mode";
 import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
-import { errMessage } from "../util/errors.ts";
+import { NO_RETRY } from "./config.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 import { parseLogLevel } from "./payloads.ts";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 
@@ -130,9 +131,70 @@ export function createDeferredAckReceiver(opts: DeferredAckReceiverOptions): Rec
   const client = new SocketModeClient({
     appToken: opts.appToken,
     logLevel: parseLogLevel(opts.logLevel),
-    ...(opts.slackApiUrl ? { clientOptions: { slackApiUrl: opts.slackApiUrl } } : {}),
+    autoReconnectEnabled: false,
+    clientOptions: {
+      ...NO_RETRY,
+      rejectRateLimitedCalls: true,
+      timeout: 10_000,
+      ...(opts.slackApiUrl ? { slackApiUrl: opts.slackApiUrl } : {}),
+    },
   });
   let app: BoltApp | undefined;
+  let running = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let connecting: Promise<unknown> | undefined;
+  let reconnectFailures = 0;
+  let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+  const connect = (): Promise<unknown> => {
+    connecting ??= client.start().finally(() => {
+      connecting = undefined;
+    });
+    return connecting;
+  };
+  const cancelReconnect = (): void => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  };
+  const scheduleReconnect = (): void => {
+    if (!running || reconnectTimer) return;
+    reconnectTimer = setTimeout(
+      () => {
+        reconnectTimer = undefined;
+        if (!running) return;
+        void connect()
+          .then(() => {
+            reconnectFailures = 0;
+          })
+          .catch((error) => {
+            swallow("slack: socket reconnect", error);
+            reconnectFailures++;
+            scheduleReconnect();
+          });
+      },
+      Math.min(60_000, 5_000 * 2 ** Math.min(reconnectFailures, 4)),
+    );
+    reconnectTimer.unref();
+  };
+  const clearHandshakeTimer = (): void => {
+    if (handshakeTimer) clearTimeout(handshakeTimer);
+    handshakeTimer = undefined;
+  };
+  client.on("connecting", () => {
+    clearHandshakeTimer();
+    handshakeTimer = setTimeout(
+      () => {
+        handshakeTimer = undefined;
+        void client.disconnect().catch((error) => swallow("slack: socket handshake cleanup", error));
+      },
+      running ? 10_000 : 0,
+    );
+    handshakeTimer.unref();
+  });
+  client.on("connected", clearHandshakeTimer);
+  client.on("disconnected", () => {
+    clearHandshakeTimer();
+    scheduleReconnect();
+  });
 
   client.on(
     "slack_event",
@@ -169,7 +231,23 @@ export function createDeferredAckReceiver(opts: DeferredAckReceiverOptions): Rec
     init(a: BoltApp) {
       app = a;
     },
-    start: () => client.start() as Promise<unknown>,
-    stop: () => client.disconnect() as Promise<unknown>,
+    async start() {
+      running = true;
+      try {
+        return await connect();
+      } catch (error) {
+        running = false;
+        cancelReconnect();
+        throw error;
+      }
+    },
+    async stop() {
+      running = false;
+      cancelReconnect();
+      const opening = connecting;
+      await client.disconnect();
+      await opening?.catch(() => {});
+      await client.disconnect();
+    },
   } as Receiver & { client: SocketModeClient };
 }

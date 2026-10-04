@@ -8,7 +8,7 @@
 
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpFetch } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 
@@ -128,14 +128,13 @@ export function createMcpToolService(opts: {
     snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
   }
 
-  const unsubscribe = opts.servers.onChange(() => {
-    void refresh();
-  });
-  const timer = setInterval(() => {
-    if (!closed) void refresh();
-  }, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
+  const refreshInBackground = (): void => {
+    if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
+  };
+  const unsubscribe = opts.servers.onChange(refreshInBackground);
+  const timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
   timer.unref?.();
-  void refresh();
+  refreshInBackground();
 
   return {
     toolDefs: () => snapshot,

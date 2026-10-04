@@ -421,7 +421,7 @@ import {
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
 import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
-import { errMessage, swallowAs } from "./util/errors.ts";
+import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
@@ -661,7 +661,7 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.hydrate();
+  void identity.hydrate().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
@@ -697,7 +697,7 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.();
+  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
@@ -2766,13 +2766,17 @@ export function buildApp(
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await Promise.all(workers.map((w) => w.releaseInFlight()));
       await drain.stop();
-      runs.close?.();
-      void runSignals.close?.();
-      void sessionStateBus.close?.();
-      void ledgerEventBus.close?.();
-      void runActivity.close?.();
       stopStreamSync();
-      void runStreamEvents.close?.();
+      await Promise.all(
+        [
+          runs.close?.(),
+          runSignals.close?.(),
+          sessionStateBus.close?.(),
+          ledgerEventBus.close?.(),
+          runActivity.close?.(),
+          runStreamEvents.close?.(),
+        ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
+      );
       await harness.turns.close?.();
       await tasks.close?.();
       await flyTunnel?.stop();

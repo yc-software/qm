@@ -190,6 +190,8 @@ class FakeApp {
     this.actionHandlers.push({ pattern, handler });
   }
 
+  async init(): Promise<void> {}
+
   async start(): Promise<void> {
     this.started = true;
   }
@@ -226,6 +228,8 @@ mock.module("@slack/web-api", {
 const { slackPluginConfigFromEnv, startSlackPlugin } = await import("../src/slack/index.ts");
 
 class FakeCore implements SlackCoreClient {
+  deliveryListener?: () => void;
+  contextListener?: Parameters<SlackCoreClient["onContextRequest"]>[0];
   async decideDeploymentAccess(): Promise<string> {
     throw new Error("not used");
   }
@@ -376,7 +380,8 @@ class FakeCore implements SlackCoreClient {
   }
   async ackDelivery(): Promise<void> {}
   deliverySubscriptions = 0;
-  onDeliveryEnqueued(): () => void {
+  onDeliveryEnqueued(listener: () => void): () => void {
+    this.deliveryListener = listener;
     this.deliverySubscriptions++;
     return () => {};
   }
@@ -384,7 +389,8 @@ class FakeCore implements SlackCoreClient {
     return [];
   }
   contextSubscriptions = 0;
-  onContextRequest(): () => void {
+  onContextRequest(listener: Parameters<SlackCoreClient["onContextRequest"]>[0]): () => void {
+    this.contextListener = listener;
     this.contextSubscriptions++;
     return () => {};
   }
@@ -1824,6 +1830,58 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       ts: "202.1",
     });
     assert.ok(f.core.ingests.flat().some((event: any) => event.ts === "202.1"));
+  } finally {
+    await f.stop();
+  }
+});
+
+test("failed Slack delivery and context persistence do not escape detached callbacks and remain retryable", async () => {
+  const f = await fixture();
+  let drains = 0;
+  let fulfillments = 0;
+  try {
+    f.core.holdDeliveryDispatch = async () => {
+      drains++;
+      throw new Error("delivery lease unavailable");
+    };
+    f.core.fulfillContextRequest = async () => {
+      fulfillments++;
+      throw new Error("context store unavailable");
+    };
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      f.core.deliveryListener?.();
+      f.core.contextListener?.({ id: "context", source: "slack", status: "pending", query: {}, createdAt: Date.now() });
+      await waitFor(() => drains === attempt && fulfillments >= attempt);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(drains, 2);
+    assert.ok(fulfillments >= 2);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("failed Slack session status persistence cannot abort an engaged turn", async () => {
+  const f = await fixture();
+  let statusStarts = 0;
+  let reconciles = 0;
+  try {
+    f.core.sessionStatus = {
+      start: async () => {
+        statusStarts++;
+        throw new Error("status store unavailable");
+      },
+      reconcile: async () => {
+        reconciles++;
+      },
+    };
+    f.core.queuedRunId = "status-run";
+    f.core.engageRun = true;
+    await f.app.emitEvent("app_mention", { channel: "C1", user: "U1", text: "<@UBOT> hello", ts: "901.1" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(statusStarts, 1);
+    assert.ok(reconciles >= 1);
+    assert.ok(f.client.posts.length > 0);
   } finally {
     await f.stop();
   }
