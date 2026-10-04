@@ -875,14 +875,19 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       queue.close();
       if (!signalsStopped) await stopSignals?.();
       turn.cancel?.removeEventListener("abort", onCancel);
-      for (const [taskId, task] of taskStates) {
-        if (task.status === "pending" || task.status === "in_progress") {
-          await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id);
+      try {
+        for (const [taskId, task] of taskStates) {
+          if (task.status === "pending" || task.status === "in_progress") {
+            await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id).catch(
+              (error: unknown) => swallow("claude: close open task", error),
+            );
+          }
         }
+      } finally {
+        active.delete(sdkQuery);
+        sdkQuery.close();
+        rmSync(jail, { recursive: true, force: true });
       }
-      active.delete(sdkQuery);
-      sdkQuery.close();
-      rmSync(jail, { recursive: true, force: true });
     }
   };
 

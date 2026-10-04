@@ -734,3 +734,34 @@ test("Claude retains a queued message which the SDK never consumes", async () =>
   assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
   assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
 });
+
+test("a task that cannot be closed at turn end does not stop the rest of cleanup", async () => {
+  const { readdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const jails = () => new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("qm-claude-")));
+  const before = jails();
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield { type: "system", subtype: "task_started", task_id: "t1", description: "one", skip_transcript: true };
+    yield { type: "system", subtype: "task_started", task_id: "t2", description: "two", skip_transcript: true };
+    yield resultMessage("done");
+  };
+  const closed: string[] = [];
+  const tasks = {
+    create: async () => ({}),
+    transitionStatus: async (id: string) => {
+      if (id === "t1") throw new Error("lost the race");
+      closed.push(id);
+      return {};
+    },
+  } as never;
+  const harness = createClaudeHarness({ tasks });
+  const { turn } = harnessTurn();
+  await harness.turns.runTurn(turn).catch(() => undefined);
+  assert.deepEqual(closed, ["t2"], "the second task is still closed");
+  assert.deepEqual(
+    [...jails()].filter((name) => !before.has(name)),
+    [],
+    "the turn's temp dir is removed",
+  );
+});
