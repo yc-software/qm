@@ -1,3 +1,4 @@
+import { redactSecrets } from "../harness/redact-secrets.ts";
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -232,7 +233,12 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       !countsAsError && overClaimed && retry && errorAttemptsAfter < run.maxAttempts
         ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
         : error;
-    const result: TurnResult = { status: "failed", sessionId: run.sessionId, reason };
+    const result: TurnResult = {
+      status: "failed",
+      sessionId: run.sessionId,
+      reason,
+      ...(countsAsError && reason === error ? { failureMessage: redactSecrets(error) } : {}),
+    };
     const { rowCount } = await q(
       `UPDATE runs SET status='failed', result=$4, lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, finished_at=$5,
          error_attempts=error_attempts+$6

@@ -489,3 +489,17 @@ test("failed shutdown handback retains the lease for expiry without charging an 
   assert.equal(retained.errorAttempts, 0);
   assert.equal(await runs.claim("replacement", 5_000), null);
 });
+
+test("a turn that gives up records its person-facing reason on the failed run, redacted", async () => {
+  const { runs } = createMemoryRunStore();
+  const orchestrator = fakeOrchestrator(async () => {
+    throw new NonRetryableTurnError("The prompt is too long for this model's context window. api_key=sk-live-123");
+  });
+  await runs.enqueue({ sessionId: "s1", request: turn });
+  const claimed = await runs.claim("w1", 5_000);
+  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, claimed!));
+  const result = (await runs.get(claimed!.id))?.result;
+  assert.equal(result?.status, "failed");
+  assert.match(result?.failureMessage ?? "", /^The prompt is too long/);
+  assert.doesNotMatch(result?.failureMessage ?? "", /sk-live-123/);
+});

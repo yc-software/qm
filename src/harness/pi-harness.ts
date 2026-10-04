@@ -1498,8 +1498,8 @@ export function guardOutputBudget(payload: unknown, model: unknown): OutputBudge
   if (estimatedPromptTokens === undefined) return { kind: "ok" };
   const available = contextWindow - estimatedPromptTokens - OUTPUT_GUARD_SAFETY_TOKENS;
   if (available < OUTPUT_BUDGET_FLOOR_TOKENS) {
-    throw new Error(
-      `prompt is too long: estimated ${estimatedPromptTokens} tokens leave no output room in a ${contextWindow}-token window (output-budget guard)`,
+    throw new NonRetryableTurnError(
+      `The prompt is too long for this model's context window: estimated ${estimatedPromptTokens} tokens leave no output room in a ${contextWindow}-token window. Start a new session or switch to a model with a larger window.`,
     );
   }
   const modelMax = typeof m?.maxTokens === "number" && m.maxTokens > 0 ? m.maxTokens : available;

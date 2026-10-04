@@ -790,6 +790,8 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
+  /** Person-facing reason a failed turn gave up (redacted); absent for reaped/parked runs. */
+  failureMessage?: string;
   refusalKind?: "security_quarantine" | "session_busy";
   adminUrl?: string;
   runId?: string;

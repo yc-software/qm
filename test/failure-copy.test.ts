@@ -42,3 +42,15 @@ test("the shared failure policy renders quarantine canned, refused reasons verba
 
   assert.equal(userFacingFailureText({ status: "refused" }), GENERIC_FAILURE_TEXT);
 });
+
+test("a failed run's recorded person-facing reason is shown instead of the generic text", () => {
+  assert.equal(
+    userFacingFailureText({
+      status: "failed",
+      failureMessage: "The prompt is too long for this model's context window.",
+    }),
+    "The prompt is too long for this model's context window.",
+  );
+  assert.equal(userFacingFailureText({ status: "failed", reason: "lease expired (reaped)" }), GENERIC_FAILURE_TEXT);
+  assert.equal(userFacingFailureText({ status: "failed", failureMessage: "  " }), GENERIC_FAILURE_TEXT);
+});

@@ -1,3 +1,4 @@
+import { redactSecrets } from "../harness/redact-secrets.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
@@ -362,7 +363,12 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
         ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
         : error;
-    run.result = { status: "failed", sessionId: run.sessionId, reason };
+    run.result = {
+      status: "failed",
+      sessionId: run.sessionId,
+      reason,
+      ...(opts?.countsAsError && reason === error ? { failureMessage: redactSecrets(error) } : {}),
+    };
     run.finishedAt = Date.now();
     settle(run);
     return { requeued: false, applied: true };

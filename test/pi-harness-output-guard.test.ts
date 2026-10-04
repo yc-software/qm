@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import assert from "node:assert/strict";
 import { isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
@@ -109,7 +110,11 @@ test("non-image data blobs count at full length — a redacted_thinking blob can
       { role: "user", content: [{ type: "text", text: "go on" }] },
     ],
   });
-  assert.throws(() => guardOutputBudget(p, FABLE), /prompt is too long/i, "refused, not raised");
+  assert.throws(
+    () => guardOutputBudget(p, FABLE),
+    (err: unknown) => err instanceof NonRetryableTurnError && /prompt is too long/i.test(err.message),
+    "refused, not raised, and not retried",
+  );
 });
 
 test("native PDF bytes use a media estimate instead of their encoded text length", () => {

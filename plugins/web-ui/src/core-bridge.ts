@@ -500,6 +500,7 @@ export interface RunPoll {
     status: string;
     reply?: string;
     reason?: string;
+    failureMessage?: string;
     stopped?: boolean;
     pendingApprovals?: PendingApproval[];
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
