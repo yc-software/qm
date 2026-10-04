@@ -27,7 +27,7 @@ import {
   createCodexHarness,
   prepareCodexHome,
 } from "../src/harness/codex-harness.ts";
-import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessLlmRequestRecord, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
@@ -2135,4 +2135,115 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   });
   assert.equal(result.reply, "denied");
   assert.equal(shared, false);
+});
+
+function spawnGateCodexBinary(dir: string): string {
+  const path = join(dir, "spawn-gate-codex");
+  const entered = join(dir, "entered");
+  const release = join(dir, "release");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const readline = require("node:readline");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const rl = readline.createInterface({ input: process.stdin });
+const authPath = path.join(process.env.CODEX_HOME, "auth.json");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-x" } } });
+  if (msg.method === "turn/start") {
+    const account = String(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.account_id ?? "none");
+    send({ id: msg.id, result: { turn: { id: "turn-" + account, status: "inProgress", items: [] } } });
+    fs.appendFileSync(${JSON.stringify(entered)}, account + "\\n");
+    const tick = setInterval(() => {
+      if (fs.existsSync(${JSON.stringify(release)})) {
+        clearInterval(tick);
+        send({ method: "turn/completed", params: { threadId: "thread-x", turn: { id: "turn-" + account, status: "completed", items: [{ type: "agentMessage", text: account, phase: "final_answer" }] } } });
+      }
+    }, 10);
+    return;
+  }
+  if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+test("a cancelled per-user Codex turn waiting for spawn capacity does not leak the slot", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-spawn-slot-test-"));
+  const entered = join(dir, "entered");
+  const release = join(dir, "release");
+  const orgAuthFile = join(dir, "auth.json");
+  writeFileSync(orgAuthFile, "{}", { mode: 0o600 });
+  const harness = createCodexHarness({
+    binaryPath: spawnGateCodexBinary(dir),
+    env: { ...testHarnessEnv(dir), CODEX_AUTH_FILE: orgAuthFile },
+    turnWallClockMs: 20_000,
+    maxConcurrentUserServers: 1,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const run = (id: string, accountId: string, cancel?: AbortSignal) =>
+    harness.turns.runTurn({
+      session: { id } as Session,
+      input: id,
+      systemPrompt: "be concise",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      cancel,
+      codexAuth: { accessToken: `${accountId}-access`, idToken: oauthIdToken(accountId), accountId },
+      emit: async (entry) => ({ ...entry, sessionId: id, seq: 1, createdAt: Date.now() }) as SessionEntry,
+      recordModelCall: () => {},
+    });
+
+  const holder = run("holder-turn", "acct-holder");
+  for (let attempt = 0; attempt < 200 && !existsSync(entered); attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(existsSync(entered), "the first per-user turn owns the only spawn slot");
+
+  const queued = new AbortController();
+  const abandoned = run("cancelled-turn", "acct-cancelled", queued.signal);
+  const behind = run("behind-turn", "acct-behind");
+  for (
+    let attempt = 0;
+    attempt < 200 && readFileSync(entered, "utf8").split("\n").filter(Boolean).length !== 1;
+    attempt += 1
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  queued.abort(new Error("Codex setup cancelled"));
+  assert.equal((await abandoned).stopped, true, "the queued turn cancels without spawning");
+  assert.doesNotMatch(
+    readFileSync(entered, "utf8"),
+    /acct-cancelled/,
+    "a cancelled waiter must never take the slot it was waiting for",
+  );
+
+  writeFileSync(release, "go");
+  assert.equal((await holder).reply, "acct-holder");
+  writeFileSync(release, "go");
+  const rescued = await Promise.race([
+    behind,
+    new Promise<HarnessTurnResult>((_, reject) =>
+      setTimeout(() => reject(new Error("the turn behind a cancellation was stranded")), 5_000),
+    ),
+  ]);
+  assert.equal(rescued.reply, "acct-behind", "a cancelled waiter must not strand the turns queued behind it");
+
+  writeFileSync(release, "go");
+  const next = await Promise.race([
+    run("next-turn", "acct-next"),
+    new Promise<HarnessTurnResult>((_, reject) => setTimeout(() => reject(new Error("the spawn slot leaked")), 5_000)),
+  ]);
+  assert.equal(next.reply, "acct-next", "the cancelled turn must not hold the slot against the next one");
 });

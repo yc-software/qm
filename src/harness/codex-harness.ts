@@ -410,9 +410,28 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
   const maxConcurrentSpawns = opts.maxConcurrentUserServers ?? 8;
   let activeSpawns = 0;
   const spawnWaiters: Array<() => void> = [];
-  const acquireSpawnSlot = async (): Promise<() => void> => {
+  const acquireSpawnSlot = async (signal: AbortSignal): Promise<() => void> => {
+    let granted = false;
+    signal.throwIfAborted();
     while (activeSpawns >= maxConcurrentSpawns)
-      await new Promise<void>((resolveWait) => spawnWaiters.push(resolveWait));
+      await new Promise<void>((resolveWait, rejectWait) => {
+        const grant = (): void => {
+          granted = true;
+          signal.removeEventListener("abort", onAbort);
+          resolveWait();
+        };
+        const onAbort = (): void => {
+          const queued = spawnWaiters.indexOf(grant);
+          if (queued !== -1) spawnWaiters.splice(queued, 1);
+          rejectWait(signal.reason);
+        };
+        spawnWaiters.push(grant);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+    if (signal.aborted) {
+      if (granted) spawnWaiters.shift()?.();
+      throw signal.reason;
+    }
     activeSpawns += 1;
     let released = false;
     return () => {
@@ -800,7 +819,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       if (setupSettled) return;
       setupSettled = true;
       releaseStartupWaiter();
-      authAcquireAbort.abort();
+      authAcquireAbort.abort(error);
       rejectSetup(error);
     };
     const onSetupCancel = () => stopSetup(setupCancelled);
@@ -843,7 +862,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       }
       const jail = mkdtempSync(join(tmpdir(), "qm-codex-user-"));
       try {
-        releaseSpawnSlot = await awaitSetup(acquireSpawnSlot());
+        releaseSpawnSlot = await awaitSetup(acquireSpawnSlot(authAcquireAbort.signal));
         prepareCodexHome(sourceEnv, jail, userAuth);
         const server = buildServer(jail, codexChildEnv(sourceEnv, jail, userAuth));
         ephemeral = { server, jail };
