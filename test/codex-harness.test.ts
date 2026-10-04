@@ -18,6 +18,7 @@ import {
   codexNonRetryable,
   codexProviderFailure,
   codexUsageTotals,
+  priceCodexUsage,
   codexChildToolAllowed,
   codexReasoningEffort,
   codexReplayCallId,
@@ -1491,7 +1492,7 @@ test("Codex reads cumulative usage totals off the app-server's token notificatio
     codexUsageTotals({
       tokenUsage: { total: { inputTokens: 400, outputTokens: 90, cachedInputTokens: 120 }, last: { inputTokens: 40 } },
     }),
-    { input: 400, output: 90, cacheRead: 120, cacheWrite: 0, totalTokens: 490, costUsd: 0 },
+    { input: 280, output: 90, cacheRead: 120, cacheWrite: 0, totalTokens: 490, costUsd: 0 },
   );
   assert.equal(codexUsageTotals({ tokenUsage: { last: { inputTokens: 40 } } }), null);
   assert.equal(codexUsageTotals(null), null);
@@ -2135,4 +2136,15 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   });
   assert.equal(result.reply, "denied");
   assert.equal(shared, false);
+});
+
+test("API-key Codex usage is priced from the registry, cached input at the cache rate, and doubled in fast mode", () => {
+  const usage = codexUsageTotals({
+    tokenUsage: { total: { inputTokens: 1_000_000, outputTokens: 100_000, cachedInputTokens: 400_000 } },
+  });
+  const sol = priceCodexUsage(usage, "gpt-5.6-sol", false)!;
+  assert.equal(Math.round(sol.costUsd * 1e6) / 1e6, 8.12);
+  assert.equal(Math.round(priceCodexUsage(usage, "gpt-5.6-sol", true)!.costUsd * 1e6) / 1e6, 16.24);
+  assert.equal(priceCodexUsage(usage, "codex-default", false)!.costUsd, 0, "unknown models stay unpriced");
+  assert.equal(priceCodexUsage(null, "gpt-5.6-sol", false), null);
 });

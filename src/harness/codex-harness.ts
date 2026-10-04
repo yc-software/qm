@@ -5,7 +5,9 @@ import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
+import { calculateCost } from "@earendil-works/pi-ai";
+import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness, resolveModel } from "../model/pi-models.ts";
+import { FAST_COST_MULTIPLIER, scaleCost } from "./pi-harness.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
@@ -197,10 +199,33 @@ export function codexUsageTotals(params: unknown): LlmCallUsage | null {
   if (!tokenUsage || typeof tokenUsage !== "object") return null;
   const total = (tokenUsage as Record<string, unknown>).total;
   if (!total || typeof total !== "object") return null;
-  const input = usageNumber(total, "inputTokens", "input_tokens");
+  const promptTokens = usageNumber(total, "inputTokens", "input_tokens");
   const output = usageNumber(total, "outputTokens", "output_tokens");
-  const cacheRead = usageNumber(total, "cachedInputTokens", "cached_input_tokens");
-  return { input, output, cacheRead, cacheWrite: 0, totalTokens: input + output, costUsd: 0 };
+  const cacheRead = Math.min(promptTokens, usageNumber(total, "cachedInputTokens", "cached_input_tokens"));
+  return {
+    input: promptTokens - cacheRead,
+    output,
+    cacheRead,
+    cacheWrite: 0,
+    totalTokens: promptTokens + output,
+    costUsd: 0,
+  };
+}
+
+/** Price API-key Codex usage from the model registry; ChatGPT-subscription turns stay at $0. */
+export function priceCodexUsage(usage: LlmCallUsage | null, modelId: string, fast: boolean): LlmCallUsage | null {
+  const model = usage ? resolveModel(modelId) : undefined;
+  if (!usage || !model?.cost || model.cost.input < 0 || model.cost.output < 0) return usage;
+  const card = fast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as typeof model) : model;
+  const priced = calculateCost(card, {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    totalTokens: usage.totalTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+  return { ...usage, costUsd: priced.total };
 }
 
 function sumUsage(byThread: ReadonlyMap<string, LlmCallUsage>): LlmCallUsage | null {
@@ -396,6 +421,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
   const authStore: CodexAuthStore | undefined =
     opts.authStore ?? (authPath && readCodexOAuthAuthFile(authPath) ? fileCodexAuthStore(authPath) : undefined);
   const oauthConfigured = Boolean(authStore);
+  const apiKeyBilled = (userRuntime: unknown): boolean =>
+    !userRuntime && !oauthConfigured && Boolean(sourceEnv.OPENAI_API_KEY);
   const closeAbort = new AbortController();
   let runtime: Runtime | null = null;
   let starting: StartingRuntime | null = null;
@@ -1144,7 +1171,9 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               transport: { modelId: selectedModel },
               ttftMs: state.firstOutputAt ? state.firstOutputAt - startedAt : null,
               durationMs: Date.now() - startedAt,
-              usage: sumUsage(state.usageByThread),
+              usage: apiKeyBilled(ephemeral)
+                ? priceCodexUsage(sumUsage(state.usageByThread), selectedModel, turn.runtime?.fastMode === true)
+                : sumUsage(state.usageByThread),
             },
             recordAbort.signal,
           ),
