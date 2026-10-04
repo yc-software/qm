@@ -637,6 +637,7 @@ test("inbox viewers are exactly the active candidates who can administer the loo
         managesScope: async (who: string, scope: string) => scope === "group:core" && members.has(who),
       },
       res: {
+        getHeader: () => undefined,
         writeHead: (value: number) => {
           status = value;
         },
