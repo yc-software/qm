@@ -911,7 +911,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          FROM sessions s WHERE s.id = ANY($1)`,
       [missing],
       options,
-    ).catch(reportFailureAs("sessions: derive legacy user previews", [] as Rows));
+    ).catch((error: unknown) => {
+      if (options.signal?.aborted) throw error;
+      return reportFailureAs("sessions: derive legacy user previews", [] as Rows)(error);
+    });
     for (const r of derived) {
       out.set(r.id as string, {
         first: (r.first_user_preview as string | null) ?? storedPreview(parsedPayload(r.first_user), FIRST_PREVIEW_LEN),

@@ -1409,7 +1409,10 @@ test("pg scopeSessionSummaries: keyset pages break last_activity ties by id with
   assert.equal(new Set(all.map((r) => r.lastActivity)).size, 1, "every row ties on last_activity");
   assert.deepEqual(
     all.map((r) => r.id),
-    [...all.map((r) => r.id)].sort().reverse(),
+    all
+      .map((r) => r.id)
+      .sort()
+      .reverse(),
     "ties order by id descending",
   );
   for (const orgWide of [false, true]) {
