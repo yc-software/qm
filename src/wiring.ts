@@ -2739,7 +2739,7 @@ export function buildApp(
   async function releaseInFlightRuns(): Promise<void> {
     inlineShutdown.abort();
     await Promise.all([
-      withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "inline turn handback").catch(
+      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
       ...workers.map((w) => w.releaseInFlight()),
