@@ -72,7 +72,6 @@ export interface ToolContextRef {
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
   tapeResultScopes?: Map<string, ScopeId>;
-  interruptedResults?: Set<string>;
   llmCapture?: Array<{
     envelope: unknown;
     truncated: boolean;
@@ -426,15 +425,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       orgScopeId: ref.orgScopeId ?? ref.scopeLabel,
       sourceScopeId,
     });
-    if (type === "tool_result") {
+    if (type === "tool_result" && scopeLabel !== ref.scopeLabel) {
       const callId = (payload as { callId?: unknown } | null)?.callId;
-      if (typeof callId === "string" && callId) {
-        if (scopeLabel !== ref.scopeLabel) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
-        if (ref.abortSignal?.aborted) {
-          (ref.interruptedResults ??= new Set()).add(callId);
-          payload = { ...(isObj(payload) ? payload : {}), interrupted: true };
-        }
-      }
+      if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
     await ref.emit({ type, payload, scopeLabel });
   };
