@@ -91,10 +91,8 @@ import {
 
 import {
   awaitBackgroundWork,
-  backgroundWorkMutation,
-  mutateBackgroundWork,
   readBackgroundWork,
-  type BackgroundWorkMember,
+  setBackgroundOwner,
   type BackgroundWorkStatus,
   type BackgroundWorkTransport,
 } from "../background-work.ts";
@@ -2431,7 +2429,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       if (!current?.backgroundDeploymentId && !services.includes("core"))
         throw new CliError("enabling background ownership requires deploying core to allocate its identity");
       reconcileBackgroundPreparation(aws, current, before);
-      if (services.includes("core")) await assertBackgroundCohortReplaceable(config, current);
+      if (services.includes("core")) await assertNotBackgroundOwner(config, current);
     }
     const selected = new Set(services);
     if (allServices.some((service) => !selected.has(service))) {
@@ -2786,7 +2784,7 @@ export async function awsRollback(
     if (currentManifest?.backgroundDeploymentId || targetManifest.backgroundDeploymentId) {
       if (!aws.backgroundWorkControl || !targetManifest.backgroundDeploymentId)
         throw new CliError("controlled rollback requires a protocol-capable target deployment");
-      await assertBackgroundCohortReplaceable(config, currentManifest);
+      await assertNotBackgroundOwner(config, currentManifest);
     }
     const missing = services.filter((service) => !targetManifest.tasks[service]);
     if (missing.length)
@@ -3116,22 +3114,13 @@ export async function awsBackgroundWorkStatus(
   assertAwsCallerAccount(requireAws(config));
   const cohort = await awsBackgroundCohort(config, configDir, candidatePath);
   const status = await readBackgroundWork(awsBackgroundWorkTransport(config), cohort.deploymentId);
-  for (const taskArn of cohort.taskArns) {
-    if (
-      !status.members.some(
-        (member) => member.taskArn === taskArn && member.deploymentId === cohort.deploymentId && !member.retired,
-      )
-    )
-      throw new CliError("a running core task has not enrolled in the ownership protocol");
-  }
   return { status, deploymentId: cohort.deploymentId, taskArns: cohort.taskArns, manifestId: cohort.manifest.id };
 }
 
 export interface AwsBackgroundWorkCapacity {
   manifestId: string;
   deploymentId: string;
-  generation: number;
-  desiredDeploymentId: string;
+  ownerDeploymentId: string;
   workloads: Record<string, { taskDefinition: string; deploymentId: string; desiredCount: number; taskArns: string[] }>;
 }
 
@@ -3226,22 +3215,8 @@ export async function awsBackgroundWorkCapacity(
   const cohort = await awsBackgroundCohort(config, configDir, candidatePath, false);
   const transport = awsBackgroundWorkTransport(config);
   const ownership = await readBackgroundWork(transport, cohort.deploymentId);
-  if (!ownership.enabled || !ownership.desiredDeploymentId || ownership.desiredDeploymentId === cohort.deploymentId)
-    throw new CliError("capacity requires enabled background ownership held by another deployment");
-  assertBackgroundCohortRelinquished(ownership, cohort.deploymentId);
-  if (
-    cohort.taskArns.some(
-      (taskArn) =>
-        !ownership.members.some(
-          (member) =>
-            member.taskArn === taskArn &&
-            member.deploymentId === cohort.deploymentId &&
-            !member.retired &&
-            member.state !== "admitted",
-        ),
-    )
-  )
-    throw new CliError("capacity requires every current core task to be enrolled and relinquished");
+  if (!ownership.ownerDeploymentId || ownership.ownerDeploymentId === cohort.deploymentId)
+    throw new CliError("capacity requires background ownership held by another deployment");
   const states = describedServices(config, workloads);
   assertOwnedServices(config, states, workloads);
   const snapshot = serviceSnapshotFromStates(states, workloads);
@@ -3249,8 +3224,7 @@ export async function awsBackgroundWorkCapacity(
   const proof: AwsBackgroundWorkCapacity = {
     manifestId: cohort.manifest.id,
     deploymentId: cohort.deploymentId,
-    generation: ownership.generation,
-    desiredDeploymentId: ownership.desiredDeploymentId,
+    ownerDeploymentId: ownership.ownerDeploymentId,
     workloads: {},
   };
   for (const workload of [...workloads].sort()) {
@@ -3269,179 +3243,16 @@ export async function awsBackgroundWorkCapacity(
     throw new CliError("deployment manifest changed while checking capacity");
   assertBackgroundPreparationResolved(aws, finalManifest, snapshot);
   const finalOwnership = await readBackgroundWork(transport, cohort.deploymentId);
-  if (
-    !finalOwnership.enabled ||
-    finalOwnership.generation !== proof.generation ||
-    finalOwnership.desiredDeploymentId !== proof.desiredDeploymentId
-  )
+  if (finalOwnership.ownerDeploymentId !== proof.ownerDeploymentId)
     throw new CliError("background ownership changed while checking capacity");
-  assertBackgroundCohortRelinquished(finalOwnership, cohort.deploymentId);
-  if (
-    cohort.taskArns.some(
-      (taskArn) =>
-        !finalOwnership.members.some(
-          (member) =>
-            member.taskArn === taskArn &&
-            member.deploymentId === cohort.deploymentId &&
-            !member.retired &&
-            member.state !== "admitted",
-        ),
-    )
-  )
-    throw new CliError("current core enrollment changed while checking capacity");
   return proof;
 }
 
-export interface AwsBackgroundWorkPeer {
-  config: QmConfig;
-  configDir: string;
-  candidatePath?: string;
-}
-
-async function withBackgroundPeerLeases<T>(peers: AwsBackgroundWorkPeer[], operation: () => Promise<T>): Promise<T> {
-  const unique = new Map(
-    peers.map((peer) => {
-      const aws = requireAws(peer.config);
-      return [
-        `${aws.accountId}:${aws.region}:${deployLocksTable(aws)}:${deploymentStateKey(aws, "deploy")}`,
-        aws,
-      ] as const;
-    }),
-  );
-  if (unique.size !== peers.length)
-    throw new CliError("background ownership peers must have distinct deployment leases");
-  const leases: Array<{ aws: AwsConfig; lease: ReturnType<typeof acquireLease> }> = [];
-  try {
-    for (const [, aws] of [...unique.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-      assertAwsCallerAccount(aws);
-      leases.push({ aws, lease: acquireLease(aws) });
-    }
-    return await operation();
-  } finally {
-    for (const { aws, lease } of leases.reverse()) releaseLease(aws, lease);
-  }
-}
-
-export async function awsBootstrapBackgroundWork(
-  peers: AwsBackgroundWorkPeer[],
-  desiredDeploymentId: string | null,
-): Promise<BackgroundWorkStatus> {
-  if (!peers.length) throw new CliError("background ownership bootstrap requires every participating deployment");
-  return withBackgroundPeerLeases(peers, async () => {
-    const cohorts = [];
-    for (const peer of peers)
-      cohorts.push(await awsBackgroundWorkStatus(peer.config, peer.configDir, peer.candidatePath));
-    const first = cohorts[0]!;
-    if (cohorts.some((cohort) => cohort.status.enabled || cohort.status.generation !== 0))
-      throw new CliError("background ownership bootstrap requires disabled generation zero for every cohort");
-    if (new Set(cohorts.map((cohort) => cohort.deploymentId)).size !== cohorts.length)
-      throw new CliError("background ownership bootstrap requires distinct cohort identities");
-    const shared = (status: BackgroundWorkStatus): string =>
-      canonicalJson({
-        generation: status.generation,
-        desiredDeploymentId: status.desiredDeploymentId,
-        members: [...status.members].sort((a, b) => a.instanceId.localeCompare(b.instanceId)),
-      });
-    if (cohorts.some((cohort) => shared(cohort.status) !== shared(first.status)))
-      throw new CliError("background ownership peers do not agree on shared durable membership");
-    const taskArns = cohorts.flatMap((cohort) => cohort.taskArns);
-    if (
-      new Set(taskArns).size !== taskArns.length ||
-      first.status.members.some((member) => !member.retired && (!member.taskArn || !taskArns.includes(member.taskArn)))
-    )
-      throw new CliError("bootstrap must include every enrolled non-retired task");
-    const desired =
-      desiredDeploymentId === null ? undefined : cohorts.find((cohort) => cohort.deploymentId === desiredDeploymentId);
-    if (desiredDeploymentId !== null && !desired)
-      throw new CliError("bootstrap desired owner is not a verified peer cohort");
-    const transport = awsBackgroundWorkTransport(peers[0]!.config);
-    const mutation = { ...backgroundWorkMutation(0, desiredDeploymentId), bootstrapTaskArns: taskArns };
-    const applied = await mutateBackgroundWork(transport, first.deploymentId, mutation);
-    return awaitBackgroundWork(
-      transport,
-      first.deploymentId,
-      { generation: applied.generation, desiredDeploymentId, taskArns: desired?.taskArns ?? [] },
-      { timeoutMs: envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000), pollMs: 1000 },
-    );
-  });
-}
-
-export async function awsRetireBackgroundWorkMembers(
-  peers: AwsBackgroundWorkPeer[],
-  terminatedMembers: Array<Pick<BackgroundWorkMember, "instanceId" | "taskArn" | "generation">>,
-): Promise<BackgroundWorkStatus> {
-  if (!peers.length || !terminatedMembers.length)
-    throw new CliError("task retirement requires deployment peers and exact member identities");
-  return withBackgroundPeerLeases(peers, async () => {
-    const first = await awsBackgroundWorkStatus(peers[0]!.config, peers[0]!.configDir, peers[0]!.candidatePath);
-    for (const retired of terminatedMembers) {
-      const member = first.status.members.find(
-        (item) =>
-          item.instanceId === retired.instanceId &&
-          item.taskArn === retired.taskArn &&
-          item.generation === retired.generation,
-      );
-      if (!member?.taskArn || member.retired)
-        throw new CliError("task retirement does not match a live durable member");
-      let proved = false;
-      for (const peer of peers) {
-        const aws = requireAws(peer.config);
-        if (!member.deploymentId.startsWith(`${aws.services.core!.ecsService}:`)) continue;
-        const response = awsJson<{
-          tasks?: Array<{ taskArn?: string; taskDefinitionArn?: string; lastStatus?: string; group?: string }>;
-          failures?: unknown[];
-        }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", member.taskArn]);
-        const task = response.tasks?.find((item) => item.taskArn === member.taskArn);
-        if (
-          response.failures?.length ||
-          !task ||
-          task.lastStatus !== "STOPPED" ||
-          task.group !== `service:${aws.services.core!.ecsService}` ||
-          !task.taskDefinitionArn
-        )
-          continue;
-        const definition = awsJson<{
-          taskDefinition?: {
-            containerDefinitions?: Array<{ name?: string; environment?: Array<{ name: string; value: string }> }>;
-          };
-        }>(aws, ["ecs", "describe-task-definition", "--task-definition", task.taskDefinitionArn]).taskDefinition;
-        const identity = definition?.containerDefinitions
-          ?.find((container) => container.name === "core")
-          ?.environment?.find((entry) => entry.name === "BACKGROUND_DEPLOYMENT_ID")?.value;
-        if (identity === member.deploymentId) proved = true;
-      }
-      if (!proved)
-        throw new CliError(
-          "task retirement requires ECS STOPPED evidence bound to the exact service, task and deployment identity",
-        );
-    }
-    return mutateBackgroundWork(awsBackgroundWorkTransport(peers[0]!.config), first.deploymentId, {
-      expectedGeneration: first.status.generation,
-      requestId: randomUUID(),
-      terminatedMembers,
-    });
-  });
-}
-
-async function assertBackgroundCohortReplaceable(
-  config: QmConfig,
-  current: DeploymentManifest | undefined,
-): Promise<void> {
+async function assertNotBackgroundOwner(config: QmConfig, current: DeploymentManifest | undefined): Promise<void> {
   if (!current?.backgroundDeploymentId) return;
   const status = await readBackgroundWork(awsBackgroundWorkTransport(config), current.backgroundDeploymentId);
-  if (status.enabled) assertBackgroundCohortRelinquished(status, current.backgroundDeploymentId);
-}
-
-function assertBackgroundCohortRelinquished(status: BackgroundWorkStatus, deploymentId: string): void {
-  if (
-    status.desiredDeploymentId === deploymentId ||
-    status.members.some(
-      (member) => !member.retired && member.deploymentId === deploymentId && member.state === "admitted",
-    )
-  )
-    throw new CliError(
-      "pause or hand over background ownership and wait for every member to relinquish before replacing the current core cohort",
-    );
+  if (status.ownerDeploymentId === current.backgroundDeploymentId)
+    throw new CliError("hand background ownership to another deployment before replacing the current core tasks");
 }
 
 export async function awsSetBackgroundWork(
@@ -3449,7 +3260,7 @@ export async function awsSetBackgroundWork(
   configDir: string,
   enabled: boolean,
   candidatePath?: string,
-  expectedOwnership?: Pick<BackgroundWorkStatus, "generation" | "lastRequestId">,
+  expectedOwnership?: Pick<BackgroundWorkStatus, "ownerDeploymentId">,
 ): Promise<BackgroundWorkStatus | undefined> {
   const { aws, workloads } = awsTopology(config, configDir);
   if (!workloads.includes("core")) throw new CliError("background work requires the core workload");
@@ -3497,32 +3308,21 @@ export async function awsSetBackgroundWork(
     if (aws.backgroundWorkControl) {
       const cohort = await awsBackgroundCohort(config, configDir, candidatePath);
       const transport = awsBackgroundWorkTransport(config);
-      let status = await readBackgroundWork(transport, cohort.deploymentId);
-      if (
-        expectedOwnership &&
-        (status.generation !== expectedOwnership.generation || status.lastRequestId !== expectedOwnership.lastRequestId)
-      )
+      const status = await readBackgroundWork(transport, cohort.deploymentId);
+      if (expectedOwnership && status.ownerDeploymentId !== expectedOwnership.ownerDeploymentId)
         throw new CliError("background ownership changed since promotion; refusing automatic compensation");
-      if (!status.enabled)
-        throw new CliError("explicitly bootstrap all background ownership cohorts before changing ownership");
-      if (!enabled && status.desiredDeploymentId !== null && status.desiredDeploymentId !== cohort.deploymentId)
+      if (!enabled && status.ownerDeploymentId !== null && status.ownerDeploymentId !== cohort.deploymentId)
         throw new CliError("cannot disable background work on a different deployment's current owner");
-      const desiredDeploymentId = enabled ? cohort.deploymentId : null;
-      if (status.desiredDeploymentId !== desiredDeploymentId) {
-        status = await mutateBackgroundWork(transport, cohort.deploymentId, {
-          ...backgroundWorkMutation(status.generation, desiredDeploymentId),
-          ...(expectedOwnership ? { expectedLastRequestId: expectedOwnership.lastRequestId } : {}),
+      const ownerDeploymentId = enabled ? cohort.deploymentId : null;
+      if (status.ownerDeploymentId !== ownerDeploymentId)
+        await setBackgroundOwner(transport, cohort.deploymentId, {
+          ownerDeploymentId,
+          expectedOwnerDeploymentId: status.ownerDeploymentId,
         });
-      }
       return awaitBackgroundWork(
         transport,
         cohort.deploymentId,
-        {
-          generation: status.generation,
-          desiredDeploymentId,
-          taskArns: enabled ? cohort.taskArns : [],
-          lastRequestId: status.lastRequestId,
-        },
+        { ownerDeploymentId, active: enabled },
         { timeoutMs: envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000), pollMs: 1000 },
       );
     }
@@ -5005,7 +4805,7 @@ async function checkLive(
   if (!failures.length) {
     try {
       const cohort = aws.backgroundWorkControl ? await awsBackgroundWorkStatus(config, configDir) : undefined;
-      if (cohort?.status.enabled && cohort.status.desiredDeploymentId === cohort.deploymentId) {
+      if (cohort && cohort.status.ownerDeploymentId === cohort.deploymentId) {
         const transport = awsBackgroundWorkTransport(config, "/v1/deployment/live-session", 600_000, 65_536);
         await checkControlledLiveSession({
           before: cohort,

@@ -96,62 +96,59 @@ that replaces them cannot finish before their longest in-flight turn ends
 longer deadline or when no long turn is in flight.
 
 AWS deployments can opt into durable background ownership with
-`aws.backgroundWorkControl: true`. Deploy protocol-capable core images to every
-participating stack before bootstrapping ownership. The CLI allocates a unique
-`BACKGROUND_DEPLOYMENT_ID` for each replacement core cohort and records it in the
-deployment manifest. A no-op deployment and automatic ECS task replacement keep
+`aws.backgroundWorkControl: true`. The CLI allocates a unique
+`BACKGROUND_DEPLOYMENT_ID` for each replacement core deployment and records it in
+the deployment manifest. A no-op deployment and automatic ECS task replacement keep
 that identity; an explicit core restart allocates a new one. Pending preparation
 is persisted before ECS changes, and an ambiguous previous deployment must be
 reconciled before another identity can be allocated.
 
 Control requests require both `CORE_SIGNING_SECRET` and a distinct
 `DEPLOYMENT_CONTROL_SECRET` of at least 32 characters. The control secret is
-restricted to core. Configuring an identity preserves the legacy background flag
-until explicit bootstrap verifies every participating task. The exported
-`awsBootstrapBackgroundWork` adapter accepts all peer configurations and an exact
-desired deployment identity, or `null` to start paused. It refuses missing cohorts
-and inconsistent durable membership.
+restricted to core. One shared record names the deployment that owns background
+work; a core process with a configured identity admits work only while that
+record names its deployment, and `BACKGROUND_WORK_ENABLED` is ignored there.
 
 The exported `awsBackgroundWorkBootState` reads the exact manifest core task to
 return its recorded boot flag and optional deployment identity. It returns
 `undefined` only without a recorded core task, and rejects missing or ambiguous
-boot flags or identities. Deployment wrappers can preserve the boot environment
-while changing durable ownership independently.
+boot flags or identities.
+
+The exported `awsBackgroundWorkStatus(config, configDir, candidatePath?)` proves
+the stack's exact healthy core task set and reads the owner record through the
+stack's own API, returning the responder's `ownerDeploymentId`, `setAt`, `setBy`,
+and whether the responding process is currently active. The exported
+`awsSetBackgroundWork(config, configDir, enabled, candidatePath?, expected?)` sets
+the owner record to the stack's identity (or clears it when `enabled` is false)
+without restarting ECS tasks, then waits for the stack's processes to report
+matching activity. Passing `expected: { ownerDeploymentId }` refuses the change
+if the owner differs from what the caller last observed. A demotion refuses to
+clear a different deployment's ownership.
 
 The exported `awsBackgroundWorkCapacity(config, configDir, candidatePath?)` proves
 that an inactive controlled stack is currently reusable. It requires another
-owner, a current membership that has relinquished, stable native deployments and
-exact task inventories for every workload, and resolved deployment preparation. It
-never changes deployment state. The result binds the manifest and deployment
-identities, ownership generation, workload task definitions, native deployment IDs,
-and task ARNs.
-`awsBackgroundWorkStatus` also returns the current manifest ID for an active-owner
-proof. A release coordinator can combine both snapshots with immutable candidate
-provenance and compare them again under its production lock before any mutation.
-This is a point-in-time check, not a reservation: intervening maintenance or task
-replacement invalidates the proof and must block promotion.
+owner, stable native deployments and exact task inventories for every workload,
+and resolved deployment preparation. It never changes deployment state. The
+result binds the manifest and deployment identities, the owner, workload task
+definitions, native deployment IDs, and task ARNs. A release coordinator can
+combine both snapshots with immutable candidate provenance and compare them
+again under its production lock before any mutation. This is a point-in-time
+check, not a reservation: intervening maintenance or task replacement
+invalidates the proof and must block promotion.
 
-Live checks use the active ownership cohort's authenticated canary endpoint to
-verify a real model reply, session persistence, generated title, error records,
-session cleanup, and database catalog health. The CLI proves the exact healthy
-task cohort and ownership generation before and after the check. It requires a
-final success bound to the request and responding task; heartbeats alone do not
-count. An uncertain result never triggers an automatic replay or fallback.
-Legacy deployments retain the Fargate canary. A controlled deployment uses that
-same path only when a successful ownership read proves bootstrap is disabled or
-another cohort owns background work.
+Live checks use the owning deployment's authenticated canary endpoint to verify a
+real model reply, session persistence, generated title, error records, session
+cleanup, and database catalog health. The CLI confirms the stack owns background
+work and is active before and after the check, and requires a final success bound
+to the request and responding process; heartbeats alone do not count. An uncertain
+result never triggers an automatic replay or fallback. Legacy deployments retain
+the Fargate canary, and a controlled stack that does not own background work uses
+that same path.
 
-Once bootstrapped, background mode changes use generation-checked ownership
-requests without restarting ECS tasks. Activation waits for prior owners to stop
-claiming and every expected task to finish activation. Pausing stops new claims;
-in-flight turns can continue draining. Replacing or rolling back the active core
-cohort requires an explicit pause or handover and proof that every member has
-relinquished first; ECS then stops the old tasks, and any turn still running
-there resumes on the replacement tasks. A demotion
-refuses to pause a different current owner. Unresponsive members are never
-assumed dead: `awsRetireBackgroundWorkMembers` requires exact instance, task ARN,
-and generation identities plus ECS evidence that each task stopped. This recovery
-is also available before bootstrap for stopped legacy members.
+Replacing or rolling back a controlled stack's core tasks requires that the stack
+is not the current owner: hand ownership to the other stack first. Processes that
+lose ownership stop claiming within their poll interval and finish admitted work
+under their leases; ECS task replacement then drains them through `SIGTERM`.
 
 Core secret uploads defer activation to a subsequent staged `up --restart core`.
 The generic upload path refuses changes to either control credential while a
