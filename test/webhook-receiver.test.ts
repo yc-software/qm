@@ -6,6 +6,7 @@ import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 
 const SECRET = "topsecret";
@@ -370,4 +371,84 @@ test("history capture failure rejects before acknowledging or starting a turn", 
   await assert.rejects(receiver.deliver(wh.id, githubReq("{}")), /history unavailable/);
   await flush();
   assert.equal(calls.length, 0);
+});
+
+test("a redelivery while the first turn is still running fires no second turn, even on another instance", async () => {
+  const webhooks = createWebhookStore();
+  const identity = createIdentityService();
+  const inflight = createMemoryReplayDedupe();
+  const calls: TurnRequest[] = [];
+  let finish!: () => void;
+  const gate = new Promise<void>((r) => (finish = r));
+  const run = async (req: TurnRequest): Promise<TurnResult> => {
+    calls.push(req);
+    await gate;
+    return { status: "ok", reply: "done" };
+  };
+  const instance = () =>
+    createWebhookReceiver({
+      webhooks,
+      deliveries: createDeliveryStore(),
+      idempotency: createIdempotencyStore(),
+      identity,
+      run,
+      inflight,
+    });
+  const [a, b] = [instance(), instance()];
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "x",
+    verification: { scheme: "github", secret: SECRET },
+  });
+  const body = JSON.stringify({ action: "opened" });
+  assert.equal((await a.deliver(wh.id, githubReq(body, "retry-1"))).status, 202);
+  await flush();
+  assert.deepEqual(await a.deliver(wh.id, githubReq(body, "retry-1")), { status: 200, body: "duplicate" });
+  assert.deepEqual(await b.deliver(wh.id, githubReq(body, "retry-1")), { status: 200, body: "duplicate" });
+  finish();
+  await flush();
+  assert.equal(calls.length, 1);
+});
+
+test("a first fire that fails before committing releases its claim, so the redelivery runs", async () => {
+  for (const failure of ["throws"] as const) {
+    const webhooks = createWebhookStore();
+    const inflight = createMemoryReplayDedupe();
+    const calls: TurnRequest[] = [];
+    const run = async (req: TurnRequest): Promise<TurnResult> => {
+      calls.push(req);
+      if (calls.length === 1) {
+        throw new Error(`session store unavailable (${failure})`);
+      }
+      return { status: "ok", reply: "done" };
+    };
+    const receiver = createWebhookReceiver({
+      webhooks,
+      deliveries: createDeliveryStore(),
+      idempotency: createIdempotencyStore(),
+      identity: createIdentityService(),
+      run,
+      inflight,
+    });
+    const wh = await webhooks.create({
+      ownerScopeId: scopeId("personal", "U1"),
+      owner: "U1",
+      createdBy: "U1",
+      action: "x",
+      verification: { scheme: "github", secret: SECRET },
+    });
+    const body = JSON.stringify({ action: "opened" });
+    assert.equal((await receiver.deliver(wh.id, githubReq(body, "retry-2"))).status, 202, failure);
+    await flush();
+    await flush();
+    assert.equal(
+      (await receiver.deliver(wh.id, githubReq(body, "retry-2"))).status,
+      202,
+      `${failure}: redelivery runs`,
+    );
+    await flush();
+    assert.equal(calls.length, 2, failure);
+  }
 });

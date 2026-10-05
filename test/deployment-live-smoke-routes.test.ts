@@ -31,7 +31,7 @@ async function fixture(run: () => Promise<void> = async () => {}) {
     backgroundOwnership: { store, instanceId: "instance-a", deploymentId: "cohort-a", active: () => active },
     deploymentControlSecret: controlSecret,
     deploymentLiveSmoke: run,
-    replayDedupe: { durable: true, claim: (...args) => dedupe.claim(...args) },
+    replayDedupe: { durable: true, claim: (...args) => dedupe.claim(...args), release: (id) => dedupe.release(id) },
   });
   server.listen(0);
   const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;

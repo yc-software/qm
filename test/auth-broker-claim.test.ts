@@ -26,6 +26,9 @@ function durableStub(): ReplayDedupe {
       held.set(eventId, expiresAtMs);
       return true;
     },
+    async release(eventId) {
+      held.delete(eventId);
+    },
   };
 }
 

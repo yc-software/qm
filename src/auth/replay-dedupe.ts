@@ -3,6 +3,8 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 export interface ReplayDedupe {
   readonly durable: boolean;
   claim(eventId: string, expiresAtMs: number): Promise<boolean>;
+  /** Drops a claim so the same id can be claimed again (the claimed work never committed). */
+  release(eventId: string): Promise<void>;
 }
 
 const PRUNE_INTERVAL_MS = 60_000;
@@ -22,6 +24,9 @@ export function createMemoryReplayDedupe(now: () => number = Date.now): ReplayDe
       if (existing !== undefined && existing >= t) return false;
       seen.set(eventId, expiresAtMs);
       return true;
+    },
+    async release(eventId) {
+      seen.delete(eventId);
     },
   };
 }
@@ -52,6 +57,9 @@ export function createPostgresReplayDedupe(connectionString: string): ReplayDedu
         [eventId, expiresAtMs],
       );
       return res.rowCount === 1;
+    },
+    async release(eventId) {
+      await pg.query("DELETE FROM source_auth_replay WHERE event_id = $1", [eventId]);
     },
   };
 }
