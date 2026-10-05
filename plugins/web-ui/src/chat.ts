@@ -3171,12 +3171,13 @@ export function createChatSurface(
     const session = sessionPresentation(row, status);
     const sessionView = session ? sessionToolView(call, result, sessionsState.list) : null;
     const sessionDetail = [sessionView?.detail, session?.preview].filter(Boolean).join(" · ");
+    const sessionText = session ? [session.label, sessionDetail].filter(Boolean).join(" ") : null;
     const rowIcon = session
       ? Bot
       : { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[description.category];
     const classes = ["tool-row", `tool-${kind}`].join(" ");
     const head = html`<span class="tool-icon">${icon(rowIcon, 15)}</span>
-      ${session && sessionView?.chipTitle ? html`<span class="session-action">${session.label}</span>${subagentChip(sessionView.chipTitle, sessionView.sessionId)}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${detail ? `${label}: ${detail}` : label}>${session ? [session.label, sessionDetail].filter(Boolean).join(" ") : visible}</span>`}`;
+      ${session && sessionView?.chipTitle ? html`<span class="session-action">${session.label}</span>${subagentChip(sessionView.chipTitle, sessionView.sessionId)}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${sessionText ?? (detail ? `${label}: ${detail}` : label)}>${sessionText ?? visible}</span>`}`;
     if (!row.call && !row.result) return html`<div class="${classes}">${head}</div>`;
     const renderDisclosure = (details: HTMLDetailsElement): void => {
       const host = details.querySelector<HTMLElement>(".tool-disclosure-host");

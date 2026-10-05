@@ -76,7 +76,7 @@ test("thinking stays in sequence but is independently collapsible", () => {
 test("dense activity rows let their icons carry repeated type labels", () => {
   assert.match(chat, /thinkingPresentation\(/);
   assert.match(chat, /activityLabel\(row, status\)/);
-  assert.match(chat, /: visible\}<\/span>/);
+  assert.match(chat, /sessionText \?\? visible\}<\/span>/);
   assert.doesNotMatch(chat, />Thinking\$\{preview/);
   assert.doesNotMatch(chat, />\$\{label\}\$\{detail/);
 });
