@@ -220,8 +220,27 @@ function withoutThinking(messages: readonly unknown[]): unknown[] {
   });
 }
 
+function interruptedToolResult(message: unknown): string | undefined {
+  const msg = message as { role?: string; interrupted?: unknown; toolCallId?: unknown } | null;
+  return msg?.role === "toolResult" && msg.interrupted === true && typeof msg.toolCallId === "string"
+    ? msg.toolCallId
+    : undefined;
+}
+
+function callsAnsweredForReal(rows: readonly TapeRecord[]): Set<string> {
+  const answered = new Set<string>();
+  for (const row of rows) {
+    if (row.kind !== "message") continue;
+    const msg = row.payload as { role?: string; interrupted?: unknown; toolCallId?: unknown } | null;
+    if (msg?.role === "toolResult" && msg.interrupted !== true && typeof msg.toolCallId === "string")
+      answered.add(msg.toolCallId);
+  }
+  return answered;
+}
+
 export function foldTape(rows: readonly TapeRecord[]): unknown[] {
   const f: Foldable = { out: [], boundaries: [] };
+  const answeredForReal = callsAnsweredForReal(rows);
   for (const row of rows) {
     if (row.kind === "annotation") {
       if ((row.payload as { turnEnd?: unknown } | null)?.turnEnd === true && row.entrySeq !== undefined) {
@@ -261,15 +280,20 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
       }
       continue;
     }
-    if (row.kind === "message" && row.payload != null) f.out.push(interruptedResultPlaceholder(row.payload));
+    if (row.kind !== "message" || row.payload == null) continue;
+    const interruptedCall = interruptedToolResult(row.payload);
+    if (interruptedCall !== undefined && answeredForReal.has(interruptedCall)) continue;
+    f.out.push(interruptedCall !== undefined ? interruptedResultPlaceholder(row.payload) : row.payload);
   }
   return f.out;
 }
 
 function interruptedResultPlaceholder(message: unknown): unknown {
-  const msg = message as { role?: string; interrupted?: unknown; content?: unknown };
-  if (msg?.role !== "toolResult" || msg.interrupted !== true) return message;
-  return { ...msg, content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }], isError: true };
+  return {
+    ...(message as Record<string, unknown>),
+    content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
+    isError: true,
+  };
 }
 
 const LEGACY_CONTINUATION_LINE = "(continuing after the tool result above)";
@@ -331,7 +355,8 @@ export function openTapeToolCalls(rows: readonly TapeRecord[]): { messages: numb
   const calls: string[] = [];
   for (const m of fold) {
     const msg = m as { role?: string; toolCallId?: string; content?: unknown };
-    if (msg?.role === "toolResult" && typeof msg.toolCallId === "string") answered.add(msg.toolCallId);
+    if (msg?.role === "toolResult" && typeof msg.toolCallId === "string" && interruptedToolResult(m) === undefined)
+      answered.add(msg.toolCallId);
     if (msg?.role !== "assistant" || !Array.isArray(msg.content) || assistantDroppedAtReplay(m)) continue;
     for (const block of msg.content) {
       const b = block as { type?: string; id?: string };

@@ -4,6 +4,7 @@ import {
   filterTapeForAudience,
   foldTape,
   lintFold,
+  openTapeToolCalls,
   planTapeSeed,
   rehydrateFoldImages,
   tapeNeedsInterruptHeal,
@@ -775,4 +776,41 @@ test("a toolResult row marked interrupted folds as the interrupted placeholder, 
   assert.equal(result.content[0]!.text, INTERRUPTED_TOOL_RESULT);
   assert.equal(result.isError, true);
   assert.ok(lintFold(fold).ok);
+  assert.deepEqual(openTapeToolCalls(rows).open, ["c1"], "a marked result leaves its call open for resume");
+});
+
+test("a later real result for the same call supersedes the interrupted one, so a retried call pairs once", () => {
+  const rows = [
+    user("run it"),
+    assistant([{ type: "toolCall", id: "c1", name: "history", arguments: { query: "budget" } }]),
+    row({
+      kind: "message",
+      payload: {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "history",
+        content: [{ type: "text", text: "[exit 143]" }],
+        isError: false,
+        interrupted: true,
+      },
+    }),
+    row({
+      kind: "message",
+      payload: {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "history",
+        content: [{ type: "text", text: "flat" }],
+        isError: false,
+      },
+    }),
+  ];
+  const fold = foldTape(rows) as Array<{ role: string; content: Array<{ text: string }> }>;
+  const results = fold.filter((m) => m.role === "toolResult");
+  assert.deepEqual(
+    results.map((m) => m.content[0]!.text),
+    ["flat"],
+  );
+  assert.ok(lintFold(fold).ok);
+  assert.deepEqual(openTapeToolCalls(rows).open, []);
 });

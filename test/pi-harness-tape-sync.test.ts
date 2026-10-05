@@ -581,7 +581,7 @@ for (const failure of ["acknowledge", "tape"] as const) {
 }
 
 for (const abort of ["shutdown", "stop"] as const) {
-  test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted and leaves its call open on the tape" : "a user Stop stays a real answer"}`, async () => {
+  test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted on entries and tape and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
     const harness = createPiHarness({ apiKey: "sk-test" });
     const store = createMemorySessionStore();
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
@@ -643,8 +643,16 @@ for (const abort of ["shutdown", "stop"] as const) {
           : { interrupted: undefined, result: "[exit 143]" },
       );
       const tape = await store.getTape(session.id);
-      const { openTapeToolCalls } = await import("../src/harness/tape-fold.ts");
+      const tapedResult = tape.find(
+        (row) => row.kind === "message" && (row.payload as { role?: string }).role === "toolResult",
+      );
+      assert.equal(
+        (tapedResult?.payload as { interrupted?: unknown }).interrupted,
+        abort === "shutdown" ? true : undefined,
+      );
+      const { openTapeToolCalls, foldTape, lintFold } = await import("../src/harness/tape-fold.ts");
       assert.deepEqual(openTapeToolCalls(tape).open, abort === "shutdown" ? ["read-memory"] : []);
+      assert.ok(lintFold(foldTape(tape)).ok, "the served fold keeps the result beside its call");
       const { resumeStrategy } = await import("../src/core/turn-resume.ts");
       const userSeq = entries.find((entry) => entry.type === "user")!.seq;
       assert.equal(
