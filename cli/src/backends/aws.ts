@@ -3322,7 +3322,7 @@ export async function awsSetBackgroundWork(
       return awaitBackgroundWork(
         transport,
         cohort.deploymentId,
-        { ownerDeploymentId, active: enabled },
+        { ownerDeploymentId, active: enabled, instances: cohort.taskArns.length },
         { timeoutMs: envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000), pollMs: 1000 },
       );
     }
@@ -3506,7 +3506,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       }
       if (aws.backgroundWorkControl && affected.includes("core")) {
         note(
-          "core secret activation deferred: pause or hand over background ownership, then run qm up --restart core to allocate a new cohort",
+          "core secret activation deferred: pause or hand over background ownership, then run qm up --restart core to allocate a new deployment identity",
         );
         affected.splice(affected.indexOf("core"), 1);
       }

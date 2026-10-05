@@ -427,7 +427,7 @@ export interface Runtime {
   start(): void;
   startBackground(): void;
   stopBackgroundClaims(): Promise<void>;
-  setBackgroundAdmission(check: () => boolean): void;
+  setBackgroundAdmission(canClaim: () => boolean, active: () => boolean): void;
   stopBackground(): Promise<void>;
   backgroundDrained(): Promise<void>;
   stop(): Promise<void>;
@@ -574,6 +574,7 @@ export function buildApp(
   } = {},
 ): BuiltApp {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
+  let backgroundActive = () => false;
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
   });
@@ -2542,7 +2543,7 @@ export function buildApp(
         store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
         instanceId: randomUUID(),
         deploymentId: config.backgroundDeploymentId,
-        active: () => backgroundAdmission(),
+        active: () => backgroundActive(),
       }
     : undefined;
   const instanceRegistry: InstanceRegistry =
@@ -2714,8 +2715,9 @@ export function buildApp(
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
-    setBackgroundAdmission(check) {
-      backgroundAdmission = check;
+    setBackgroundAdmission(canClaim, active) {
+      backgroundAdmission = canClaim;
+      backgroundActive = active;
     },
     async stopBackgroundClaims() {
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));

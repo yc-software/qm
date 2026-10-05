@@ -39,7 +39,15 @@ test(
         setBy: "core:green",
       });
       assert.equal(migrated.ownerDeploymentId, "core:green");
-      assert.deepEqual(await maps[0]!.get("ownership"), migrated);
+      assert.deepEqual(await maps[0]!.get("ownership"), {
+        ...migrated,
+        enabled: true,
+        generation: 0,
+        desiredDeploymentId: "core:green",
+        lastRequestId: null,
+        lastRequest: null,
+        members: [],
+      });
     } finally {
       const pool = await factories[0]!.pool.pool();
       await pool.query(`DROP TABLE IF EXISTS ${table}`);

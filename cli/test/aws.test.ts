@@ -5734,7 +5734,7 @@ test("AWS deployment progress rejects invalid options before AWS calls", async (
   }
 });
 
-test("inactive capacity proves exact relinquished cohorts without mutating deployment state", async () => {
+test("inactive capacity proves the stack is not the owner and its tasks are stable without mutating deployment state", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-capacity-"));
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);

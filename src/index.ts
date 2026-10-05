@@ -175,7 +175,7 @@ if (built.backgroundOwnership) {
     },
     onError: reportFailureAs("background ownership", undefined),
   });
-  built.runtime.setBackgroundAdmission(backgroundController.canClaim);
+  built.runtime.setBackgroundAdmission(backgroundController.canClaim, backgroundController.active);
   backgroundController.start();
 }
 

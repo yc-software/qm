@@ -133,17 +133,22 @@ export async function setBackgroundOwner(
 export async function awaitBackgroundWork(
   transport: BackgroundWorkTransport,
   deploymentId: string,
-  expected: { ownerDeploymentId: string | null; active: boolean },
+  expected: { ownerDeploymentId: string | null; active: boolean; instances: number },
   options: { timeoutMs: number; pollMs: number },
 ): Promise<BackgroundWorkStatus> {
   const deadline = Date.now() + options.timeoutMs;
+  const confirmed = new Set<string>();
   for (;;) {
     const state = await readBackgroundWork(transport, deploymentId);
     if (state.ownerDeploymentId !== expected.ownerDeploymentId)
       throw new CliError("background ownership changed while awaiting acknowledgment");
-    if (state.active === expected.active) return state;
+    if (state.active === expected.active) confirmed.add(state.instanceId);
+    else confirmed.clear();
+    if (confirmed.size >= expected.instances) return state;
     if (Date.now() >= deadline)
-      throw new CliError(`timed out awaiting ${deploymentId} to ${expected.active ? "start" : "stop"} background work`);
+      throw new CliError(
+        `timed out awaiting ${expected.instances} ${deploymentId} process(es) to ${expected.active ? "start" : "stop"} background work; ${confirmed.size} confirmed`,
+      );
     await sleep(options.pollMs);
   }
 }
