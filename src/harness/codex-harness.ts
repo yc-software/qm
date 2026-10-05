@@ -37,6 +37,7 @@ import {
   transitionTask,
   type BridgedTool,
   type HarnessToolPlumbing,
+  withResumedToolCall,
 } from "./harness-shared.ts";
 import {
   recordedMessageTimestamps,
@@ -937,6 +938,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       toolAbort = new AbortController();
       ref.abortSignal = toolAbort.signal;
       tools = toolsEnabled ? bridgedTools(ref, harnessToolOptions(opts, turn)) : [];
+      turn = await withResumedToolCall(turn, ref, tools);
       dynamicTools = tools.map((tool) => ({
         type: "function",
         name: tool.name,

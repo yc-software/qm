@@ -432,8 +432,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     await ref.emit({ type, payload, scopeLabel });
   };
 
-  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...sandboxLog(payload), callId });
+  const retryMarks = new Map<string, RetryMark>();
+  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
+    const mark = retryMarks.get(callId);
+    return log("tool_call", {
+      ...sandboxLog(payload),
+      callId,
+      ...(mark
+        ? { retrySafe: mark.safe, ...(mark.safe ? { rerun: { tool: mark.tool, input: mark.input } } : {}) }
+        : {}),
+    });
+  };
 
   const resultQueue = createKeyedQueue();
   const quarantinedMessages = new Set<string>();
@@ -4347,8 +4356,56 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
   return active.map((t) =>
-    withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+    withRetrySafety(
+      withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+      retryMarks,
+    ),
   );
+}
+
+const RETRY_SAFE_FIELD = "retrySafe";
+
+const RETRY_SAFE_SCHEMA = Type.Optional(
+  Type.Boolean({
+    description:
+      "Set true when re-running this exact call would be harmless (reads, searches, idempotent writes) so the platform can transparently re-run it if a deploy interrupts it; set false when re-running would duplicate a side effect (sending a message, charging, creating a record).",
+  }),
+);
+
+interface RetryMark {
+  safe: boolean;
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+function withRetrySafeField(parameters: unknown): unknown {
+  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return parameters;
+  if (RETRY_SAFE_FIELD in parameters.properties) return parameters;
+  return { ...parameters, properties: { ...parameters.properties, [RETRY_SAFE_FIELD]: RETRY_SAFE_SCHEMA } };
+}
+
+function stripRetrySafeField(params: unknown): { params: unknown; retrySafe?: boolean } {
+  if (!isObj(params) || !(RETRY_SAFE_FIELD in params)) return { params };
+  const { [RETRY_SAFE_FIELD]: retrySafe, ...rest } = params;
+  return { params: rest, ...(typeof retrySafe === "boolean" ? { retrySafe } : {}) };
+}
+
+function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): ToolDefinition {
+  const inner = tool.execute.bind(tool);
+  return {
+    ...tool,
+    parameters: withRetrySafeField(tool.parameters) as ToolDefinition["parameters"],
+    async execute(callId: string, params: unknown, ...rest: unknown[]) {
+      const stripped = stripRetrySafeField(params);
+      if (stripped.retrySafe !== undefined && isObj(stripped.params))
+        marks.set(callId, { safe: stripped.retrySafe, tool: tool.name, input: stripped.params });
+      try {
+        return await (inner as (...args: unknown[]) => unknown)(callId, stripped.params, ...rest);
+      } finally {
+        marks.delete(callId);
+      }
+    },
+  } as ToolDefinition;
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);

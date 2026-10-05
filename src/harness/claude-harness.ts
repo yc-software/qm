@@ -50,6 +50,7 @@ import {
   type SteerIntake,
   transitionTask,
   type HarnessToolPlumbing,
+  withResumedToolCall,
 } from "./harness-shared.ts";
 import {
   recordedMessageTimestamps,
@@ -336,6 +337,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
     const bridged = toolsEnabled ? bridgedTools(ref, harnessToolOptions(opts, turn)) : [];
+    turn = await withResumedToolCall(turn, ref, bridged);
     const bridgedNames = bridged.map((definition) => `mcp__qm__${definition.name}`);
     const childToolNames = bridged
       .filter((definition) => nativeChildToolAllowed(definition.name))

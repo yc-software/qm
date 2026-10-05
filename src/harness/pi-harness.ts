@@ -1,4 +1,4 @@
-import { recordSteerIntake, type SteerIntake } from "./harness-shared.ts";
+import { recordSteerIntake, resumeInterruptedToolCall, type BridgedTool, type SteerIntake } from "./harness-shared.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
@@ -11,6 +11,7 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  type ToolDefinition,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -44,7 +45,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ClientToolDeclaration, ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
+import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
 import type {
   GapPhase,
   GapPhases,
@@ -1605,25 +1606,41 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
+  function createTurnTools(ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
+    return createAgentTools(ref, {
+      sessionTools: Boolean(turn.tools.sessionSyscalls),
+      delegateWork: turn.delegateWork === true,
+      scratchExec,
+      ownerAuthExec,
+      reachExec,
+      ...(mcpTools ? { mcpTools } : {}),
+      controlTools,
+      ...(turn.commandCredentialHandles?.length ? { commandCredentialHandles: turn.commandCredentialHandles } : {}),
+      ...(turn.surfaceTools ? { surfaceTools: true } : {}),
+      ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
+      ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
+      ...(turn.readOnly ? { readOnly: true } : {}),
+      ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
+      ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
+      ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
+      ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
+      sandboxResources: opts?.sandboxResources,
+    });
+  }
   async function createTurnSession(
     model: Model<Api>,
     sessionId: string,
     systemPrompt: string,
     history: SessionEntry[],
-    priorTurns?: ConversationTurn[],
-    readOnly?: boolean,
-    surfaceTools?: boolean,
-    surfaceName?: string,
-    turnScope?: ScopeId,
-    commandCredentialHandles?: readonly string[],
-    tapeRows?: TapeRecord[],
-    tapeMode?: "shadow" | "serve",
-    tapeFold?: unknown[],
-    tape?: HarnessTurnInput["tape"],
-    turnProviderKeys?: ProviderKeys,
-    sessionTools = false,
-    delegateWork = false,
-    clientTools?: readonly ClientToolDeclaration[],
+    priorTurns: ConversationTurn[] | undefined,
+    turnScope: ScopeId,
+    tapeRows: TapeRecord[] | undefined,
+    tapeMode: "shadow" | "serve" | undefined,
+    tapeFold: unknown[] | undefined,
+    tape: HarnessTurnInput["tape"],
+    turnProviderKeys: ProviderKeys | undefined,
+    ref: TurnSession["ref"],
+    tools: ToolDefinition[],
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
     let reconstructed: PiReplayMessage[] | null;
@@ -1661,7 +1678,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       turnProviderKeys ? undefined : modelGateway,
       systemCacheSplit ? "long" : undefined,
     );
-    const ref: TurnSession["ref"] = { current: null };
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       composedPrompt,
@@ -1675,25 +1691,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         modelRuntime,
         resourceLoader,
         settingsManager,
-        customTools: createAgentTools(ref, {
-          sessionTools,
-          delegateWork,
-          scratchExec,
-          ownerAuthExec,
-          reachExec,
-          ...(mcpTools ? { mcpTools } : {}),
-          controlTools,
-          ...(commandCredentialHandles?.length ? { commandCredentialHandles } : {}),
-          ...(surfaceTools ? { surfaceTools: true } : {}),
-          ...(surfaceName ? { surfaceName } : {}),
-          ...(clientTools?.length ? { clientTools } : {}),
-          ...(readOnly ? { readOnly: true } : {}),
-          ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
-          ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
-          ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
-          ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
-          sandboxResources: opts?.sandboxResources,
-        }),
+        customTools: tools,
         noTools: "builtin",
         sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
         cwd,
@@ -1724,7 +1722,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           await tape({
             kind: "context_event",
             payload: { event: "legacy_import", messages: seeded },
-            scopeLabel: turnScope!,
+            scopeLabel: turnScope,
           });
         } catch (err) {
           removeIsolatedDirs({ agentDir, ephemeralCwd });
@@ -1838,50 +1836,61 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       ]),
     },
     {
-      async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
-        const desiredModelId = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
-        const baseModel = getRequiredModel(desiredModelId, !turn.providerKeys);
-        const turnModelGateway = turn.providerKeys ? undefined : modelGateway;
-        const wantFast = wantsFastMode(turn.runtime?.fastMode, desiredModelId);
+      async runTurn(dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
+        const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
+        const baseModel = getRequiredModel(desiredModelId, !dispatched.providerKeys);
+        const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
+        const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
+        const ref: TurnSession["ref"] = {
+          current: dispatched.tools,
+          documents: dispatched.documents,
+          runtimeHandoff: undefined,
+          runtimeMutationPending: false,
+          runtimeInFlight: new Set(),
+          runtimeRunId: dispatched.runId,
+          runtimeActorId: dispatched.runtimeActorId,
+          pendingApprovals: [],
+          pausedOnApproval: undefined,
+          silentRequested: false,
+          pollFire: !!dispatched.pollFire,
+          screenToolResult: dispatched.screenToolResult,
+          verifyGoal: dispatched.verifyGoal,
+          emit: dispatched.emit,
+          scopeLabel: dispatched.scopeLabel,
+          orgScopeId: dispatched.orgScopeId,
+          toolApprovalGate: dispatched.toolApprovalGate,
+        };
+        const tools = createTurnTools(ref, dispatched);
+        const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
+        const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
+        if (resumed) {
+          const callId = resumed.message.toolCallId;
+          const resultScope = ref.tapeResultScopes?.get(callId);
+          ref.tapeResultScopes?.delete(callId);
+          await turn.tape?.({
+            kind: "message",
+            harness: "pi",
+            payload: stripImageBytes(resumed.message),
+            scopeLabel: resultScope ?? turn.scopeLabel,
+          });
+        }
         const { entry, compileMs } = await createTurnSession(
           withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
           turn.session.id,
           turn.systemPrompt,
           turn.history,
           turn.priorTurns,
-          turn.readOnly,
-          turn.surfaceTools,
-          turn.surfaceName,
           turn.scopeLabel,
-          turn.commandCredentialHandles,
           turn.tapeRows,
           turn.tapeMode,
           turn.tapeFold,
           turn.tape,
           turn.providerKeys,
-          Boolean(turn.tools.sessionSyscalls),
-          turn.delegateWork,
-          turn.clientTools,
+          ref,
+          tools,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
-          entry.ref.current = turn.tools;
-          entry.ref.documents = turn.documents;
-          entry.ref.runtimeHandoff = undefined;
-          entry.ref.runtimeMutationPending = false;
-          entry.ref.runtimeInFlight = new Set();
-          entry.ref.runtimeRunId = turn.runId;
-          entry.ref.runtimeActorId = turn.runtimeActorId;
-          entry.ref.pendingApprovals = [];
-          entry.ref.pausedOnApproval = undefined;
-          entry.ref.silentRequested = false;
-          entry.ref.pollFire = !!turn.pollFire;
-          entry.ref.screenToolResult = turn.screenToolResult;
-          entry.ref.verifyGoal = turn.verifyGoal;
-          entry.ref.emit = turn.emit;
-          entry.ref.scopeLabel = turn.scopeLabel;
-          entry.ref.orgScopeId = turn.orgScopeId;
-          entry.ref.toolApprovalGate = turn.toolApprovalGate;
 
           const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
           entry.ref.fast = wantFast;

@@ -154,7 +154,7 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { findTrailingPartialTurn, resumeNote, turnAtSeq } from "./turn-resume.ts";
+import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   appendCoverageImport,
@@ -3069,6 +3069,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             MAX_HISTORY_IMAGE_BYTES,
           );
         };
+        const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
+        const resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
+        const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
         const tapeRows = await (async () => {
           if (memoryHistoryReset || historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES)
             return undefined;
@@ -3085,8 +3088,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const sameHarness = rows.every(
               (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
             );
+            const retrying = resumePlan?.kind === "retry";
             if (
               (!covered || lastImportLacksScopes(rows)) &&
+              !retrying &&
               deps.sessionTapeMode === "serve" &&
               sameHarness &&
               participantHistorySeqs === undefined
@@ -3113,7 +3118,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ) &&
               participantHistorySeqs === undefined;
             let fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
-            if (eligible && rows.length && fold && tapeNeedsInterruptHeal(rows, fold)) {
+            if (eligible && rows.length && fold && !retrying && tapeNeedsInterruptHeal(rows, fold)) {
               const interrupt = await deps.sessions.appendTape(lease, {
                 kind: "context_event",
                 payload: { event: "interrupt" },
@@ -3241,8 +3246,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const approvalReplay =
           !!pausedTurnUserEntry &&
           String((pausedTurnUserEntry.payload as { text?: string } | null)?.text ?? "").trim() === input.text.trim();
-        const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
-        const resume = partial && partial.workEntries > 0 ? partial : null;
         if (partial)
           postKeys.seed(
             completedSurfaceEnqueues(
@@ -3267,10 +3270,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
           });
           console.error(
-            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries}`,
+            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} strategy=${resumePlan!.kind}`,
           );
         }
-        let turnInput = partial ? resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume }) : baseText;
+        let turnInput = resumePlan
+          ? resumeNote({ strategy: resumePlan, backgroundJobs: !!backgroundBroker })
+          : baseText;
         if (partial && !history.some((entry) => entry.seq === partial.userSeq))
           turnInput += `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`;
         if (releasedToolOutput) {
@@ -3898,6 +3903,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ...(selectedTape.fold ? { tapeFold: selectedTape.fold } : {}),
                 }
               : {}),
+            ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             tape: (rec) => {
               turnProgress++;
               if (rec.kind !== "message" || rec.meta?.bareText === undefined) {
@@ -4021,7 +4027,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               : undefined;
             segment = await runHarnessSegment(
-              resumeNote() +
+              resumeNote({ cause: "runtime-change" }) +
                 (recovery ? "\nContext reduced without a new summary." : "\nRuntime handoff completed.") +
                 " Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request." +
                 (recovery &&

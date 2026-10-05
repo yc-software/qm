@@ -70,18 +70,74 @@ export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): Re
   return { userSeq, workEntries, ...(answer ? { answer } : {}) };
 }
 
-export function resumeNote(opts?: { backgroundJobs?: boolean; workRecorded?: boolean }): string {
-  if (opts?.workRecorded === false) {
-    return `${NOTE_HEAD} your previous attempt at the request above was interrupted before it recorded any work, so there is nothing to pick up. Start the request now.)`;
+export interface ResumableToolCall {
+  callId: string;
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+export type ResumeStrategy = { kind: "restart" } | { kind: "note" } | { kind: "retry"; call: ResumableToolCall };
+
+export function resumeStrategy(entries: readonly SessionEntry[], partial: PartialTurn): ResumeStrategy {
+  if (partial.workEntries === 0) return { kind: "restart" };
+  const turn = entries.filter((e) => e.seq > partial.userSeq);
+  const answered = new Set<unknown>();
+  for (const e of turn) {
+    if (e.type === "tool_result") answered.add((e.payload as { callId?: unknown } | null)?.callId);
   }
-  const parts = [
-    `${NOTE_HEAD} your previous attempt at the request above was interrupted mid-turn.`,
-    "Your work up to the interruption is recorded above; a tool result marked interrupted has an",
-    "unknown outcome, so check what actually happened before redoing anything with side effects.",
-  ];
+  const dangling = turn.filter(
+    (e) => e.type === "tool_call" && !answered.has((e.payload as { callId?: unknown } | null)?.callId),
+  );
+  if (dangling.length !== 1) return { kind: "note" };
+  const payload = dangling[0]!.payload as {
+    callId?: unknown;
+    retrySafe?: unknown;
+    rerun?: { tool?: unknown; input?: unknown };
+  } | null;
+  const rerun = payload?.rerun;
+  if (
+    payload?.retrySafe !== true ||
+    typeof payload.callId !== "string" ||
+    typeof rerun?.tool !== "string" ||
+    rerun.input === null ||
+    typeof rerun.input !== "object" ||
+    Array.isArray(rerun.input)
+  )
+    return { kind: "note" };
+  return {
+    kind: "retry",
+    call: { callId: payload.callId, tool: rerun.tool, input: rerun.input as Record<string, unknown> },
+  };
+}
+
+const ROUTINE = "This was a routine platform deploy; it is common and almost never worth mentioning to the user.";
+const CONTINUE = "Continue from where you left off; don't start over or repeat completed steps.)";
+
+export function resumeNote(opts?: {
+  strategy?: ResumeStrategy;
+  backgroundJobs?: boolean;
+  cause?: "deploy" | "runtime-change";
+}): string {
+  const strategy = opts?.strategy ?? { kind: "note" };
+  if (strategy.kind === "restart") {
+    return `${NOTE_HEAD} your previous attempt at the request above was interrupted by a routine platform deploy before it recorded any work, so there is nothing to pick up. Start the request now.)`;
+  }
+  const parts =
+    strategy.kind === "retry"
+      ? [
+          `${NOTE_HEAD} your previous attempt at the request above was paused mid-turn and has resumed.`,
+          ROUTINE,
+          "The tool call that was in flight was re-run and its result is recorded above, so your recorded work is complete and current.",
+        ]
+      : [
+          `${NOTE_HEAD} your previous attempt at the request above was interrupted mid-turn.`,
+          opts?.cause === "runtime-change" ? "" : ROUTINE,
+          "Your work up to the interruption is recorded above; a tool result marked interrupted has an",
+          "unknown outcome, so check what actually happened before redoing anything with side effects.",
+        ];
   if (opts?.backgroundJobs) {
     parts.push("Background jobs on your computer kept running — `background` list/poll to check on them.");
   }
-  parts.push("Continue from where you left off; don't start over or repeat completed steps.)");
-  return parts.join(" ");
+  parts.push(CONTINUE);
+  return parts.filter(Boolean).join(" ");
 }

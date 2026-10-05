@@ -48,6 +48,7 @@ import {
   type SteerIntake,
   type BridgedTool,
   type HarnessToolPlumbing,
+  withResumedToolCall,
 } from "./harness-shared.ts";
 import { recordedMessageTimestamps, reconstructMessagesFromHistory } from "./replay.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -899,6 +900,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
     const tools = bridgedTools(ref, harnessToolOptions(opts, turn));
+    turn = await withResumedToolCall(turn, ref, tools);
     const userEntry = await turn.emit({
       type: "user",
       payload: {

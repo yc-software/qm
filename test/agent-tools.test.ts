@@ -4075,3 +4075,53 @@ test("background process guidance reflects the configured sandbox token lifetime
   assert.match(unlimited, /does not expire those turn tokens/);
   assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
 });
+
+test("every tool schema carries the optional retrySafe flag, which is stripped before the tool runs and recorded on the call", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tools = createAgentTools(ref, {
+    controlTools: true,
+    clientTools: [
+      { name: "page_state", description: "Read page state", inputSchema: { type: "object", properties: {} } },
+    ],
+  });
+  for (const tool of tools) {
+    const schema = tool.parameters as { properties?: Record<string, { type?: string }>; required?: string[] };
+    assert.equal(schema.properties?.retrySafe?.type, "boolean", `${tool.name} exposes retrySafe`);
+    assert.ok(!schema.required?.includes("retrySafe"), `${tool.name} keeps retrySafe optional`);
+  }
+  const history = tools.find((t) => t.name === "history")!;
+  assert.ok(Check(history.parameters, { query: "budget", retrySafe: true }));
+
+  await callWith(history, "safe", { query: "budget", retrySafe: true });
+  await callWith(history, "unsafe", { seq: 3, retrySafe: false });
+  await callWith(history, "unmarked", { seq: 3 });
+
+  const calls = emitted.filter((e) => e.type === "tool_call");
+  assert.deepEqual(
+    calls.map((e) => e.payload),
+    [
+      {
+        tool: "history",
+        query: "budget",
+        callId: "safe",
+        retrySafe: true,
+        rerun: { tool: "history", input: { query: "budget" } },
+      },
+      { tool: "history", seq: 3, callId: "unsafe", retrySafe: false },
+      { tool: "history", seq: 3, callId: "unmarked" },
+    ],
+  );
+  assert.equal(emitted.filter((e) => e.type === "tool_result").length, 3);
+  assert.doesNotMatch(
+    JSON.stringify(emitted.filter((e) => e.type === "tool_result")),
+    /retrySafe/,
+    "the flag never reaches the tool body or its result",
+  );
+});

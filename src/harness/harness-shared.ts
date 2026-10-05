@@ -12,7 +12,7 @@ import { rehydrateOpenGoal } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord, type NewTapeRecord } from "../sessions/session-store.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
 export interface HarnessToolPlumbing {
   scratchExec?: boolean;
@@ -160,6 +160,79 @@ export function nativeChildToolAllowed(name: string, args?: unknown): boolean {
 
 export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {
   return createAgentTools(ref, options) as unknown as BridgedTool[];
+}
+
+export interface ResumedToolResult {
+  history: SessionEntry[];
+  message: {
+    role: "toolResult";
+    toolCallId: string;
+    toolName: string;
+    content: NonNullable<Awaited<ReturnType<BridgedTool["execute"]>>["content"]>;
+    isError: boolean;
+    timestamp: number;
+  };
+}
+
+export async function withResumedToolCall(
+  turn: HarnessTurnInput,
+  ref: ToolContextRef,
+  tools: readonly BridgedTool[],
+): Promise<HarnessTurnInput> {
+  const resumed = await resumeInterruptedToolCall(turn, ref, tools);
+  return resumed ? { ...turn, history: resumed.history } : turn;
+}
+
+export async function resumeInterruptedToolCall(
+  turn: HarnessTurnInput,
+  ref: ToolContextRef,
+  tools: readonly BridgedTool[],
+): Promise<ResumedToolResult | null> {
+  const call = turn.resumeToolCall;
+  if (!call) return null;
+  const tool = tools.find((candidate) => candidate.name === call.tool);
+  if (!tool) {
+    console.error(
+      `[harness] resume: tool ${call.tool} is not available on this turn; leaving call ${call.callId} interrupted`,
+    );
+    return null;
+  }
+  const emit = ref.emit;
+  let recorded: SessionEntry | undefined;
+  ref.emit = async (entry) => {
+    if (entry.type === "tool_call") return;
+    const appended = await emit?.(entry);
+    if (entry.type === "tool_result") recorded = appended as SessionEntry;
+    return appended;
+  };
+  let content: ResumedToolResult["message"]["content"];
+  let isError = false;
+  try {
+    content = (await tool.execute(call.callId, call.input)).content ?? [];
+  } catch (error) {
+    isError = true;
+    content = [{ type: "text", text: `[error] ${errMessage(error)}` }];
+    await ref.emit({
+      type: "tool_result",
+      payload: { tool: call.tool, callId: call.callId, isError, result: content[0]!.text },
+      scopeLabel: turn.scopeLabel,
+    });
+  } finally {
+    ref.emit = emit;
+  }
+  if (!recorded) return null;
+  console.log(`[harness] resume: re-ran retry-safe ${call.tool} call ${call.callId} as seq ${recorded.seq}`);
+  return {
+    history: [...turn.history, recorded],
+    message: {
+      role: "toolResult",
+      toolCallId: call.callId,
+      toolName: call.tool,
+      content,
+      isError,
+      timestamp: recorded.createdAt,
+    },
+  };
 }
 
 export function bridgedToolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {
