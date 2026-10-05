@@ -234,10 +234,8 @@ test("resumeStrategy falls back to the interrupted note when the dangling call i
   assert.deepEqual(resumeStrategy(unmarked, { userSeq: 1, workEntries: 1 }), { kind: "note" });
   const twoDangling = [user("build and deploy the release", 1), safeCall(2, true), safeCall(3, true)];
   assert.deepEqual(resumeStrategy(twoDangling, { userSeq: 1, workEntries: 2 }), { kind: "note" });
-  const answered = [user("build and deploy the release", 1), safeCall(2, true), toolResult(3)];
-  assert.deepEqual(resumeStrategy(answered, { userSeq: 1, workEntries: 2 }), { kind: "note" });
   const priorTurnCall = [safeCall(0, true), user("build and deploy the release", 1), toolCall(2), toolResult(3)];
-  assert.deepEqual(resumeStrategy(priorTurnCall, { userSeq: 1, workEntries: 2 }), { kind: "note" });
+  assert.deepEqual(resumeStrategy(priorTurnCall, { userSeq: 1, workEntries: 2 }), { kind: "continue" });
 });
 
 test("resumeStrategy restarts when the dead attempt recorded no work", () => {
@@ -268,4 +266,30 @@ test("a tool_result marked interrupted does not answer its call, so the call is 
   assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 2 }).kind, "retry");
   const unsafe = [user("build and deploy the release", 1), safeCall(4, false), killed];
   assert.deepEqual(resumeStrategy(unsafe, { userSeq: 1, workEntries: 2 }), { kind: "note" });
+});
+
+test("resumeStrategy continues silently only when every call is answered and the ledger ends at a real tool result", () => {
+  const thinking = (seq: number) => ent("thinking", { text: "hm" }, seq);
+  const killed = (seq: number) =>
+    ent("tool_result", { callId: `c${seq - 1}`, result: "[exit 143]", interrupted: true }, seq);
+  const partial = { userSeq: 1, workEntries: 2 };
+  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3)], partial), { kind: "continue" });
+  assert.deepEqual(resumeStrategy([user("go", 1), safeCall(2, true), toolResult(3)], partial), { kind: "continue" });
+  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), thinking(4)], partial), {
+    kind: "continue",
+  });
+  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), steer("also", 4)], partial), {
+    kind: "note",
+  });
+  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), user(resumeNote(), 4)], partial), {
+    kind: "note",
+  });
+  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), killed(3)], partial), { kind: "note" });
+  assert.deepEqual(
+    resumeStrategy([user("go", 1), toolCall(2), toolResult(3), safeCall(4, true), killed(5)], {
+      userSeq: 1,
+      workEntries: 4,
+    }).kind,
+    "retry",
+  );
 });

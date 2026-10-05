@@ -3290,8 +3290,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let turnInput = resumePlan
           ? resumeNote({ strategy: resumePlan, backgroundJobs: !!backgroundBroker })
           : baseText;
-        if (partial && !history.some((entry) => entry.seq === partial.userSeq))
+        const requestInHistory = !!partial && history.some((entry) => entry.seq === partial.userSeq);
+        const continueTurn =
+          (resumePlan?.kind === "continue" || resumePlan?.kind === "retry") && requestInHistory && !releasedToolOutput;
+        if (partial && !requestInHistory)
           turnInput += `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`;
+        if (partial) spine.turnUserEntrySeq = partial.userSeq;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
         }
@@ -3747,6 +3751,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
+            ...(continueTurn && !continuation ? { continueTurn: true } : {}),
             input: harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
@@ -4238,7 +4243,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnCompleted = outcome.completed;
         const pausing = outcome.paused;
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
-        const turnUserSeq = emittedEntries.find((e) => e.type === "user")?.seq;
+        const turnUserSeq = partial?.userSeq ?? emittedEntries.find((e) => e.type === "user")?.seq;
         let metricProvisionMs: number | undefined;
         if (box.provisionMs !== undefined) metricProvisionMs = box.provisionMs;
         else if (scratchBox.provisionMs !== undefined) metricProvisionMs = scratchBox.provisionMs;
@@ -4389,7 +4394,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
 
         let finalResult: TurnResult;
-        const sourceUserSeq = partial?.userSeq ?? emittedEntries.find((e) => e.type === "user")?.seq;
+        const sourceUserSeq = turnUserSeq;
         const sourceAssistantEntrySeq = [...emittedEntries].reverse().find((e) => e.type === "assistant")?.seq;
         if (cancelStopped && !result.pendingApprovals?.length) {
           finalResult = { status: "silent", sessionId: session.id, stopped: true };

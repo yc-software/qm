@@ -62,9 +62,11 @@ async function runScenario(
     staleNudgeRead?: boolean;
     stoppedPartial?: boolean;
     stoppedTapeComplete?: boolean;
+    resumedPrimary?: boolean;
   } = {},
 ) {
   const modes: Array<"shadow" | "serve" | undefined> = [];
+  const continued: Array<boolean | undefined> = [];
   const folds: unknown[][] = [];
   const harness = defineHarness(
     {
@@ -75,9 +77,13 @@ async function runScenario(
       capabilities: new Set(),
     },
     {
-      async runTurn(turn) {
-        modes.push(turn.tapeMode);
-        folds.push(turn.tapeFold ?? []);
+      async runTurn(dispatched) {
+        modes.push(dispatched.tapeMode);
+        folds.push(dispatched.tapeFold ?? []);
+        continued.push(dispatched.continueTurn);
+        const turn = dispatched.input.startsWith("(system note:")
+          ? { ...dispatched, input: "needs nudge" }
+          : dispatched;
         if (options.nudgeCrash && turn.input.startsWith("[system] You were addressed")) {
           throw new Error("fetch failed");
         }
@@ -287,11 +293,26 @@ async function runScenario(
   });
 
   await orchestrator.handleTurn(input("prime"));
+  if (options.resumedPrimary) {
+    const primed = (await sessions.getByThread(conversation.threadRef))!;
+    const { lease } = await sessions.acquireLease(primed.id);
+    try {
+      for (const entry of [
+        { type: "user" as const, payload: { text: "needs nudge" } },
+        { type: "tool_call" as const, payload: { tool: "execute", callId: "c1", command: "ls" } },
+        { type: "tool_result" as const, payload: { callId: "c1", result: "ok" } },
+      ])
+        await sessions.append(lease!, { ...entry, scopeLabel: primed.scopeId });
+    } finally {
+      await sessions.releaseLease(lease!);
+    }
+  }
   const second = orchestrator.handleTurn(
     input("needs nudge", {
       addressed: true,
       surfaceTools: true,
       deliveryTarget: "slack:C1:tape-nudge",
+      ...(options.resumedPrimary ? { attempt: 2 } : {}),
     }),
   );
   if (options.nudgeCrash) {
@@ -304,8 +325,22 @@ async function runScenario(
   const session = await sessions.getByThread(conversation.threadRef);
   const entries = await sessions.getEntries(session!.id);
   assert.equal(scope, session!.scopeId);
-  return { modes, folds, deliveries, sessions, session: session!, entries, orchestrator, input };
+  return { modes, folds, continued, deliveries, sessions, session: session!, entries, orchestrator, input };
 }
+
+test("only a resumed primary turn continues the assistant turn; its reply-or-decline nudge never does", async () => {
+  const { continued, deliveries } = await runScenario({ resumedPrimary: true });
+  assert.deepEqual(continued, [undefined, true, undefined]);
+  assert.equal(
+    (await deliveries.pending("slack")).some((delivery) => delivery.text === "nudged from tape"),
+    true,
+  );
+});
+
+test("an ordinary primary turn and its nudge never continue a prior assistant turn", async () => {
+  const { continued } = await runScenario();
+  assert.deepEqual(continued, [undefined, undefined, undefined]);
+});
 
 test("an exact first sub-turn continues its reply-or-decline nudge from the refreshed tape", async () => {
   const { modes, folds, deliveries, sessions, session, entries } = await runScenario();
