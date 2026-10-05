@@ -371,3 +371,27 @@ test("history capture failure rejects before acknowledging or starting a turn", 
   await flush();
   assert.equal(calls.length, 0);
 });
+
+test("a fire whose outcome can't be recorded does not leave an unhandled rejection", async () => {
+  const { webhooks, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "triage this issue",
+    verification: { scheme: "github", secret: SECRET },
+  });
+  webhooks.recordFire = async () => {
+    throw new Error("store unavailable");
+  };
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    assert.deepEqual(await receiver.deliver(wh.id, githubReq(JSON.stringify({ action: "opened" }))), { status: 202 });
+    for (let i = 0; i < 5; i++) await flush();
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+  assert.deepEqual(unhandled, []);
+});
