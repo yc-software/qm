@@ -8,11 +8,7 @@ import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
-import {
-  backfillSessionOriginBatch,
-  createPostgresSessionStore,
-  rowToSession,
-} from "../src/sessions/postgres-session-store.ts";
+import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
@@ -1090,7 +1086,7 @@ test(
 );
 
 test(
-  "pg session origin columns: written at insert, regex fallback while NULL, backfill restores them",
+  "pg session origin columns: written at insert, no inference while NULL, backfill restores them",
   { skip },
   async () => {
     const s = createPostgresSessionStore(URL!);
@@ -1149,11 +1145,7 @@ test(
       assert.equal(stored.cronStats.total, 1);
 
       await q("UPDATE sessions SET origin = NULL, origin_id = NULL WHERE id = ANY($1)", [ids]);
-      assert.deepEqual(
-        await classify(),
-        stored,
-        "NULL columns fall back to the thread-ref regex and classify identically",
-      );
+      assert.deepEqual((await classify()).groups, []);
 
       let batches = 0;
       let updated = 0;
@@ -3293,3 +3285,5 @@ test("pg context window preserves user memory checkpoints through compaction and
     await store.releaseLease(lease);
   }
 });
+
+import { backfillSessionOriginBatch } from "../scripts/lib/automation-origin-backfill.ts";

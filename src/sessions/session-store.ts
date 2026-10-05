@@ -489,9 +489,6 @@ export const legacyOriginPattern = (origin: string): string => `^${origin}:[^:]+
 export const ORIGIN_ALTERNATION = "(cron|webhook|monitor)";
 const STABLE_CRON_ID_PATTERN = "^agent:main:cron:([^:]+)$";
 const LEGACY_CRON_ID_PATTERN = "^cron:([^:]+)(:.+)?$";
-export const threadRefCronIdExpr = (threadRef: string): string =>
-  `COALESCE(substring(${threadRef} FROM '${STABLE_CRON_ID_PATTERN}'), substring(${threadRef} FROM '${LEGACY_CRON_ID_PATTERN}'))`;
-
 const STABLE_ORIGIN_RE = new RegExp(stableOriginPattern(ORIGIN_ALTERNATION));
 const LEGACY_ORIGIN_RE = new RegExp(legacyOriginPattern(ORIGIN_ALTERNATION));
 const STABLE_CRON_ID_RE = new RegExp(STABLE_CRON_ID_PATTERN);

@@ -16,6 +16,7 @@
         "scripts/aws-litestream-smoke.ts",
         "scripts/backfill-search-index.ts",
         "scripts/backfill-session-origin.ts",
+        "scripts/retire-cron-fire-history.ts",
         "scripts/backfill-session-tape.ts",
         "scripts/backfill-tape-render-import.ts",
         "scripts/tape-parity-check.ts",

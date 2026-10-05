@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
@@ -37,30 +37,12 @@ import type {
 import { tsPrefixQuery } from "./entry-search.ts";
 import {
   cronIdOf,
-  legacyOriginPattern,
-  ORIGIN_ALTERNATION,
   promptEnvelopeBody,
   sessionOrigin,
-  stableOriginPattern,
-  threadRefCronIdExpr,
   userMessagePreview,
   tapeTranscriptEntryRecord,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
-
-const threadRefOriginExpr = (threadRef: string): string =>
-  `COALESCE(substring(${threadRef} FROM '${stableOriginPattern(ORIGIN_ALTERNATION)}'), substring(${threadRef} FROM '${legacyOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
-
-export async function backfillSessionOriginBatch(q: PgPool["q"], limit: number): Promise<number> {
-  const updated = await q(
-    `UPDATE sessions
-        SET origin = ${threadRefOriginExpr("thread_ref")}, origin_id = ${threadRefCronIdExpr("thread_ref")}
-      WHERE id IN (SELECT id FROM sessions WHERE origin IS NULL LIMIT $1)
-      RETURNING 1`,
-    [limit],
-  );
-  return updated.length;
-}
 
 export function rowToSession(r: Record<string, unknown>): Session {
   return {
@@ -229,10 +211,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
     return rows[0] ? rowToParticipantSession(rows[0]) : null;
   };
-  const originExpr = (alias: string): string =>
-    `COALESCE(${alias}.origin, ${threadRefOriginExpr(`${alias}.thread_ref`)})`;
-  const cronIdExpr = (alias: string): string =>
-    `COALESCE(${alias}.origin_id, ${threadRefCronIdExpr(`${alias}.thread_ref`)})`;
+  const originExpr = (alias: string): string => `${alias}.origin`;
+  const cronIdExpr = (alias: string): string => `${alias}.origin_id`;
   const isBackground = (alias: string): string => `${originExpr(alias)} <> 'conversation'`;
   const hasOrigin = (alias: string, origin: SessionOrigin): string => `${originExpr(alias)} = '${origin}'`;
   const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>

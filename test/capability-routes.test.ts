@@ -666,7 +666,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await get(`/v1/crons/${id}`, { "x-agent-capability": await capFor("U1") })).status, 404);
   });
 
-  it("the runs endpoint reads the fire table and strips the legacy fireLog from the cron", async () => {
+  it("the runs endpoint reads the fire table separately from the cron", async () => {
     const created = (await (
       await post(
         "/v1/crons",
@@ -699,7 +699,6 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(body.runs.length, 1);
     assert.equal(body.runs[0].fireKey, "k2");
     assert.equal(body.runs[0].reply, "second");
-    assert.equal("fireLog" in body.cron, false);
   });
 
   it("another public-channel user can read an OWNER cron but cannot patch, run, or delete it", async () => {

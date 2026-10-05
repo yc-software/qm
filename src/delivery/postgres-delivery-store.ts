@@ -1,25 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
-import { cronIdOf, threadRefCronIdExpr } from "../sessions/session-store.ts";
+import { cronIdOf } from "../sessions/session-store.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
-const SOURCE_CRON_ID_EXPR = threadRefCronIdExpr("provenance->>'sourceThreadRef'");
-
-export async function backfillDeliverySourceCronIdBatch(q: PgPool["q"], limit: number): Promise<number> {
-  const updated = await q(
-    `UPDATE deliveries
-        SET source_cron_id = ${SOURCE_CRON_ID_EXPR}
-      WHERE id IN (SELECT id FROM deliveries
-                    WHERE source_cron_id IS NULL AND ${SOURCE_CRON_ID_EXPR} IS NOT NULL
-                    LIMIT $1)
-      RETURNING 1`,
-    [limit],
-  );
-  return updated.length;
-}
-
 function rowToDelivery(r: Record<string, unknown>): Delivery {
   return {
     id: r.id as string,
@@ -283,7 +268,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       if (!cronIds.length) return counts;
       const rows = await q(
         `SELECT d.cron_id, COUNT(DISTINCT d.run)::int AS runs
-           FROM (SELECT COALESCE(source_cron_id, ${SOURCE_CRON_ID_EXPR}) AS cron_id,
+           FROM (SELECT source_cron_id AS cron_id,
                         COALESCE(provenance->>'sourceSessionId', provenance->>'sourceThreadRef') AS run
                    FROM deliveries
                   WHERE NOT shadow AND expired_at IS NULL AND provenance->>'sourceThreadRef' IS NOT NULL) d

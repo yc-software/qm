@@ -1,6 +1,6 @@
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { backfillDeliverySourceCronIdBatch } from "../src/delivery/postgres-delivery-store.ts";
-import { backfillSessionOriginBatch } from "../src/sessions/postgres-session-store.ts";
+import { backfillDeliverySourceCronIdBatch } from "./lib/automation-origin-backfill.ts";
+import { backfillSessionOriginBatch } from "./lib/automation-origin-backfill.ts";
 import { sleep } from "../src/util/async.ts";
 import { databaseUrl } from "./lib/backfill-runner.ts";
 

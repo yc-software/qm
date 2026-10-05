@@ -108,26 +108,6 @@ test("pg cron_fires: thread-ref lookups hit the indexed columns across crons", {
   assert.deepEqual(await fires.listByThreadRefs([]), []);
 });
 
-test(
-  "pg cron_fires: backfill is an idempotent guarded upsert that never regresses an ended row",
-  { skip },
-  async () => {
-    const fires = createPostgresCronFireStore(URL!);
-    const entries = [
-      { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" as const },
-      { fireKey: "k2", threadRef: "t2", firedAt: 2_000, endedAt: 3_000, status: "ok" as const, reply: "two" },
-    ];
-    await fires.backfill("c-bf", entries);
-    await fires.backfill("c-bf", entries);
-    assert.equal((await fires.listByCron("c-bf")).total, 2);
-    await fires.record("c-bf", { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 9_000, status: "ok" });
-    await fires.backfill("c-bf", entries);
-    const { runs } = await fires.listByCron("c-bf");
-    assert.equal(runs.find((r) => r.fireKey === "k1")?.status, "ok", "the stale running snapshot must not win");
-    assert.equal(runs.find((r) => r.fireKey === "k1")?.endedAt, 9_000);
-  },
-);
-
 test("pg cron_fires: fire rows accept text a legacy jsonb blob would reject (NULs stripped)", { skip }, async () => {
   const fires = createPostgresCronFireStore(URL!);
   await fires.record("c-nul", {
@@ -148,24 +128,11 @@ test("pg cron_fires: the cron store writes the table only and reads back through
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
   await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
   await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" });
-  assert.equal((await store.get(cron.id))?.fireLog, undefined, "the legacy json fireLog is no longer written");
   const { runs, total } = await store.listFires(cron.id);
   assert.equal(total, 1);
   assert.equal(runs[0]!.status, "ok");
   await store.delete(cron.id);
   assert.equal((await store.listFires(cron.id)).total, 1, "fires outlive the deleted cron");
-});
-
-test("pg cron_fires: backfill never clobbers a newer retry of the same fireKey", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
-  await fires.record("c-retry-slot", { fireKey: "slot-1", threadRef: "t1", firedAt: 3_000, status: "running" });
-  await fires.backfill("c-retry-slot", [
-    { fireKey: "slot-1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" },
-  ]);
-  const { runs } = await fires.listByCron("c-retry-slot");
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0]!.firedAt, 3_000, "the older ended snapshot must not clobber the live retry");
-  assert.equal(runs[0]!.status, "running");
 });
 
 test(
@@ -254,48 +221,60 @@ test("pg cron_fires: pruneEnded respects the keep window, the age cutoff, and ru
   );
 });
 
-test("pg cron_fires: existing legacy history and later legacy completions remain visible", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const client = new pg.Pool({ connectionString: URL! });
-  try {
-    await client.query(`CREATE TABLE IF NOT EXISTS cron_fire_log (
-      cron_id text NOT NULL, fire_key text NOT NULL, fired_at bigint NOT NULL, json jsonb NOT NULL,
-      PRIMARY KEY (cron_id, fire_key)
-    )`);
-    const initial = { fireKey: "legacy-k", threadRef: "legacy-thread", firedAt: 1000, status: "running" };
-    await client.query(`INSERT INTO cron_fire_log VALUES ($1, $2, $3, $4)`, [
-      "legacy-c",
-      initial.fireKey,
-      initial.firedAt,
-      initial,
-    ]);
+test(
+  "pg cron history retirement verifies then imports without regressing canonical completions",
+  { skip },
+  async () => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const run = () =>
+      promisify(execFile)(process.execPath, ["scripts/retire-cron-fire-history.ts"], { env: process.env });
+    const pg = (await import("pg")).default;
+    const p = new pg.Pool({ connectionString: URL! });
     const fires = createPostgresCronFireStore(URL!);
-    assert.deepEqual((await fires.listByCron("legacy-c")).runs, [initial]);
-    const ended = { ...initial, endedAt: 2000, status: "ok", reply: "done" };
-    await client.query(`UPDATE cron_fire_log SET json = $1 WHERE cron_id = $2`, [ended, "legacy-c"]);
-    assert.deepEqual((await fires.listByCron("legacy-c")).runs, [ended]);
-    const oldTerminal = { fireKey: "legacy-old", threadRef: "legacy-thread", firedAt: 100, status: "ok" };
-    await client.query(`INSERT INTO cron_fire_log VALUES ($1, $2, $3, $4)`, [
-      "legacy-c",
-      oldTerminal.fireKey,
-      oldTerminal.firedAt,
-      oldTerminal,
-    ]);
-    assert.equal((await fires.listByCron("legacy-c")).runs[0]?.endedAt, 100);
-    assert.ok((await fires.pruneEnded({ endedBefore: 500, keepPerCron: 1 })) >= 1);
-    assert.equal((await client.query("SELECT 1 FROM cron_fire_log WHERE fire_key = 'legacy-old'")).rowCount, 0);
-    const rebooted = createPostgresCronFireStore(URL!);
-    assert.deepEqual((await rebooted.listByCron("legacy-c")).runs, [ended]);
-    const later = { fireKey: "legacy-k2", threadRef: "legacy-thread", firedAt: 3000, status: "running" };
-    await client.query(`INSERT INTO cron_fire_log VALUES ($1, $2, $3, $4)`, [
-      "legacy-c",
-      later.fireKey,
-      later.firedAt,
-      later,
-    ]);
-    assert.deepEqual((await fires.listByCron("legacy-c")).runs, [ended, later]);
-  } finally {
-    await client.query("DROP TABLE IF EXISTS cron_fire_log");
-    await client.end();
-  }
-});
+    const ended = {
+      fireKey: "kept",
+      threadRef: "t",
+      firedAt: 1000,
+      endedAt: 2000,
+      status: "ok" as const,
+      reply: "new",
+    };
+    try {
+      await fires.record("retirement", ended);
+      await p.query("CREATE TABLE crons (id text PRIMARY KEY, json jsonb NOT NULL)");
+      await p.query("INSERT INTO crons VALUES ('retirement', $1)", [
+        {
+          fireLog: [
+            { fireKey: "kept", threadRef: "t", firedAt: 1000, status: "ok", reply: "old" },
+            { fireKey: "missing", threadRef: "t", firedAt: 3000, status: "running" },
+          ],
+        },
+      ]);
+      await p.query("CREATE TABLE cron_fire_log (cron_id text, fire_key text, fired_at bigint, json jsonb)");
+      await p.query("INSERT INTO cron_fire_log VALUES ('retirement', 'table', 4000, $1)", [
+        { threadRef: "t", status: "ok" },
+      ]);
+      await assert.rejects(run(), (error: unknown) => {
+        assert.match((error as { stdout: string }).stdout, /"missing":2/);
+        return true;
+      });
+      assert.equal((await p.query("SELECT json ? 'fireLog' AS present FROM crons")).rows[0].present, true);
+      await promisify(execFile)(process.execPath, ["scripts/retire-cron-fire-history.ts", "--apply"], {
+        env: process.env,
+      });
+      assert.match((await run()).stdout, /"missing":0/);
+      const { runs } = await fires.listByCron("retirement");
+      assert.equal(runs.length, 3);
+      assert.deepEqual(
+        runs.find((r) => r.fireKey === "kept"),
+        ended,
+      );
+      assert.equal(runs.find((r) => r.fireKey === "table")?.endedAt, 4000);
+      assert.equal((await p.query("SELECT json ? 'fireLog' AS present FROM crons")).rows[0].present, false);
+    } finally {
+      await p.query("DROP TABLE IF EXISTS crons, cron_fire_log");
+      await p.end();
+    }
+  },
+);

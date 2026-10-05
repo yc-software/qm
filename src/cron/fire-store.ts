@@ -16,7 +16,6 @@ export interface CronFireStore {
   sweepStranded(now: number, staleRunningMs: number, note: string): Promise<number>;
 
   pruneEnded(opts: { endedBefore: number; keepPerCron: number }): Promise<number>;
-  backfill(cronId: string, entries: readonly CronFireLogEntry[]): Promise<void>;
   listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   listByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestForThread(cronId: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
@@ -27,11 +26,6 @@ function fireOrder(a: CronFireLogEntry, b: CronFireLogEntry): number {
   if (a.fireKey < b.fireKey) return -1;
   if (a.fireKey > b.fireKey) return 1;
   return 0;
-}
-
-function backfillMayReplace(existing: CronFireLogEntry, incoming: CronFireLogEntry): boolean {
-  if (incoming.firedAt < existing.firedAt) return false;
-  return existing.endedAt === undefined || incoming.endedAt !== undefined;
 }
 
 export function createMemoryCronFireStore(): CronFireStore {
@@ -82,14 +76,6 @@ export function createMemoryCronFireStore(): CronFireStore {
       }
       return pruned;
     },
-    async backfill(cronId, entries) {
-      const fires = firesOf(cronId);
-      for (const entry of entries) {
-        const existing = fires.get(entry.fireKey);
-        if (existing && !backfillMayReplace(existing, entry)) continue;
-        fires.set(entry.fireKey, { ...entry });
-      }
-    },
     async listByCron(cronId, opts) {
       const all = [...(byCron.get(cronId)?.values() ?? [])].sort(fireOrder).map((entry) => ({ ...entry }));
       let runs = all;
@@ -116,34 +102,30 @@ export function createMemoryCronFireStore(): CronFireStore {
 
 interface FireColumn {
   name: string;
-  cast: "text" | "bigint";
   value(cronId: string, entry: CronFireLogEntry): string | number | null;
 }
 
 const FIRE_COLUMN_DEFS: readonly FireColumn[] = [
-  { name: "cron_id", cast: "text", value: (cronId) => cronId },
-  { name: "fire_key", cast: "text", value: (_cronId, e) => e.fireKey },
-  { name: "thread_ref", cast: "text", value: (_cronId, e) => e.threadRef },
-  { name: "session_id", cast: "text", value: (_cronId, e) => e.sessionId ?? null },
-  { name: "fired_at", cast: "bigint", value: (_cronId, e) => e.firedAt },
-  { name: "scheduled_at", cast: "bigint", value: (_cronId, e) => e.scheduledAt ?? null },
-  { name: "ended_at", cast: "bigint", value: (_cronId, e) => e.endedAt ?? null },
-  { name: "status", cast: "text", value: (_cronId, e) => e.status ?? null },
-  { name: "note", cast: "text", value: (_cronId, e) => (e.note !== undefined ? pgTextSafe(e.note) : null) },
-  { name: "reply", cast: "text", value: (_cronId, e) => (e.reply !== undefined ? pgTextSafe(e.reply) : null) },
+  { name: "cron_id", value: (cronId) => cronId },
+  { name: "fire_key", value: (_cronId, e) => e.fireKey },
+  { name: "thread_ref", value: (_cronId, e) => e.threadRef },
+  { name: "session_id", value: (_cronId, e) => e.sessionId ?? null },
+  { name: "fired_at", value: (_cronId, e) => e.firedAt },
+  { name: "scheduled_at", value: (_cronId, e) => e.scheduledAt ?? null },
+  { name: "ended_at", value: (_cronId, e) => e.endedAt ?? null },
+  { name: "status", value: (_cronId, e) => e.status ?? null },
+  { name: "note", value: (_cronId, e) => (e.note !== undefined ? pgTextSafe(e.note) : null) },
+  { name: "reply", value: (_cronId, e) => (e.reply !== undefined ? pgTextSafe(e.reply) : null) },
 ];
 
 const FIRE_COLUMNS = FIRE_COLUMN_DEFS.map((c) => c.name).join(", ");
 const VALUE_COLUMN_DEFS = FIRE_COLUMN_DEFS.filter((c) => c.name !== "cron_id" && c.name !== "fire_key");
 const UPSERT_SET = VALUE_COLUMN_DEFS.map((c) => `${c.name} = EXCLUDED.${c.name}`).join(", ");
-const ROW_OF = (prefix: string): string => `(${VALUE_COLUMN_DEFS.map((c) => `${prefix}.${c.name}`).join(", ")})`;
 
 const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
    ON CONFLICT (cron_id, fire_key) DO UPDATE
      SET ${UPSERT_SET}`;
-
-const BACKFILL_CHUNK = 500;
 
 function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
   return FIRE_COLUMN_DEFS.map((c) => c.value(cronId, entry));
@@ -163,61 +145,12 @@ function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
   };
 }
 
-const LEGACY_FIRE_FIELDS = [
-  "source.cron_id",
-  "source.fire_key",
-  "COALESCE(source.json->>'threadRef', 'cron:' || source.cron_id)",
-  "source.json->>'sessionId'",
-  "source.fired_at",
-  "(source.json->>'scheduledAt')::bigint",
-  "COALESCE((source.json->>'endedAt')::bigint, CASE WHEN source.json->>'status' IS DISTINCT FROM 'running' THEN source.fired_at END)",
-  "source.json->>'status'",
-  "source.json->>'note'",
-  "source.json->>'reply'",
-].join(", ");
-
-const LEGACY_FIRE_UPSERT = `ON CONFLICT (cron_id, fire_key) DO UPDATE SET ${UPSERT_SET}
-  WHERE EXCLUDED.fired_at >= cron_fires.fired_at
-    AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)
-    AND ${ROW_OF("cron_fires")} IS DISTINCT FROM ${ROW_OF("EXCLUDED")}`;
-
-const LEGACY_FIRE_MAINTENANCE = {
-  id: "cron/fires/import-legacy-history",
-  statements: [
-    `DO $body$ BEGIN
-      IF to_regclass('cron_fire_log') IS NOT NULL THEN
-        LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE;
-        INSERT INTO cron_fires (${FIRE_COLUMNS})
-        SELECT ${LEGACY_FIRE_FIELDS} FROM cron_fire_log source
-        ${LEGACY_FIRE_UPSERT};
-      END IF;
-    END $body$`,
-    `CREATE OR REPLACE FUNCTION qm_sync_legacy_cron_fire() RETURNS trigger LANGUAGE plpgsql AS $body$
-      BEGIN
-        INSERT INTO cron_fires (${FIRE_COLUMNS})
-        SELECT ${LEGACY_FIRE_FIELDS} FROM (SELECT NEW.*) source
-        ${LEGACY_FIRE_UPSERT};
-        RETURN NEW;
-      END
-    $body$`,
-    `DO $body$ BEGIN
-      IF to_regclass('cron_fire_log') IS NOT NULL THEN
-        DROP TRIGGER IF EXISTS qm_sync_legacy_cron_fire ON cron_fire_log;
-        CREATE TRIGGER qm_sync_legacy_cron_fire AFTER INSERT OR UPDATE ON cron_fire_log
-          FOR EACH ROW EXECUTE FUNCTION qm_sync_legacy_cron_fire();
-      END IF;
-    END $body$`,
-  ],
-};
-
 export function createPostgresCronFireStore(connectionString: string): CronFireStore {
-  const { q, query, pool } = createPgPool(
-    connectionString,
-    [
-      {
-        id: "cron/fires/0001",
-        statements: [
-          `CREATE TABLE IF NOT EXISTS cron_fires(
+  const { q, query, pool } = createPgPool(connectionString, [
+    {
+      id: "cron/fires/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS cron_fires(
         cron_id TEXT NOT NULL,
         fire_key TEXT NOT NULL,
         thread_ref TEXT NOT NULL,
@@ -230,13 +163,11 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         reply TEXT,
         PRIMARY KEY (cron_id, fire_key)
       )`,
-          `CREATE INDEX IF NOT EXISTS idx_cron_fires_thread_ref ON cron_fires (thread_ref)`,
-          `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
-        ],
-      },
-    ],
-    [LEGACY_FIRE_MAINTENANCE],
-  );
+        `CREATE INDEX IF NOT EXISTS idx_cron_fires_thread_ref ON cron_fires (thread_ref)`,
+        `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
+      ],
+    },
+  ]);
 
   return {
     async record(cronId, entry) {
@@ -269,8 +200,6 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
     },
     async pruneEnded({ endedBefore, keepPerCron }) {
       return withPgTransaction(await pool(), async (client) => {
-        const legacy = await client.query("SELECT to_regclass('cron_fire_log') IS NOT NULL AS present");
-        if (legacy.rows[0]?.present) await client.query("LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE");
         const result = await client.query(
           `DELETE FROM cron_fires cf
             USING (SELECT cron_id, fire_key,
@@ -282,31 +211,8 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
             RETURNING cf.cron_id, cf.fire_key`,
           [keepPerCron, endedBefore],
         );
-        if (result.rows.length && legacy.rows[0]?.present) {
-          await client.query(
-            `DELETE FROM cron_fire_log source
-               USING unnest($1::text[], $2::text[]) removed(cron_id, fire_key)
-               WHERE source.cron_id = removed.cron_id AND source.fire_key = removed.fire_key`,
-            [result.rows.map((row) => row.cron_id), result.rows.map((row) => row.fire_key)],
-          );
-        }
         return result.rowCount ?? 0;
       });
-    },
-    async backfill(cronId, entries) {
-      for (let start = 0; start < entries.length; start += BACKFILL_CHUNK) {
-        const chunk = entries.slice(start, start + BACKFILL_CHUNK);
-        await query(
-          `INSERT INTO cron_fires (${FIRE_COLUMNS})
-           SELECT * FROM unnest(${FIRE_COLUMN_DEFS.map((c, i) => `$${i + 1}::${c.cast}[]`).join(", ")})
-           ON CONFLICT (cron_id, fire_key) DO UPDATE
-             SET ${UPSERT_SET}
-           WHERE EXCLUDED.fired_at >= cron_fires.fired_at
-             AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)
-             AND ${ROW_OF("cron_fires")} IS DISTINCT FROM ${ROW_OF("EXCLUDED")}`,
-          FIRE_COLUMN_DEFS.map((c) => chunk.map((entry) => c.value(cronId, entry))),
-        );
-      }
     },
     async listByCron(cronId, opts) {
       if (opts?.limit !== undefined && opts.limit <= 0) {
