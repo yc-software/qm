@@ -47,3 +47,21 @@ test("unknown resources are 404, not silent 200 or 500", async () => {
     await s.close();
   }
 });
+
+test("a JSON null body is a 400, not a 500", async () => {
+  const s = start();
+  try {
+    for (const [method, path] of [
+      ["POST", "/v1/directory"],
+      ["POST", "/v1/grants/revoke"],
+      ["POST", "/v1/soul"],
+      ["PUT", "/v1/memory"],
+      ["PUT", "/v1/ui-state"],
+    ] as const) {
+      const res = await fetch(s.base + path, { method, headers: { "content-type": "application/json" }, body: "null" });
+      assert.ok(res.status < 500, `${method} ${path} answered ${res.status}`);
+    }
+  } finally {
+    await s.close();
+  }
+});
