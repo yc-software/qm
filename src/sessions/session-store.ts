@@ -306,11 +306,11 @@ interface ListLlmRequestsOptions {
 
 export interface SessionPage {
   limit: number;
-  offset: number;
   before?: { lastActivity: number; id: string };
   category?: SessionCategory;
   origin?: SessionOriginFilter;
   cronId?: string;
+  signal?: AbortSignal;
 }
 
 export interface CronGroupSummary {
@@ -786,12 +786,7 @@ export interface SessionStore {
 
   distinctScopes(): Promise<DistinctScope[]>;
 
-  scopeSessionSummaries(
-    scope: ScopeId,
-    orgWide: boolean,
-    page?: SessionPage,
-    sessionIds?: string[],
-  ): Promise<SessionSummary[]>;
+  scopeSessionSummaries(scope: ScopeId, orgWide: boolean, page: SessionPage): Promise<SessionSummary[]>;
 
   lastUserMessages(sessionIds: string[]): Promise<Map<string, string>>;
 

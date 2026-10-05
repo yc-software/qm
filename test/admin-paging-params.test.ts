@@ -12,7 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 
 const URL = process.env.DATABASE_URL;
 
-test("admin list endpoints accept fractional limit and offset values", { skip: !URL }, async () => {
+test("admin list endpoints accept fractional limit values", { skip: !URL }, async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "admin-paging-")),
     databaseUrl: URL,
@@ -44,7 +44,7 @@ test("admin list endpoints accept fractional limit and offset values", { skip: !
     assert.equal((await built.app.turn(dm)).status, "ok");
     for (const path of [
       "/v1/admin/sessions?scope=org:default-org&limit=1.5",
-      "/v1/admin/sessions?scope=org:default-org&offset=0.5",
+      "/v1/admin/sessions?scope=org:default-org&cursor=not-a-cursor",
       "/v1/admin/audit?scope=org:default-org&limit=2.5",
     ]) {
       const res = await fetch(base + path, { headers });

@@ -12,6 +12,7 @@ import {
   transcriptEntries,
   type LlmRequestRecord,
   type SessionCategory,
+  type SessionStore,
   type SessionSummary,
 } from "../../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../../harness/tape-projection.ts";
@@ -33,6 +34,25 @@ const SESSIONS_PAGE_LIMIT_MAX = 200;
 const SESSIONS_PAGE_LIMIT_DEFAULT = 50;
 const TRANSCRIPT_LIMIT_MAX = 50000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
+const SCOPE_AGGREGATE_TTL_MS = 15_000;
+
+const scopeAggregates = new WeakMap<SessionStore, Map<string, { expiresAt: number; value: Promise<unknown> }>>();
+
+function sharedScopeAggregate<T>(store: SessionStore, key: string, read: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  let cache = scopeAggregates.get(store);
+  if (!cache) scopeAggregates.set(store, (cache = new Map()));
+  const hit = cache.get(key);
+  if (hit && hit.expiresAt > now) return hit.value as Promise<T>;
+  for (const [k, entry] of cache) if (entry.expiresAt <= now) cache.delete(k);
+  const value = read();
+  const entries = cache;
+  entries.set(key, { expiresAt: now + SCOPE_AGGREGATE_TTL_MS, value });
+  value.catch(() => {
+    if (entries.get(key)?.value === value) entries.delete(key);
+  });
+  return value;
+}
 
 async function displayNameForPrincipal(app: App, deps: ServerDeps, principalId: string): Promise<string> {
   return (await app.directoryMember(principalId))?.displayName?.trim() || principalId;
@@ -171,7 +191,14 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const originFilter: AdminSessionOrigin | undefined =
     originParam === "cron" || originParam === "other_background" ? originParam : undefined;
   const cronId = url.searchParams.get("cron") || undefined;
-  const stats = (await deps.sessions?.scopeSessionStats(scope, orgWide, categoryFilter, originFilter, cronId)) ?? {
+  const sessionStore = deps.sessions;
+  const stats = (sessionStore
+    ? await sharedScopeAggregate(
+        sessionStore,
+        JSON.stringify(["stats", scope, categoryFilter, originFilter, cronId]),
+        () => sessionStore.scopeSessionStats(scope, orgWide, categoryFilter, originFilter, cronId),
+      )
+    : undefined) ?? {
     total: 0,
     turns: 0,
     byType: {},
@@ -222,21 +249,18 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
       turns: stats.turns,
       byType: stats.byType,
       limit,
-      offset: 0,
     });
   }
   const total = stats.total;
-  const lastOffset = total ? Math.floor((total - 1) / limit) * limit : 0;
   const cursorParam = url.searchParams.get("cursor");
   const cursorMatch = cursorParam ? /^(\d+)~(.+)$/.exec(cursorParam) : null;
   const before = cursorMatch ? { lastActivity: Number(cursorMatch[1]), id: cursorMatch[2]! } : undefined;
-  const offset = before
-    ? 0
-    : Math.min(Math.max(0, Math.floor(Number(url.searchParams.get("offset"))) || 0), lastOffset);
+  const disconnected = new AbortController();
+  res.once("close", () => disconnected.abort());
   const summaries =
     (await deps.sessions?.scopeSessionSummaries(scope, orgWide, {
       limit,
-      offset,
+      signal: disconnected.signal,
       ...(before ? { before } : {}),
       ...(categoryFilter ? { category: categoryFilter } : {}),
       ...(originFilter ? { origin: originFilter } : {}),
@@ -293,7 +317,6 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
     turns: stats.turns,
     byType: stats.byType,
     limit,
-    offset,
     ...(summaries.length === limit
       ? { nextCursor: `${summaries[summaries.length - 1]!.lastActivity}~${summaries[summaries.length - 1]!.id}` }
       : {}),

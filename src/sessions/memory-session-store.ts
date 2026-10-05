@@ -742,21 +742,19 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return [...byScope].map(([scopeId, channelName]) => ({ scopeId, ...(channelName ? { channelName } : {}) }));
     },
 
-    async scopeSessionSummaries(scope, orgWide, page?: SessionPage, sessionIds?: string[]): Promise<SessionSummary[]> {
-      const idSet = sessionIds ? new Set(sessionIds) : null;
+    async scopeSessionSummaries(scope, orgWide, page: SessionPage): Promise<SessionSummary[]> {
       const out: SessionSummary[] = [];
       for (const s of sessions.values()) {
         if (!orgWide && s.scopeId !== scope) continue;
-        if (idSet && !idSet.has(s.id)) continue;
         const origin = sessionOrigin(s.threadRef);
-        if (page?.category && sessionCategory(origin) !== page.category) continue;
+        if (page.category && sessionCategory(origin) !== page.category) continue;
         if (
-          page?.origin === "other_background"
+          page.origin === "other_background"
             ? origin === "conversation" || origin === "cron"
-            : page?.origin && origin !== page.origin
+            : page.origin && origin !== page.origin
         )
           continue;
-        if (page?.cronId && cronIdOf(s.threadRef) !== page.cronId) continue;
+        if (page.cronId && cronIdOf(s.threadRef) !== page.cronId) continue;
         const log = entries.get(s.id) ?? [];
         const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
         out.push({
@@ -774,16 +772,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         });
       }
       out.sort((a, b) => b.lastActivity - a.lastActivity || idDesc(a.id, b.id));
-      if (!page) return out;
       const before = page.before;
-      if (before) {
-        return out
-          .filter(
-            (r) => r.lastActivity < before.lastActivity || (r.lastActivity === before.lastActivity && r.id < before.id),
-          )
-          .slice(0, page.limit);
-      }
-      return out.slice(page.offset, page.offset + page.limit);
+      return (
+        before
+          ? out.filter(
+              (r) =>
+                r.lastActivity < before.lastActivity || (r.lastActivity === before.lastActivity && r.id < before.id),
+            )
+          : out
+      ).slice(0, page.limit);
     },
 
     async lastUserMessages(sessionIds): Promise<Map<string, string>> {
