@@ -2761,13 +2761,17 @@ export function buildApp(
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();
-      runs.close?.();
-      void runSignals.close?.();
-      void sessionStateBus.close?.();
-      void ledgerEventBus.close?.();
-      void runActivity.close?.();
       stopStreamSync();
-      void runStreamEvents.close?.();
+      await withTimeout(
+        () =>
+          Promise.all(
+            [runs, runSignals, sessionStateBus, ledgerEventBus, runActivity, runStreamEvents].map((store) =>
+              Promise.resolve(store.close?.()).catch(swallowAs("wiring: store close failed", undefined)),
+            ),
+          ),
+        config.shutdownDrainMs,
+        "store close",
+      ).catch(swallowAs("wiring: store close timed out", undefined));
       await harness.turns.close?.();
       await tasks.close?.();
       await flyTunnel?.stop();
