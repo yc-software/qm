@@ -189,6 +189,9 @@ const built = buildApp({
   runStore: "memory",
   harness: "mock",
 });
+await built.config.hydrate?.();
+await built.identity.hydrate();
+await built.mcpToolService.ready();
 const core = createServer(built.app, {
   signingSecret: secret,
   connectorTokens: built.connectorTokens,
