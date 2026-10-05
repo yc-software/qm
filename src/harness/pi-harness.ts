@@ -1868,6 +1868,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           scopeLabel: dispatched.scopeLabel,
           orgScopeId: dispatched.orgScopeId,
           toolApprovalGate: dispatched.toolApprovalGate,
+          shutdown: dispatched.shutdown,
         };
         const tools = createTurnTools(ref, dispatched);
         const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
@@ -2000,6 +2001,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
+            if (role === "toolResult" && turn.shutdown?.aborted) return;
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",

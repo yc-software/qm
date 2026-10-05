@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -4124,4 +4125,44 @@ test("every tool schema carries the optional retrySafe flag, which is stripped b
     /retrySafe/,
     "the flag never reaches the tool body or its result",
   );
+});
+
+test("a tool result recorded after shutdown fires is marked interrupted; user Stop and plain completion are not", async () => {
+  const record = async (abort: "shutdown" | "stop" | "none") => {
+    const emitted: Emitted[] = [];
+    const shutdown = new AbortController();
+    const cancel = new AbortController();
+    const ref: ToolContextRef = {
+      current: fakeToolContext(),
+      emit: (e) => {
+        emitted.push(e as Emitted);
+      },
+      scopeLabel: "personal:U1",
+      shutdown: shutdown.signal,
+      abortSignal: cancel.signal,
+    };
+    const history = createAgentTools(ref).find((t) => t.name === "history")!;
+    if (abort === "shutdown") shutdown.abort();
+    if (abort !== "none") cancel.abort();
+    await callWith(history, `call-${abort}`, { query: "budget", retrySafe: true });
+    return emitted;
+  };
+
+  const interrupted = await record("shutdown");
+  const result = interrupted.find((e) => e.type === "tool_result")!.payload;
+  assert.equal(result.interrupted, true);
+  assert.equal(typeof result.result, "string", "the recorded text is kept alongside the mark");
+  const entries = interrupted.map((e, i) => ({ ...e, seq: i + 2 }) as unknown as SessionEntry);
+  assert.deepEqual(resumeStrategy(entries, { userSeq: 1, workEntries: entries.length }), {
+    kind: "retry",
+    call: { callId: "call-shutdown", tool: "history", input: { query: "budget" } },
+  });
+
+  for (const abort of ["stop", "none"] as const) {
+    const emitted = await record(abort);
+    const payload = emitted.find((e) => e.type === "tool_result")!.payload;
+    assert.ok(!("interrupted" in payload), `${abort}: an ordinary result stays a real answer`);
+    const plain = emitted.map((e, i) => ({ ...e, seq: i + 2 }) as unknown as SessionEntry);
+    assert.deepEqual(resumeStrategy(plain, { userSeq: 1, workEntries: plain.length }), { kind: "note" });
+  }
 });

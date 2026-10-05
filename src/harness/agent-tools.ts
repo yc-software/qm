@@ -90,6 +90,7 @@ export interface ToolContextRef {
   onGapWork?: (work: GapWork) => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
 
@@ -429,6 +430,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const callId = (payload as { callId?: unknown } | null)?.callId;
       if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
+    if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload)) payload = { ...payload, interrupted: true };
     await ref.emit({ type, payload, scopeLabel });
   };
 

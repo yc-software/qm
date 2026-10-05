@@ -85,6 +85,7 @@ export async function processRun(
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
       cancel: cancel.signal,
+      ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
       ...(queueMs !== undefined ? { queueMs } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });

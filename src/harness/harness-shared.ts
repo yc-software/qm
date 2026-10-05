@@ -119,6 +119,7 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     screenToolResult: turn.screenToolResult,
     verifyGoal: turn.verifyGoal,
     toolApprovalGate: turn.toolApprovalGate,
+    shutdown: turn.shutdown,
   };
 }
 

@@ -245,10 +245,12 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
     unwind = resolve;
   });
   let signal!: AbortSignal;
+  let shutdownSignal: AbortSignal | undefined;
   let leaseToken!: string;
   const orchestrator = {
     async handleTurn(input: OrchestratorInput) {
       signal = input.cancel!;
+      shutdownSignal = input.shutdown;
       leaseToken = input.runLeaseToken!;
       const { lease } = await sessions.acquireLease(session.id);
       assert.ok(lease);
@@ -273,6 +275,7 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
   });
   await sleep(20);
   assert.equal(signal.aborted, true, "shutdown reaches the existing cancellation signal immediately");
+  assert.equal(shutdownSignal?.aborted, true, "the turn can tell this cancellation apart from a user Stop");
   assert.equal(released, false, "handback waits for the cancellation checkpoint and finally block");
   assert.equal(worker.busy(), true);
   assert.equal((await runs.get(enq.id))?.status, "running");
