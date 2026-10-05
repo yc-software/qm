@@ -2,191 +2,165 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   awaitBackgroundWork,
-  mutateBackgroundWork,
   parseBackgroundWorkStatus,
+  setBackgroundOwner,
   type BackgroundWorkStatus,
   type BackgroundWorkTransport,
 } from "../src/background-work.ts";
 
-const state = (): BackgroundWorkStatus => ({
-  protocol: 1,
-  enabled: true,
+const state = (patch: Partial<BackgroundWorkStatus> = {}): BackgroundWorkStatus => ({
+  protocol: 2,
   deploymentId: "new-cohort",
   instanceId: "new-instance",
-  generation: 2,
-  desiredDeploymentId: "new-cohort",
-  lastRequestId: "our-request",
-  members: [
-    {
-      instanceId: "old-instance",
-      taskArn: "old-task",
-      deploymentId: "old-cohort",
-      generation: 1,
-      state: "relinquished",
-      retired: false,
-      ready: true,
-    },
-    {
-      instanceId: "new-instance",
-      taskArn: "new-task",
-      deploymentId: "new-cohort",
-      generation: 2,
-      state: "admitted",
-      retired: false,
-      ready: true,
-    },
-  ],
+  ownerDeploymentId: "new-cohort",
+  setAt: "2026-10-04T00:00:00.000Z",
+  setBy: "new-cohort",
+  active: true,
+  ...patch,
 });
 
-const response = (value: BackgroundWorkStatus) => ({ status: 200, body: JSON.stringify(value) });
+const response = (value: unknown) => ({ status: 200, body: JSON.stringify(value) });
 
-test("ownership status refuses stale responders and malformed durable membership", () => {
-  assert.equal(parseBackgroundWorkStatus(JSON.stringify(state()), "new-cohort").generation, 2);
+test("ownership status refuses other responders and malformed records", () => {
+  assert.deepEqual(parseBackgroundWorkStatus(JSON.stringify(state()), "new-cohort"), state());
   assert.throws(() => parseBackgroundWorkStatus(JSON.stringify(state()), "old-cohort"), /requested deployment/);
-  const duplicate = state();
-  duplicate.members.push(duplicate.members[0]!);
-  assert.throws(() => parseBackgroundWorkStatus(JSON.stringify(duplicate), "new-cohort"), /duplicate/);
-  const unenrolled = state();
-  unenrolled.instanceId = "missing";
-  assert.throws(() => parseBackgroundWorkStatus(JSON.stringify(unenrolled), "new-cohort"), /not enrolled/);
+  assert.throws(() => parseBackgroundWorkStatus("not json", "new-cohort"), /invalid JSON/);
+  for (const patch of [
+    { protocol: 3 },
+    { ownerDeploymentId: 4 },
+    { ownerDeploymentId: "" },
+    { active: "yes" },
+    { setAt: 12 },
+    { instanceId: "" },
+  ])
+    assert.throws(
+      () => parseBackgroundWorkStatus(JSON.stringify({ ...state(), ...patch }), "new-cohort"),
+      /does not match/,
+    );
+  const paused = parseBackgroundWorkStatus(
+    JSON.stringify(state({ ownerDeploymentId: null, active: false })),
+    "new-cohort",
+  );
+  assert.equal(paused.ownerDeploymentId, null);
 });
 
-test("lost mutation responses require the exact request ID and generation on durable readback", async () => {
+test("a member-protocol responder is read as its enabled desired owner", () => {
+  const legacy = {
+    protocol: 1,
+    enabled: true,
+    deploymentId: "old-cohort",
+    instanceId: "old-instance",
+    generation: 4,
+    desiredDeploymentId: "old-cohort",
+    lastRequestId: "handover",
+    members: [
+      {
+        instanceId: "old-instance",
+        taskArn: "old-task",
+        deploymentId: "old-cohort",
+        generation: 4,
+        state: "admitted",
+        retired: false,
+        ready: true,
+      },
+    ],
+  };
+  const parsed = parseBackgroundWorkStatus(JSON.stringify(legacy), "old-cohort");
+  assert.equal(parsed.protocol, 2);
+  assert.equal(parsed.ownerDeploymentId, "old-cohort");
+  assert.equal(parsed.active, true);
+  assert.equal(parsed.setAt, null);
+  legacy.members[0]!.state = "relinquished";
+  assert.equal(parseBackgroundWorkStatus(JSON.stringify(legacy), "old-cohort").active, false);
+  legacy.enabled = false;
+  assert.equal(parseBackgroundWorkStatus(JSON.stringify(legacy), "old-cohort").ownerDeploymentId, null);
+  assert.throws(
+    () => parseBackgroundWorkStatus(JSON.stringify({ ...legacy, members: "none" }), "old-cohort"),
+    /does not match/,
+  );
+});
+
+test("a lost change response is confirmed by reading the owner back", async () => {
   const calls: string[] = [];
-  const mutation = { expectedGeneration: 1, desiredDeploymentId: "new-cohort", requestId: "our-request" };
+  const change = { ownerDeploymentId: "new-cohort", expectedOwnerDeploymentId: "old-cohort" };
   let observed = state();
   const transport: BackgroundWorkTransport = async (method, body) => {
     calls.push(method);
     if (method === "POST") {
-      assert.deepEqual(JSON.parse(body!), mutation);
+      assert.deepEqual(JSON.parse(body!), change);
       throw new Error("connection lost after commit");
     }
     return response(observed);
   };
-  assert.equal((await mutateBackgroundWork(transport, "new-cohort", mutation)).generation, 2);
+  assert.equal((await setBackgroundOwner(transport, "new-cohort", change)).ownerDeploymentId, "new-cohort");
   assert.deepEqual(calls, ["POST", "GET"]);
-  observed = { ...state(), lastRequestId: "someone-else" };
-  await assert.rejects(mutateBackgroundWork(transport, "new-cohort", mutation), /changed concurrently/);
-});
-
-test("retirement acknowledgment binds every terminated instance, task and generation", async () => {
-  const mutation = {
-    expectedGeneration: 2,
-    requestId: "retirement",
-    terminatedMembers: [{ instanceId: "old-instance", taskArn: "old-task", generation: 1 }],
-  };
-  const observed = state();
-  observed.lastRequestId = "retirement";
-  observed.members[0]!.retired = true;
-  const transport: BackgroundWorkTransport = async () => response(observed);
-  assert.equal((await mutateBackgroundWork(transport, "new-cohort", mutation)).generation, 2);
-  observed.members[0]!.taskArn = "different-task";
-  await assert.rejects(mutateBackgroundWork(transport, "new-cohort", mutation), /unconfirmed/);
-});
-
-test("activation waits for every old owner and every expected new task without waiting for old turns to drain", async () => {
-  const observed = state();
-  observed.members[0]!.state = "admitted";
-  let polls = 0;
-  const transport: BackgroundWorkTransport = async () => {
-    polls++;
-    if (polls === 2) observed.members[0]!.state = "relinquished";
-    if (polls === 3)
-      observed.members.push({
-        ...observed.members[1]!,
-        instanceId: "second-instance",
-        taskArn: "second-task",
-        ready: false,
-      });
-    if (polls === 4) observed.members[2]!.ready = true;
-    return response(observed);
-  };
-  const ready = await awaitBackgroundWork(
-    transport,
-    "new-cohort",
-    { generation: 2, desiredDeploymentId: "new-cohort", taskArns: ["new-task", "second-task"] },
-    { timeoutMs: 10_000, pollMs: 1 },
-  );
-  assert.equal(polls, 4);
-  assert.equal(ready.members[0]!.state, "relinquished");
-});
-
-test("pause never infers unacknowledged owners dead and refuses concurrent generations", async () => {
-  const observed = state();
-  observed.desiredDeploymentId = null;
-  observed.members[0]!.state = "admitted";
-  observed.members[1]!.state = "drained";
-  const transport: BackgroundWorkTransport = async () => response(observed);
-  const expected = { generation: 2, desiredDeploymentId: null, taskArns: [] };
-  await assert.rejects(
-    awaitBackgroundWork(transport, "new-cohort", expected, { timeoutMs: 0, pollMs: 1 }),
-    /no member was inferred dead/,
-  );
-  observed.members[0]!.state = "relinquished";
-  assert.equal(
-    (await awaitBackgroundWork(transport, "new-cohort", expected, { timeoutMs: 0, pollMs: 1 })).generation,
-    2,
-  );
-  observed.generation = 3;
-  await assert.rejects(
-    awaitBackgroundWork(transport, "new-cohort", expected, { timeoutMs: 0, pollMs: 1 }),
-    /changed while awaiting/,
-  );
+  observed = state({ ownerDeploymentId: "someone-else" });
+  await assert.rejects(setBackgroundOwner(transport, "new-cohort", change), /changed concurrently/);
 });
 
 for (const mode of ["late-commit", "unavailable-read", "never-commits", "competitor", "rejected"] as const) {
-  test(`mutation confirmation handles ${mode} without changing its request`, async () => {
-    const mutation = { expectedGeneration: 1, desiredDeploymentId: "new-cohort", requestId: "our-request" };
+  test(`owner change confirmation handles ${mode} without changing its request`, async () => {
+    const change = { ownerDeploymentId: "new-cohort", expectedOwnerDeploymentId: "old-cohort" };
     let posts = 0;
     let reads = 0;
-    const old = {
-      ...state(),
-      generation: 1,
-      desiredDeploymentId: "old-cohort",
-      lastRequestId: "previous",
-      members: state().members.map((member) => ({ ...member, generation: 1 })),
-    };
+    const old = state({ ownerDeploymentId: "old-cohort", active: false });
     const transport: BackgroundWorkTransport = async (method, body) => {
       if (method === "POST") {
         posts++;
-        assert.equal(body, JSON.stringify(mutation));
+        assert.equal(body, JSON.stringify(change));
         if (mode === "rejected") return { status: 403, body: "denied" };
         if (posts > 1 && (mode === "late-commit" || mode === "unavailable-read")) return response(state());
         throw new Error("response timed out before commit");
       }
       reads++;
       if (mode === "unavailable-read") throw new Error("temporarily unavailable");
-      if (mode === "competitor") return response({ ...state(), lastRequestId: "competitor" });
+      if (mode === "competitor") return response(state({ ownerDeploymentId: "competitor" }));
       return response(old);
     };
     if (mode === "late-commit" || mode === "unavailable-read") {
-      assert.equal((await mutateBackgroundWork(transport, "new-cohort", mutation)).generation, 2);
+      assert.equal((await setBackgroundOwner(transport, "new-cohort", change)).ownerDeploymentId, "new-cohort");
       assert.equal(posts, 2);
       assert.equal(reads, 1);
     } else {
       await assert.rejects(
-        mutateBackgroundWork(transport, "new-cohort", mutation),
-        mode === "competitor" ? /changed concurrently/ : /unconfirmed.*automatic compensation is unsafe/,
+        setBackgroundOwner(transport, "new-cohort", change),
+        mode === "competitor" ? /changed concurrently/ : /unconfirmed/,
       );
       assert.equal(posts, mode === "never-commits" ? 3 : 1);
     }
   });
 }
 
-test("readiness cannot replace the confirmed mutation identity with a same-generation retirement", async () => {
-  const observed = { ...state(), lastRequestId: "operator-retirement" };
+test("activation waits for the responder to report activity and refuses a changed owner", async () => {
+  let polls = 0;
+  const transport: BackgroundWorkTransport = async () => {
+    polls++;
+    return response(state({ active: polls >= 3 }));
+  };
+  const ready = await awaitBackgroundWork(
+    transport,
+    "new-cohort",
+    { ownerDeploymentId: "new-cohort", active: true },
+    { timeoutMs: 10_000, pollMs: 1 },
+  );
+  assert.equal(polls, 3);
+  assert.equal(ready.active, true);
   await assert.rejects(
     awaitBackgroundWork(
-      async () => response(observed),
+      async () => response(state({ ownerDeploymentId: "other" })),
       "new-cohort",
-      {
-        generation: 2,
-        desiredDeploymentId: "new-cohort",
-        taskArns: ["new-task"],
-        lastRequestId: "our-request",
-      },
+      { ownerDeploymentId: "new-cohort", active: true },
       { timeoutMs: 0, pollMs: 1 },
     ),
     /changed while awaiting/,
+  );
+  await assert.rejects(
+    awaitBackgroundWork(
+      async () => response(state({ ownerDeploymentId: null, active: true })),
+      "new-cohort",
+      { ownerDeploymentId: null, active: false },
+      { timeoutMs: 0, pollMs: 1 },
+    ),
+    /timed out awaiting new-cohort to stop/,
   );
 });

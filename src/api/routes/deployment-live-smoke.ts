@@ -16,60 +16,24 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
   const body = ctx.body;
   if (
     !isObj(body) ||
-    !Object.keys(body).every((key) =>
-      ["requestId", "expectedDeploymentId", "expectedGeneration", "expectedTaskArns"].includes(key),
-    ) ||
+    !Object.keys(body).every((key) => ["requestId", "expectedDeploymentId"].includes(key)) ||
     typeof body.requestId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.requestId) ||
-    typeof body.expectedDeploymentId !== "string" ||
-    body.expectedDeploymentId !== control.deploymentId ||
-    !Number.isSafeInteger(body.expectedGeneration) ||
-    (body.expectedGeneration as number) < 1 ||
-    !Array.isArray(body.expectedTaskArns) ||
-    !body.expectedTaskArns.length ||
-    body.expectedTaskArns.length > 1000 ||
-    !body.expectedTaskArns.every((arn) => typeof arn === "string" && arn.length > 0 && arn.length <= 2048) ||
-    new Set(body.expectedTaskArns).size !== body.expectedTaskArns.length
+    body.expectedDeploymentId !== control.deploymentId
   )
     return sendJson(ctx.res, 400, { error: "invalid_deployment_smoke_request" });
   if (running.has(control)) return sendJson(ctx.res, 409, { error: "deployment_smoke_running" });
-  const expectedTasks = new Set(body.expectedTaskArns as string[]);
-  const valid = (state: BackgroundOwnership): boolean => {
-    const members = state.members.filter((member) => !member.retired && member.state === "admitted");
-    return (
-      state.enabled &&
-      state.generation === body.expectedGeneration &&
-      state.desiredDeploymentId === control.deploymentId &&
-      members.some((member) => member.instanceId === control.instanceId) &&
-      members.length === expectedTasks.size &&
-      new Set(members.map((member) => member.taskArn)).size === expectedTasks.size &&
-      members.every(
-        (member) =>
-          member.deploymentId === control.deploymentId &&
-          member.generation === state.generation &&
-          member.state === "admitted" &&
-          member.ready &&
-          member.taskArn !== null &&
-          expectedTasks.has(member.taskArn),
-      )
-    );
-  };
+  const valid = (state: BackgroundOwnership): boolean =>
+    state.ownerDeploymentId === control.deploymentId && control.active();
   running.add(control);
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
-    const state = await control.store.get();
-    if (!valid(state)) return sendJson(ctx.res, 409, { error: "deployment_smoke_ownership_conflict" });
+    if (!valid(await control.store.get()))
+      return sendJson(ctx.res, 409, { error: "deployment_smoke_ownership_conflict" });
     if (!(await replay.claim(`deployment-live-smoke:${body.requestId.toLowerCase()}`, REQUEST_EXPIRY))) {
       return sendJson(ctx.res, 409, { error: "deployment_smoke_replay" });
     }
-    const member = state.members.find((entry) => entry.instanceId === control.instanceId)!;
-    const identity = {
-      requestId: body.requestId,
-      deploymentId: control.deploymentId,
-      instanceId: control.instanceId,
-      taskArn: member.taskArn,
-      generation: state.generation,
-    };
+    const identity = { requestId: body.requestId, deploymentId: control.deploymentId, instanceId: control.instanceId };
     ctx.res.writeHead(200, {
       "content-type": "application/x-ndjson",
       "cache-control": "no-store, no-transform",

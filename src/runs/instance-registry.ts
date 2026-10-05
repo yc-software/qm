@@ -57,15 +57,3 @@ export function createPostgresInstanceRegistry(
     },
   };
 }
-
-export function createLegacyEnrollmentBridge(
-  registry: InstanceRegistry,
-  eligible: () => Promise<boolean>,
-): InstanceRegistry {
-  return {
-    async beat() {
-      if (await eligible()) await registry.beat();
-      return false;
-    },
-  };
-}

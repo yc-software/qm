@@ -2,63 +2,27 @@ import { randomUUID } from "node:crypto";
 import type { BackgroundWorkStatus } from "./background-work.ts";
 import { CliError } from "./log.ts";
 
-export interface LiveSessionCohort {
+export interface LiveSessionOwner {
   deploymentId: string;
-  taskArns: string[];
   status: BackgroundWorkStatus;
 }
 
-function assertReady(cohort: LiveSessionCohort): void {
-  const { deploymentId, taskArns, status } = cohort;
-  if (
-    !status.enabled ||
-    status.deploymentId !== deploymentId ||
-    status.desiredDeploymentId !== deploymentId ||
-    taskArns.length === 0 ||
-    new Set(taskArns).size !== taskArns.length ||
-    taskArns.some(
-      (taskArn) =>
-        !status.members.some(
-          (member) =>
-            member.taskArn === taskArn &&
-            member.deploymentId === deploymentId &&
-            member.generation === status.generation &&
-            member.state === "admitted" &&
-            member.ready &&
-            !member.retired,
-        ),
-    ) ||
-    status.members.some(
-      (member) =>
-        !member.retired &&
-        member.state === "admitted" &&
-        (member.deploymentId !== deploymentId ||
-          member.generation !== status.generation ||
-          member.taskArn === null ||
-          !taskArns.includes(member.taskArn)),
-    )
-  )
-    throw new CliError("live session requires the exact ready deployment cohort to own background work");
+function assertActiveOwner({ deploymentId, status }: LiveSessionOwner): void {
+  if (status.deploymentId !== deploymentId || status.ownerDeploymentId !== deploymentId || !status.active)
+    throw new CliError("live session requires an active deployment that owns background work");
 }
 
 export async function checkControlledLiveSession(options: {
-  before: LiveSessionCohort;
-  read: () => Promise<LiveSessionCohort>;
+  before: LiveSessionOwner;
+  read: () => Promise<LiveSessionOwner>;
   request: (body: string) => Promise<{ status: number; body: string }>;
 }): Promise<void> {
   const { before } = options;
-  assertReady(before);
+  assertActiveOwner(before);
   const requestId = randomUUID();
   let response: { status: number; body: string };
   try {
-    response = await options.request(
-      JSON.stringify({
-        requestId,
-        expectedDeploymentId: before.deploymentId,
-        expectedGeneration: before.status.generation,
-        expectedTaskArns: before.taskArns,
-      }),
-    );
+    response = await options.request(JSON.stringify({ requestId, expectedDeploymentId: before.deploymentId }));
   } catch {
     throw new CliError(
       `live session result is unconfirmed for request ${requestId}; no automatic replay or fallback was attempted`,
@@ -78,38 +42,12 @@ export async function checkControlledLiveSession(options: {
     value.ok !== true ||
     value.requestId !== requestId ||
     value.deploymentId !== before.deploymentId ||
-    value.generation !== before.status.generation ||
-    !before.status.members.some(
-      (member) =>
-        member.instanceId === value.instanceId &&
-        member.taskArn === value.taskArn &&
-        before.taskArns.includes(member.taskArn ?? "") &&
-        member.deploymentId === before.deploymentId &&
-        member.generation === before.status.generation &&
-        member.state === "admitted" &&
-        member.ready &&
-        !member.retired,
-    )
+    typeof value.instanceId !== "string" ||
+    !value.instanceId
   )
-    throw new CliError(
-      `live session did not confirm success for the expected request and deployment cohort (${requestId})`,
-    );
+    throw new CliError(`live session did not confirm success for the expected request and deployment (${requestId})`);
   const after = await options.read();
-  assertReady(after);
-  if (
-    after.deploymentId !== before.deploymentId ||
-    after.status.generation !== before.status.generation ||
-    after.taskArns.length !== before.taskArns.length ||
-    after.taskArns.some((arn) => !before.taskArns.includes(arn)) ||
-    !after.status.members.some(
-      (member) =>
-        member.instanceId === value.instanceId &&
-        member.taskArn === value.taskArn &&
-        member.state === "admitted" &&
-        member.ready &&
-        !member.retired &&
-        member.generation === before.status.generation,
-    )
-  )
-    throw new CliError("live session deployment cohort changed during qualification");
+  assertActiveOwner(after);
+  if (after.deploymentId !== before.deploymentId)
+    throw new CliError("live session deployment changed during qualification");
 }

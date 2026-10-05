@@ -9,25 +9,16 @@ function identity(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 2048;
 }
 
-function generation(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function keys(value: Record<string, unknown>, allowed: string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
 function status(ctx: ApiCtx, state: BackgroundOwnership): void {
   const control = ctx.deps.backgroundOwnership!;
   sendJson(ctx.res, 200, {
-    protocol: 1,
+    protocol: 2,
     deploymentId: control.deploymentId,
     instanceId: control.instanceId,
-    enabled: state.enabled,
-    generation: state.generation,
-    desiredDeploymentId: state.desiredDeploymentId,
-    lastRequestId: state.lastRequestId,
-    members: state.members,
+    ownerDeploymentId: state.ownerDeploymentId,
+    setAt: state.setAt,
+    setBy: state.setBy,
+    active: control.active(),
   });
 }
 
@@ -55,74 +46,25 @@ async function backgroundWork(ctx: ApiCtx): Promise<void> {
   const body = ctx.body;
   if (
     !isObj(body) ||
-    !generation(body.expectedGeneration) ||
-    typeof body.requestId !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.requestId)
+    !Object.keys(body).every((key) => ["ownerDeploymentId", "expectedOwnerDeploymentId"].includes(key)) ||
+    !(body.ownerDeploymentId === null || identity(body.ownerDeploymentId)) ||
+    !(
+      body.expectedOwnerDeploymentId === undefined ||
+      body.expectedOwnerDeploymentId === null ||
+      identity(body.expectedOwnerDeploymentId)
+    )
   ) {
     return sendJson(ctx.res, 400, { error: "invalid_background_request" });
   }
   try {
-    if (body.terminatedMembers !== undefined) {
-      if (
-        !keys(body, ["expectedGeneration", "requestId", "terminatedMembers"]) ||
-        !Array.isArray(body.terminatedMembers) ||
-        body.terminatedMembers.length < 1 ||
-        body.terminatedMembers.length > 1000 ||
-        !body.terminatedMembers.every(
-          (member) =>
-            isObj(member) &&
-            keys(member, ["instanceId", "taskArn", "generation"]) &&
-            identity(member.instanceId) &&
-            identity(member.taskArn) &&
-            generation(member.generation),
-        )
-      ) {
-        return sendJson(ctx.res, 400, { error: "invalid_background_retirement" });
-      }
-      const terminatedMembers = body.terminatedMembers.map((member) => ({
-        instanceId: member.instanceId as string,
-        taskArn: member.taskArn as string,
-        generation: member.generation as number,
-      }));
-      return status(
-        ctx,
-        await control.store.retire({
-          expectedGeneration: body.expectedGeneration,
-          requestId: body.requestId,
-          terminatedMembers,
-        }),
-      );
-    }
-    if (
-      !keys(body, [
-        "expectedGeneration",
-        "requestId",
-        "desiredDeploymentId",
-        "bootstrapTaskArns",
-        "expectedLastRequestId",
-      ]) ||
-      !(body.desiredDeploymentId === null || identity(body.desiredDeploymentId)) ||
-      !(
-        body.expectedLastRequestId === undefined ||
-        body.expectedLastRequestId === null ||
-        identity(body.expectedLastRequestId)
-      ) ||
-      (body.bootstrapTaskArns !== undefined &&
-        (!Array.isArray(body.bootstrapTaskArns) ||
-          body.bootstrapTaskArns.length < 1 ||
-          body.bootstrapTaskArns.length > 1000 ||
-          !body.bootstrapTaskArns.every(identity)))
-    ) {
-      return sendJson(ctx.res, 400, { error: "invalid_background_transition" });
-    }
     return status(
       ctx,
-      await control.store.transition({
-        expectedGeneration: body.expectedGeneration,
-        requestId: body.requestId,
-        desiredDeploymentId: body.desiredDeploymentId,
-        ...(body.expectedLastRequestId !== undefined ? { expectedLastRequestId: body.expectedLastRequestId } : {}),
-        ...(body.bootstrapTaskArns ? { bootstrapTaskArns: body.bootstrapTaskArns as string[] } : {}),
+      await control.store.set({
+        ownerDeploymentId: body.ownerDeploymentId,
+        setBy: control.deploymentId,
+        ...(body.expectedOwnerDeploymentId !== undefined
+          ? { expectedOwnerDeploymentId: body.expectedOwnerDeploymentId }
+          : {}),
       }),
     );
   } catch (error) {
