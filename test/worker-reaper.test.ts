@@ -378,6 +378,56 @@ test("shutdown aborts the blocked step before the handback, and the next worker 
   assert.deepEqual(events, ["step1", "abort", "release", "resume@2", "step2"]);
 });
 
+test("shutdown mid-turn through the harness leaves no stop marker, and the resumed attempt finishes the work", async () => {
+  const built = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "harness-resume-")), workers: 1, shutdownDrainMs: 30 }),
+  );
+  const threadRef = "harness-shutdown-resume";
+  const queued = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef },
+    text: "!work-until-shutdown",
+    async: true,
+  });
+  const entriesNow = async () => {
+    const session = await built.sessions.getByThread(threadRef);
+    return session ? built.sessions.getEntries(session.id) : [];
+  };
+  built.runtime.start();
+  try {
+    const deadline = Date.now() + 5_000;
+    while (!(await entriesNow()).some((entry) => entry.type === "tool_result")) {
+      if (Date.now() > deadline) throw new Error("the first attempt never recorded its tool work");
+      await sleep(10);
+    }
+    await built.runtime.stopBackground();
+    await built.runtime.releaseInFlightRuns();
+    const handedBack = (await built.runs.get(queued.runId!))!;
+    assert.equal(handedBack.status, "pending");
+    assert.equal(handedBack.attempts, 1);
+    assert.equal(handedBack.leaseToken, null);
+    const interrupted = await entriesNow();
+    assert.deepEqual(
+      interrupted.filter((entry) => entry.type === "assistant"),
+      [],
+      "the shutdown-cancelled attempt must not close the turn",
+    );
+    built.runtime.start();
+    const done = await built.runs.waitFor(queued.runId!, 5_000);
+    assert.equal(done.status, "done");
+    assert.equal(done.attempts, 2);
+    assert.equal(done.result?.reply, "finished after resume");
+    const replies = (await entriesNow()).filter((entry) => entry.type === "assistant");
+    assert.deepEqual(
+      replies.map((entry) => (entry.payload as { text: string }).text),
+      ["finished after resume"],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("a thrown claim neither kills the worker loop nor blocks the drain handback", async () => {
   const store = createMemoryRunStore();
   let explode = 2;

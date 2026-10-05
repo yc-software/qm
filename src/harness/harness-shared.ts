@@ -85,6 +85,11 @@ export async function tapeReplyCheckpoint(
   });
 }
 
+export async function recordStoppedReply(turn: HarnessTurnInput, text: string): Promise<SessionEntry | null> {
+  if (turn.shutdown?.aborted) return null;
+  return turn.emit({ type: "assistant", payload: { text, stopped: true }, scopeLabel: turn.scopeLabel });
+}
+
 export function withTapedEntryMirrors(turn: HarnessTurnInput): HarnessTurnInput {
   const tape = turn.tape;
   if (!tape) return turn;

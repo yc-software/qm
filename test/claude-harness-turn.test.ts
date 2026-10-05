@@ -5,7 +5,7 @@ import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
-import { resumeNote } from "../src/core/turn-resume.ts";
+import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
@@ -755,3 +755,51 @@ test("Claude ignores continueTurn and still prompts the resume note as a user me
   assert.equal((entries[0]!.payload as { text: string }).text, note);
   assert.ok(prompted[0]!.includes("(system note:"), "the note reaches the model as a user prompt");
 });
+
+for (const shutdown of [false, true]) {
+  test(`Claude ${shutdown ? "skips" : "records"} the stopped partial when cancelled mid-turn ${shutdown ? "by shutdown" : "by the worker"}`, async () => {
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    const shutdownSignal = new AbortController();
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      await toolHandlers.get("memory")!({ action: "read" });
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
+      };
+      waiting.resolve();
+      await release.promise;
+      yield resultMessage("replacement after stop");
+    };
+    const harness = createClaudeHarness({});
+    const { turn, entries } = harnessTurn({
+      cancel: cancel.signal,
+      shutdown: shutdownSignal.signal,
+      readOnly: false,
+      tools: { memoryRead: async () => "remembered facts" } as unknown as HarnessTurnInput["tools"],
+    });
+    const running = harness.turns.runTurn(turn);
+    await waiting.promise;
+    if (shutdown) shutdownSignal.abort();
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.stopped, true);
+    assert.equal(result.stoppedByUser, undefined);
+    assert.deepEqual(
+      entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
+      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant"],
+    );
+    const partial = findTrailingPartialTurn(entries, turn.input);
+    if (shutdown) {
+      assert.ok(partial);
+      assert.notEqual(resumeStrategy(entries, partial).kind, "restart");
+      assert.equal(turnAtSeq(entries, partial.userSeq)?.answer, undefined);
+    } else {
+      assert.deepEqual(entries.at(-1)!.payload, { text: "Visible partial", stopped: true });
+      assert.equal(partial, null);
+    }
+  });
+}

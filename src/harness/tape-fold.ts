@@ -415,8 +415,10 @@ export function lintFold(messages: readonly unknown[]): FoldLint {
         }
       }
     }
-    if (msg.role === "assistant" && Array.isArray(msg.content)) {
-      for (const block of msg.content) {
+    if (msg.role === "assistant") {
+      if (openCalls.size && !assistantDroppedAtReplay(m))
+        problems.push(`#${i}: assistant message while ${openCalls.size} tool call(s) await results`);
+      for (const block of Array.isArray(msg.content) ? msg.content : []) {
         const b = block as { type?: string; id?: string };
         if (b?.type === "toolCall" && typeof b.id === "string") {
           if (seenCallIds.has(b.id)) problems.push(`#${i}: duplicate tool call id ${b.id}`);

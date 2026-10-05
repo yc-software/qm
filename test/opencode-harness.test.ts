@@ -760,3 +760,55 @@ test("OpenCode's fixed tool list includes the web-only sessions tool", () => {
     );
   assert.doesNotMatch(definitions.find((tool) => tool.name === "subagents")!.description, /use sessions/);
 });
+
+for (const shutdown of [false, true]) {
+  test(`OpenCode ${shutdown ? "skips" : "records"} the stopped partial when ${shutdown ? "shutdown" : "the worker"} cancels mid-turn`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-shutdown-stop-"));
+    const cancel = new AbortController();
+    const shutdownSignal = new AbortController();
+    const partialAssistant = okAssistant.replace("hello from fake", "Partial answer");
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "shutdown-stop",
+        `
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          globalThis.pendingPrompt = res;
+          require("node:fs").writeFileSync(${JSON.stringify(join(dir, "started"))}, "1");
+          return;
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/abort")) {
+          if (globalThis.pendingPrompt) { json(globalThis.pendingPrompt, ${partialAssistant}); globalThis.pendingPrompt = null; }
+          return json(res, true);
+        }
+        if (req.method === "GET" && message) return json(res, []);
+      `,
+      ),
+      turnWallClockMs: 5_000,
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const entries: SessionEntry[] = [];
+    const running = harness.turns.runTurn(
+      turnInput(entries, [], { runId: "shutdown-stop", cancel: cancel.signal, shutdown: shutdownSignal.signal }),
+    );
+    const deadline = Date.now() + 4_000;
+    while (!existsSync(join(dir, "started"))) {
+      if (Date.now() > deadline) throw new Error("mock OpenCode never started");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (shutdown) shutdownSignal.abort();
+    cancel.abort();
+    const result = await running;
+    assert.equal(result.stopped, true);
+    assert.equal(result.stoppedByUser, undefined);
+    assert.equal(result.reply, "Partial answer");
+    assert.deepEqual(
+      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+      shutdown ? [] : [{ text: "Partial answer", stopped: true }],
+    );
+  });
+}

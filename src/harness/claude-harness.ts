@@ -47,6 +47,7 @@ import {
   oneShotRunner,
   tapeReplyCheckpoint,
   recordSteerIntake,
+  recordStoppedReply,
   type SteerIntake,
   transitionTask,
   type HarnessToolPlumbing,
@@ -787,12 +788,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
         if (reply && !terminal) {
-          const finalEntry = await turn.emit({
-            type: "assistant",
-            payload: { text: reply, stopped: true },
-            scopeLabel: turn.scopeLabel,
-          });
-          await tapeReplyCheckpoint(turn, finalEntry);
+          const finalEntry = await recordStoppedReply(turn, reply);
+          if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
         }
         return {
           reply,

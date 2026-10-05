@@ -828,3 +828,15 @@ test("a later real result for the same call supersedes the interrupted one in pl
     "patching a served fold with the re-run result lands it in the same place",
   );
 });
+
+test("lintFold flags an assistant message recorded between a tool call and its result", () => {
+  const call = { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "t", arguments: {} }] };
+  const result = { role: "toolResult", toolCallId: "c1", toolName: "t", content: [{ type: "text", text: "r" }] };
+  const stopped = { role: "assistant", content: [{ type: "text", text: "(stopped)" }], stopReason: "stop" };
+  const aborted = { role: "assistant", content: [], stopReason: "aborted" };
+  const lint = lintFold([{ role: "user", content: [] }, call, stopped, result]);
+  assert.ok(!lint.ok);
+  assert.ok(lint.problems.some((p) => p.includes("assistant message while 1 tool call(s) await results")));
+  assert.ok(lintFold([{ role: "user", content: [] }, call, aborted, result]).ok, "pi drops aborted partials at replay");
+  assert.ok(lintFold([{ role: "user", content: [] }, call, result, stopped]).ok);
+});

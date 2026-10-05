@@ -33,6 +33,7 @@ import {
   oneShotRunner,
   tapeReplyCheckpoint,
   recordSteerIntake,
+  recordStoppedReply,
   type SteerIntake,
   transitionTask,
   type BridgedTool,
@@ -1189,11 +1190,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               scopeLabel: turn.scopeLabel,
             });
         }
-        await turn.emit({
-          type: "assistant",
-          payload: { text: state.stoppedReply ?? "", stopped: true },
-          scopeLabel: turn.scopeLabel,
-        });
+        await recordStoppedReply(turn, state.stoppedReply ?? "");
       })();
       return stoppedReplySaved;
     };

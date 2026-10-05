@@ -1,4 +1,11 @@
-import { recordSteerIntake, resumeInterruptedToolCall, type BridgedTool, type SteerIntake } from "./harness-shared.ts";
+import {
+  recordSteerIntake,
+  recordStoppedReply,
+  resumeInterruptedToolCall,
+  tapeReplyCheckpoint,
+  type BridgedTool,
+  type SteerIntake,
+} from "./harness-shared.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
@@ -54,7 +61,7 @@ import type {
   NewTapeRecord,
   TapeRecord,
 } from "../sessions/session-store.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
+import { tapeEntryMirrorRecord } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
@@ -2161,22 +2168,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (!turn.tape) return;
             await turn.tape(tapeEntryMirrorRecord(mirrored));
           };
-          const checkpointSubturn = async (
-            finalEntry: { seq: number; createdAt: number },
-            reply: string,
-          ): Promise<void> => {
-            if (!turn.tape) return;
-            await turn.tape({
-              kind: "annotation",
-              payload: tapeCheckpointPayload("subturnEnd", {
-                type: "assistant",
-                payload: { text: reply },
-                at: finalEntry.createdAt,
-              }),
-              scopeLabel: turn.scopeLabel,
-              entrySeq: finalEntry.seq,
-            });
-          };
           let wallClock!: TurnWallClockOutcome;
           const messagesBefore = entry.agentSession.messages.length;
           const freshAssistantStopReason = (): string | undefined => {
@@ -2493,12 +2484,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               await tapeEntryMirror(goalEntry);
               if (g.status === "complete") entry.ref.goal = null;
             }
-            const finalEntry = await turn.emit({
-              type: "assistant",
-              payload: { text: reply, stopped: true },
-              scopeLabel: turn.scopeLabel,
-            });
-            const stoppedPartial = stoppedPartialTapeMessage(freshMessages, reply, finalEntry.createdAt);
+            const finalEntry = await recordStoppedReply(turn, reply);
+            const stoppedPartial = finalEntry && stoppedPartialTapeMessage(freshMessages, reply, finalEntry.createdAt);
             if (turn.tape && stoppedPartial) {
               await turn.tape({
                 kind: "message",
@@ -2507,7 +2494,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 scopeLabel: turn.scopeLabel,
               });
             }
-            await checkpointSubturn(finalEntry, reply);
+            if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
             const cacheUsage = sumCacheUsage(callStats);
             const base = {
               reply,
@@ -2538,7 +2525,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             payload: { text: reply },
             scopeLabel: turn.scopeLabel,
           });
-          await checkpointSubturn(finalEntry, reply);
+          await tapeReplyCheckpoint(turn, finalEntry);
           const pendingApprovals = entry.ref.pendingApprovals ?? [];
           const modelCalls = entry.ref.modelCalls ?? 0;
           const cacheUsage = sumCacheUsage(callStats);
