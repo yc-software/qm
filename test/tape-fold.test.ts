@@ -5,6 +5,7 @@ import {
   foldTape,
   lintFold,
   openTapeToolCalls,
+  withResumedToolResult,
   planTapeSeed,
   rehydrateFoldImages,
   tapeNeedsInterruptHeal,
@@ -779,7 +780,7 @@ test("a toolResult row marked interrupted folds as the interrupted placeholder, 
   assert.deepEqual(openTapeToolCalls(rows).open, ["c1"], "a marked result leaves its call open for resume");
 });
 
-test("a later real result for the same call supersedes the interrupted one, so a retried call pairs once", () => {
+test("a later real result for the same call supersedes the interrupted one in place, so a retried call pairs once", () => {
   const rows = [
     user("run it"),
     assistant([{ type: "toolCall", id: "c1", name: "history", arguments: { query: "budget" } }]),
@@ -794,6 +795,8 @@ test("a later real result for the same call supersedes the interrupted one, so a
         interrupted: true,
       },
     }),
+    row({ kind: "message", payload: { role: "assistant", content: [], stopReason: "aborted", timestamp: 4 } }),
+    assistant([{ type: "text", text: "(stopped)" }]),
     row({
       kind: "message",
       payload: {
@@ -805,12 +808,21 @@ test("a later real result for the same call supersedes the interrupted one, so a
       },
     }),
   ];
-  const fold = foldTape(rows) as Array<{ role: string; content: Array<{ text: string }> }>;
-  const results = fold.filter((m) => m.role === "toolResult");
+  const fold = foldTape(rows) as Array<{ role: string; content: Array<{ text: string }>; stopReason?: string }>;
   assert.deepEqual(
-    results.map((m) => m.content[0]!.text),
-    ["flat"],
+    fold.map((m) => (m.role === "toolResult" ? `result:${m.content[0]!.text}` : m.role)),
+    ["user", "assistant", "result:flat", "assistant", "assistant"],
+    "the re-run result sits beside its call, not after the stop messages",
   );
   assert.ok(lintFold(fold).ok);
   assert.deepEqual(openTapeToolCalls(rows).open, []);
+  assert.deepEqual(
+    withResumedToolResult(foldTape(rows.slice(0, 5)), rows[5]!.payload).map((m) =>
+      (m as { role: string }).role === "toolResult"
+        ? `result:${(m as { content: Array<{ text: string }> }).content[0]!.text}`
+        : (m as { role: string }).role,
+    ),
+    ["user", "assistant", "result:flat", "assistant", "assistant"],
+    "patching a served fold with the re-run result lands it in the same place",
+  );
 });

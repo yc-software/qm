@@ -101,7 +101,7 @@ import {
   type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
-import { assistantDroppedAtReplay, ELIDED_IMAGE_TEXT, planTapeSeed } from "./tape-fold.ts";
+import { assistantDroppedAtReplay, ELIDED_IMAGE_TEXT, planTapeSeed, withResumedToolResult } from "./tape-fold.ts";
 import { estimateHistoryTokens, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -1872,7 +1872,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         };
         const tools = createTurnTools(ref, dispatched);
         const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
-        const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
+        const turn = resumed
+          ? {
+              ...dispatched,
+              history: resumed.history,
+              ...(dispatched.tapeFold ? { tapeFold: withResumedToolResult(dispatched.tapeFold, resumed.message) } : {}),
+            }
+          : dispatched;
         if (resumed) {
           const callId = resumed.message.toolCallId;
           const resultScope = ref.tapeResultScopes?.get(callId);

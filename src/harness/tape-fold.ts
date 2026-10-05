@@ -227,20 +227,27 @@ function interruptedToolResult(message: unknown): string | undefined {
     : undefined;
 }
 
-function callsAnsweredForReal(rows: readonly TapeRecord[]): Set<string> {
-  const answered = new Set<string>();
+function realToolResults(rows: readonly TapeRecord[]): Map<string, unknown> {
+  const results = new Map<string, unknown>();
   for (const row of rows) {
     if (row.kind !== "message") continue;
     const msg = row.payload as { role?: string; interrupted?: unknown; toolCallId?: unknown } | null;
     if (msg?.role === "toolResult" && msg.interrupted !== true && typeof msg.toolCallId === "string")
-      answered.add(msg.toolCallId);
+      results.set(msg.toolCallId, row.payload);
   }
-  return answered;
+  return results;
+}
+
+export function withResumedToolResult(fold: readonly unknown[], message: unknown): unknown[] {
+  const callId = (message as { toolCallId?: unknown }).toolCallId;
+  const at = fold.findIndex((m) => interruptedToolResult(m) === callId);
+  return at < 0 ? [...fold, message] : fold.with(at, message);
 }
 
 export function foldTape(rows: readonly TapeRecord[]): unknown[] {
   const f: Foldable = { out: [], boundaries: [] };
-  const answeredForReal = callsAnsweredForReal(rows);
+  const realResults = realToolResults(rows);
+  const superseded = new Set<string>();
   for (const row of rows) {
     if (row.kind === "annotation") {
       if ((row.payload as { turnEnd?: unknown } | null)?.turnEnd === true && row.entrySeq !== undefined) {
@@ -281,19 +288,23 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
       continue;
     }
     if (row.kind !== "message" || row.payload == null) continue;
+    const msg = row.payload as { role?: string; toolCallId?: unknown };
     const interruptedCall = interruptedToolResult(row.payload);
-    if (interruptedCall !== undefined && answeredForReal.has(interruptedCall)) continue;
-    f.out.push(interruptedCall !== undefined ? interruptedResultPlaceholder(row.payload) : row.payload);
+    if (interruptedCall === undefined) {
+      if (msg.role === "toolResult" && typeof msg.toolCallId === "string" && superseded.has(msg.toolCallId)) continue;
+      f.out.push(row.payload);
+    } else if (realResults.has(interruptedCall)) {
+      superseded.add(interruptedCall);
+      f.out.push(realResults.get(interruptedCall));
+    } else {
+      f.out.push({
+        ...(row.payload as Record<string, unknown>),
+        content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
+        isError: true,
+      });
+    }
   }
   return f.out;
-}
-
-function interruptedResultPlaceholder(message: unknown): unknown {
-  return {
-    ...(message as Record<string, unknown>),
-    content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
-    isError: true,
-  };
 }
 
 const LEGACY_CONTINUATION_LINE = "(continuing after the tool result above)";

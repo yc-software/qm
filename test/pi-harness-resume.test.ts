@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import type { NewEntry, NewTapeRecord } from "../src/sessions/session-store.ts";
+import type { NewEntry, NewTapeRecord, TapeRecord } from "../src/sessions/session-store.ts";
+import { foldTape } from "../src/harness/tape-fold.ts";
+import { zeroUsage } from "../src/harness/replay.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
@@ -75,11 +77,51 @@ test("the pi harness re-runs a retry-safe interrupted call before the model sees
     },
   ];
   let seq = 3;
+  const tapeRow = (payload: unknown, i: number): TapeRecord =>
+    ({
+      sessionId: "s1",
+      seq: i,
+      kind: "message",
+      harness: "pi",
+      payload,
+      scopeLabel: scope,
+      createdAt: i,
+    }) as TapeRecord;
+  const servedRows = [
+    { role: "user", content: [{ type: "text", text: "what about the budget?" }], timestamp: 1 },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c-budget", name: "history", arguments: { query: "budget", retrySafe: true } }],
+      stopReason: "toolUse",
+      timestamp: 2,
+      usage: zeroUsage(),
+    },
+    {
+      role: "toolResult",
+      toolCallId: "c-budget",
+      toolName: "history",
+      content: [{ type: "text", text: "[exit 143]" }],
+      isError: false,
+      interrupted: true,
+      timestamp: 3,
+    },
+    { role: "assistant", content: [], stopReason: "aborted", timestamp: 4, usage: zeroUsage() },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "(stopped)" }],
+      stopReason: "stop",
+      timestamp: 5,
+      usage: zeroUsage(),
+    },
+  ].map(tapeRow);
   const turn: HarnessTurnInput = {
     session: { id: "s1" } as HarnessTurnInput["session"],
     input: NOTE,
     systemPrompt: "BASE",
     history,
+    tapeRows: servedRows,
+    tapeMode: "serve",
+    tapeFold: foldTape(servedRows),
     tools: {
       async history(q: string) {
         queries.push(q);
@@ -128,7 +170,14 @@ test("the pi harness re-runs a retry-safe interrupted call before the model sees
   assert.equal(requests.length, 1);
   const flattened = JSON.stringify(requests[0]);
   assert.ok(!flattened.includes("[interrupted"), "the model never sees an interrupted placeholder");
+  assert.ok(!flattened.includes("[exit 143]"), "the killed attempt's text is gone from the served fold");
   const resultAt = flattened.indexOf("shared/q2.md");
+  const stoppedAt = flattened.indexOf("(stopped)");
   const noteAt = flattened.indexOf("paused mid-turn and has resumed");
-  assert.ok(resultAt > 0 && noteAt > resultAt, "the real tool result precedes the resume note in the model's context");
+  assert.ok(resultAt > 0 && stoppedAt > resultAt, "the re-run result sits beside its call, before the stop message");
+  assert.ok(noteAt > resultAt, "the real tool result precedes the resume note in the model's context");
+  const toolResults = requests[0]!.flatMap((m) =>
+    Array.isArray(m.content) ? m.content.filter((block) => block.type === "tool_result") : [],
+  );
+  assert.equal(toolResults.length, 1, "exactly one tool_result reaches the provider for the retried call");
 });
