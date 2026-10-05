@@ -988,27 +988,56 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async append(lease, entry: NewEntry): Promise<SessionEntry> {
+      return (await this.appendMany(lease, [entry]))[0]!;
+    },
+
+    async appendMany(lease, entries: readonly NewEntry[]): Promise<SessionEntry[]> {
       return withLease(lease, "append without a valid session lease", async (client) => {
+        if (!entries.length) return [];
         const max = await client.query(
           "SELECT COALESCE(MAX(seq), -1) + 1 AS n FROM session_entries WHERE session_id = $1",
           [lease.sessionId],
         );
-        const seq = Number(max.rows[0]!.n);
-        const stored = jsonbSafeStringify(entry.payload ?? null);
-        const full: SessionEntry = {
-          sessionId: lease.sessionId,
-          seq,
-          parentSeq: seq === 0 ? null : seq - 1,
+        const startSeq = Number(max.rows[0]!.n);
+        const createdAt = now();
+        const full = entries.map((entry, index): SessionEntry => {
+          const seq = startSeq + index;
+          return {
+            sessionId: lease.sessionId,
+            seq,
+            parentSeq: seq === 0 ? null : seq - 1,
+            type: entry.type,
+            payload: JSON.parse(jsonbSafeStringify(entry.payload ?? null)),
+            scopeLabel: entry.scopeLabel as ScopeId,
+            createdAt,
+          };
+        });
+        const rows = full.map((entry) => ({
+          seq: entry.seq,
+          parent_seq: entry.parentSeq,
           type: entry.type,
-          payload: JSON.parse(stored),
-          scopeLabel: entry.scopeLabel as ScopeId,
-          createdAt: now(),
-        };
+          payload: JSON.stringify(entry.payload),
+          scope_label: entry.scopeLabel,
+          created_at: entry.createdAt,
+          tape_payload: JSON.stringify(tapeTranscriptEntryRecord(entry).payload),
+        }));
+        const encoded = JSON.stringify(rows);
         await client.query(
-          "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-          [full.sessionId, full.seq, full.parentSeq, full.type, stored, full.scopeLabel, full.createdAt],
+          `INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at)
+           SELECT $1, e.seq, e.parent_seq, e.type, e.payload, e.scope_label, e.created_at
+           FROM jsonb_to_recordset($2::jsonb) AS e(
+             seq bigint, parent_seq bigint, type text, payload text, scope_label text, created_at bigint)
+           ORDER BY e.seq`,
+          [lease.sessionId, encoded],
         );
-        await insertTapeRow(client, full.sessionId, tapeTranscriptEntryRecord(full));
+        await client.query(
+          `INSERT INTO session_tape(session_id, seq, kind, payload, scope_label, entry_seq, created_at)
+           SELECT $1, t.next_seq + e.seq - $3, 'annotation', e.tape_payload, e.scope_label, e.seq, e.created_at
+           FROM jsonb_to_recordset($2::jsonb) AS e(seq bigint, tape_payload text, scope_label text, created_at bigint)
+           CROSS JOIN (SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM session_tape WHERE session_id = $1) t
+           ORDER BY e.seq`,
+          [lease.sessionId, encoded, startSeq],
+        );
         await client.query(
           `UPDATE sessions
               SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
@@ -1020,11 +1049,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                                ELSE turns + $4 END
             WHERE id = $1`,
           [
-            full.sessionId,
-            full.createdAt,
-            seq + 1,
-            full.type === "user" && !stored.includes('"overheard":true') ? 1 : 0,
-            seq,
+            lease.sessionId,
+            createdAt,
+            startSeq + full.length,
+            rows.filter((entry) => entry.type === "user" && !entry.payload.includes('"overheard":true')).length,
+            startSeq,
           ],
         );
         return full;

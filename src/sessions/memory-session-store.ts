@@ -256,6 +256,10 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async append(lease, entry: NewEntry): Promise<SessionEntry> {
+      return (await this.appendMany(lease, [entry]))[0]!;
+    },
+
+    async appendMany(lease, batch: readonly NewEntry[]): Promise<SessionEntry[]> {
       const held = leases.get(lease.sessionId);
       if (!held || held.token !== lease.token || now() >= held.expiresAt) {
         throw new Error("append without a valid session lease");
@@ -263,34 +267,43 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       held.expiresAt = now() + leaseTtlMs;
       const log = entries.get(lease.sessionId);
       if (!log) throw new Error(`unknown session: ${lease.sessionId}`);
-      const seq = log.length;
-      const full: SessionEntry = {
-        sessionId: lease.sessionId,
-        seq,
-        parentSeq: seq === 0 ? null : seq - 1,
-        type: entry.type,
-        payload: entry.payload,
-        scopeLabel: entry.scopeLabel as ScopeId,
-        createdAt: now(),
-      };
-      const mirrored = structuredClone(tapeTranscriptEntryRecord(full));
-      log.push(full);
-      const tapeLog = tape.get(lease.sessionId) ?? [];
-      tapeLog.push({
-        ...mirrored,
-        sessionId: lease.sessionId,
-        seq: tapeLog.length,
-        createdAt: now(),
+      const copied = structuredClone(batch);
+      return copied.map((entry) => {
+        const seq = log.length;
+        const full: SessionEntry = {
+          sessionId: lease.sessionId,
+          seq,
+          parentSeq: seq === 0 ? null : seq - 1,
+          type: entry.type,
+          payload: entry.payload,
+          scopeLabel: entry.scopeLabel as ScopeId,
+          createdAt: now(),
+        };
+        const mirrored = structuredClone(tapeTranscriptEntryRecord(full));
+        log.push(full);
+        const tapeLog = tape.get(lease.sessionId) ?? [];
+        tapeLog.push({
+          ...mirrored,
+          sessionId: lease.sessionId,
+          seq: tapeLog.length,
+          createdAt: now(),
+        });
+        tape.set(lease.sessionId, tapeLog);
+        const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
+        if (text?.trim()) {
+          const index = searchIndex.get(full.sessionId) ?? [];
+          const author = entrySearchAuthor(full);
+          index.push({
+            seq: full.seq,
+            type: full.type,
+            text,
+            createdAt: full.createdAt,
+            ...(author ? { author } : {}),
+          });
+          searchIndex.set(full.sessionId, index);
+        }
+        return full;
       });
-      tape.set(lease.sessionId, tapeLog);
-      const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
-      if (text?.trim()) {
-        const index = searchIndex.get(full.sessionId) ?? [];
-        const author = entrySearchAuthor(full);
-        index.push({ seq: full.seq, type: full.type, text, createdAt: full.createdAt, ...(author ? { author } : {}) });
-        searchIndex.set(full.sessionId, index);
-      }
-      return full;
     },
 
     async getEntries(sessionId, opts?: GetEntriesOptions) {

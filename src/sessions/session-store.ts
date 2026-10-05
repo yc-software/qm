@@ -729,6 +729,7 @@ export interface SessionStore {
   forceReleaseLease(sessionId: string): Promise<void>;
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
+  appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   canReadTranscriptSuffix(sessionId: string, beforeSeq: number): Promise<boolean>;

@@ -928,18 +928,13 @@ export function createSessionMethods(
         );
         const { lease } = await deps.sessions.acquireLease(forked.id, "fork");
         if (!lease) throw new Error(`fork: could not lease fresh session ${forked.id}`);
-        let forkBoundarySeq: number | null = null;
+        let forkBoundarySeq: number | null;
         try {
-          const copiedEntries = [];
-          for (const entry of copied) {
-            const appended = await deps.sessions.append(lease, {
-              type: entry.type,
-              payload: entry.payload,
-              scopeLabel: entry.scopeLabel,
-            });
-            copiedEntries.push(appended);
-            forkBoundarySeq = appended.seq;
-          }
+          const copiedEntries = await deps.sessions.appendMany(
+            lease,
+            copied.map((entry) => ({ type: entry.type, payload: entry.payload, scopeLabel: entry.scopeLabel })),
+          );
+          forkBoundarySeq = copiedEntries.at(-1)?.seq ?? null;
           if (forkBoundarySeq !== null) {
             await appendCoverageImport(deps.sessions, lease, copiedEntries, source.scopeId).catch(
               swallowAs("fork: tape import", undefined),

@@ -166,6 +166,7 @@ import {
   onSessionDragStart,
   endSessionDrag,
   dropPendingSession,
+  replacePendingSession,
   groupDmTitle,
   refreshSessions,
   renderList,
@@ -223,6 +224,7 @@ interface SettledRowKey {
   approvalDecision: unknown;
   sendFailure: unknown;
   forkable: boolean;
+  forking: boolean;
   speakerLabel: string | undefined;
   edited: boolean;
   deleted: boolean;
@@ -268,6 +270,7 @@ export function createChatSurface(
   const runSlot = createRunSlot((message) => {
     ctx.composer.state.error = message;
   });
+  let pendingFork: { index: number } | null = null;
   const transcriptViewport = createTranscriptViewport();
   let preserveConnectionScroll = isConnectionReturn();
   let connectionReturnMessageCount: number | null = null;
@@ -1701,6 +1704,7 @@ export function createChatSurface(
       (!work || ((work.status === "complete" || work.status === "failed") && !work.pendingApprovals?.length));
     if (!cacheable) return chatMessage(message, index, isStreaming);
     const forkable = Boolean(chatState.threadRef && chatState.sessionId && chatState.agent);
+    const forking = pendingFork !== null;
     const speakerLabel = speakerLabelFor(message);
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -1719,6 +1723,7 @@ export function createChatSurface(
       hit.approvalDecision === msg.approvalDecision &&
       hit.sendFailure === msg.sendFailure &&
       hit.forkable === forkable &&
+      hit.forking === forking &&
       hit.speakerLabel === speakerLabel &&
       hit.edited === edited &&
       hit.deleted === deleted
@@ -1738,6 +1743,7 @@ export function createChatSurface(
       approvalDecision: msg.approvalDecision,
       sendFailure: msg.sendFailure,
       forkable,
+      forking,
       speakerLabel,
       edited,
       deleted,
@@ -1980,11 +1986,13 @@ export function createChatSurface(
             ? html`<button
                 class="msg-copy msg-fork"
                 type="button"
-                ${tip("Fork conversation from here")}
-                aria-label="Fork conversation from here"
+                ${tip(pendingFork ? "Forking..." : "Fork conversation from here")}
+                aria-label=${pendingFork?.index === index ? "Forking conversation…" : "Fork conversation from here"}
+                ?disabled=${pendingFork !== null}
+                aria-busy=${pendingFork?.index === index ? "true" : "false"}
                 @click=${() => void forkFromMessage(index)}
               >
-                ${icon(GitFork, 13)}
+                ${pendingFork?.index === index ? waveLoader({ width: 13, height: 13, label: "Forking" }) : icon(GitFork, 13)}
               </button>`
             : nothing
         }
@@ -1996,15 +2004,24 @@ export function createChatSurface(
     const agent = chatState.agent;
     const sessionId = chatState.sessionId;
     const sourceThreadRef = chatState.threadRef;
-    if (!agent || !sessionId) return;
+    if (!agent || !sessionId || pendingFork) return;
     const messages = agent.state.messages;
     if (!messages[index]) return;
     const floorSeq = Math.max(chatState.forkSession?.forkBoundarySeq ?? -1, (chatState.transcriptAnchorSeq ?? 0) - 1);
+    const pendingRef = `web:fork:${crypto.randomUUID()}`;
+    pendingFork = { index };
+    ctx.composer.state.error = "";
+    addPendingSession(pendingRef, chatState.scopeId, chatState.contextName, true);
+    if (chatState.scopeId) sessionsState.collapsedProjectScopes.delete(chatState.scopeId);
+    renderList();
+    drawActiveChat();
     try {
       const { entries } = await api<{ entries: SessionEntry[] }>(`/api/sessions/${encodeURIComponent(sessionId)}`);
       const upToSeq = forkCutSeq(entries ?? [], messages, index, floorSeq);
       if (upToSeq === undefined) throw new Error("That message is still saving. Try forking again in a moment.");
       const forked = await forkSession(sessionId, upToSeq);
+      replacePendingSession(pendingRef, forked.session);
+      if (chatState.agent !== agent || chatState.sessionId !== sessionId) return;
       const split = inheritedTranscript(forked.session, forked.entries ?? []);
       ctx.composer.carryModelPick(sourceThreadRef, forked.session.threadRef);
       mountContinuable(
@@ -2016,10 +2033,12 @@ export function createChatSurface(
         forked.session,
         entriesToMessages(split.inherited, transcriptModel()),
       );
-      await refreshSessions({ silent: true });
       renderList();
     } catch (err) {
       ctx.composer.state.error = errMessage(err, "Could not fork the conversation.");
+    } finally {
+      pendingFork = null;
+      dropPendingSession(pendingRef);
       drawActiveChat();
     }
   }
