@@ -932,10 +932,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       child: false,
     };
     active.set(sessionId, state);
-    let interrupted = false;
     const abort = async (stopped: boolean) => {
       state.stopped ||= stopped;
-      interrupted = true;
       controller.abort();
       await rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
     };
@@ -1172,6 +1170,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       for (const thinking of reasoningFromParts(parts))
         await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
       const reply = ref.runtimeHandoff || ref.silentRequested ? "" : textFromParts(parts);
+      const interrupted = state.stopped || turn.cancel?.aborted === true;
       if (reply) {
         const finalEntry = interrupted
           ? await recordStoppedReply(turn, reply)

@@ -1327,14 +1327,13 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (reply && !terminal) {
           const finalEntry = await turn.emit({
             type: "assistant",
-            payload: { text: reply, ...(state.stopped ? { stopped: true } : {}) },
+            payload: { text: reply },
             scopeLabel: turn.scopeLabel,
           });
           await tapeReplyCheckpoint(turn, finalEntry);
         }
         turnResult = {
           reply,
-          ...(state.stopped ? { stopped: true as const } : {}),
           ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
