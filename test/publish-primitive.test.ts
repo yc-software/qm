@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createToolContext } from "../src/tools/primitives.ts";
@@ -107,9 +107,6 @@ test("publish collects only the published dir (prefix-stripped) and returns a /d
 
   const d = (await s.deployStore.getByName("my-app"))!;
   assert.ok(d, "deployment is reachable by name");
-  const snap = (await s.deployStore.versionOf(d.id, 1))!.snapshotDir;
-  const top = readdirSync(snap).sort();
-  assert.deepEqual(top, ["public", "server.js"], "dir prefix stripped; outside-dir file excluded");
   assert.deepEqual(
     (await s.deployStore.treeOf(d.id, 1))?.map((f) => f.path),
     ["public/index.html", "server.js"],
@@ -675,8 +672,6 @@ test("publish drops a workspace's git metadata instead of deploying it", async (
     ["server.js"],
     "git metadata never reaches the deployment's archive",
   );
-  const snap = (await s.deployStore.versionOf(d.id, 1))!.snapshotDir;
-  assert.deepEqual(readdirSync(snap).sort(), ["server.js"], "and never reaches the running app");
 });
 
 test("publish drops git metadata on the per-file fallback path too", async () => {

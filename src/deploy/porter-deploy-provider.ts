@@ -1,7 +1,8 @@
+import type { MaterializedVersion } from "./deploy-provider.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
-import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
+import type { Deployment } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { waitAppReady } from "./shared-deploy-provider.ts";
 import { normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
@@ -112,7 +113,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     for (const b of await liveBodies(d)) await retirePorterBody(b, drain);
   }
 
-  function appEnv(version: DeploymentVersion): Record<string, string> {
+  function appEnv(version: MaterializedVersion): Record<string, string> {
     const declared = Object.fromEntries(Object.entries(version.env ?? {}).filter(([k]) => ENV_NAME.test(k)));
     return { ...declared, HOME: HOME_DIR, PORT: String(appPort), DATA_DIR };
   }
@@ -140,12 +141,12 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       throw new Error(`porter deploy: unpacking into ${guestDir} failed: ${(r.stderr || r.stdout).slice(0, 300)}`);
   }
 
-  async function materialize(sandboxId: string, volumeId: string, version: DeploymentVersion): Promise<void> {
+  async function materialize(sandboxId: string, volumeId: string, version: MaterializedVersion): Promise<void> {
     await unpackTree(sandboxId, volumeId, APP_DIR, version.snapshotDir);
     if (version.homeDir) await unpackTree(sandboxId, volumeId, HOME_DIR, version.homeDir);
   }
 
-  async function startApp(sandboxId: string, version: DeploymentVersion): Promise<void> {
+  async function startApp(sandboxId: string, version: MaterializedVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
     const launch = `sh -c ${shq(inner)} < /dev/null > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`;
     const script = [

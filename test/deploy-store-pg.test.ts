@@ -58,7 +58,7 @@ const createInput = (name?: string) => ({
   ownerScopeId: scopeId("personal", "U1"),
   createdBy: "U1",
   entrypoint: "node s.js",
-  snapshotDir: "/snap",
+  files: [],
   ...(name ? { name } : {}),
 });
 

@@ -57,6 +57,7 @@ function registryRow(
   over: Partial<{ kind: "build" | "dev-server" | "background"; ttlMs: number }> = {},
 ) {
   return {
+    sandboxId: "sandbox-test",
     processId,
     scopeId: "personal:U1",
     kind: over.kind ?? ("background" as const),

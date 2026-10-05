@@ -41,7 +41,7 @@ describe("deployment always-on route", () => {
       currentVersion: 1,
       status: "running" as const,
       endpoint: null,
-      versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/tmp" }],
+      versions: [{ commit: "a".repeat(40), version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/tmp" }],
     };
     const app = {
       authorizesCapabilityScope: async () => true,

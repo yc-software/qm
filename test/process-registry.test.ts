@@ -7,6 +7,8 @@ import {
   type ProcessRegistry,
 } from "../src/processes/process-registry.ts";
 
+const sandboxId = "sandbox-test";
+
 function backends(): Array<{ name: string; make: () => ProcessRegistry }> {
   return [{ name: "memory", make: () => createMemoryProcessRegistry() }];
 }
@@ -15,6 +17,7 @@ for (const b of backends()) {
   test(`[${b.name}] register stamps expiry and liveByScope returns running+unexpired`, async () => {
     const reg = b.make();
     const rec = await reg.register({
+      sandboxId,
       processId: id(1),
       scopeId: "personal:U1",
       kind: "build",
@@ -32,7 +35,7 @@ for (const b of backends()) {
 
   test(`[${b.name}] expired running sessions are not live; listExpired surfaces them WITHOUT flipping status`, async () => {
     const reg = b.make();
-    await reg.register({ processId: id(2), scopeId: "s", kind: "build", command: "x", ttlMs: -1 });
+    await reg.register({ sandboxId, processId: id(2), scopeId: "s", kind: "build", command: "x", ttlMs: -1 });
     assert.equal((await reg.liveByScope("s")).length, 0, "an expired session is not live");
 
     const expired = await reg.listExpired();
@@ -47,7 +50,7 @@ for (const b of backends()) {
 
   test(`[${b.name}] markStatus and delete`, async () => {
     const reg = b.make();
-    await reg.register({ processId: id(3), scopeId: "s", kind: "build", command: "make", ttlMs: 60_000 });
+    await reg.register({ sandboxId, processId: id(3), scopeId: "s", kind: "build", command: "make", ttlMs: 60_000 });
     await reg.markStatus(id(3), "exited");
     assert.equal((await reg.liveByScope("s")).length, 0);
     assert.equal((await reg.get(id(3)))!.status, "exited");
@@ -58,7 +61,7 @@ for (const b of backends()) {
   test(`[${b.name}] only declared kinds may be registered`, async () => {
     const reg = b.make();
     await assert.rejects(
-      reg.register({ processId: id(4), scopeId: "s", kind: "shell" as never, command: "sh", ttlMs: 1000 }),
+      reg.register({ sandboxId, processId: id(4), scopeId: "s", kind: "shell" as never, command: "sh", ttlMs: 1000 }),
       /not declared/,
     );
   });
@@ -79,6 +82,7 @@ for (const b of backends()) {
     const reg = b.make();
     const before = Date.now();
     const rec = await reg.register({
+      sandboxId,
       processId: id(7),
       scopeId: "personal:U1",
       kind: "background",
@@ -99,6 +103,7 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
   const scope = `pg-test-${Date.now()}`;
   try {
     const rec = await reg.register({
+      sandboxId,
       processId: id(1),
       scopeId: scope,
       kind: "dev-server",
@@ -114,7 +119,7 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
     assert.equal(live[0]!.processId, id(1));
     assert.equal(typeof live[0]!.expiresAt, "number");
 
-    await reg2.register({ processId: id(2), scopeId: scope, kind: "build", command: "y", ttlMs: -1 });
+    await reg2.register({ sandboxId, processId: id(2), scopeId: scope, kind: "build", command: "y", ttlMs: -1 });
     assert.equal(
       (await reg2.listExpired()).some((r) => r.processId === id(2)),
       true,

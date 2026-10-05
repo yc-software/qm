@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import type { MaterializedVersion } from "../src/deploy/deploy-provider.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +9,7 @@ import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/c
 import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
 import { createMicrovmApi, createMicrovmClient } from "../src/sandbox/aws-microvm-api.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { loadConfig } from "../src/config.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
@@ -39,10 +40,10 @@ http.createServer((req, res) => {
 }).listen(process.env.PORT || 8081);
 `;
 
-function makeVersion(): DeploymentVersion {
+function makeVersion(): MaterializedVersion {
   const snapshotDir = mkdtempSync(join(tmpdir(), "ls-smoke-app-"));
   writeFileSync(join(snapshotDir, "server.js"), APP);
-  return { version: 1, createdAt: 0, entrypoint: "node server.js", snapshotDir };
+  return { commit: "a".repeat(40), version: 1, createdAt: 0, entrypoint: "node server.js", snapshotDir };
 }
 
 const d: Deployment = {

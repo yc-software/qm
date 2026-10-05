@@ -44,7 +44,7 @@ function fakeProcessSandbox() {
       processSessions: true,
     },
     async provision(): Promise<SandboxHandle> {
-      return { id: "vm", rootDir: "/workspace", homeDir: "/root" };
+      return { resourceId: "sandbox-test", id: "vm", rootDir: "/workspace", homeDir: "/root" };
     },
     async run(_h, command) {
       if (/get-caller-identity|auth status|print-access-token/.test(command)) {
@@ -157,9 +157,10 @@ test("a live durable process keeps the computer warm; none lets it suspend", asy
   const fake = fakeProcessSandbox();
   const orch = buildOrchestrator(reg, fake.sandbox);
 
-  const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
+  const handle: SandboxHandle = { resourceId: "sandbox-test", id: "vm", rootDir: "/workspace", homeDir: "/root" };
   const live = await fake.sandbox.startProcess!(handle, "long build");
   await reg.register({
+    sandboxId: "sandbox-test",
     processId: live.processId,
     scopeId: await memoryScope(),
     kind: "build",
@@ -179,6 +180,7 @@ test("reattach reconciles a session whose process died while core was down", asy
   const reg = createMemoryProcessRegistry();
   const fake = fakeProcessSandbox();
   await reg.register({
+    sandboxId: "sandbox-test",
     processId: "00000000-0000-0000-0000-0000000000ff",
     scopeId: await memoryScope(),
     kind: "build",

@@ -88,11 +88,11 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     async handleFor(processId) {
       const rec = await deps.registry.get(processId);
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") throw new Error("no such background job");
-      if (!rec.sandboxId) return null;
       if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
       return deps.provisionSandbox(rec.sandboxId);
     },
     async start(handle, command, ttlMs): Promise<BackgroundStartResult> {
+      if (!handle.resourceId) throw new Error("background jobs require a sandbox resource");
       const ttl = Math.min(ttlMs ?? defaultTtlMs, maxTtlMs);
 
       const normalized = `bg: ${command.replace(/\s+/g, " ").trim()}`;
@@ -142,7 +142,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         await deps.registry.register({
           processId: id,
           scopeId: deps.scopeId,
-          ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
+          sandboxId: handle.resourceId!,
           kind: "background",
           command: redacted,
           ttlMs: ttl,
@@ -167,7 +167,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job");
       }
-      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
+      if (rec.sandboxId !== handle.resourceId) {
         if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
         handle = await deps.provisionSandbox(rec.sandboxId);
       }
@@ -185,7 +185,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job");
       }
-      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
+      if (rec.sandboxId !== handle.resourceId) {
         if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
         handle = await deps.provisionSandbox(rec.sandboxId);
       }
@@ -200,7 +200,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job");
       }
-      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
+      if (rec.sandboxId !== handle.resourceId) {
         if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
         handle = await deps.provisionSandbox(rec.sandboxId);
       }

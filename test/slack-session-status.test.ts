@@ -66,6 +66,7 @@ function fixture() {
   };
   const background = (sessionRef = "ch:C1:1.0") => {
     const job: ProcessRecord = {
+      sandboxId: "sandbox-test",
       processId: "p1",
       scopeId: "channel:C1",
       kind: "background",

@@ -1,3 +1,4 @@
+import type { MaterializedVersion } from "../src/deploy/deploy-provider.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -7,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/deploy/porter-deploy-provider.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { Deployment } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
@@ -51,14 +52,14 @@ const deployment = (id: string, name?: string): Deployment => ({
 function version(
   files: Record<string, string>,
   entrypoint: string,
-  extra: Partial<DeploymentVersion> = {},
-): DeploymentVersion {
+  extra: Partial<MaterializedVersion> = {},
+): MaterializedVersion {
   const snapshotDir = mkdtempSync(join(tmpdir(), "porter-deploy-snap-"));
   for (const [rel, body] of Object.entries(files)) {
     mkdirSync(dirname(join(snapshotDir, rel)), { recursive: true });
     writeFileSync(join(snapshotDir, rel), body);
   }
-  return { version: 1, createdAt: Date.now(), entrypoint, snapshotDir, ...extra };
+  return { commit: "a".repeat(40), version: 1, createdAt: Date.now(), entrypoint, snapshotDir, ...extra };
 }
 
 const fetchText = async (path: string): Promise<string> => (await fetch(`http://127.0.0.1:${appPort}${path}`)).text();

@@ -13,7 +13,7 @@ export type ProcessStatus = "running" | "exited" | "reaped";
 export interface ProcessRecord {
   processId: string;
   scopeId: string;
-  sandboxId?: string;
+  sandboxId: string;
   kind: ProcessKind;
   command: string;
   startedAt: number;
@@ -26,7 +26,7 @@ export interface ProcessRecord {
 interface NewProcessRecord {
   processId: string;
   scopeId: string;
-  sandboxId?: string;
+  sandboxId: string;
   kind: ProcessKind;
   command: string;
   ttlMs: number;
@@ -47,11 +47,12 @@ export interface ProcessRegistry {
 }
 
 function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
+  if (!rec.sandboxId) throw new Error("process sandboxId is required");
   if (!isDeclaredKind(rec.kind)) throw new Error(`process kind not declared: ${rec.kind}`);
   return {
     processId: rec.processId,
     scopeId: rec.scopeId,
-    ...(rec.sandboxId ? { sandboxId: rec.sandboxId } : {}),
+    sandboxId: rec.sandboxId,
     kind: rec.kind,
     command: rec.command,
     startedAt: now,
@@ -104,7 +105,7 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
   return {
     processId: r.process_id as string,
     scopeId: r.scope_id as string,
-    ...(r.sandbox_id ? { sandboxId: r.sandbox_id as string } : {}),
+    sandboxId: r.sandbox_id as string,
     kind: r.kind as ProcessKind,
     command: r.command as string,
     startedAt: Number(r.started_at),
@@ -132,12 +133,20 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"],
   };
   pg.registerMigration(migration);
+  const requiredSandbox = {
+    id: "processes/registry/0003",
+    statements: ["ALTER TABLE process_sessions ALTER COLUMN sandbox_id SET NOT NULL"],
+  };
+  pg.registerMigration(requiredSandbox);
   let ready: Promise<void> | undefined;
   const q: typeof pg.q = async (...args) => {
-    ready ??= pg.migrate(migration).catch((error) => {
-      ready = undefined;
-      throw error;
-    });
+    ready ??= pg
+      .migrate(migration)
+      .then(() => pg.migrate(requiredSandbox))
+      .catch((error) => {
+        ready = undefined;
+        throw error;
+      });
     await ready;
     return pg.q(...args);
   };
@@ -157,7 +166,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.status,
           row.sessionRef ?? null,
           row.runId ?? null,
-          row.sandboxId ?? null,
+          row.sandboxId,
         ],
       );
       return row;

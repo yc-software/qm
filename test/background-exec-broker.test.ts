@@ -6,7 +6,7 @@ import { redactCommand } from "../src/sandbox/exec-process-session.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle, StartProcessOptions } from "../src/sandbox/sandbox.ts";
 
 const SCOPE = "personal:U1";
-const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
+const handle: SandboxHandle = { resourceId: "sandbox-test", id: "vm", rootDir: "/workspace", homeDir: "/root" };
 
 function fakeSandbox(opts?: { seedOutput?: string }) {
   interface Proc {

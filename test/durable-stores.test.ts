@@ -75,15 +75,15 @@ test("deployments persist with immutable versions across store instances", async
     ownerScopeId: scopeId("team", "T1"),
     createdBy: "U1",
     entrypoint: "node server.js",
-    snapshotDir: "/snap/1",
+    files: [],
   });
-  await s1.addVersion(d.id, { entrypoint: "node server.js --v2", snapshotDir: "/snap/2" });
+  await s1.addVersion(d.id, { entrypoint: "node server.js --v2", files: [] });
 
   const s2 = createDeployStore(map);
   const got = await s2.get(d.id);
   assert.equal(got?.versions.length, 2);
   assert.equal(got?.currentVersion, 2);
-  assert.equal((await s2.versionOf(d.id, 1))?.snapshotDir, "/snap/1");
+  assert.ok((await s2.versionOf(d.id, 1))?.commit);
 });
 
 test("a fresh in-memory map is the unchanged default (ephemeral, no durability required)", async () => {

@@ -20,10 +20,9 @@ export function createReaperKillHook(
   const termGraceMs = opts?.termGraceMs ?? 5_000;
   const killGraceMs = opts?.killGraceMs ?? 2_000;
   return async (rec) => {
-    const handle = await sandbox.provision(
-      [{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }],
-      rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
-    );
+    const handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+      sandboxId: rec.sandboxId,
+    });
     try {
       await sandbox.signalProcess(handle, rec.processId, "TERM");
       let status = await awaitProcessExit(sandbox, handle, rec.processId, termGraceMs);

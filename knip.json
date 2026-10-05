@@ -13,6 +13,7 @@
         "src/migrate-main.ts",
         "src/sandbox/local-sandbox.ts",
         "scripts/aws-deploy-smoke.ts",
+        "scripts/one-off/verify-app-networks.ts",
         "scripts/aws-litestream-smoke.ts",
         "scripts/backfill-search-index.ts",
         "scripts/backfill-session-origin.ts",

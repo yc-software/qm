@@ -16,10 +16,9 @@ export interface DeploymentVersion {
   version: number;
   createdAt: number;
   entrypoint: string;
-  snapshotDir: string;
   homeDir?: string;
   image?: string;
-  commit?: string;
+  commit: string;
   parentCommit?: string;
   env?: Record<string, string>;
 }
@@ -81,10 +80,9 @@ export function currentVersionOf(d: Deployment | null): DeploymentVersion | unde
 
 interface VersionInput {
   entrypoint: string;
-  snapshotDir: string;
   homeDir?: string;
   env?: Record<string, string>;
-  files?: DeployGitInputFile[];
+  files: DeployGitInputFile[];
 }
 
 export interface DeployStore {
@@ -280,36 +278,31 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     input: VersionInput,
     parentCommit?: string,
   ): Promise<DeploymentVersion> {
-    const commit = input.files
-      ? await git.commit({
-          deploymentId,
-          version,
-          files: input.files,
-          ...(parentCommit ? { parent: parentCommit } : {}),
-          message: `deploy v${version}`,
-        })
-      : undefined;
+    const commit = await git.commit({
+      deploymentId,
+      version,
+      files: input.files,
+      ...(parentCommit ? { parent: parentCommit } : {}),
+      message: `deploy v${version}`,
+    });
     return {
       version,
       createdAt: Date.now(),
       entrypoint: input.entrypoint,
-      snapshotDir: input.snapshotDir,
       ...(input.homeDir ? { homeDir: input.homeDir } : {}),
       ...(input.env ? { env: input.env } : {}),
-      ...(commit ? { commit } : {}),
+      commit,
       ...(parentCommit ? { parentCommit } : {}),
     };
   }
 
   async function updateVersionRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
-    if (!version.commit) return;
     await git.setRef(deploymentId, versionRef(version.version), version.commit);
     await git.setRef(deploymentId, `refs/deploy-commits/${version.commit}`, version.commit);
   }
 
   async function updateAppliedRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
-    if (version.commit) await git.setRef(deploymentId, CURRENT_REF, version.commit);
-    else await git.deleteRef(deploymentId, CURRENT_REF);
+    await git.setRef(deploymentId, CURRENT_REF, version.commit);
   }
 
   return {
@@ -354,7 +347,6 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
         version,
         createdAt: Date.now(),
         entrypoint: current?.entrypoint ?? "",
-        snapshotDir: current?.snapshotDir ?? "/unused",
         ...(current?.homeDir ? { homeDir: current.homeDir } : {}),
         ...(current?.env ? { env: current.env } : {}),
         commit,
@@ -467,11 +459,11 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     },
     async treeOf(id, version) {
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.treeOf(id, v.commit) : null;
+      return v ? git.treeOf(id, v.commit) : null;
     },
     async filesOf(id, version, paths) {
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.filesOf(id, v.commit, paths) : null;
+      return v ? git.filesOf(id, v.commit, paths) : null;
     },
     async diffVersions(id, fromVersion, toVersion) {
       const d = await backingMap.get(id);
@@ -482,7 +474,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     },
     async bundleOf(id, version) {
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.bundle(id, v.commit) : null;
+      return v ? git.bundle(id, v.commit) : null;
     },
     refOf: (id, ref) => git.refOf(id, ref),
     repoUrl: (id) => git.repoUrl(id),

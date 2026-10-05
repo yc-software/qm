@@ -194,7 +194,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     if (deploymentEnv && Object.keys(deploymentEnv).length)
       version = { ...version, env: { ...version.env, ...deploymentEnv } };
     let endpoint: DeployEndpoint;
-    if (deps.provider.reconcile && version.commit) {
+    if (deps.provider.reconcile) {
       const diff = await deps.deployStore.diffVersions(id, fromVersion, version.version);
       const allPaths = ((await deps.deployStore.treeOf(id, version.version)) ?? []).map((f) => f.path);
       const gitBundle = await deps.deployStore.bundleOf(id, version.version);
@@ -205,13 +205,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         allPaths,
       });
     } else {
-      let materialized = version;
-      if (version.commit) {
-        const files = await deps.deployStore.filesOf(id, version.version);
-        if (files == null) throw new Error(`cannot materialize deployment ${id} version ${version.version}`);
-        materialized = { ...version, snapshotDir: await snapshotFiles(deps.deployDir, files) };
-      }
-      endpoint = await deps.provider.apply(d, materialized);
+      const files = await deps.deployStore.filesOf(id, version.version);
+      if (files == null) throw new Error(`cannot materialize deployment ${id} version ${version.version}`);
+      endpoint = await deps.provider.apply(d, { ...version, snapshotDir: await snapshotFiles(deps.deployDir, files) });
     }
     if (alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, alwaysOn);
     if (endpoint.image && endpoint.image !== version.image) {
@@ -385,14 +381,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         validateName(input.name);
         if (await deps.deployStore.getByName(input.name)) throw new Error(`deployment name taken: ${input.name}`);
       }
-      const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
       const d = await deps.deployStore.create({
         ownerScopeId: input.ownerScopeId,
         createdBy: input.createdBy,
         entrypoint: input.entrypoint,
-        snapshotDir,
         files: input.files,
         ...(homeDir ? { homeDir } : {}),
         ...(input.name !== undefined ? { name: input.name } : {}),
@@ -418,14 +412,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const before = await deps.deployStore.get(id);
         if (!before) throw new Error(`unknown deployment: ${id}`);
         const current = currentVersionOf(before);
-        const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
         let homeDir = input.homeFiles === undefined ? current?.homeDir : undefined;
         if (input.homeFiles?.length) homeDir = await snapshotFiles(deps.deployDir, input.homeFiles);
         const inherited = input.env ?? current?.env;
         const env = input.stampEnv ? { ...inherited, ...input.stampEnv } : inherited;
         const v = await deps.deployStore.addVersion(id, {
           entrypoint: input.entrypoint,
-          snapshotDir,
           files: input.files,
           ...(homeDir ? { homeDir } : {}),
           ...(env ? { env } : {}),

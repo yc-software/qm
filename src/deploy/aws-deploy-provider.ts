@@ -1,3 +1,4 @@
+import type { MaterializedVersion } from "./deploy-provider.ts";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
@@ -483,17 +484,19 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     id: string,
     endpoint: string,
     fresh: boolean,
-    version: DeploymentVersion,
+    version: DeploymentVersion | MaterializedVersion,
     input?: DeployReconcileInput,
   ): Promise<void> {
-    if (input?.gitBundle && version.commit) {
+    if (input?.gitBundle) {
       await checkoutBundle(id, endpoint, input.gitBundle, version.commit);
-    } else {
+    } else if ("snapshotDir" in version) {
       await writeFiles(id, endpoint, APP_DIR, await readTree(version.snapshotDir, { tolerateMissing: true }));
+    } else {
+      throw new Error("deployment reconciliation requires a git bundle");
     }
     if (version.homeDir)
       await writeFiles(id, endpoint, HOME_DIR, await readTree(version.homeDir, { tolerateMissing: true }));
-    await writeAbs(id, endpoint, READY_PATH, Buffer.from(`${version.commit ?? version.version}\n`));
+    await writeAbs(id, endpoint, READY_PATH, Buffer.from(`${version.commit}\n`));
     if (litestream) {
       await launchQueue(d.id, async () => {
         await stageLitestream(d.id, id, endpoint);
@@ -610,7 +613,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
   const place = async (
     d: Deployment,
-    version: DeploymentVersion,
+    version: DeploymentVersion | MaterializedVersion,
     input?: DeployReconcileInput,
   ): Promise<DeployEndpoint> => {
     ensureConfigured();
