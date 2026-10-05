@@ -73,10 +73,12 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "automatic" }), 0);
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "explicit" }), 1);
 
-  assert.equal(calls[0]?.url, "http://knowledge.internal:8080/token");
-  assert.equal(calls[1]?.authorization, "Bearer ro-token");
-  assert.match(calls[1]?.body ?? "", /search_knowledge/);
-  assert.equal(calls[2]?.url, "http://knowledge.internal:8080/token");
-  assert.equal(calls[3]?.authorization, "Bearer rw-token");
-  assert.match(calls[3]?.body ?? "", /write_knowledge/);
+  // Drop the MCP lifecycle requests (initialize + initialized ack); assert on token mints and tool calls.
+  const work = calls.filter((c) => !/"method":"(?:initialize|notifications\/initialized)"/.test(c.body));
+  assert.equal(work[0]?.url, "http://knowledge.internal:8080/token");
+  assert.equal(work[1]?.authorization, "Bearer ro-token");
+  assert.match(work[1]?.body ?? "", /search_knowledge/);
+  assert.equal(work[2]?.url, "http://knowledge.internal:8080/token");
+  assert.equal(work[3]?.authorization, "Bearer rw-token");
+  assert.match(work[3]?.body ?? "", /write_knowledge/);
 });
