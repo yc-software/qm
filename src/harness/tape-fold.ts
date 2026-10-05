@@ -319,6 +319,22 @@ export function planTapeSeed(
   return { seed: mode === "serve" && lint.ok && fold.length ? fold : null, lint, fold };
 }
 
+export function openTapeToolCalls(rows: readonly TapeRecord[]): { messages: number; open: string[] } {
+  const fold = foldTape(rows);
+  const answered = new Set<string>();
+  const calls: string[] = [];
+  for (const m of fold) {
+    const msg = m as { role?: string; toolCallId?: string; content?: unknown };
+    if (msg?.role === "toolResult" && typeof msg.toolCallId === "string") answered.add(msg.toolCallId);
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content) || assistantDroppedAtReplay(m)) continue;
+    for (const block of msg.content) {
+      const b = block as { type?: string; id?: string };
+      if (b?.type === "toolCall" && typeof b.id === "string") calls.push(b.id);
+    }
+  }
+  return { messages: fold.length, open: calls.filter((id) => !answered.has(id)) };
+}
+
 export function tapeNeedsInterruptHeal(rows: readonly TapeRecord[], folded?: readonly unknown[]): boolean {
   const problems = lintFold(folded ?? foldTape(rows)).problems;
   return problems.length > 0 && problems.every((p) => p.startsWith("end:"));

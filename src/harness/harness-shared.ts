@@ -13,6 +13,7 @@ import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, 
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord, type NewTapeRecord } from "../sessions/session-store.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 
 export interface HarnessToolPlumbing {
   scratchExec?: boolean;
@@ -191,37 +192,42 @@ export async function resumeInterruptedToolCall(
   const call = turn.resumeToolCall;
   if (!call) return null;
   const tool = tools.find((candidate) => candidate.name === call.tool);
-  if (!tool) {
-    console.error(
-      `[harness] resume: tool ${call.tool} is not available on this turn; leaving call ${call.callId} interrupted`,
-    );
-    return null;
-  }
   const emit = ref.emit;
+  const abortSignal = ref.abortSignal;
   let recorded: SessionEntry | undefined;
   ref.emit = async (entry) => {
     if (entry.type === "tool_call") return;
     const appended = await emit?.(entry);
-    if (entry.type === "tool_result") recorded = appended as SessionEntry;
+    if (entry.type === "tool_result" && !recorded) recorded = appended as SessionEntry;
     return appended;
   };
-  let content: ResumedToolResult["message"]["content"];
-  let isError = false;
+  ref.abortSignal = turn.cancel;
+  let content: ResumedToolResult["message"]["content"] = [{ type: "text", text: INTERRUPTED_TOOL_RESULT }];
+  let isError = true;
   try {
-    content = (await tool.execute(call.callId, call.input)).content ?? [];
+    if (tool && !turn.cancel?.aborted) {
+      content = (await tool.execute(call.callId, call.input)).content ?? [];
+      isError = false;
+    } else {
+      console.error(
+        `[harness] resume: ${tool ? "turn cancelled" : `tool ${call.tool} unavailable on this turn`}; recording call ${call.callId} as interrupted`,
+      );
+    }
   } catch (error) {
-    isError = true;
     content = [{ type: "text", text: `[error] ${errMessage(error)}` }];
+  }
+  if (!recorded) {
     await ref.emit({
       type: "tool_result",
-      payload: { tool: call.tool, callId: call.callId, isError, result: content[0]!.text },
+      payload: { tool: call.tool, callId: call.callId, isError, result: content[0]?.text ?? "" },
       scopeLabel: turn.scopeLabel,
     });
-  } finally {
-    ref.emit = emit;
   }
+  ref.emit = emit;
+  ref.abortSignal = abortSignal;
   if (!recorded) return null;
-  console.log(`[harness] resume: re-ran retry-safe ${call.tool} call ${call.callId} as seq ${recorded.seq}`);
+  if (!isError)
+    console.log(`[harness] resume: re-ran retry-safe ${call.tool} call ${call.callId} as seq ${recorded.seq}`);
   return {
     history: [...turn.history, recorded],
     message: {

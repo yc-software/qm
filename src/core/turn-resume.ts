@@ -120,14 +120,14 @@ export function resumeNote(opts?: {
 }): string {
   const strategy = opts?.strategy ?? { kind: "note" };
   if (strategy.kind === "restart") {
-    return `${NOTE_HEAD} your previous attempt at the request above was interrupted by a routine platform deploy before it recorded any work, so there is nothing to pick up. Start the request now.)`;
+    return `${NOTE_HEAD} your previous attempt at the request above was interrupted before it recorded any work (a routine platform deploy), so there is nothing to pick up. Start the request now.)`;
   }
   const parts =
     strategy.kind === "retry"
       ? [
           `${NOTE_HEAD} your previous attempt at the request above was paused mid-turn and has resumed.`,
           ROUTINE,
-          "The tool call that was in flight was re-run and its result is recorded above, so your recorded work is complete and current.",
+          "The tool call that was in flight was re-run and its result is recorded above.",
         ]
       : [
           `${NOTE_HEAD} your previous attempt at the request above was interrupted mid-turn.`,

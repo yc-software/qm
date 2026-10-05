@@ -126,6 +126,7 @@ import {
   filterTapeForAudience,
   foldTape,
   healFoldInterrupt,
+  openTapeToolCalls,
   lastImportLacksScopes,
   lintFold,
   rehydrateFoldImages,
@@ -3070,7 +3071,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         };
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
-        const resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
+        let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
+        if (resumePlan?.kind === "retry") {
+          const tapeCalls = openTapeToolCalls(await deps.sessions.getTape(session.id));
+          const tapeAgrees =
+            tapeCalls.messages === 0 || (tapeCalls.open.length === 1 && tapeCalls.open[0] === resumePlan.call.callId);
+          if (!tapeAgrees) resumePlan = { kind: "note" };
+        }
         const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
         const tapeRows = await (async () => {
           if (memoryHistoryReset || historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES)

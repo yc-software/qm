@@ -438,9 +438,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     return log("tool_call", {
       ...sandboxLog(payload),
       callId,
-      ...(mark
-        ? { retrySafe: mark.safe, ...(mark.safe ? { rerun: { tool: mark.tool, input: mark.input } } : {}) }
-        : {}),
+      ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
     });
   };
 
@@ -4368,19 +4366,19 @@ const RETRY_SAFE_FIELD = "retrySafe";
 const RETRY_SAFE_SCHEMA = Type.Optional(
   Type.Boolean({
     description:
-      "Set true when re-running this exact call would be harmless (reads, searches, idempotent writes) so the platform can transparently re-run it if a deploy interrupts it; set false when re-running would duplicate a side effect (sending a message, charging, creating a record).",
+      "true if re-running this exact call is harmless (reads, searches, idempotent writes) so the platform may re-run it after an interruption; false if it would duplicate a side effect (sending a message, charging, creating a record).",
   }),
 );
+const RERUN_INPUT_MAX_CHARS = 4_000;
 
 interface RetryMark {
   safe: boolean;
-  tool: string;
-  input: Record<string, unknown>;
+  rerun?: { tool: string; input: Record<string, unknown> };
 }
 
-function withRetrySafeField(parameters: unknown): unknown {
-  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return parameters;
-  if (RETRY_SAFE_FIELD in parameters.properties) return parameters;
+function withRetrySafeField(parameters: unknown): unknown | null {
+  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return null;
+  if (RETRY_SAFE_FIELD in parameters.properties) return null;
   return { ...parameters, properties: { ...parameters.properties, [RETRY_SAFE_FIELD]: RETRY_SAFE_SCHEMA } };
 }
 
@@ -4391,14 +4389,21 @@ function stripRetrySafeField(params: unknown): { params: unknown; retrySafe?: bo
 }
 
 function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): ToolDefinition {
+  const parameters = withRetrySafeField(tool.parameters);
+  if (!parameters) return tool;
   const inner = tool.execute.bind(tool);
   return {
     ...tool,
-    parameters: withRetrySafeField(tool.parameters) as ToolDefinition["parameters"],
+    parameters: parameters as ToolDefinition["parameters"],
     async execute(callId: string, params: unknown, ...rest: unknown[]) {
       const stripped = stripRetrySafeField(params);
-      if (stripped.retrySafe !== undefined && isObj(stripped.params))
-        marks.set(callId, { safe: stripped.retrySafe, tool: tool.name, input: stripped.params });
+      if (stripped.retrySafe !== undefined && isObj(stripped.params)) {
+        const replayable = stripped.retrySafe && JSON.stringify(stripped.params).length <= RERUN_INPUT_MAX_CHARS;
+        marks.set(callId, {
+          safe: stripped.retrySafe,
+          ...(replayable ? { rerun: { tool: tool.name, input: stripped.params } } : {}),
+        });
+      }
       try {
         return await (inner as (...args: unknown[]) => unknown)(callId, stripped.params, ...rest);
       } finally {

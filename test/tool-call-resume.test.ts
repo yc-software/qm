@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { isResumeNote, type ResumableToolCall } from "../src/core/turn-resume.ts";
+import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -125,18 +126,51 @@ test("resumeInterruptedToolCall re-runs the recorded input exactly once and reco
   assert.equal(ref.emit, turn.emit, "the emit hook is restored after the re-run");
 });
 
-test("resumeInterruptedToolCall leaves the call interrupted when nothing is to resume or the tool is unavailable", async () => {
+test("resumeInterruptedToolCall does nothing without a call to resume", async () => {
   const queries: string[] = [];
   const sink: Array<{ type: string; payload: unknown }> = [];
   const tools = historyToolContext(queries);
   const idle = turnFor([danglingCall], undefined, sink, tools);
   const ref: ToolContextRef = { current: tools, emit: idle.emit, scopeLabel: personal };
   assert.equal(await resumeInterruptedToolCall(idle, ref, bridgedTools(ref, {})), null);
-
-  const missing = turnFor([danglingCall], { callId: "c-x", tool: "no_such_tool", input: {} }, sink, tools);
-  assert.equal(await resumeInterruptedToolCall(missing, ref, bridgedTools(ref, {})), null);
   assert.deepEqual(queries, []);
   assert.deepEqual(sink, []);
+});
+
+test("when the tool is unavailable on the retried turn the call is closed as interrupted instead of left dangling", async () => {
+  const queries: string[] = [];
+  const sink: Array<{ type: string; payload: unknown }> = [];
+  const tools = historyToolContext(queries);
+  const missing = turnFor([danglingCall], { callId: "c-x", tool: "no_such_tool", input: {} }, sink, tools);
+  const ref: ToolContextRef = { current: tools, emit: missing.emit, scopeLabel: personal };
+  const resumed = await resumeInterruptedToolCall(missing, ref, bridgedTools(ref, {}));
+  assert.ok(resumed);
+  assert.equal(resumed.message.isError, true);
+  assert.equal(resumed.message.content[0]!.text, INTERRUPTED_TOOL_RESULT);
+  assert.deepEqual(
+    sink.map((e) => [e.type, (e.payload as { callId: string; result: string }).result]),
+    [["tool_result", INTERRUPTED_TOOL_RESULT]],
+  );
+  assert.deepEqual(queries, []);
+});
+
+test("a cancelled turn does not re-run anything and closes the call as interrupted", async () => {
+  const queries: string[] = [];
+  const sink: Array<{ type: string; payload: unknown }> = [];
+  const tools = historyToolContext(queries);
+  const turn = turnFor(
+    [danglingCall],
+    { callId: "c-budget", tool: "history", input: { query: "budget" } },
+    sink,
+    tools,
+  );
+  turn.cancel = AbortSignal.abort();
+  const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal };
+  const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
+  assert.equal(resumed?.message.isError, true);
+  assert.deepEqual(queries, []);
+  assert.equal(sink.length, 1);
+  assert.equal(ref.abortSignal, undefined, "the cancel signal is only borrowed for the re-run");
 });
 
 test("a tool that throws during the re-run still records an error result so the model sees a closed call", async () => {
@@ -295,6 +329,7 @@ function buildScenario() {
 async function seedDeadAttempt(
   sessions: ReturnType<typeof buildScenario>["sessions"],
   callPayload: Record<string, unknown>,
+  siblingWithResult?: Record<string, unknown>,
 ): Promise<{ sessionId: string; userSeq: number }> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
   const { lease } = await sessions.acquireLease(session.id);
@@ -308,6 +343,8 @@ async function seedDeadAttempt(
       entrySeq: user.seq,
       meta: { bareText: ASK },
     });
+    if (siblingWithResult)
+      await sessions.append(lease!, { type: "tool_call", payload: siblingWithResult, scopeLabel: personal });
     await sessions.append(lease!, { type: "tool_call", payload: callPayload, scopeLabel: personal });
     await sessions.appendTape(lease!, {
       kind: "message",
@@ -315,6 +352,9 @@ async function seedDeadAttempt(
       payload: {
         role: "assistant",
         content: [
+          ...(siblingWithResult
+            ? [{ type: "toolCall", id: "c-sibling", name: "history", arguments: { query: "q2" } }]
+            : []),
           { type: "toolCall", id: "c-budget", name: "history", arguments: { query: "budget", retrySafe: true } },
         ],
         timestamp: Date.now(),
@@ -322,6 +362,12 @@ async function seedDeadAttempt(
       },
       scopeLabel: personal,
     });
+    if (siblingWithResult)
+      await sessions.append(lease!, {
+        type: "tool_result",
+        payload: { tool: "history", callId: "c-sibling", isError: false, result: "- q2 notes" },
+        scopeLabel: personal,
+      });
     return { sessionId: session.id, userSeq: user.seq };
   } finally {
     await sessions.releaseLease(lease!);
@@ -392,3 +438,33 @@ for (const [label, payload] of [
     assert.deepEqual(types, ["user", "tool_call", "user", "assistant"], "the call stays open; nothing is re-run");
   });
 }
+
+test("a parallel batch whose sibling result never reached the tape falls back to the note so the tape heals as one", async () => {
+  const { orchestrator, sessions, runs, received, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const { sessionId, userSeq } = await seedDeadAttempt(
+    sessions,
+    {
+      tool: "history",
+      query: "budget",
+      callId: "c-budget",
+      retrySafe: true,
+      rerun: { tool: "history", input: { query: "budget" } },
+    },
+    { tool: "history", query: "q2", callId: "c-sibling" },
+  );
+  await runs.noteTurnUserSeq(run.id, userSeq);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.equal(
+    received[0]!.resumeToolCall,
+    undefined,
+    "the entries alone look retry-safe, but the tape still has two open calls",
+  );
+  assert.match(received[0]!.input, /unknown outcome/);
+  const roles = (await sessions.getTape(sessionId))
+    .filter((row) => row.kind === "message")
+    .map((row) => (row.payload as { role: string }).role);
+  assert.ok(!roles.includes("toolResult"), "no lone toolResult row is appended next to a still-open sibling");
+});
