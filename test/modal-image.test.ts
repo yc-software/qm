@@ -44,8 +44,9 @@ test("Modal preserves custom registry images and the default baseline", async ()
   ]);
 });
 
-test("Modal default baseline keeps pip usable with common Python packages", () => {
-  assert.match(MODAL_DEFAULT_IMAGE_SETUP, / python3-pip /);
-  assert.match(MODAL_DEFAULT_IMAGE_SETUP, /break-system-packages = true/);
-  assert.match(MODAL_DEFAULT_IMAGE_SETUP, /pip install .*beautifulsoup4==/);
+test("Modal default baseline installs uv and common Python packages system-wide", () => {
+  assert.match(MODAL_DEFAULT_IMAGE_SETUP, /astral-sh\/uv\/releases\/download\/\d+\.\d+\.\d+\//);
+  assert.match(MODAL_DEFAULT_IMAGE_SETUP, /sha256sum -c -/);
+  assert.match(MODAL_DEFAULT_IMAGE_SETUP, /system = true\\nbreak-system-packages = true/);
+  assert.match(MODAL_DEFAULT_IMAGE_SETUP, /uv pip install .*beautifulsoup4==/);
 });

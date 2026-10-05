@@ -20,9 +20,10 @@ does not change running sandboxes or deploy core.
 
 With no `MODAL_IMAGE` set during the build, the image starts from QM's pinned Node
 base and installs its usual shell, Python, Git, curl, and archive utilities. It also
-makes `pip install` work without a virtual environment and preinstalls pinned
-requests, beautifulsoup4, lxml, openpyxl, pypdf and python-docx. Packages installed
-later with pip land in `/usr/local`, outside home checkpoints, so they last until the
+installs a pinned, checksum-verified `uv`, configures `uv pip install` to target the
+system Python without a virtual environment, and preinstalls pinned requests,
+beautifulsoup4, lxml, openpyxl, pypdf and python-docx. Packages installed later with
+`uv pip install` land in `/usr/local`, outside home checkpoints, so they last until the
 sandbox is replaced. To extend an existing custom image, set `MODAL_IMAGE` to its
 registry reference (prefer an immutable digest) or an existing Modal image ID. Custom bases must already contain
 Node, npm, and QM's baseline utilities; this preserves the existing custom-image
