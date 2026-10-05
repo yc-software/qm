@@ -252,7 +252,7 @@ test("the resume notes name the routine deploy, and only the retry note promises
   assert.match(note, /unknown outcome/);
   const retried = resumeNote({ strategy: { kind: "retry", call: { callId: "c1", tool: "history", input: {} } } });
   assert.ok(isResumeNote(retried));
-  assert.match(retried, /re-run and its result is recorded above/);
+  assert.match(retried, /result of the tool call that was in flight is recorded above/);
   assert.doesNotMatch(retried, /unknown outcome/);
   assert.match(retried, /Continue from where you left off/);
   assert.doesNotMatch(retried, /history|c1/);

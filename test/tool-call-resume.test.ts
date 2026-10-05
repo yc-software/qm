@@ -330,6 +330,7 @@ async function seedDeadAttempt(
   sessions: ReturnType<typeof buildScenario>["sessions"],
   callPayload: Record<string, unknown>,
   siblingWithResult?: Record<string, unknown>,
+  harness = "pi",
 ): Promise<{ sessionId: string; userSeq: number }> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
   const { lease } = await sessions.acquireLease(session.id);
@@ -337,7 +338,7 @@ async function seedDeadAttempt(
     const user = await sessions.append(lease!, { type: "user", payload: { text: ASK }, scopeLabel: personal });
     await sessions.appendTape(lease!, {
       kind: "message",
-      harness: "pi",
+      harness,
       payload: { role: "user", content: [{ type: "text", text: ASK }], timestamp: user.createdAt },
       scopeLabel: personal,
       entrySeq: user.seq,
@@ -348,7 +349,7 @@ async function seedDeadAttempt(
     await sessions.append(lease!, { type: "tool_call", payload: callPayload, scopeLabel: personal });
     await sessions.appendTape(lease!, {
       kind: "message",
-      harness: "pi",
+      harness,
       payload: {
         role: "assistant",
         content: [
@@ -397,7 +398,7 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   const turn = received[0]!;
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
   assert.ok(isResumeNote(turn.input));
-  assert.match(turn.input, /re-run and its result is recorded above/);
+  assert.match(turn.input, /result of the tool call that was in flight is recorded above/);
   assert.doesNotMatch(turn.input, /unknown outcome/);
   assert.deepEqual(await tapeEvents(sessions, sessionId), [], "no interrupt or coverage import is baked into the tape");
 
@@ -467,4 +468,27 @@ test("a parallel batch whose sibling result never reached the tape falls back to
     .filter((row) => row.kind === "message")
     .map((row) => (row.payload as { role: string }).role);
   assert.ok(!roles.includes("toolResult"), "no lone toolResult row is appended next to a still-open sibling");
+});
+
+test("a session taped by another harness still re-runs from entries, since its tape is never served", async () => {
+  const { orchestrator, sessions, runs, received, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const { userSeq } = await seedDeadAttempt(
+    sessions,
+    {
+      tool: "history",
+      query: "budget",
+      callId: "c-budget",
+      retrySafe: true,
+      rerun: { tool: "history", input: { query: "budget" } },
+    },
+    undefined,
+    "claude",
+  );
+  await runs.noteTurnUserSeq(run.id, userSeq);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(received[0]!.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
+  assert.doesNotMatch(received[0]!.input, /unknown outcome/);
 });

@@ -213,18 +213,27 @@ export async function resumeInterruptedToolCall(
         `[harness] resume: ${tool ? "turn cancelled" : `tool ${call.tool} unavailable on this turn`}; recording call ${call.callId} as interrupted`,
       );
     }
+    if (!recorded) {
+      await ref.emit({
+        type: "tool_result",
+        payload: { tool: call.tool, callId: call.callId, isError, result: content[0]?.text ?? "" },
+        scopeLabel: turn.scopeLabel,
+      });
+    }
   } catch (error) {
-    content = [{ type: "text", text: `[error] ${errMessage(error)}` }];
+    const payload = recorded?.payload as { result?: unknown; isError?: unknown } | undefined;
+    isError = payload ? payload.isError === true : true;
+    content = [{ type: "text", text: payload ? String(payload.result ?? "") : `[error] ${errMessage(error)}` }];
+    if (!recorded)
+      await ref.emit({
+        type: "tool_result",
+        payload: { tool: call.tool, callId: call.callId, isError, result: content[0]!.text },
+        scopeLabel: turn.scopeLabel,
+      });
+  } finally {
+    ref.emit = emit;
+    ref.abortSignal = abortSignal;
   }
-  if (!recorded) {
-    await ref.emit({
-      type: "tool_result",
-      payload: { tool: call.tool, callId: call.callId, isError, result: content[0]?.text ?? "" },
-      scopeLabel: turn.scopeLabel,
-    });
-  }
-  ref.emit = emit;
-  ref.abortSignal = abortSignal;
   if (!recorded) return null;
   if (!isError)
     console.log(`[harness] resume: re-ran retry-safe ${call.tool} call ${call.callId} as seq ${recorded.seq}`);

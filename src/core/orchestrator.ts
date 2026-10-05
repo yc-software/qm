@@ -3073,9 +3073,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
         let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
         if (resumePlan?.kind === "retry") {
-          const tapeCalls = openTapeToolCalls(await deps.sessions.getTape(session.id));
-          const tapeAgrees =
-            tapeCalls.messages === 0 || (tapeCalls.open.length === 1 && tapeCalls.open[0] === resumePlan.call.callId);
+          const retryCallId = resumePlan.call.callId;
+          const tapeAgrees = await deps.sessions
+            .getTape(session.id)
+            .then((rows) => {
+              if (rows.some((row) => row.kind === "message" && row.harness !== undefined && row.harness !== "pi"))
+                return true;
+              const tapeCalls = openTapeToolCalls(rows);
+              return tapeCalls.messages === 0 || (tapeCalls.open.length === 1 && tapeCalls.open[0] === retryCallId);
+            })
+            .catch(swallowAs("orchestrator: resume tape agreement", false));
           if (!tapeAgrees) resumePlan = { kind: "note" };
         }
         const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;

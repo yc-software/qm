@@ -127,7 +127,7 @@ export function resumeNote(opts?: {
       ? [
           `${NOTE_HEAD} your previous attempt at the request above was paused mid-turn and has resumed.`,
           ROUTINE,
-          "The tool call that was in flight was re-run and its result is recorded above.",
+          "The result of the tool call that was in flight is recorded above.",
         ]
       : [
           `${NOTE_HEAD} your previous attempt at the request above was interrupted mid-turn.`,
