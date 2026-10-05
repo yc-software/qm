@@ -5,20 +5,14 @@ import { statusPlaceholderKey } from "../src/slack/lib.ts";
 
 const RECOVERED_AGE_MS = 60_000;
 
-function harness(opts: {
-  thread?: Array<Record<string, unknown>>;
-  reactions?: Array<{ name: string; count: number }>;
-  pinned?: string[];
-  repliesError?: string;
-}) {
+function harness(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<string, string> }) {
   const calls: Array<{ method: string; args: Record<string, unknown> }> = [];
   const record =
     (method: string, result: unknown = {}) =>
     async (args: Record<string, unknown>) => {
       calls.push({ method, args });
-      if (method === "conversations.replies" && opts.repliesError) {
-        throw Object.assign(new Error(opts.repliesError), { data: { error: opts.repliesError } });
-      }
+      const error = opts.errors?.[method];
+      if (error) throw Object.assign(new Error(error), { data: { error } });
       return typeof result === "function" ? result(args) : result;
     };
   const client = {
@@ -26,15 +20,8 @@ function harness(opts: {
       replies: record("conversations.replies", () => ({ messages: opts.thread ?? [] })),
       history: record("conversations.history", () => ({ messages: opts.thread ?? [] })),
     },
-    reactions: {
-      get: record("reactions.get", { message: { reactions: opts.reactions ?? [] } }),
-      add: record("reactions.add"),
-    },
-    pins: {
-      list: record("pins.list", { items: (opts.pinned ?? []).map((ts) => ({ message: { ts } })) }),
-      add: record("pins.add"),
-      remove: record("pins.remove"),
-    },
+    reactions: { add: record("reactions.add") },
+    pins: { add: record("pins.add"), remove: record("pins.remove") },
     chat: {
       postMessage: record("chat.postMessage", { ts: "900.100" }),
       update: record("chat.update"),
@@ -141,64 +128,47 @@ test("a recorded editRef skips the placeholder probe", async () => {
   assert.deepEqual(h.methods(), ["chat.update"]);
 });
 
-test("a recovered reaction row is a no-op when Slack already shows the reaction", async () => {
-  const h = harness({ reactions: [{ name: "eyes", count: 1 }] });
-  await h.deliver({ destination: { react: { messageTs: "100.200", emoji: "eyes" } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(h.methods(), ["reactions.get"]);
-  assert.deepEqual(h.acknowledgements, ["D1"]);
-});
+for (const [label, destination, method, error] of [
+  ["reaction", { react: { messageTs: "100.200", emoji: "eyes" } }, "reactions.add", "already_reacted"],
+  ["pin", { pin: { messageTs: "100.200" } }, "pins.add", "already_pinned"],
+  ["unpin", { pin: { messageTs: "100.200", remove: true } }, "pins.remove", "no_pin"],
+  ["unpin", { pin: { messageTs: "100.200", remove: true } }, "pins.remove", "not_pinned"],
+  ["delete", { delete: { messageTs: "100.500" } }, "chat.delete", "message_not_found"],
+  ["delete", { delete: { messageTs: "100.500" } }, "chat.delete", "cant_delete_message"],
+] as const) {
+  test(`a recovered ${label} row acts without probing and acks when Slack answers ${error}`, async () => {
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.join(" "));
+    };
+    try {
+      const h = harness({ errors: { [method]: error } });
+      await h.deliver({ destination, ageMs: RECOVERED_AGE_MS });
+      assert.deepEqual(h.methods(), [method]);
+      assert.deepEqual(h.acknowledgements, ["D1"]);
+      assert.deepEqual(errors, []);
+    } finally {
+      console.error = original;
+    }
+  });
+}
 
-test("a recovered reaction row still reacts when Slack lacks the reaction", async () => {
-  const h = harness({ reactions: [{ name: "tada", count: 1 }] });
-  await h.deliver({ destination: { react: { messageTs: "100.200", emoji: "eyes" } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(h.methods(), ["reactions.get", "reactions.add"]);
-});
+test("fresh and recovered reaction, pin and delete rows act directly", async () => {
+  for (const ageMs of [0, RECOVERED_AGE_MS]) {
+    const react = harness({});
+    await react.deliver({ destination: { react: { messageTs: "100.200", emoji: "eyes" } }, ageMs });
+    assert.deepEqual(react.methods(), ["reactions.add"]);
+    assert.deepEqual(react.acknowledgements, ["D1"]);
 
-test("a fresh reaction row reacts without probing", async () => {
-  const h = harness({ reactions: [{ name: "eyes", count: 1 }] });
-  await h.deliver({ destination: { react: { messageTs: "100.200", emoji: "eyes" } } });
-  assert.deepEqual(h.methods(), ["reactions.add"]);
-});
+    const pin = harness({});
+    await pin.deliver({ destination: { pin: { messageTs: "100.200" } }, ageMs });
+    assert.deepEqual(pin.methods(), ["pins.add"]);
 
-test("recovered pin and unpin rows are no-ops when the message is already in the requested state", async () => {
-  const pinned = harness({ pinned: ["100.200"] });
-  await pinned.deliver({ destination: { pin: { messageTs: "100.200" } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(pinned.methods(), ["pins.list"]);
-  assert.deepEqual(pinned.acknowledgements, ["D1"]);
-
-  const unpinned = harness({ pinned: [] });
-  await unpinned.deliver({ destination: { pin: { messageTs: "100.200", remove: true } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(unpinned.methods(), ["pins.list"]);
-});
-
-test("recovered pin and unpin rows act when Slack disagrees with the requested state", async () => {
-  const pin = harness({ pinned: [] });
-  await pin.deliver({ destination: { pin: { messageTs: "100.200" } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(pin.methods(), ["pins.list", "pins.add"]);
-
-  const unpin = harness({ pinned: ["100.200"] });
-  await unpin.deliver({ destination: { pin: { messageTs: "100.200", remove: true } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(unpin.methods(), ["pins.list", "pins.remove"]);
-});
-
-test("a recovered delete row is a no-op once the message is gone", async () => {
-  const gone = harness({ thread: [] });
-  await gone.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(gone.methods(), ["conversations.replies"]);
-  assert.deepEqual(gone.acknowledgements, ["D1"]);
-
-  const missingThread = harness({ repliesError: "thread_not_found" });
-  await missingThread.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(missingThread.methods(), ["conversations.replies"]);
-});
-
-test("a recovered delete row deletes when the message still exists, and a fresh row deletes without probing", async () => {
-  const present = harness({ thread: [{ ts: "100.500", text: "to remove" }] });
-  await present.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs: RECOVERED_AGE_MS });
-  assert.deepEqual(present.methods(), ["conversations.replies", "chat.delete"]);
-  assert.equal(present.calls[0]!.args.ts, "100.500");
-
-  const fresh = harness({ thread: [] });
-  await fresh.deliver({ destination: { delete: { messageTs: "100.500" } } });
-  assert.deepEqual(fresh.methods(), ["chat.delete"]);
+    const remove = harness({});
+    await remove.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs });
+    assert.deepEqual(remove.methods(), ["chat.delete"]);
+    assert.equal(remove.calls[0]!.args.ts, "100.500");
+    assert.deepEqual(remove.acknowledgements, ["D1"]);
+  }
 });
