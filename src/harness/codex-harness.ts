@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
 import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
@@ -77,7 +77,12 @@ export function codexHarnessConfigOptions(config: Config): CodexHarnessOptions {
 }
 
 type CodexItem = Record<string, unknown> & { type: string };
-type CodexTurn = { id: string; status: string; error?: { message?: string } | null; items?: CodexItem[] };
+type CodexTurn = {
+  id: string;
+  status: string;
+  error?: { message?: string; codexErrorInfo?: CodexErrorInfo | null } | null;
+  items?: CodexItem[];
+};
 const CODEX_TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted", "cancelled", "canceled"]);
 
 function isCodexThreadStart(value: unknown): value is { thread: { id: string }; model?: string } {
@@ -167,16 +172,37 @@ type StartingRuntime = {
 };
 const CODEX_START_TIMEOUT_MS = 30_000;
 
-const CODEX_NON_RETRYABLE_PATTERN =
-  /\b(?:401|402|403)\b|unauthoriz|forbidden|invalid[_ -]?api[_ -]?key|incorrect api key|authentication (?:error|failed)|missing bearer|missing (?:api key|credentials)|not logged in|codex login|insufficient[_ -]?quota|exceeded your current quota|billing|credit(?: balance| limit)|out of credits|credits_depleted|must be verified|model[_ -]?not[_ -]?found|does not exist or you do not have access|unsupported[_ -]?model/i;
+// Codex app-server TurnError.codexErrorInfo (protocol v2, codex-cli 0.156.1). Strings and single-key
+// objects; HTTP-backed variants carry httpStatusCode.
+type CodexErrorInfo = string | Record<string, { httpStatusCode?: number | null } | undefined>;
 
-export function codexNonRetryable(message: string): boolean {
-  return CODEX_NON_RETRYABLE_PATTERN.test(message);
-}
+const CODEX_ERROR_CODES: Record<string, ProviderErrorCode> = {
+  contextWindowExceeded: "context_too_long",
+  sessionBudgetExceeded: "model_budget",
+  usageLimitExceeded: "rate_limit",
+  rateLimitExceeded: "rate_limit",
+  serverOverloaded: "transient",
+  internalServerError: "transient",
+  httpConnectionFailed: "transient",
+  responseStreamConnectionFailed: "transient",
+  responseStreamDisconnected: "transient",
+  responseTooManyFailedAttempts: "transient",
+  cyberPolicy: "refusal",
+  misalignmentPolicyViolation: "refusal",
+  unauthorized: "auth",
+};
 
-export function codexProviderFailure(message: string): Error {
+/** Classifies a Codex failure from codexErrorInfo only; the message text is carried, never matched. */
+export function codexProviderFailure(message: string, info?: CodexErrorInfo | null): ProviderTurnError {
   const safe = redactSecrets(message);
-  return codexNonRetryable(safe) ? new NonRetryableTurnError(safe) : new Error(safe);
+  const variant = typeof info === "string" || !info ? info || undefined : Object.keys(info)[0];
+  const detail = info && typeof info === "object" && variant ? info[variant] : undefined;
+  const status = detail?.httpStatusCode ?? undefined;
+  let code: ProviderErrorCode = (variant && CODEX_ERROR_CODES[variant]) || "unknown";
+  if (code === "transient" && (status === 401 || status === 403)) code = "auth";
+  if (code === "transient" && status === 429) code = "rate_limit";
+  const retryable = code === "rate_limit" || code === "transient" || (code === "unknown" && variant !== "badRequest");
+  return new ProviderTurnError(safe, { code, retryable, status, raw: safe });
 }
 export function codexChildToolAllowed(name: string, args?: unknown): boolean {
   return nativeChildToolAllowed(name, args);
@@ -1314,7 +1340,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         });
       }
       if (result.status === "failed" && !state.stopped && !ref.runtimeHandoff)
-        throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
+        throw codexProviderFailure(result.error?.message ?? "Codex turn failed", result.error?.codexErrorInfo);
       if (state.stopped || turn.cancel?.aborted) {
         if (turn.cancel?.aborted) runtimeCleanupRequested = true;
         await saveStoppedReply();

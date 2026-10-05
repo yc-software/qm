@@ -16,7 +16,6 @@ import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import {
   codexChildEnv,
-  codexNonRetryable,
   codexProviderFailure,
   codexUsageTotals,
   codexChildToolAllowed,
@@ -31,7 +30,7 @@ import {
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
-import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
 import { CodexAppServer } from "../src/harness/codex-app-server.ts";
@@ -1462,58 +1461,28 @@ test("cancelling one Codex setup does not kill another active turn", async (t) =
   assert.equal((await first).reply, "FIRST-OK");
 });
 
-test("Codex classifies deterministic provider failures as terminal and leaves transient ones retryable", () => {
-  const terminal = [
-    "Codex 401: Incorrect API key provided",
-    "Codex app-server exited (1): stream error: unauthorized",
-    "You exceeded your current quota, please check your plan and billing details",
-    "The model `gpt-5.6-sol` does not exist or you do not have access to it",
-    "Not logged in. Run `codex login` to authenticate.",
-    "Codex -32000: invalid_api_key",
-    "403 Forbidden",
-    "HTTP 402 Payment Required",
-    "Your organization must be verified to stream this model",
-    "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
-    "You've reached your workspace credit limit",
-    "Your workspace is out of credits. Ask your workspace owner to add more.",
-    "workspace_owner_credits_depleted",
+test("Codex classifies failures from codexErrorInfo, never from message text", () => {
+  const cases: Array<[Parameters<typeof codexProviderFailure>[1], string, boolean, number?]> = [
+    ["contextWindowExceeded", "context_too_long", false],
+    ["sessionBudgetExceeded", "model_budget", false],
+    ["usageLimitExceeded", "rate_limit", true],
+    ["rateLimitExceeded", "rate_limit", true],
+    ["serverOverloaded", "transient", true],
+    ["unauthorized", "auth", false],
+    ["cyberPolicy", "refusal", false],
+    ["badRequest", "unknown", false],
+    ["other", "unknown", true],
+    [null, "unknown", true],
+    [{ httpConnectionFailed: { httpStatusCode: 502 } }, "transient", true, 502],
+    [{ responseStreamConnectionFailed: { httpStatusCode: 401 } }, "auth", false, 401],
+    [{ responseTooManyFailedAttempts: { httpStatusCode: 429 } }, "rate_limit", true, 429],
   ];
-  for (const message of terminal) {
-    assert.equal(codexNonRetryable(message), true, message);
-    assert.ok(codexProviderFailure(message) instanceof NonRetryableTurnError, message);
+  for (const [info, code, retryable, status] of cases) {
+    // The text says "401 invalid_api_key" every time; only codexErrorInfo decides.
+    const err = codexProviderFailure("Codex 401: invalid_api_key", info);
+    assert.ok(err instanceof ProviderTurnError);
+    assert.deepEqual([err.code, err.retryable, err.status], [code, retryable, status], JSON.stringify(info));
   }
-
-  const transient = [
-    "Rate limit reached for gpt-5.6-sol, please retry",
-    "429 Too Many Requests",
-    "The server had an error while processing your request",
-    "socket hang up",
-    "Codex app-server exited (null): ECONNRESET",
-    "Codex turn failed",
-    "rate_limit_reached",
-    "You've hit your usage limit for gpt-5.6-sol",
-    "workspace_member_usage_limit_reached",
-    "407 Proxy Authentication Required",
-  ];
-  for (const message of transient) {
-    assert.equal(codexNonRetryable(message), false, message);
-    assert.ok(!(codexProviderFailure(message) instanceof NonRetryableTurnError), message);
-  }
-});
-
-test("Codex never classifies its own infrastructure failures as terminal", () => {
-  const ours = [
-    "permission denied for table session_entries",
-    "EACCES: permission denied, open '/data/tape/x.jsonl'",
-    "Codex app-server exited (1): thread panicked at src/client.rs:403:9",
-    "Codex app-server exited (1): WARN retrying request: 401 Unauthorized (attempt 1); INFO recovered",
-    "connect ECONNREFUSED 127.0.0.1:403",
-  ];
-  for (const message of ours) {
-    assert.ok(codexProviderFailure(message) instanceof Error, message);
-  }
-  assert.equal(codexProviderFailure("Codex turn failed").message, "Codex turn failed");
-  assert.ok(!(codexProviderFailure("socket hang up") instanceof NonRetryableTurnError));
   assert.equal(
     codexProviderFailure("401 access_token=provider-secret-123456").message.includes("provider-secret"),
     false,
@@ -1549,7 +1518,7 @@ rl.on("line", (line) => {
       mode === "startRejected"
         ? `return send({ id: msg.id, error: { code: 401, message: "Incorrect API key provided" } });`
         : `send({ id: msg.id, result: { turn: { id: "turn-fail", status: "inProgress", items: [] } } });
-    return send({ method: "turn/completed", params: { threadId: "thread-fail", turn: { id: "turn-fail", status: "failed", error: { message: "You exceeded your current quota" }, items: [] } } });`
+    return send({ method: "turn/completed", params: { threadId: "thread-fail", turn: { id: "turn-fail", status: "failed", error: { message: "You exceeded your current quota", codexErrorInfo: "unauthorized" }, items: [] } } });`
     }
   }
   if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
@@ -1561,7 +1530,7 @@ rl.on("line", (line) => {
 }
 
 for (const mode of ["turnFailed", "startRejected"] as const) {
-  test(`Codex parks the run on a provider auth/quota failure (${mode}) instead of burning retries`, async (t) => {
+  test(`Codex classifies a ${mode} provider failure structurally`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "qm-codex-fail-test-"));
     const harness = createCodexHarness({
       binaryPath: failingProviderCodexBinary(dir, mode),
@@ -1585,7 +1554,10 @@ for (const mode of ["turnFailed", "startRejected"] as const) {
         emit: async (entry) => ({ ...entry, sessionId: "fail-session", seq: 1, createdAt: Date.now() }) as SessionEntry,
         recordModelCall: () => {},
       }),
-      (error: unknown) => error instanceof NonRetryableTurnError,
+      (error: unknown) =>
+        error instanceof ProviderTurnError &&
+        // turn/completed carries codexErrorInfo; a bare JSON-RPC rejection has no structured cause.
+        (mode === "turnFailed" ? error.code === "auth" && !error.retryable : error.code === "unknown"),
     );
   });
 }

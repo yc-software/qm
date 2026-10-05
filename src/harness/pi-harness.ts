@@ -24,8 +24,6 @@ import {
 import {
   calculateCost,
   InMemoryCredentialStore,
-  isContextOverflow,
-  isRetryableAssistantError,
   type Api,
   type AssistantMessage,
   type Context,
@@ -62,7 +60,8 @@ import type {
   TapeRecord,
 } from "../sessions/session-store.ts";
 import { tapeEntryMirrorRecord } from "../sessions/session-store.ts";
-import { NonRetryableTurnError, ProviderTurnError, TitleRejected, type ProviderErrorCode } from "../core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
+import { providerTurnError } from "./provider-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -948,73 +947,6 @@ export function textFromContent(content: unknown): string {
 
 type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
 
-function parseProviderError(message: string): { type: string; message: string } | null {
-  const jsonAt = message.indexOf("{");
-  if (jsonAt < 0) return null;
-  try {
-    const parsed = JSON.parse(message.slice(jsonAt)) as {
-      type?: unknown;
-      message?: unknown;
-      error?: { type?: unknown; message?: unknown };
-    };
-    const body = parsed.error && typeof parsed.error === "object" ? parsed.error : parsed;
-    const providerMessage = typeof body.message === "string" ? body.message.trim() : "";
-    const providerType = typeof body.type === "string" ? body.type.trim() : "";
-    return providerMessage || providerType ? { type: providerType, message: providerMessage } : null;
-  } catch (e) {
-    swallow("pi: assistant error json parse", e);
-    return null;
-  }
-}
-
-function formatPiAssistantError(raw: string | undefined): string {
-  const message = raw?.trim();
-  if (!message) return "Pi agent stopped with an error";
-  const provider = parseProviderError(message);
-  if (!provider?.message) return message;
-  return provider.type
-    ? `Model provider API error (${provider.type}): ${provider.message}`
-    : `Model provider API error: ${provider.message}`;
-}
-
-const TRANSIENT_PROVIDER_ERROR_TYPES = new Set(["overloaded_error", "api_error", "rate_limit_error", "timeout_error"]);
-
-/**
- * pi-ai flattens provider HTTP failures into AssistantMessage.errorMessage ("<status>: <body>" or
- * "<Provider> API error (<status>): <body>") and keeps no status or body fields, so this is the one
- * place that reads that string. Everything downstream branches on the typed ProviderTurnError.
- */
-function piProviderError(failed: AssistantMessage): ProviderTurnError {
-  const raw = failed.errorMessage?.trim() ?? "";
-  const type = parseProviderError(raw)?.type;
-  const status = Number(/^(?:[\w ]+\()?([1-5]\d\d)\b/.exec(raw)?.[1]) || undefined;
-  const retryable =
-    (!type || TRANSIENT_PROVIDER_ERROR_TYPES.has(type)) &&
-    isRetryableAssistantError(failed) &&
-    !isContextOverflow(failed);
-  return new ProviderTurnError(formatPiAssistantError(raw), {
-    code: piErrorCode(failed, raw, type, status, retryable),
-    retryable,
-    status,
-    raw,
-  });
-}
-
-function piErrorCode(
-  failed: AssistantMessage,
-  raw: string,
-  type: string | undefined,
-  status: number | undefined,
-  retryable: boolean,
-): ProviderErrorCode {
-  if (type === "budget_exceeded") return "model_budget";
-  if (PROVIDER_REFUSAL_PATTERN.test(raw)) return "refusal";
-  if (isContextOverflow(failed)) return "context_too_long";
-  if (type === "authentication_error" || type === "permission_error" || status === 401 || status === 403) return "auth";
-  if (type === "rate_limit_error" || status === 429) return "rate_limit";
-  return retryable ? "transient" : "unknown";
-}
-
 function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
   const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant") as
     AssistantMessage | undefined;
@@ -1023,7 +955,7 @@ function piFailedAssistant(session: AssistantTextSession): AssistantMessage | un
 
 function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
   const failed = piFailedAssistant(session);
-  return failed ? piProviderError(failed) : null;
+  return failed ? providerTurnError(failed) : null;
 }
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
@@ -1047,9 +979,6 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
   if (detailed) return detailed;
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
-
-const PROVIDER_REFUSAL_PATTERN =
-  /violate Anthropic(?:'|’)?s (?:Terms of Service|usage policy)|under Anthropic(?:'|’)?s usage policy|refusals-and-fallback|reduce refusals for your users by configuring a fallback model|the model refused to complete the request|gateway model is unavailable/i;
 
 export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
   const err = piAssistantFailure(messagesSince(session, messagesBefore));
@@ -2616,8 +2545,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             (id) => !!resolveModel(id),
           );
           if (
-            !(error instanceof Error) ||
-            !PROVIDER_REFUSAL_PATTERN.test(error.message) ||
+            !(error instanceof ProviderTurnError) ||
+            error.code !== "refusal" ||
             !fallbackId ||
             !resolveModel(fallbackId)
           )
