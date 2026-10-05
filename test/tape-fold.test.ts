@@ -392,6 +392,7 @@ test("audience filter withholds message rows the whole room isn't entitled to, n
         content: [{ type: "text", text: "U1's private DM text" }],
         isError: false,
         timestamp: 4,
+        interrupted: true,
       },
       scopeLabel: "personal:U1" as ScopeId,
     }),
@@ -411,6 +412,7 @@ test("audience filter withholds message rows the whole room isn't entitled to, n
   assert.equal(substituted.toolCallId, "c1");
   assert.equal(substituted.isError, true);
   assert.equal(substituted.content[0].text, INTERRUPTED_TOOL_RESULT);
+  assert.equal((substituted as { interrupted?: unknown }).interrupted, true, "the mark survives redaction");
   assert.ok(!JSON.stringify(room).includes("private DM text"), "withheld bytes never survive");
   assert.equal(room.filter((r) => r.kind === "context_event").length, 1, "events always survive");
   assert.equal(filterTapeForAudience(rows, [], scope, org).length, 0, "empty audience sees nothing");

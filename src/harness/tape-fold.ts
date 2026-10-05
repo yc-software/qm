@@ -20,7 +20,7 @@ export function filterTapeForAudience(
       out.push(r);
       continue;
     }
-    const msg = r.payload as { role?: string; toolCallId?: string; toolName?: string } | null;
+    const msg = r.payload as { role?: string; toolCallId?: string; toolName?: string; interrupted?: unknown } | null;
     if (msg?.role === "toolResult" && typeof msg.toolCallId === "string") {
       out.push({
         ...r,
@@ -31,6 +31,7 @@ export function filterTapeForAudience(
           content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
           isError: true,
           timestamp: r.createdAt,
+          ...(msg.interrupted === true ? { interrupted: true } : {}),
         },
       });
     }
