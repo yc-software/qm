@@ -11,7 +11,6 @@ import {
   oneShot,
   parseDetectVerdict,
   piHarnessConfigOptions,
-  isProviderRefusal,
   piLastAssistantTextOrThrow,
   piTurnError,
   providerRefusalError,
@@ -32,7 +31,7 @@ import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
+import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
@@ -629,8 +628,7 @@ test("transient Pi provider errors stay retryable and keep their message for the
     "fetch failed",
   ]) {
     const err = piTurnError(failed(errorMessage), new Error("An unknown error occurred"));
-    assert.ok(err instanceof ProviderTurnError, errorMessage);
-    assert.ok(!(err instanceof NonRetryableTurnError), errorMessage);
+    assert.ok(err instanceof ProviderTurnError && err.retryable, errorMessage);
     assert.equal(turnFailureMessage(err), err.message);
     assert.throws(() => piLastAssistantTextOrThrow(failed(errorMessage)), ProviderTurnError);
   }
@@ -644,7 +642,8 @@ test("transient Pi provider errors stay retryable and keep their message for the
     '400 {"type":"invalid_request_error","message":"max_tokens must be at most 50000"}',
     '429 {"type":"error","error":{"type":"rate_limit_error","message":"quota exceeded"}}',
   ]) {
-    assert.ok(piTurnError(failed(errorMessage), new Error("x")) instanceof NonRetryableTurnError, errorMessage);
+    const err = piTurnError(failed(errorMessage), new Error("x"));
+    assert.ok(err instanceof ProviderTurnError && !err.retryable, errorMessage);
   }
 });
 
@@ -915,25 +914,40 @@ test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to
   assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai", "claude-opus-4-8"), "claude-opus-4-8");
 });
 
-test("isProviderRefusal matches Anthropic's ToS-refusal wording and nothing else", () => {
-  assert.equal(
-    isProviderRefusal(
-      "Anthropic API error (invalid_request_error): This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs. To learn more, visit https://www.anthropic.com/legal/commercial-terms. API integrators: you can reduce refusals for your users by configuring a fallback model — see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback.",
-    ),
-    true,
+test("Pi provider errors are classified once into a typed code, status and retryability", () => {
+  const classify = (errorMessage: string) =>
+    piTurnError(
+      {
+        getLastAssistantText: () => undefined,
+        messages: [{ role: "assistant", stopReason: "error", errorMessage, content: [] }],
+      } as unknown as Parameters<typeof piTurnError>[0],
+      new Error("x"),
+    ) as ProviderTurnError;
+  const budget = classify(
+    'OpenAI API error (429): {"message":"ExceededBudget: Team=team-a over 1d budget. Spend=$1011.5675, Limit=$1000.00","type":"budget_exceeded","param":null,"code":"429"}',
   );
-  assert.equal(isProviderRefusal("This request seems to violate Anthropic’s usage policy."), true);
-  assert.equal(
-    isProviderRefusal(
-      "This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy. To learn more, see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback.",
-    ),
-    true,
-  );
-  assert.equal(isProviderRefusal("The model refused to complete the request"), true);
-  assert.equal(isProviderRefusal("Gateway model is unavailable: claude-opus-5-5"), true);
-  assert.equal(isProviderRefusal("Anthropic API error (overloaded_error): Overloaded"), false);
-  assert.equal(isProviderRefusal("prompt is too long: 250000 tokens > 200000 maximum"), false);
-  assert.equal(isProviderRefusal(undefined), false);
+  assert.deepEqual([budget.code, budget.status, budget.retryable], ["model_budget", 429, false]);
+  assert.match(budget.raw, /Limit=\$1000\.00/, "the gateway's full text is kept for operators");
+  assert.match(budget.message, /ExceededBudget/);
+  const cases: Array<[string, string, number | undefined, boolean]> = [
+    ['429 {"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}', "rate_limit", 429, true],
+    ['401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}', "auth", 401, false],
+    ["prompt is too long: 250000 tokens > 200000 maximum", "context_too_long", undefined, false],
+    ['529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', "transient", 529, true],
+    ["The model refused to complete the request", "refusal", undefined, false],
+    ["Gateway model is unavailable: claude-opus-5-5", "refusal", undefined, false],
+    [
+      "This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy.",
+      "refusal",
+      undefined,
+      false,
+    ],
+  ];
+  for (const [errorMessage, code, status] of cases) {
+    const err = classify(errorMessage);
+    assert.equal(err.code, code, errorMessage);
+    assert.equal(err.status, status, errorMessage);
+  }
 });
 
 test("providerRefusalError finds this prompt's refusal but never a prior turn's", () => {

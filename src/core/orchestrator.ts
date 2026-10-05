@@ -167,7 +167,14 @@ import {
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
-import { NonRetryableTurnError, TitleRejected, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
+import {
+  isModelBudget,
+  NonRetryableTurnError,
+  ProviderTurnError,
+  TitleRejected,
+  turnFailureMessage,
+  type TurnFailurePayload,
+} from "./turn-error.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -4583,17 +4590,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
           return { status: "refused", sessionId: session.id, reason: err.message };
         }
+        const budget = isModelBudget(err) && !input.cancel?.aborted;
         deps.errors?.record(
           {
             category: "turn",
-            code: "error",
-            message: errMessage(err),
+            code: budget ? "model_budget" : "error",
+            message: err instanceof ProviderTurnError ? err.raw : errMessage(err),
             scopeLabel: scopeId,
             sessionId: session.id,
           },
           err,
         );
-        if ((err instanceof NonRetryableTurnError || input.finalAttempt) && !input.cancel?.aborted) {
+        const nonRetryable =
+          err instanceof NonRetryableTurnError || (err instanceof ProviderTurnError && !err.retryable);
+        if ((nonRetryable || input.finalAttempt) && !input.cancel?.aborted) {
           const mirrorFailureEntry = async (entry: SessionEntry | undefined): Promise<void> => {
             if (!entry) return;
             await deps.sessions
@@ -4616,6 +4626,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .then(mirrorFailureEntry)
             .catch(swallowAs("orchestrator: terminal turn failure record", undefined));
         }
+        if (budget)
+          return {
+            status: "refused",
+            sessionId: session.id,
+            reason: turnFailureMessage(err),
+            refusalKind: "model_budget",
+          };
         throw err;
       } finally {
         if (input.runId) deps.turnStream?.end(input.runId);
