@@ -216,7 +216,7 @@ export async function resumeInterruptedToolCall(
     if (!recorded) {
       await ref.emit({
         type: "tool_result",
-        payload: { tool: call.tool, callId: call.callId, isError, result: content[0]?.text ?? "" },
+        payload: { tool: call.tool, callId: call.callId, isError, result: content[0]?.text ?? "", interrupted: true },
         scopeLabel: turn.scopeLabel,
       });
     }

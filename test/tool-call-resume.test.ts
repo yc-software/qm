@@ -151,6 +151,7 @@ test("when the tool is unavailable on the retried turn the call is closed as int
     sink.map((e) => [e.type, (e.payload as { callId: string; result: string }).result]),
     [["tool_result", INTERRUPTED_TOOL_RESULT]],
   );
+  assert.equal((sink[0]!.payload as { interrupted?: boolean }).interrupted, true, "the ledger carries the meaning");
   assert.deepEqual(queries, []);
 });
 
