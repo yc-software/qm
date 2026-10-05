@@ -1,9 +1,10 @@
 import { createHmac, scrypt } from "node:crypto";
 import { probeModel } from "../harness/pi-harness.ts";
+import { ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
 import { modelFromOverlay } from "./pi-models.ts";
 import type { ModelOverlay } from "./model-overlay.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
-import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { GatewayModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 
 export class ModelVerificationError extends Error {
   readonly code: string;
@@ -19,40 +20,35 @@ interface ModelVerificationContext {
 }
 export type ModelVerifier = (spec: ModelOverlay) => Promise<ModelVerificationContext>;
 
+const VERIFICATION_FAILURES: Record<string, string> = {
+  timeout: "Verification timed out. Try again; the model was not enabled.",
+  access_denied: "The serving credential cannot access this model. Check its provider permissions.",
+  quota_or_rate_limit: "The provider reports a quota, billing, or rate limit. Resolve it and verify again.",
+  model_unavailable: "The provider could not serve this model ID. Check the ID and credential access.",
+  unsupported_configuration: "The provider rejected this configuration. Check the template and fast-mode capability.",
+  provider_failure: "The provider did not complete the verification request. Try again or check provider status.",
+};
+
+const VERIFICATION_CODES: Record<ProviderErrorCode, keyof typeof VERIFICATION_FAILURES> = {
+  auth: "access_denied",
+  model_budget: "quota_or_rate_limit",
+  rate_limit: "quota_or_rate_limit",
+  not_found: "model_unavailable",
+  bad_request: "unsupported_configuration",
+  context_too_long: "unsupported_configuration",
+  refusal: "provider_failure",
+  transient: "provider_failure",
+  unknown: "provider_failure",
+};
+
+/** Maps a probe failure from structured signals only: ProviderTurnError.code or an abort/timeout error's name. */
 export function verificationFailure(error: unknown): ModelVerificationError {
   if (error instanceof ModelVerificationError) return error;
-  const text = error instanceof Error ? error.message : "";
-  if (/timeout|aborted|aborterror/i.test(text))
-    return new ModelVerificationError("timeout", "Verification timed out. Try again; the model was not enabled.");
-  if (/401|403|unauthori[sz]ed|forbidden|permission|authentication|(?:invalid|incorrect).api.key/i.test(text))
-    return new ModelVerificationError(
-      "access_denied",
-      "The serving credential cannot access this model. Check its provider permissions.",
-    );
-  if (/429|quota|rate.limit|billing|credit|resource.exhausted/i.test(text))
-    return new ModelVerificationError(
-      "quota_or_rate_limit",
-      "The provider reports a quota, billing, or rate limit. Resolve it and verify again.",
-    );
-  if (/404|not.found|does not exist|model.*unavailable/i.test(text))
-    return new ModelVerificationError(
-      "model_unavailable",
-      "The provider could not serve this model ID. Check the ID and credential access.",
-    );
-  if (/\b5\d\d\b/.test(text))
-    return new ModelVerificationError(
-      "provider_failure",
-      "The provider is temporarily unable to complete verification. Try again later.",
-    );
-  if (/400|422|unsupported|invalid.*(parameter|request)|not.supported/i.test(text))
-    return new ModelVerificationError(
-      "unsupported_configuration",
-      "The provider rejected this configuration. Check the template and fast-mode capability.",
-    );
-  return new ModelVerificationError(
-    "provider_failure",
-    "The provider did not complete the verification request. Try again or check provider status.",
-  );
+  let code = "provider_failure";
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) code = "timeout";
+  else if (error instanceof GatewayModelUnavailableError) code = "model_unavailable";
+  else if (error instanceof ProviderTurnError) code = VERIFICATION_CODES[error.code];
+  return new ModelVerificationError(code, VERIFICATION_FAILURES[code]!);
 }
 
 export function createModelVerifier(input: {

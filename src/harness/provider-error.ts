@@ -9,6 +9,7 @@ const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
 const CONTEXT_CODES = new Set(["context_length_exceeded"]);
 const QUOTA_CODES = new Set(["insufficient_quota"]);
+const NOT_FOUND_CODES = new Set(["model_not_found"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>(["rate_limit", "transient", "unknown"]);
 
 function providerErrorCode(failed: AssistantMessage): ProviderErrorCode {
@@ -18,8 +19,10 @@ function providerErrorCode(failed: AssistantMessage): ProviderErrorCode {
   if (code && CONTEXT_CODES.has(code)) return "context_too_long";
   if ((type && AUTH_TYPES.has(type)) || status === 401 || status === 403) return "auth";
   if (type === "rate_limit_error" || status === 429) return "rate_limit";
+  if (type === "not_found_error" || (code && NOT_FOUND_CODES.has(code)) || status === 404) return "not_found";
   if ((type && TRANSIENT_TYPES.has(type)) || status === 408 || status === 409 || (status ?? 0) >= 500)
     return "transient";
+  if (type === "invalid_request_error" || status === 400 || status === 422) return "bad_request";
   return "unknown";
 }
 

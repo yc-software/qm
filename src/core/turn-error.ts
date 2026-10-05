@@ -8,7 +8,15 @@ export class NonRetryableTurnError extends Error {
 }
 
 export type ProviderErrorCode =
-  "model_budget" | "rate_limit" | "refusal" | "auth" | "context_too_long" | "transient" | "unknown";
+  | "model_budget"
+  | "rate_limit"
+  | "refusal"
+  | "auth"
+  | "context_too_long"
+  | "not_found"
+  | "bad_request"
+  | "transient"
+  | "unknown";
 
 export class ProviderTurnError extends Error {
   readonly code: ProviderErrorCode;

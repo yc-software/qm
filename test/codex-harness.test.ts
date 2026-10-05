@@ -1470,7 +1470,7 @@ test("Codex classifies failures from codexErrorInfo, never from message text", (
     ["serverOverloaded", "transient", true],
     ["unauthorized", "auth", false],
     ["cyberPolicy", "refusal", false],
-    ["badRequest", "unknown", false],
+    ["badRequest", "bad_request", false],
     ["other", "unknown", true],
     [null, "unknown", true],
     [{ httpConnectionFailed: { httpStatusCode: 502 } }, "transient", true, 502],

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import type { Model } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/openai-completions";
 import { providerTurnError } from "../src/harness/provider-error.ts";
 
@@ -48,4 +48,35 @@ test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerE
   assert.match(failed.errorMessage ?? "", /^429: /, "errorMessage keeps stock pi-ai formatting");
   const err = providerTurnError(failed);
   assert.deepEqual([err.code, err.status, err.retryable], ["model_budget", 429, false]);
+});
+
+test("providerTurnError maps documented status, type and code without reading errorMessage", () => {
+  const failed = (providerError: AssistantMessage["providerError"], rawStopReason?: string) =>
+    ({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "429 budget refusal timeout",
+      providerError,
+      rawStopReason,
+    }) as AssistantMessage;
+  for (const [message, code, retryable] of [
+    [failed({ status: 429, type: "budget_exceeded" }), "model_budget", false],
+    [failed({ status: 429, code: "insufficient_quota" }), "model_budget", false],
+    [failed({ status: 400, code: "context_length_exceeded" }), "context_too_long", false],
+    [failed({ status: 401, type: "authentication_error" }), "auth", false],
+    [failed({ status: 429, type: "rate_limit_error" }), "rate_limit", true],
+    [failed({ status: 404, type: "not_found_error" }), "not_found", false],
+    [failed({ status: 404, code: "model_not_found" }), "not_found", false],
+    [failed({ status: 400, type: "invalid_request_error" }), "bad_request", false],
+    [failed({ status: 422 }), "bad_request", false],
+    [failed({ status: 529, type: "overloaded_error" }), "transient", true],
+    [failed({ status: 503, type: "invalid_request_error" }), "transient", true],
+    [failed(undefined, "refusal"), "refusal", false],
+    [failed(undefined), "unknown", true],
+  ] as const) {
+    const error = providerTurnError(message);
+    assert.equal(error.code, code);
+    assert.equal(error.retryable, retryable);
+    assert.equal(error.raw, "429 budget refusal timeout");
+  }
 });

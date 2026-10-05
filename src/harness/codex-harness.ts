@@ -190,6 +190,7 @@ const CODEX_ERROR_CODES: Record<string, ProviderErrorCode> = {
   cyberPolicy: "refusal",
   misalignmentPolicyViolation: "refusal",
   unauthorized: "auth",
+  badRequest: "bad_request",
 };
 
 /** Classifies a Codex failure from codexErrorInfo only; the message text is carried, never matched. */

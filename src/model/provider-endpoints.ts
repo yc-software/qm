@@ -74,6 +74,14 @@ export function providerBaseUrl(provider: string): string | undefined {
   return (PROVIDER_IDS as readonly string[]).includes(provider) ? configured[provider as ProviderId] : undefined;
 }
 
+/** Our own signal that the gateway has no route for a model id; typed so callers never match its text. */
+export class GatewayModelUnavailableError extends Error {
+  constructor(modelId: string) {
+    super(`Gateway model is unavailable: ${modelId}`);
+    this.name = "GatewayModelUnavailableError";
+  }
+}
+
 export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string }>(
   config: ModelGatewayTransportConfig | undefined,
   model: T,
@@ -81,7 +89,7 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
   const target = config?.models[model.id];
   if (!target || !config) {
     if (isGatewayModelId(model.id) || config?.reservedModelIds?.has(model.id))
-      throw new Error(`Gateway model is unavailable: ${model.id}`);
+      throw new GatewayModelUnavailableError(model.id);
     return undefined;
   }
   return {

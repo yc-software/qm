@@ -82,7 +82,11 @@ import {
   codexProviderModelId,
 } from "../model/pi-models.ts";
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import {
+  GatewayModelUnavailableError,
+  modelGatewayRequest,
+  type ModelGatewayTransportConfig,
+} from "../model/provider-endpoints.ts";
 import {
   defineHarness,
   promptEnvelopeWithoutHistory,
@@ -1259,7 +1263,7 @@ export async function buildModelRuntime(
       options: wireModelId(routed, model, async () => {
         await modelGateway?.refresh?.();
         const current = modelGatewayRequest(modelGateway, model);
-        if (!current) throw new Error(`Gateway model is unavailable: ${model.id}`);
+        if (!current) throw new GatewayModelUnavailableError(model.id);
         return current.target;
       }),
     };
@@ -1359,8 +1363,10 @@ export async function probeModel(
     )
     .result();
   signal.throwIfAborted();
+  if (response.stopReason === "aborted") throw new DOMException("Model verification was aborted", "AbortError");
+  if (response.stopReason === "error") throw providerTurnError(response);
   if (response.stopReason !== "stop" || !response.content.some((part) => part.type === "text" && part.text.trim()))
-    throw new Error(response.errorMessage || "Model verification did not produce a completed text response");
+    throw new Error("Model verification did not produce a completed text response");
 }
 
 const FAST_MODE_BETA = "fast-mode-2026-02-01";

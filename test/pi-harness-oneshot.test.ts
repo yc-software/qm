@@ -915,13 +915,13 @@ test("Pi provider errors are classified once into a typed code from structured f
     [{ providerError: { status: 400, code: "context_length_exceeded" } }, "context_too_long", 400],
     [{ providerError: { status: 529, type: "overloaded_error" } }, "transient", 529],
     [{ rawStopReason: "refusal" }, "refusal", undefined],
-    // No structured signal: these stay unknown even though the text looks classifiable.
+    // Anthropic documents prompt-too-long only as a 400 invalid_request_error, so it is a bad_request, not context_too_long.
     [
       {
         errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
         providerError: { status: 400, type: "invalid_request_error" },
       },
-      "unknown",
+      "bad_request",
       400,
     ],
     [{ errorMessage: "The model refused to complete the request" }, "unknown", undefined],
