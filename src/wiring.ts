@@ -203,7 +203,7 @@ import { createMemoryService, type MemoryService } from "./memory/memory-service
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpToolService, mcpPublicOAuthClients, type McpToolService } from "./mcp/mcp-tool-service.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -278,7 +278,13 @@ import {
   type FeatureFlagRecord,
   type FeatureFlagStore,
 } from "./feature-flags.ts";
-import { makeRefresh, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
+import {
+  makeRefresh,
+  setPublicOAuthClients,
+  withPublicOAuthClients,
+  type OAuthClientResolver,
+  type OAuthState,
+} from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
   deriveConnectorKey,
@@ -419,7 +425,7 @@ import {
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
 import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
-import { errMessage, swallowAs } from "./util/errors.ts";
+import { errMessage, swallow, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
@@ -1176,11 +1182,13 @@ export function buildApp(
           createAwsSecretsManagerSource({ prefix: config.secretsPrefix }),
         )
       : createEnvSecretSource();
-  const resolveClient: OAuthClientResolver = createConnectorClientResolver({
-    reader: configStore,
-    orgScopeId: (o) => scopeId("org", o),
-    secrets: secretSource,
-  });
+  const resolveClient: OAuthClientResolver = withPublicOAuthClients(
+    createConnectorClientResolver({
+      reader: configStore,
+      orgScopeId: (o) => scopeId("org", o),
+      secrets: secretSource,
+    }),
+  );
   const keychainKeyMaterial = config.connectorSecretKey;
   const legacyCredentialKey =
     keychainKeyMaterial && config.signingSecret && config.signingSecret !== keychainKeyMaterial
@@ -1235,7 +1243,20 @@ export function buildApp(
     servers: mcpServers,
     audit: auditLog,
     ...(keychain ? { userTokens: keychain } : {}),
+    ...(config.publicWebUrl
+      ? {
+          signInUrl: (id: string) =>
+            `${config.publicWebUrl!.replace(/\/$/, "")}/connect/${encodeURIComponent(id)}/self-connect`,
+        }
+      : {}),
   });
+  const syncMcpOAuth = () =>
+    void mcpServers
+      .list()
+      .then((servers) => setPublicOAuthClients(mcpPublicOAuthClients(servers)))
+      .catch((e: unknown) => swallow("mcp oauth client sync", e));
+  mcpServers.onChange(syncMcpOAuth);
+  syncMcpOAuth();
   const mcpTools = () => mcpToolService.toolDefs();
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })

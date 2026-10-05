@@ -144,3 +144,52 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   assert.equal(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), "Bearer alice-only");
   assert.equal(calls, 1);
 });
+
+test("MCP admin accepts per-user OAuth servers, discovers endpoints, and never shadows built-in connectors", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-admin-oauth-"));
+  const built = buildApp(testConfig({ dataDir: dir }));
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    auditLog: built.auditLog,
+    mcpServers: store,
+  });
+  const issuer = createServer((req, res) => {
+    if (req.url !== "/.well-known/oauth-authorization-server") return void res.writeHead(404).end();
+    const base = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token` }));
+  });
+  server.listen(0, "127.0.0.1");
+  issuer.listen(0, "127.0.0.1");
+  await Promise.all([once(server, "listening"), once(issuer, "listening")]);
+  t.after(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => issuer.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/mcp-servers`;
+  const put = (id: string, body: object) =>
+    fetch(`${base}/${id}`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ url: "https://tools.example.com/mcp", auth: "oauth-user", ...body }),
+    });
+  assert.equal((await put("orders", { clientId: "c" })).status, 400);
+  assert.equal((await put("github", { clientId: "c", oauthIssuer: `http://127.0.0.1:1` })).status, 400);
+  assert.equal(
+    (await put("orders", { clientId: "c", oauthIssuer: "x", credentialHost: "api.github.com" })).status,
+    400,
+  );
+  const issuerUrl = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
+  const saved = await put("orders", { clientId: " c ", oauthIssuer: issuerUrl, oauthScopes: "a b" });
+  assert.equal(saved.status, 200);
+  const record = (await store.get("orders"))!;
+  assert.equal(record.credentialScope, "per-user");
+  assert.equal(record.credentialHost, "tools.example.com");
+  assert.equal(record.clientId, "c");
+  assert.equal(record.oauthAuthorizeUrl, `${issuerUrl}/authorize`);
+  assert.equal(record.oauthTokenUrl, `${issuerUrl}/token`);
+  assert.deepEqual(record.oauthScopes, ["a", "b"]);
+  assert.equal(record.clientSecret, undefined);
+});
