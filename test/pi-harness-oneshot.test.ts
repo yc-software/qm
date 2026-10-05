@@ -1009,3 +1009,89 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
 });
+
+test("provider errors are classified retryable or final by what a retry can fix", () => {
+  const cases: Array<[string, string, "retry" | "final"]> = [
+    [
+      "anthropic 529 overloaded",
+      '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      "retry",
+    ],
+    ["anthropic 429", '429 {"type":"error","error":{"type":"rate_limit_error","message":"rate limit"}}', "retry"],
+    ["anthropic 500", '500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}', "retry"],
+    [
+      "anthropic 401",
+      '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+      "final",
+    ],
+    ["anthropic 400", '400 {"type":"error","error":{"type":"invalid_request_error","message":"bad"}}', "final"],
+    [
+      "openai 429 RPM",
+      '429 {"error":{"message":"Rate limit reached on requests per min (RPM)","type":"requests","code":"rate_limit_exceeded"}}',
+      "retry",
+    ],
+    [
+      "openai 429 TPM",
+      '429 {"error":{"message":"Rate limit reached on tokens per min (TPM)","type":"tokens","code":"rate_limit_exceeded"}}',
+      "retry",
+    ],
+    [
+      "openai quota",
+      '429 {"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}',
+      "final",
+    ],
+    [
+      "openai 500",
+      '500 {"error":{"message":"The server had an error while processing your request.","type":"server_error"}}',
+      "retry",
+    ],
+    ["openai 503", '503 {"error":{"message":"The engine is currently overloaded","type":"server_error"}}', "retry"],
+    [
+      "openai 401",
+      '401 {"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}',
+      "final",
+    ],
+    [
+      "vertex 429",
+      '429 {"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}',
+      "retry",
+    ],
+    [
+      "litellm 429",
+      '429 {"error":{"message":"litellm.RateLimitError: rate limit","type":"None","code":"429"}}',
+      "retry",
+    ],
+    [
+      "litellm 503",
+      '503 {"error":{"message":"litellm.ServiceUnavailableError: Overloaded","type":"None","code":"503"}}',
+      "retry",
+    ],
+    [
+      "litellm budget",
+      '400 {"error":{"message":"Budget has been exceeded!","type":"budget_exceeded","code":"400"}}',
+      "final",
+    ],
+    ["ECONNRESET", "read ECONNRESET", "retry"],
+    ["ETIMEDOUT", "connect ETIMEDOUT 1.2.3.4:443", "retry"],
+    ["undici terminated", "terminated", "retry"],
+    [
+      "context overflow",
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}',
+      "final",
+    ],
+  ];
+  for (const [name, errorMessage, want] of cases) {
+    const session = {
+      messages: [{ role: "assistant", stopReason: "error", errorMessage, content: [] }],
+    } as unknown as Parameters<typeof piLastAssistantTextOrThrow>[0];
+    let got: string = "none";
+    try {
+      piLastAssistantTextOrThrow(session);
+    } catch (e) {
+      if (e instanceof NonRetryableTurnError) got = "final";
+      else if (e instanceof ProviderTurnError) got = "retry";
+      else got = "other";
+    }
+    assert.equal(got, want, name);
+  }
+});
