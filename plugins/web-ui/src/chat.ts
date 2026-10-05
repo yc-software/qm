@@ -2030,9 +2030,11 @@ export function createChatSurface(
     return `${url}${sep}returnTo=${encodeURIComponent(returnTo)}`;
   }
 
-  function continueAfterConnection(name: string): void {
+  async function continueAfterConnection(name: string): Promise<void> {
     const agent = chatState.agent;
-    if (agent) void ctx.composer.sendSuggestedPrompt(`I connected ${name}. Please continue.`, agent);
+    if (!agent) return;
+    await ctx.composer.refreshRuntimeSelection(chatState.scopeId, agent);
+    await ctx.composer.sendSuggestedPrompt(`I connected ${name}. Please continue.`, agent);
   }
 
   function connectorWidget(link: ConnectorLink): TemplateResult {
