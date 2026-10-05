@@ -325,6 +325,25 @@ test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async (
   );
 });
 
+test("Linear refreshes via the standard refresh_token grant", async () => {
+  const fetchImpl: FetchLike = async (u, init) => {
+    assert.equal(u, PROVIDERS.linear!.tokenUrl);
+    assert.match(init.body, /grant_type=refresh_token/);
+    assert.match(init.body, /refresh_token=rt-old/);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "lin-new", refresh_token: "rt-new", expires_in: 86399 }),
+    };
+  };
+  const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl })("api.linear.app", {
+    accessToken: "lin-old",
+    refreshToken: "rt-old",
+  });
+  assert.equal(fresh.accessToken, "lin-new");
+  assert.equal(fresh.refreshToken, "rt-new");
+});
+
 test("scopesFor: BYO client scopes override the provider default", async () => {
   const byo: ResolvedClient = { id: "x", secret: "y", clientRef: "org:default-org:google", scopes: ["only.this"] };
   assert.deepEqual(scopesFor(PROVIDERS.google!, byo), ["only.this"]);
