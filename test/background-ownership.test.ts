@@ -28,7 +28,7 @@ test("compare-and-swap refuses a stale expectation but accepts an idempotent ret
   assert.equal(paused.setBy, "b");
 });
 
-test("a member-protocol record migrates to its enabled desired owner without being rewritten on read", async () => {
+test("a member-protocol record is read as its enabled desired owner and stays readable by that protocol", async () => {
   const map = createMemoryMap<BackgroundOwnership>();
   const legacy = {
     enabled: true,
@@ -42,6 +42,8 @@ test("a member-protocol record migrates to its enabled desired owner without bei
   const store = createBackgroundOwnershipStore(map);
   assert.deepEqual(await store.get(), { ownerDeploymentId: "core:blue", setAt: null, setBy: null });
   assert.deepEqual(await map.get("ownership"), legacy);
+  await store.set({ ownerDeploymentId: "core:blue", setBy: "core:blue" });
+  assert.deepEqual(await map.get("ownership"), legacy);
   await assert.rejects(
     store.set({ ownerDeploymentId: "core:green", expectedOwnerDeploymentId: null, setBy: "core:green" }),
     /changed/,
@@ -52,7 +54,15 @@ test("a member-protocol record migrates to its enabled desired owner without bei
     setBy: "core:green",
   });
   assert.equal(migrated.ownerDeploymentId, "core:green");
-  assert.deepEqual(Object.keys((await map.get("ownership"))!).sort(), ["ownerDeploymentId", "setAt", "setBy"]);
+  assert.deepEqual(await map.get("ownership"), {
+    ...migrated,
+    enabled: true,
+    generation: 0,
+    desiredDeploymentId: "core:green",
+    lastRequestId: null,
+    lastRequest: null,
+    members: [],
+  });
   await map.put("ownership", { ...legacy, enabled: false } as unknown as BackgroundOwnership);
   assert.equal((await store.get()).ownerDeploymentId, null);
 });

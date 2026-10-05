@@ -74,6 +74,16 @@ test("a member-protocol responder is read as its enabled desired owner", () => {
   assert.equal(parseBackgroundWorkStatus(JSON.stringify(legacy), "old-cohort").active, false);
   legacy.enabled = false;
   assert.equal(parseBackgroundWorkStatus(JSON.stringify(legacy), "old-cohort").ownerDeploymentId, null);
+  const rewritten = { ...legacy, enabled: true, desiredDeploymentId: "new-cohort", members: [] };
+  assert.deepEqual(parseBackgroundWorkStatus(JSON.stringify(rewritten), "old-cohort"), {
+    protocol: 2,
+    deploymentId: "old-cohort",
+    instanceId: "old-instance",
+    ownerDeploymentId: "new-cohort",
+    setAt: null,
+    setBy: null,
+    active: false,
+  });
   assert.throws(
     () => parseBackgroundWorkStatus(JSON.stringify({ ...legacy, members: "none" }), "old-cohort"),
     /does not match/,
@@ -131,25 +141,27 @@ for (const mode of ["late-commit", "unavailable-read", "never-commits", "competi
   });
 }
 
-test("activation waits for the responder to report activity and refuses a changed owner", async () => {
+test("activation waits for every expected process to report activity and refuses a changed owner", async () => {
   let polls = 0;
   const transport: BackgroundWorkTransport = async () => {
     polls++;
-    return response(state({ active: polls >= 3 }));
+    const instanceId = polls % 2 ? "first" : "second";
+    if (polls === 4) return response(state({ instanceId, active: false }));
+    return response(state({ instanceId, active: polls >= 3 }));
   };
   const ready = await awaitBackgroundWork(
     transport,
     "new-cohort",
-    { ownerDeploymentId: "new-cohort", active: true },
+    { ownerDeploymentId: "new-cohort", active: true, instances: 2 },
     { timeoutMs: 10_000, pollMs: 1 },
   );
-  assert.equal(polls, 3);
+  assert.equal(polls, 6);
   assert.equal(ready.active, true);
   await assert.rejects(
     awaitBackgroundWork(
       async () => response(state({ ownerDeploymentId: "other" })),
       "new-cohort",
-      { ownerDeploymentId: "new-cohort", active: true },
+      { ownerDeploymentId: "new-cohort", active: true, instances: 1 },
       { timeoutMs: 0, pollMs: 1 },
     ),
     /changed while awaiting/,
@@ -158,9 +170,9 @@ test("activation waits for the responder to report activity and refuses a change
     awaitBackgroundWork(
       async () => response(state({ ownerDeploymentId: null, active: true })),
       "new-cohort",
-      { ownerDeploymentId: null, active: false },
+      { ownerDeploymentId: null, active: false, instances: 1 },
       { timeoutMs: 0, pollMs: 1 },
     ),
-    /timed out awaiting new-cohort to stop/,
+    /timed out awaiting 1 new-cohort process\(es\) to stop background work; 0 confirmed/,
   );
 });

@@ -685,7 +685,10 @@ test("inline turns remain admitted through pause and queued intake survives roll
     }),
   );
   let admitted = true;
-  built.runtime.setBackgroundAdmission(() => admitted);
+  built.runtime.setBackgroundAdmission(
+    () => admitted,
+    () => admitted,
+  );
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const complete = built.runs.complete.bind(built.runs);

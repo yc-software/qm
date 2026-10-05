@@ -120,8 +120,8 @@ stack's own API, returning the responder's `ownerDeploymentId`, `setAt`, `setBy`
 and whether the responding process is currently active. The exported
 `awsSetBackgroundWork(config, configDir, enabled, candidatePath?, expected?)` sets
 the owner record to the stack's identity (or clears it when `enabled` is false)
-without restarting ECS tasks, then waits for the stack's processes to report
-matching activity. Passing `expected: { ownerDeploymentId }` refuses the change
+without restarting ECS tasks, then polls until every core task of the stack has
+reported matching activity. Passing `expected: { ownerDeploymentId }` refuses the change
 if the owner differs from what the caller last observed. A demotion refuses to
 clear a different deployment's ownership.
 
@@ -147,8 +147,11 @@ that same path.
 
 Replacing or rolling back a controlled stack's core tasks requires that the stack
 is not the current owner: hand ownership to the other stack first. Processes that
-lose ownership stop claiming within their poll interval and finish admitted work
-under their leases; ECS task replacement then drains them through `SIGTERM`.
+lose ownership stop claiming within their poll interval (at most their ten-second
+validity window) and finish admitted work under their leases; ECS task
+replacement then drains them through `SIGTERM`. `qm down` is not guarded: if the
+record still names a stack that has no tasks, set the live stack active to
+recover.
 
 Core secret uploads defer activation to a subsequent staged `up --restart core`.
 The generic upload path refuses changes to either control credential while a

@@ -60,6 +60,7 @@ test("only the owning deployment's replicas run background work and handover is 
   assert.equal(a2.starts(), 1);
   assert.equal(b.starts(), 0);
   assert.equal(a.controller.canClaim(), true);
+  assert.equal(a.controller.active(), true);
   assert.equal(b.controller.canClaim(), false);
   await own("b");
   for (const r of [a, a2, b]) await r.controller.reconcile();
@@ -184,7 +185,7 @@ test("a hanging owner read expires local admission and cannot resurrect it after
   await controller.drained();
 });
 
-test("expiry during a slow startup aborts the activation", async () => {
+test("a process is active only after startup completes, and expiry during a slow startup aborts it", async () => {
   const { store, own } = setup();
   await own("a");
   const started = Promise.withResolvers<void>();
@@ -210,11 +211,14 @@ test("expiry during a slow startup aborts the activation", async () => {
   });
   controller.start();
   await started.promise;
+  assert.equal(controller.canClaim(), true);
+  assert.equal(controller.active(), false);
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(signal?.aborted, true);
   finish.resolve();
   await controller.reconcile();
   assert.equal(stops, 1);
+  assert.equal(controller.active(), false);
   await controller.stop();
 });
 

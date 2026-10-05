@@ -16,6 +16,7 @@ export interface BackgroundControllerDeps {
 export function createBackgroundController(deps: BackgroundControllerDeps) {
   let running = false;
   let activation: AbortController | null = null;
+  let started = false;
   let validUntil = 0;
   let watchdog: ReturnType<typeof setTimeout> | null = null;
   let poller: ReturnType<typeof setInterval> | null = null;
@@ -26,6 +27,7 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
   const validityMs = deps.validityMs ?? 10_000;
   const fence = (): void => {
     validUntil = 0;
+    started = false;
     activation?.abort();
     deps.fence();
     if (watchdog) clearTimeout(watchdog);
@@ -34,8 +36,8 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
   const release = async (): Promise<void> => {
     fence();
     if (!activation) return;
-    activation = null;
     await deps.relinquish();
+    activation = null;
     draining = deps.drained();
     void draining.catch(deps.onError);
   };
@@ -98,6 +100,7 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
           starting = false;
         }
         if (current.signal.aborted || !running) await release();
+        else started = true;
       } catch (error) {
         fence();
         try {
@@ -112,8 +115,10 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
     });
     return pending;
   };
+  const canClaim = () => running && activation !== null && !activation.signal.aborted && Date.now() < validUntil;
   return {
-    canClaim: () => running && activation !== null && !activation.signal.aborted && Date.now() < validUntil,
+    canClaim,
+    active: () => started && canClaim(),
     reconcile,
     start() {
       if (running) return;
