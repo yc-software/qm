@@ -4128,7 +4128,7 @@ test("every tool schema carries the optional retrySafe flag, which is stripped b
 });
 
 test("a tool result recorded after shutdown fires is marked interrupted; user Stop and plain completion are not", async () => {
-  const record = async (abort: "shutdown" | "stop" | "none") => {
+  const record = async (abort: "shutdown" | "stop" | "none", retrySafe = true) => {
     const emitted: Emitted[] = [];
     const shutdown = new AbortController();
     const cancel = new AbortController();
@@ -4144,25 +4144,32 @@ test("a tool result recorded after shutdown fires is marked interrupted; user St
     const history = createAgentTools(ref).find((t) => t.name === "history")!;
     if (abort === "shutdown") shutdown.abort();
     if (abort !== "none") cancel.abort();
-    await callWith(history, `call-${abort}`, { query: "budget", retrySafe: true });
+    await callWith(history, `call-${abort}`, { query: "budget", retrySafe });
     return emitted;
+  };
+  const strategy = (emitted: Emitted[]) => {
+    const entries = emitted.map((e, i) => ({ ...e, seq: i + 2 }) as unknown as SessionEntry);
+    return resumeStrategy(entries, { userSeq: 1, workEntries: entries.length });
   };
 
   const interrupted = await record("shutdown");
   const result = interrupted.find((e) => e.type === "tool_result")!.payload;
   assert.equal(result.interrupted, true);
   assert.equal(typeof result.result, "string", "the recorded text is kept alongside the mark");
-  const entries = interrupted.map((e, i) => ({ ...e, seq: i + 2 }) as unknown as SessionEntry);
-  assert.deepEqual(resumeStrategy(entries, { userSeq: 1, workEntries: entries.length }), {
+  assert.deepEqual(strategy(interrupted), {
     kind: "retry",
     call: { callId: "call-shutdown", tool: "history", input: { query: "budget" } },
   });
+  assert.deepEqual(
+    strategy(await record("shutdown", false)),
+    { kind: "note" },
+    "a killed call the model marked unsafe gets the unknown-outcome note, never a continue",
+  );
 
   for (const abort of ["stop", "none"] as const) {
     const emitted = await record(abort);
     const payload = emitted.find((e) => e.type === "tool_result")!.payload;
     assert.ok(!("interrupted" in payload), `${abort}: an ordinary result stays a real answer`);
-    const plain = emitted.map((e, i) => ({ ...e, seq: i + 2 }) as unknown as SessionEntry);
-    assert.deepEqual(resumeStrategy(plain, { userSeq: 1, workEntries: plain.length }), { kind: "note" });
+    assert.deepEqual(strategy(emitted), { kind: "continue" });
   }
 });
