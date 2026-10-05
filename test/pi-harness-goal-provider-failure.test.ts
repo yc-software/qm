@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createGoalRecord, latestGoalRecord } from "../src/harness/goal.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
-import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
@@ -65,7 +65,7 @@ test("an active goal stops continuing once a model round fails at the provider",
     );
     assert.equal(requests, 1, "a failed round must not be re-prompted by the goal loop");
     assert.ok(
-      "error" in outcome && outcome.error instanceof NonRetryableTurnError,
+      "error" in outcome && outcome.error instanceof ProviderTurnError && !outcome.error.retryable,
       "the turn fails with the provider error",
     );
     assert.match((outcome as { error: Error }).error.message, /credit balance is too low/);
@@ -174,7 +174,7 @@ test("a goal never falls back to a model that already refused in the same turn",
     const [primary, refused, fallback, refusedAgain] = models;
     assert.deepEqual([refused, refusedAgain], [primary, fallback]);
     assert.equal(models.length, 4, "the turn ends instead of bouncing back to the model that already refused");
-    assert.ok("error" in outcome && outcome.error instanceof NonRetryableTurnError);
+    assert.ok("error" in outcome && outcome.error instanceof ProviderTurnError && !outcome.error.retryable);
     assert.equal(latestGoalRecord(entries)?.status, "active");
   } finally {
     globalThis.fetch = realFetch;

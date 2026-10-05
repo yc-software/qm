@@ -44,6 +44,10 @@ const GENERIC_TURN_FAILURE = "That turn failed and couldn't be completed. The de
 export const MODEL_BUDGET_TEXT =
   "This workspace has used up its model budget, so I can't run until it resets. An admin can raise the limit.";
 
+export function isNonRetryable(err: unknown): boolean {
+  return err instanceof NonRetryableTurnError || (err instanceof ProviderTurnError && !err.retryable);
+}
+
 export function isModelBudget(err: unknown): err is ProviderTurnError {
   return err instanceof ProviderTurnError && err.code === "model_budget";
 }

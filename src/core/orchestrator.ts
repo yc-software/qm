@@ -169,6 +169,7 @@ import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
 import {
   isModelBudget,
+  isNonRetryable,
   NonRetryableTurnError,
   ProviderTurnError,
   TitleRejected,
@@ -4601,9 +4602,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           err,
         );
-        const nonRetryable =
-          err instanceof NonRetryableTurnError || (err instanceof ProviderTurnError && !err.retryable);
-        if ((nonRetryable || input.finalAttempt) && !input.cancel?.aborted) {
+        if ((isNonRetryable(err) || input.finalAttempt) && !input.cancel?.aborted) {
           const mirrorFailureEntry = async (entry: SessionEntry | undefined): Promise<void> => {
             if (!entry) return;
             await deps.sessions
