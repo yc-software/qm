@@ -1,3 +1,4 @@
+import { resumeNote } from "../src/core/turn-resume.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -529,6 +530,39 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
     [{ title: "return ALPHA", status: "completed" }],
   );
+});
+
+test("Codex ignores continueTurn and still records the resume note as this attempt's user entry", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const session = { id: "session-1" } as Session;
+  const note = resumeNote({ strategy: { kind: "continue" } });
+  const result = await harness.turns.runTurn({
+    session,
+    runId: "run-resume",
+    continueTurn: true,
+    input: note,
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => {
+      const saved = { ...entry, sessionId: session.id, seq: entries.length + 1, createdAt: Date.now() } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+  });
+  assert.equal(result.reply, "hello");
+  assert.equal(entries[0]?.type, "user");
+  assert.equal((entries[0]!.payload as { text: string }).text, note);
 });
 
 test("Codex task titles stay concise when the provider includes the parent request", () => {

@@ -131,7 +131,7 @@ export function resumeNote(opts?: {
     return `${NOTE_HEAD} your previous attempt at the request above was interrupted before it recorded any work (a routine platform deploy), so there is nothing to pick up. Start the request now.)`;
   }
   const parts =
-    strategy.kind === "retry" || strategy.kind === "continue"
+    strategy.kind === "retry"
       ? [
           `${NOTE_HEAD} your previous attempt at the request above was paused mid-turn and has resumed.`,
           ROUTINE,
