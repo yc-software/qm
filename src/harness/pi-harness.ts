@@ -957,10 +957,26 @@ function piFailedAssistant(session: AssistantTextSession): AssistantMessage | un
   return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
 }
 
+function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
+  const ok = [...session.messages]
+    .reverse()
+    .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
+    AssistantMessage | undefined;
+  const u = ok?.usage;
+  return u ? u.input + u.cacheRead + u.cacheWrite : undefined;
+}
+
 function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
   const failed = piFailedAssistant(session);
-  return failed ? providerTurnError(failed) : null;
+  if (!failed) return null;
+  const contextWindow = (
+    failed.model ? (resolveModel(failed.model) as { contextWindow?: number } | undefined) : undefined
+  )?.contextWindow;
+  return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
 }
+
+/** Codes that retry the turn on the configured fallback model. */
+const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
   const err = piAssistantFailure(session);
@@ -986,7 +1002,7 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
 
 export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
   const err = piAssistantFailure(messagesSince(session, messagesBefore));
-  return err?.code === "refusal" ? err.message : null;
+  return err && FALLBACK_CODES.has(err.code) ? err.message : null;
 }
 
 export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
@@ -2366,7 +2382,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (!userAborted && !cancelAbortRejection) {
               const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
               let recovered = false;
-              if (turnErr instanceof ProviderTurnError && turnErr.code === "refusal") {
+              if (turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
                 try {
                   recovered = await attemptRefusalFallback(turnErr.message);
                 } catch (e) {

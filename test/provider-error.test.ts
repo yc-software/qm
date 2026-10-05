@@ -80,3 +80,42 @@ test("providerTurnError maps documented status, type and code without reading er
     assert.equal(error.raw, "429 budget refusal timeout");
   }
 });
+
+function failedWith(providerError: AssistantMessage["providerError"]): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorMessage: "irrelevant text",
+    timestamp: 0,
+    ...(providerError ? { providerError } : {}),
+  } as AssistantMessage;
+}
+
+test("gateway model_unavailable is its own code so the turn falls back", () => {
+  assert.equal(providerTurnError(failedWith({ status: 404, type: "model_unavailable" })).code, "model_unavailable");
+});
+
+test("over-window prompts classify as context_too_long from structured signals", () => {
+  assert.equal(providerTurnError(failedWith({ status: 413, type: "request_too_large" })).code, "context_too_long");
+  const anthropic400 = failedWith({ status: 400, type: "invalid_request_error" });
+  assert.equal(
+    providerTurnError(anthropic400, { contextWindow: 200_000, lastInputTokens: 195_000 }).code,
+    "context_too_long",
+  );
+  assert.equal(
+    providerTurnError(anthropic400, { contextWindow: 200_000, lastInputTokens: 20_000 }).code,
+    "bad_request",
+  );
+});

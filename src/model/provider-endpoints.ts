@@ -76,6 +76,10 @@ export function providerBaseUrl(provider: string): string | undefined {
 
 /** Our own signal that the gateway has no route for a model id; typed so callers never match its text. */
 export class GatewayModelUnavailableError extends Error {
+  // Read by the vendored pi-ai's extractProviderError when this is thrown mid-stream, so the failed
+  // message carries providerError {status: 404, type: "model_unavailable"}.
+  readonly status = 404;
+  readonly type = "model_unavailable";
   constructor(modelId: string) {
     super(`Gateway model is unavailable: ${modelId}`);
     this.name = "GatewayModelUnavailableError";

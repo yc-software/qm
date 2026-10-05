@@ -34,6 +34,7 @@ const VERIFICATION_CODES: Record<ProviderErrorCode, keyof typeof VERIFICATION_FA
   model_budget: "quota_or_rate_limit",
   rate_limit: "quota_or_rate_limit",
   not_found: "model_unavailable",
+  model_unavailable: "model_unavailable",
   bad_request: "unsupported_configuration",
   context_too_long: "unsupported_configuration",
   refusal: "provider_failure",

@@ -14,6 +14,7 @@ export type ProviderErrorCode =
   | "auth"
   | "context_too_long"
   | "not_found"
+  | "model_unavailable"
   | "bad_request"
   | "transient"
   | "unknown";
