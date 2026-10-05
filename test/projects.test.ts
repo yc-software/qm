@@ -153,7 +153,6 @@ test("ProjectStore derives membership from the linked channel roster", async () 
   const project = await projects.create({ name: "Derived", ownerId: "owner" });
   const groupRef = projectGroupRef(project.id);
 
-  // no link yet: sync is refused
   assert.equal((await projects.syncChannelMembers(project.id, ["chan-pal"])).status, "forbidden");
 
   await projects.setSlackChannel(project.id, "owner", { channelId: "C1", channelName: "eng" });
@@ -162,24 +161,20 @@ test("ProjectStore derives membership from the linked channel roster", async () 
   assert.ok(synced.status === "ok" && synced.changed);
   assert.notEqual(await projects.version(groupRef), versionLinked, "derived roster change bumps the scope version");
 
-  // union semantics: manual + derived, deduped
   assert.deepEqual(await projects.members(groupRef), ["owner", "chan-pal"]);
   assert.equal(await projects.membership(groupRef, "chan-pal"), true);
   assert.ok((await projects.listForMember("chan-pal")).some((candidate) => candidate.id === project.id));
 
-  // idempotent re-sync: no version churn
   const versionAfter = await projects.version(groupRef);
   const again = await projects.syncChannelMembers(project.id, ["owner", "chan-pal"]);
   assert.ok(again.status === "ok" && !again.changed);
   assert.equal(await projects.version(groupRef), versionAfter);
 
-  // channel rename flows through without a roster-version bump
   const renamed = await projects.syncChannelMembers(project.id, ["owner", "chan-pal"], "eng-renamed");
   assert.ok(renamed.status === "ok" && renamed.changed);
   assert.equal((await projects.slackChannel(groupRef))?.channelName, "eng-renamed");
   assert.equal(await projects.version(groupRef), versionAfter);
 
-  // unlink drops the derived members with the link
   await projects.setSlackChannel(project.id, "owner", null);
   assert.deepEqual(await projects.members(groupRef), ["owner"]);
   assert.equal(await projects.membership(groupRef, "chan-pal"), false);
@@ -277,6 +272,9 @@ test("channel capabilities bridge legacy public rosters but still honor deactiva
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), false);
 });
 
+const send = (base: string, method: string, path: string, body: unknown) =>
+  fetch(`${base}${path}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
 async function listen(server: Server): Promise<string> {
   await new Promise<void>((resolve) => server.listen(0, resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -296,11 +294,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     { principalId: "roster-helper", displayName: "Roster Helper", type: "internal" },
   ]);
 
-  const create = await fetch(`${base}/v1/projects`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "owner", name: "Launch Cohort" }),
-  });
+  const create = await send(base, "POST", `/v1/projects`, { principalId: "owner", name: "Launch Cohort" });
   assert.equal(create.status, 201);
   const project = (
     (await create.json()) as {
@@ -344,48 +338,37 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(pendingBeforeJoin.status, "pending_approval");
   const pendingApproval = pendingBeforeJoin.pendingApprovals?.[0];
   assert.ok(pendingApproval);
-  const denied = await fetch(`${base}/v1/projects/${project.id}/members`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "member", memberId: "outsider" }),
+  const denied = await send(base, "POST", `/v1/projects/${project.id}/members`, {
+    principalId: "member",
+    memberId: "outsider",
   });
   assert.equal(denied.status, 403);
 
   await new Promise((resolve) => setTimeout(resolve, 2));
-  const added = await fetch(`${base}/v1/projects/${project.id}/members`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "owner", memberId: "member" }),
+  const added = await send(base, "POST", `/v1/projects/${project.id}/members`, {
+    principalId: "owner",
+    memberId: "member",
   });
   assert.equal(added.status, 200);
-  const memberAdded = await fetch(`${base}/v1/projects/${project.id}/members`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "member", memberId: "roster-helper" }),
+  const memberAdded = await send(base, "POST", `/v1/projects/${project.id}/members`, {
+    principalId: "member",
+    memberId: "roster-helper",
   });
   assert.equal(memberAdded.status, 200);
-  const memberRemoved = await fetch(`${base}/v1/projects/${project.id}/members/roster-helper`, {
-    method: "DELETE",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "owner" }),
+  const memberRemoved = await send(base, "DELETE", `/v1/projects/${project.id}/members/roster-helper`, {
+    principalId: "owner",
   });
   assert.equal(memberRemoved.status, 200);
-  const renameDenied = await fetch(`${base}/v1/projects/${project.id}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "member", name: "Stolen" }),
+  const renameDenied = await send(base, "PATCH", `/v1/projects/${project.id}`, {
+    principalId: "member",
+    name: "Stolen",
   });
   assert.equal(renameDenied.status, 403);
-  const renameEmpty = await fetch(`${base}/v1/projects/${project.id}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "owner", name: "   " }),
-  });
+  const renameEmpty = await send(base, "PATCH", `/v1/projects/${project.id}`, { principalId: "owner", name: "   " });
   assert.equal(renameEmpty.status, 400);
-  const renamed = await fetch(`${base}/v1/projects/${project.id}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "owner", name: "  Launch Renamed " }),
+  const renamed = await send(base, "PATCH", `/v1/projects/${project.id}`, {
+    principalId: "owner",
+    name: "  Launch Renamed ",
   });
   assert.equal(renamed.status, 200);
   assert.equal(((await renamed.json()) as { project: { name: string } }).project.name, "Launch Renamed");
@@ -500,14 +483,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal((await built.sessions.get(forked.session.id))?.title ?? null, null);
 
   const appendForFork = built.sessions.append.bind(built.sessions);
-  let releaseForkCopy!: () => void;
-  const forkCopyReleased = new Promise<void>((resolve) => {
-    releaseForkCopy = resolve;
-  });
-  let forkCopyStarted!: () => void;
-  const forkCopyStart = new Promise<void>((resolve) => {
-    forkCopyStarted = resolve;
-  });
+  const { promise: forkCopyReleased, resolve: releaseForkCopy } = Promise.withResolvers<void>();
+  const { promise: forkCopyStart, resolve: forkCopyStarted } = Promise.withResolvers<void>();
   let copyingSessionId: string | undefined;
   built.sessions.append = async (lease, entry) => {
     if (!copyingSessionId && lease.sessionId !== first.id && lease.sessionId !== forked.session.id) {
@@ -632,11 +609,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(outsiderSessions.every((session) => (session.title ?? null) === globalTitles.get(session.id)));
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
 
-  const removed = await fetch(`${base}/v1/projects/${project.id}/members/member`, {
-    method: "DELETE",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "owner" }),
-  });
+  const removed = await send(base, "DELETE", `/v1/projects/${project.id}/members/member`, { principalId: "owner" });
   assert.equal(removed.status, 200);
   assert.equal(await built.app.belongsToScope("member", scope), false);
   assert.equal(await built.app.managesScope("member", scope), false);
@@ -682,24 +655,35 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   }
 });
 
-test("a member added mid-turn sees the thread but never the prior roster's output", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-roster-race-")) }));
-  await built.app.upsertDirectory([
-    { principalId: "owner", displayName: "Owner", type: "internal" },
-    { principalId: "late-member", displayName: "Late Member", type: "internal" },
-  ]);
-  const project = await built.app.createProject("owner", "Roster race");
+async function projectWorld(prefix: string, name: string, people: Record<string, string>) {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), prefix)) }));
+  await built.app.upsertDirectory(
+    Object.entries({ owner: "Owner", ...people }).map(([principalId, displayName]) => ({
+      principalId,
+      displayName,
+      type: "internal" as const,
+    })),
+  );
+  const project = await built.app.createProject("owner", name);
   assert.ok(project);
+  const conversation = (threadRef: string) => ({
+    kind: "group" as const,
+    channelRef: projectGroupRef(project.id),
+    threadRef,
+    audience: [],
+  });
+  const say = (actor: string, threadRef: string, text: string) =>
+    built.app.turn({ surface: "web", actor: { externalId: actor }, conversation: conversation(threadRef), text });
+  return { built, project, conversation, say };
+}
 
+test("a member added mid-turn sees the thread but never the prior roster's output", async () => {
+  const { built, project, say } = await projectWorld("project-roster-race-", "Roster race", {
+    "late-member": "Late Member",
+  });
   const originalRecord = built.sessions.recordLlmRequest.bind(built.sessions);
-  let resumeTurn!: () => void;
-  const turnMayResume = new Promise<void>((resolve) => {
-    resumeTurn = resolve;
-  });
-  let markPaused!: () => void;
-  const turnPaused = new Promise<void>((resolve) => {
-    markPaused = resolve;
-  });
+  const { promise: turnMayResume, resolve: resumeTurn } = Promise.withResolvers<void>();
+  const { promise: turnPaused, resolve: markPaused } = Promise.withResolvers<void>();
   let paused = false;
   built.sessions.recordLlmRequest = async (sessionId, record) => {
     const stored = await originalRecord(sessionId, record);
@@ -712,17 +696,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
   };
 
   const threadRef = "web:owner:roster-race";
-  const turn = built.app.turn({
-    surface: "web",
-    actor: { externalId: "owner" },
-    conversation: {
-      kind: "group",
-      channelRef: projectGroupRef(project.id),
-      threadRef,
-      audience: [],
-    },
-    text: "old-roster-prompt",
-  });
+  const turn = say("owner", threadRef, "old-roster-prompt");
 
   try {
     await turnPaused;
@@ -754,52 +728,11 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
   }
 });
 
-test("Project turns rebuild the full thread for a member who joined later", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-tape-tenure-")) }));
-  await built.app.upsertDirectory([
-    { principalId: "owner", displayName: "Owner", type: "internal" },
-    { principalId: "late-member", displayName: "Late Member", type: "internal" },
-  ]);
-  const project = await built.app.createProject("owner", "Tape tenure");
-  assert.ok(project);
-  const threadRef = "web:owner:tape-tenure";
-  const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
-  assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "PRE_JOIN_SECRET" }))
-      .status,
-    "ok",
-  );
-  assert.equal((await built.app.addProjectMember(project.id, "owner", "late-member")).status, "ok");
-  assert.equal(
-    (
-      await built.app.turn({
-        surface: "web",
-        actor: { externalId: "late-member" },
-        conversation,
-        text: "hello after joining",
-      })
-    ).status,
-    "ok",
-  );
-  const session = await built.sessions.getByThread(threadRef);
-  assert.ok(session);
-  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as {
-    tapeMode?: string;
-    messages?: unknown[];
-  };
-  assert.equal(request.tapeMode, "shadow", "roster-scoped history must use the entry reconstruction path");
-  assert.match(JSON.stringify(request.messages), /PRE_JOIN_SECRET/);
-});
-
 test("Auto quarantine honors the current Project roster epoch", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-auto-race-")) }));
-  await built.app.upsertDirectory([
-    { principalId: "owner", displayName: "Owner", type: "internal" },
-    { principalId: "member", displayName: "Member", type: "internal" },
-    { principalId: "late-member", displayName: "Late Member", type: "internal" },
-  ]);
-  const project = await built.app.createProject("owner", "Auto quarantine race");
-  assert.ok(project);
+  const { built, project, conversation } = await projectWorld("project-auto-race-", "Auto quarantine race", {
+    member: "Member",
+    "late-member": "Late Member",
+  });
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
 
   const threadRef = "web:owner:auto-quarantine-race";
@@ -807,12 +740,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
     built.app.turn({
       surface: "web",
       actor: { externalId: "owner" },
-      conversation: {
-        kind: "group",
-        channelRef: projectGroupRef(project.id),
-        threadRef,
-        audience: [],
-      },
+      conversation: conversation(threadRef),
       text: `!security-risk ${marker}`,
       unprompted: true,
       ...(overheard
@@ -830,12 +758,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
   const denied = await built.app.turn({
     surface: "web",
     actor: { externalId: "owner" },
-    conversation: {
-      kind: "group",
-      channelRef: projectGroupRef(project.id),
-      threadRef,
-      audience: [],
-    },
+    conversation: conversation(threadRef),
     text: "!security-risk initial-marker",
     unprompted: true,
     approval: { requestId: quarantined.pendingApprovals![0]!.requestId, approved: false },
@@ -878,76 +801,44 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
   }
 });
 
-test("a member added to a Project inherits the chats that predate them", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-backfill-")) }));
-  await built.app.upsertDirectory([
-    { principalId: "owner", displayName: "Owner", type: "internal" },
-    { principalId: "member", displayName: "Member", type: "internal" },
-  ]);
-  const project = await built.app.createProject("owner", "Shared history");
-  assert.ok(project);
+test("a member added to a Project inherits the chats that predate them, and turns rebuild the full thread", async () => {
+  const { built, project, say } = await projectWorld("project-backfill-", "Shared history", { member: "Member" });
   const threadRef = "web:owner:pre-join";
-  const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
-  assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "BEFORE_JOIN_TOPIC" }))
-      .status,
-    "ok",
-  );
+  assert.equal((await say("owner", threadRef, "BEFORE_JOIN_TOPIC")).status, "ok");
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   await built.sessions.updateTitle(session.id, "Pre-join chat");
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
 
-  const listed = await built.app.listSessions("member");
-  const row = listed.find((entry) => entry.id === session.id);
+  const row = (await built.app.listSessions("member")).find((entry) => entry.id === session.id);
   assert.ok(row, "a chat that predates the member must appear in their conversation list");
   assert.equal(row.title, "Pre-join chat", "the joiner sees the chat's real title, not a blanked one");
   const view = await built.app.getSessionForViewer(session.id, "member");
   assert.match(JSON.stringify(view?.entries), /BEFORE_JOIN_TOPIC/, "pre-join transcript must be readable");
 
-  assert.equal(
-    (
-      await built.app.turn({
-        surface: "web",
-        actor: { externalId: "member" },
-        conversation,
-        text: "hello after joining",
-      })
-    ).status,
-    "ok",
-  );
-  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as { messages?: unknown[] };
+  assert.equal((await say("member", threadRef, "hello after joining")).status, "ok");
+  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as {
+    tapeMode?: string;
+    messages?: unknown[];
+  };
+  assert.equal(request.tapeMode, "shadow", "roster-scoped history must use the entry reconstruction path");
   assert.match(JSON.stringify(request.messages), /BEFORE_JOIN_TOPIC/, "the agent keeps the project's full history");
 });
 
 test("leaving a Project still cuts off everything after the member left", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-departure-")) }));
-  await built.app.upsertDirectory([
-    { principalId: "owner", displayName: "Owner", type: "internal" },
-    { principalId: "member", displayName: "Member", type: "internal" },
-  ]);
-  const project = await built.app.createProject("owner", "Departures");
-  assert.ok(project);
+  const { built, project, say } = await projectWorld("project-departure-", "Departures", { member: "Member" });
   const threadRef = "web:owner:departure";
-  const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
-  assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "WHILE_A_MEMBER" }))
-      .status,
-    "ok",
-  );
+  assert.equal((await say("owner", threadRef, "WHILE_A_MEMBER")).status, "ok");
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
-  assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "AFTER_THEY_LEFT" }))
-      .status,
-    "ok",
-  );
+  assert.equal((await say("owner", threadRef, "AFTER_THEY_LEFT")).status, "ok");
   assert.equal(await built.app.getSessionForViewer(session.id, "member"), null);
   assert.deepEqual(await built.app.listSessions("member"), []);
 });
+
 test("linking a just-created channel refreshes the surface directory and retries", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-fresh-chan-")) }));
   await built.app.upsertDirectory([{ principalId: "owner", displayName: "Owner", type: "internal" }]);
@@ -957,7 +848,6 @@ test("linking a just-created channel refreshes the surface directory and retries
   );
   const project = await built.app.createProject("owner", "Fresh");
   assert.ok(project);
-  // Fulfil the on-demand sync the way the Slack surface would: push the new channel.
   const unlisten = built.app.onContextRequestCreated((r) => {
     if (!r.query.syncDirectory) return;
     void built.app
@@ -1006,28 +896,15 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   ]);
 
   const put = (id: string, principalId: string, channel: string) =>
-    fetch(`${base}/v1/projects/${id}/slack-channel`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId, channel }),
-    });
+    send(base, "PUT", `/v1/projects/${id}/slack-channel`, { principalId, channel });
 
-  const create = await fetch(`${base}/v1/projects`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "owner", name: "Linked" }),
-  });
+  const create = await send(base, "POST", `/v1/projects`, { principalId: "owner", name: "Linked" });
   assert.equal(create.status, 201);
   const project = ((await create.json()) as { project: { id: string } }).project;
   const groupRef = projectGroupRef(project.id);
   const scope = projectScopeId(project.id);
-  await fetch(`${base}/v1/projects/${project.id}/members`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "owner", memberId: "member" }),
-  });
+  await send(base, "POST", `/v1/projects/${project.id}/members`, { principalId: "owner", memberId: "member" });
 
-  // a session predating the link, so channel-derived members should inherit it
   await built.app.turn({
     surface: "web",
     actor: { externalId: "owner" },
@@ -1035,20 +912,16 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     text: "before the link",
   });
 
-  // a non-member of the project can't link even a channel they can see
   assert.equal((await put(project.id, "outsider", "eng")).status, 403);
-  // a private channel the actor can't see reads as invalid
   assert.equal((await put(project.id, "owner", "war-room")).status, 400);
   assert.equal((await put(project.id, "owner", "no-such-channel")).status, 400);
   assert.equal((await put("missing", "owner", "eng")).status, 404);
 
-  // a channel that already has its own workspace can't become a home channel
   await built.sessions.getOrCreateByThread("ch:C-BUSY:1", "channel", "channel:C-BUSY", "busy", "slack");
   const busy = await put(project.id, "owner", "busy");
   assert.equal(busy.status, 409);
   assert.equal(((await busy.json()) as { error: string }).error, "channel_in_use");
 
-  // linking by #name resolves through the directory and pulls in the channel roster
   const linked = await put(project.id, "owner", "#eng");
   assert.equal(linked.status, 200);
   const linkedProject = (
@@ -1066,10 +939,8 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.equal(linkedProject.members.find((m) => m.principalId === "chan-pal")?.viaChannel, true);
   assert.equal(linkedProject.members.find((m) => m.principalId === "member")?.viaChannel, undefined);
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), true);
-  // ...including the conversations that predate the link
   assert.ok((await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
 
-  // the roster keeps following the channel through directory syncs
   await built.app.upsertChannels(channels, [
     { channelId: "C-SECRET", principalId: "member" },
     { channelId: "C-ENG", principalId: "owner" },
@@ -1086,21 +957,13 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     "rejoining the channel rejoins the project",
   );
 
-  // manual members never ride the channel roster
   assert.equal(await built.projects.membership(groupRef, "member"), true);
 
-  // unlink: project members only; derived members leave with the link
-  const outsiderUnlink = await fetch(`${base}/v1/projects/${project.id}/slack-channel`, {
-    method: "DELETE",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "outsider" }),
+  const outsiderUnlink = await send(base, "DELETE", `/v1/projects/${project.id}/slack-channel`, {
+    principalId: "outsider",
   });
   assert.equal(outsiderUnlink.status, 403);
-  const unlink = await fetch(`${base}/v1/projects/${project.id}/slack-channel`, {
-    method: "DELETE",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principalId: "member" }),
-  });
+  const unlink = await send(base, "DELETE", `/v1/projects/${project.id}/slack-channel`, { principalId: "member" });
   assert.equal(unlink.status, 200);
   assert.equal(await built.projects.slackChannel(groupRef), undefined);
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), false);

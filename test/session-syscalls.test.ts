@@ -29,13 +29,21 @@ const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
 const conversation: Conversation = { kind: "dm", threadRef: "slack:dm:D1", audience: [actor] };
 
+type Syscalls = ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
+type Run = NonNullable<Awaited<ReturnType<RunStore["get"]>>>;
+
 interface Rig {
   mailbox: SessionMailbox;
   sessions: SessionStore;
   runs: RunStore;
   signals: ReturnType<typeof createMemoryRunSignalStore>;
   room: Session;
-  syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
+  syscallsFor(session: Session): Syscalls;
+  openChild(input: Parameters<Syscalls["open"]>[0], api?: Syscalls): Promise<Session>;
+  finish(run: { id: string }, result: Parameters<RunStore["complete"]>[2]): Promise<Run>;
+  settle(threadRef: string): Promise<void>;
+  say(sessionId: string, text: string, scopeLabel?: ScopeId): Promise<{ seq: number }>;
+  deps: Parameters<typeof deliverSubagentMail>[0];
 }
 
 async function rig(opts?: {
@@ -69,13 +77,37 @@ async function rig(opts?: {
       timezone: "America/Los_Angeles",
     } as Pick<OrchestratorInput, "surface" | "conversation" | "actor" | "deliveryTarget" | "timezone" | "readOnly">,
   });
+  const syscallsFor = (session: Session) => factory.forTurn(binding(session));
+  const finish = async (run: { id: string }, result: Parameters<RunStore["complete"]>[2]) => {
+    const claimed = await runs.claimById(run.id, "worker", 60_000);
+    assert.ok(claimed);
+    await runs.complete(run.id, claimed.leaseToken!, result);
+    return (await runs.get(run.id))!;
+  };
   return {
     mailbox,
     sessions,
     runs,
     signals,
     room,
-    syscallsFor: (session) => factory.forTurn(binding(session)),
+    syscallsFor,
+    openChild: async (input, api = syscallsFor(room)) => {
+      const out = await api.open(input);
+      assert.ok(out.ok, JSON.stringify(out));
+      return freshSession(sessions, out.sessionId);
+    },
+    finish,
+    settle: async (threadRef) => {
+      for (const pending of await runs.inFlightForThread(threadRef)) await finish(pending, { status: "silent" });
+    },
+    say: async (sessionId, text, scopeLabel = scope) => {
+      const { lease } = await sessions.acquireLease(sessionId, "turn");
+      assert.ok(lease);
+      const entry = await sessions.append(lease, { type: "assistant", payload: { text }, scopeLabel });
+      await sessions.releaseLease(lease);
+      return entry;
+    },
+    deps: { mailbox, sessions, runs, signals, maxAttempts: 3, delegationEnabled: async () => true },
   };
 }
 
@@ -122,18 +154,14 @@ for (const explicit of [
       },
     });
     const syscalls = r.syscallsFor(r.room);
-    const opened = await syscalls.open({ task: "initial task", ...explicit });
-    assert.ok(opened.ok);
-    const child = await freshSession(r.sessions, opened.sessionId);
+    const child = await r.openChild({ task: "initial task", ...explicit }, syscalls);
     const first = (await r.runs.inFlightForThread(child.threadRef))[0]!;
     for (const key of runtimeKeys) {
       assert.equal(child.spawnMeta?.[key], explicit[key as keyof typeof explicit]);
       assert.equal(Object.hasOwn(child.spawnMeta!, key), Object.hasOwn(explicit, key));
       assert.equal(first.request[key], { ...defaults, ...explicit }[key]);
     }
-    const claimed = await r.runs.claimById(first.id, "worker", 60_000);
-    assert.ok(claimed);
-    await r.runs.complete(first.id, claimed.leaseToken!, { status: "ok", reply: "done" });
+    await r.finish(first, { status: "ok", reply: "done" });
     defaults = { model: "new-default", harness: "claude", thinkingLevel: "medium", fastMode: false };
     const followup = await syscalls.write({ followup: true, target: child.id, text: "next task" });
     assert.ok(followup.ok);
@@ -179,36 +207,21 @@ test("followup tasks cannot turn an ordinary session into a child", async () => 
 
 test("nested sessions share the same tree without an artificial depth limit", async () => {
   const r = await rig();
-  const first = await r.syscallsFor(r.room).open({ task: "level one" });
-  assert.ok(first.ok);
-  const child = await freshSession(r.sessions, first.sessionId);
-  const second = await r.syscallsFor(child).open({ task: "level two" });
-  assert.ok(second.ok);
-  const grandchild = await freshSession(r.sessions, second.sessionId);
+  const child = await r.openChild({ task: "level one" });
+  const grandchild = await r.openChild({ task: "level two" }, r.syscallsFor(child));
   const third = await r.syscallsFor(grandchild).open({ task: "level three" });
   assert.ok(third.ok);
-});
-
-test("open refuses when the tree's live-run slots are used up", async () => {
-  const r = await rig({ treeRunCap: 1 });
-  const first = await r.syscallsFor(r.room).open({ task: "one" });
-  assert.ok(first.ok);
-  const second = await r.syscallsFor(r.room).open({ task: "two" });
-  assert.ok(!second.ok);
-  assert.match(second.message, /slots/);
 });
 
 test("write queues separately from a running child and interrupts explicitly", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);
-  const opened = await syscalls.open({ task: "watch the deploy", name: "watch_deploy" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "watch the deploy", name: "watch_deploy" }, syscalls);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
   assert.ok(claimed);
 
-  const steered = await syscalls.write({ followup: true, target: opened.sessionId, text: "focus on the canary" });
+  const steered = await syscalls.write({ followup: true, target: child.id, text: "focus on the canary" });
   assert.ok(steered.ok);
   assert.equal(steered.delivered, "queued_turn");
   const pending = await r.signals.takePending(queued.id);
@@ -217,7 +230,7 @@ test("write queues separately from a running child and interrupts explicitly", a
   assert.equal(followup.request.origin.kind, "automation");
   assert.match(followup.request.text, /focus on the canary/);
 
-  const interrupted = await syscalls.write({ target: opened.sessionId, interrupt: true });
+  const interrupted = await syscalls.write({ target: child.id, interrupt: true });
   assert.ok(interrupted.ok);
   assert.equal(interrupted.delivered, "interrupted");
   assert.equal((await r.signals.takePending(queued.id))[0]!.kind, "abort");
@@ -254,13 +267,8 @@ test("write refuses self, cross-scope, and nonparticipant targets", async () => 
 test("read lists children with status and renders a child's recent tape", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);
-  const opened = await syscalls.open({ task: "research callers", name: "research_callers" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  assert.ok(lease);
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "found 3 call sites" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const child = await r.openChild({ task: "research callers", name: "research_callers" }, syscalls);
+  await r.say(child.id, "found 3 call sites");
 
   const list = await syscalls.read({});
   assert.ok(list.ok && list.mode === "children");
@@ -276,18 +284,11 @@ test("read lists children with status and renders a child's recent tape", async 
 
 test("a finished child durably wakes its Slack parent exactly once and leaves the result in its mailbox", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "summarize the logs" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "summarize the logs" });
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "logs are clean" });
-  const finished = await r.runs.get(queued.id);
+  const finished = await r.finish(queued, { status: "ok", reply: "logs are clean" });
 
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished!,
-  );
+  await deliverSubagentMail(r.deps, finished);
   const mail = await r.mailbox.pending(r.room.id);
   assert.equal(mail.length, 1);
   const request = mail[0]!;
@@ -296,10 +297,7 @@ test("a finished child durably wakes its Slack parent exactly once and leaves th
   assert.match(request.text, /kind="final_answer"/);
   assert.match(request.text, /logs are clean/);
 
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished!,
-  );
+  await deliverSubagentMail(r.deps, finished);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
@@ -310,21 +308,12 @@ test("a finished child durably wakes its Slack parent exactly once and leaves th
 
 test("a silent child mails a completed-without-reply notice without borrowing transcript text", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "quiet work" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "halfway there" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const child = await r.openChild({ task: "quiet work" });
+  await r.say(child.id, "halfway there");
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "silent" });
-  const finished = await r.runs.get(queued.id);
+  const finished = await r.finish(queued, { status: "silent" });
 
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished!,
-  );
+  await deliverSubagentMail(r.deps, finished);
   const mail = await r.mailbox.pending(r.room.id);
   assert.equal(mail.length, 1);
   assert.match(mail[0]!.text, /kind="no_reply"/);
@@ -333,19 +322,12 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
 
 test("a detached child sends no mail; any in-scope session can still be read", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "detachable work" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "detachable work" });
   await r.sessions.setParentSession(child.id, null);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done alone" });
-  const finished = await r.runs.get(queued.id);
+  const finished = await r.finish(queued, { status: "ok", reply: "done alone" });
 
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished!,
-  );
+  await deliverSubagentMail(r.deps, finished);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 
   const read = await r.syscallsFor(r.room).read({ target: child.id });
@@ -366,19 +348,21 @@ test("mail envelope attributes stay well-formed and machine-parseable when the t
   assert.equal(head[3], "final_answer");
 });
 
-test("concurrent opens and re-tasking share one admission limit", async () => {
+test("concurrent opens and re-tasking share one admission limit and refuse once the slots are used up", async () => {
   const r = await rig({ treeRunCap: 1 });
   const opened = await Promise.all([
     r.syscallsFor(r.room).open({ task: "one" }),
     r.syscallsFor(r.room).open({ task: "two" }),
   ]);
   assert.equal(opened.filter((out) => out.ok).length, 1);
+  const refused = opened.find((out) => !out.ok)!;
+  assert.ok(!refused.ok);
+  assert.match(refused.message, /slots/);
   const first = opened.find((out) => out.ok)!;
   assert.ok(first.ok);
   const child = await freshSession(r.sessions, first.sessionId);
   const [queued] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(queued!.id, "worker", 30_000);
-  await r.runs.complete(queued!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await r.finish(queued!, { status: "ok", reply: "done" });
   const second = await r.syscallsFor(r.room).open({ task: "another" });
   assert.ok(second.ok);
   const rewritten = await r.syscallsFor(r.room).write({ followup: true, target: child.id, text: "again" });
@@ -388,14 +372,7 @@ test("concurrent opens and re-tasking share one admission limit", async () => {
 test("session reads hide history outside the viewer's participant tenure", async () => {
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:private-old", "dm", scope);
-  const { lease } = await r.sessions.acquireLease(target.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "assistant",
-    payload: { text: "hidden-before-membership" },
-    scopeLabel: scope,
-  });
-  await r.sessions.releaseLease(lease);
+  await r.say(target.id, "hidden-before-membership");
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
   assert.ok(view.ok && view.mode === "tape");
@@ -409,18 +386,9 @@ test("shared session reads require every audience member to see each entry", asy
   const shared = await r.sessions.getOrCreateByThread("group:G1", "group", sharedScope);
   await r.sessions.addParticipant(shared.id, actor.id);
   await r.sessions.addParticipant(shared.id, other.id);
-  const { lease } = await r.sessions.acquireLease(shared.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, { type: "assistant", payload: { text: "private-only" }, scopeLabel: scope });
-  await r.sessions.append(lease, { type: "assistant", payload: { text: "shared-visible" }, scopeLabel: sharedScope });
-  await r.sessions.releaseLease(lease);
-  const factory = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
-    maxAttempts: 3,
-  });
+  await r.say(shared.id, "private-only");
+  await r.say(shared.id, "shared-visible", sharedScope);
+  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const tool = factory.forTurn({
     session: shared,
     scopeId: sharedScope,
@@ -439,13 +407,7 @@ test("shared session reads require every audience member to see each entry", asy
 
 test("child runs retain the managed roster and read-only floor", async () => {
   const r = await rig();
-  const tool = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
-    maxAttempts: 3,
-  }).forTurn({
+  const tool = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
     session: r.room,
     scopeId: scope,
     request: {
@@ -457,9 +419,7 @@ test("child runs retain the managed roster and read-only floor", async () => {
       sessionParticipantIds: [actor.id],
     },
   });
-  const out = await tool.open({ task: "inspect", readOnly: false });
-  assert.ok(out.ok);
-  const child = await freshSession(r.sessions, out.sessionId);
+  const child = await r.openChild({ task: "inspect", readOnly: false }, tool);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   assert.equal(run!.request.readOnly, true);
   assert.equal(run!.request.scopeVersion, "roster-version");
@@ -468,12 +428,9 @@ test("child runs retain the managed roster and read-only floor", async () => {
 
 test("terminal children remain recoverable until their return is acknowledged", async () => {
   const r = await rig();
-  const out = await r.syscallsFor(r.room).open({ task: "finish" });
-  assert.ok(out.ok);
-  const child = await freshSession(r.sessions, out.sessionId);
+  const child = await r.openChild({ task: "finish" });
   const [queued] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(queued!.id, "worker", 30_000);
-  await r.runs.complete(queued!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await r.finish(queued!, { status: "ok", reply: "done" });
   const [pending] = await r.runs.pendingReturns();
   assert.equal(pending!.id, queued!.id);
   let failed = false;
@@ -496,14 +453,8 @@ test("terminal children remain recoverable until their return is acknowledged", 
   );
   assert.equal(failed, true);
   assert.equal((await r.runs.pendingReturns()).length, 1);
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    pending!,
-  );
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    pending!,
-  );
+  await deliverSubagentMail(r.deps, pending!);
+  await deliverSubagentMail(r.deps, pending!);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
@@ -511,13 +462,7 @@ test("terminal children remain recoverable until their return is acknowledged", 
   assert.match(wakes[0]!.request.text, /Check internal messages/);
   assert.equal(wakes[0]!.request.surfaceTools, true);
   await r.mailbox.acknowledge(r.room.id, [`subagent-mail-${pending!.id}`]);
-  assert.equal(
-    await deliverSubagentMail(
-      { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-      pending!,
-    ),
-    true,
-  );
+  assert.equal(await deliverSubagentMail(r.deps, pending!), true);
   await r.runs.markReturned(pending!.id);
   assert.deepEqual(await r.runs.pendingReturns(), []);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
@@ -525,22 +470,12 @@ test("terminal children remain recoverable until their return is acknowledged", 
 
 test("adopting into a fresh web parent never delivers to the old parent's surface", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "work" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "work" });
   const destination = await r.sessions.getOrCreateByThread("web:U1:new-parent", "dm", scope, undefined, "slack");
   await r.sessions.setParentSession(child.id, destination.id);
   const [queued] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(queued!.id, "worker", 30_000);
-  await r.runs.complete(queued!.id, claimed!.leaseToken!, { status: "ok", reply: "ready" });
-  const finished = (await r.runs.get(queued!.id))!;
-  await assert.rejects(
-    deliverSubagentMail(
-      { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-      finished,
-    ),
-    /verified runtime context/,
-  );
+  const finished = await r.finish(queued!, { status: "ok", reply: "ready" });
+  await assert.rejects(deliverSubagentMail(r.deps, finished), /verified runtime context/);
   await r.runs.enqueue({
     sessionId: destination.threadRef,
     request: {
@@ -552,10 +487,7 @@ test("adopting into a fresh web parent never delivers to the old parent's surfac
       text: "hello",
     },
   });
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished,
-  );
+  await deliverSubagentMail(r.deps, finished);
   const [mail] = await r.mailbox.pending(destination.id);
   assert.equal(mail!.recipientId, destination.id);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 0);
@@ -569,8 +501,7 @@ test("return pagination reaches later children while earlier returns remain bloc
       maxAttempts: 3,
       request: { actor, conversation, text: "finish", origin: { kind: "direct" } },
     });
-    const claimed = await r.runs.claimById(run.id, "worker", 30_000);
-    await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+    await r.finish(run, { status: "ok", reply: "done" });
   }
   const first = await r.runs.pendingReturns(100);
   const next = await r.runs.pendingReturns(100, first.at(-1)!.id);
@@ -610,18 +541,10 @@ test("ordinary-session messages queue privately without steering an externally d
 
 test("read-only callers cannot steer writable children and preserve the floor when queuing", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "work" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "work" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
-  const api = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
-    maxAttempts: 3,
-  }).forTurn({
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
     session: r.room,
     scopeId: scope,
     request: { actor, conversation, readOnly: true },
@@ -637,16 +560,11 @@ test("read-only callers cannot steer writable children and preserve the floor wh
 
 test("writes revalidate access even while a target is running", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "work" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "work" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   await r.runs.claimById(run!.id, "worker", 60_000);
   const api = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
+    ...r,
     maxAttempts: 3,
     authorize: async (session) => session.id !== child.id,
   }).forTurn({ session: r.room, scopeId: scope, request: { actor, conversation } });
@@ -656,12 +574,9 @@ test("writes revalidate access even while a target is running", async () => {
 
 test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "private research" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "private research" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "private result" });
+  await r.finish(run!, { status: "ok", reply: "private result" });
   let expanded = true;
   let attempts = 0;
   const recover = async () => {
@@ -712,19 +627,11 @@ test("completion cannot expand the finished run's audience and retries after its
 
 test("private session replies stay read-only, queue behind running work, and do not return to a parent", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "work" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "work" });
   const initial = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   assert.equal(initial.request.origin.kind, "automation");
   await r.runs.claimById(initial.id, "worker", 30_000);
-  const factory = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
-    maxAttempts: 3,
-  });
+  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const privateCaller = factory.forTurn({
     session: r.room,
     scopeId: scope,
@@ -754,13 +661,7 @@ test("session tools cannot bypass swarm worker admission or message budgets", as
   assert.equal((await r.syscallsFor(worker).open({ task: "escape" })).ok, false);
   assert.equal((await r.syscallsFor(worker).write({ target: r.room.id, text: "escape" })).ok, false);
   assert.equal((await r.syscallsFor(r.room).write({ target: worker.id, text: "escape" })).ok, false);
-  const factory = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
-    maxAttempts: 3,
-  });
+  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const rootNotification = factory.forTurn({
     session: r.room,
     scopeId: scope,
@@ -842,8 +743,7 @@ test("siblings and children send durable deduplicated messages without new turns
     sessionId: r.room.threadRef,
     request: { actor, conversation, origin: { kind: "direct" }, text: "parent task" },
   });
-  const claimed = await r.runs.claimById(run.id, "parent-worker", 30_000);
-  await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "ready" });
+  await r.finish(run, { status: "ok", reply: "ready" });
   assert.equal((await sender.write({ target: "parent", text: "progress" })).ok, true);
   assert.equal((await parent.receive!()).length, 1);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
@@ -924,19 +824,10 @@ test("queued results recheck source-entry visibility after participant tenure ch
     scopeId: sharedScope,
     request: { actor, conversation: sharedConversation },
   });
-  const opened = await api.open({ task: "shared result" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id);
-  const entry = await r.sessions.append(lease!, {
-    type: "assistant",
-    payload: { text: "OLD_PRIVATE_RESULT" },
-    scopeLabel: sharedScope,
-  });
-  await r.sessions.releaseLease(lease!);
+  const child = await r.openChild({ task: "shared result" }, api);
+  const entry = await r.say(child.id, "OLD_PRIVATE_RESULT", sharedScope);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, {
+  await r.finish(run!, {
     status: "ok",
     reply: "OLD_PRIVATE_RESULT",
     sourceAssistantEntrySeq: entry.seq,
@@ -961,9 +852,7 @@ test("enabled coordinators and their children can delegate", async () => {
     scopeId: scope,
     request: { actor, conversation, surface: "slack" },
   });
-  const opened = await api.open({ task: "Inspect the logs" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "Inspect the logs" }, api);
   const childApi = factory.forTurn({
     session: child,
     scopeId: scope,
@@ -993,21 +882,13 @@ test("completion wakes preserve a spine trigger's delivery destination", async (
     scopeId: scope,
     request: { ...parent.run.request, runId: parent.run.id },
   });
-  const opened = await api.open({ task: "inspect logs" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "inspect logs" }, api);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await r.finish(queued, { status: "ok", reply: "done" });
   for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
-    const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
-    assert.ok(parentTurn);
-    await r.runs.complete(pending.id, parentTurn.leaseToken!, { status: "silent" });
+    await r.finish(pending, { status: "silent" });
   }
-  await deliverSubagentMail(
-    { ...r, maxAttempts: 3, delegationEnabled: async () => true },
-    (await r.runs.get(queued.id))!,
-  );
+  await deliverSubagentMail(r.deps, (await r.runs.get(queued.id))!);
   const wake = (await r.runs.inFlightForThread(r.room.threadRef)).find((run) => run.id !== parent.run.id)!;
   assert.ok(wake);
   assert.equal(wake.request.surfaceTools, true);
@@ -1030,16 +911,13 @@ test("delegated automation retains explicit unattended grants and owner-keychain
       unattendedGrants: ["admin.sessions.read"],
     },
   });
-  const opened = await api.open({ task: "prepare the scheduled report" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "prepare the scheduled report" }, api);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   assert.deepEqual(queued.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(queued.request.origin.kind === "automation");
   assert.equal(queued.request.origin.useOwnerKeychain, true);
   assert.equal(queued.request.origin.ownerResourcesRequireOpen, true);
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await r.finish(queued, { status: "ok", reply: "done" });
   assert.ok((await api.write({ target: child.id, text: "finish the report", followup: true })).ok);
   const followup = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   assert.deepEqual(followup.request.unattendedGrants, ["admin.sessions.read"]);
@@ -1062,12 +940,9 @@ test("follow-up tasks cannot inherit a prior caller's automation authority", asy
       unattendedGrants: ["admin.sessions.read"],
     },
   });
-  const opened = await privileged.open({ task: "scheduled report" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "scheduled report" }, privileged);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await r.finish(queued, { status: "ok", reply: "done" });
   assert.ok(
     (await r.syscallsFor(r.room).write({ target: child.id, text: "unprivileged follow-up", followup: true })).ok,
   );
@@ -1091,12 +966,9 @@ test("coordinator delegation requires an explicit actor rollout", () => {
 
 test("disabled coordinators retain passive completion mail without a wake", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "inspect logs" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "inspect logs" });
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await r.finish(queued, { status: "ok", reply: "done" });
   await deliverSubagentMail(
     { ...r, maxAttempts: 3, delegationEnabled: async () => false },
     (await r.runs.get(queued.id))!,
@@ -1125,9 +997,7 @@ async function delegatedHumanRig(context: Partial<OrchestratorInput> = {}) {
     scopeId: scope,
     request: { ...parent.run.request, runId: parent.run.id },
   });
-  const opened = await api.open({ task: "inspect" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "inspect" }, api);
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   return { ...r, parent: parent.run, child, run, api };
 }
@@ -1201,9 +1071,7 @@ test("a later participant cannot change a completion's actor, rollout, destinati
     scopeId: sharedScope,
     request: { ...parent.run.request, runId: parent.run.id },
   });
-  const opened = await api.open({ task: "inspect" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "inspect" }, api);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   await r.runs.enqueue({
     sessionId: room.threadRef,
@@ -1217,12 +1085,9 @@ test("a later participant cannot change a completion's actor, rollout, destinati
       text: "unrelated",
     },
   });
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await r.finish(queued, { status: "ok", reply: "done" });
   for (const pending of await r.runs.inFlightForThread(room.threadRef)) {
-    const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
-    assert.ok(parentTurn);
-    await r.runs.complete(pending.id, parentTurn.leaseToken!, { status: "silent" });
+    await r.finish(pending, { status: "silent" });
   }
   await deliverSubagentMail(
     { ...r, maxAttempts: 3, delegationEnabled: async (id) => id === actor.id },
@@ -1241,14 +1106,9 @@ test("completion wakes preserve live authorization for subsequent delegated step
   const claimed = await r.runs.claimById(r.run.id, "w1", 60000);
   await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "step one" });
   for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
-    const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
-    assert.ok(parentTurn);
-    await r.runs.complete(pending.id, parentTurn.leaseToken!, { status: "silent" });
+    await r.finish(pending, { status: "silent" });
   }
-  await deliverSubagentMail(
-    { ...r, maxAttempts: 3, delegationEnabled: async () => true },
-    (await r.runs.get(r.run.id))!,
-  );
+  await deliverSubagentMail(r.deps, (await r.runs.get(r.run.id))!);
   const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
   assert.ok(wake);
   assert.equal(wake.request.origin.kind, "automation");
@@ -1274,15 +1134,11 @@ test("completed children do not fill a working parent's run slots and consumed r
     request: { actor, conversation, surface: "slack", origin: { kind: "human" }, text: "work" },
   });
   await r.runs.claimById(parent.run.id, "parent", 60_000);
-  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+  const deps = r.deps;
   for (let i = 0; i < 12; i++) {
-    const opened = await r.syscallsFor(r.room).open({ task: `work ${i}` });
-    assert.ok(opened.ok);
-    const child = await freshSession(r.sessions, opened.sessionId);
+    const child = await r.openChild({ task: `work ${i}` });
     const [run] = await r.runs.inFlightForThread(child.threadRef);
-    const claimed = await r.runs.claimById(run!.id, "child", 60_000);
-    await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: `result ${i}` });
-    const finished = (await r.runs.get(run!.id))!;
+    const finished = await r.finish(run!, { status: "ok", reply: `result ${i}` });
     assert.equal(await deliverSubagentMail(deps, finished), false);
     assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
   }
@@ -1306,7 +1162,7 @@ test("completed children do not fill a working parent's run slots and consumed r
 
 test("unread completions survive parent shutdown and share one pending wakeup", async () => {
   const r = await rig();
-  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+  const deps = r.deps;
   const parent = await r.runs.enqueue({
     sessionId: r.room.threadRef,
     request: { actor, conversation, surface: "slack", origin: { kind: "human" }, text: "work" },
@@ -1314,12 +1170,9 @@ test("unread completions survive parent shutdown and share one pending wakeup", 
   const active = await r.runs.claimById(parent.run.id, "parent", 60_000);
   assert.deepEqual(await r.syscallsFor(r.room).receive!(), []);
   for (let i = 0; i < 3; i++) {
-    const opened = await r.syscallsFor(r.room).open({ task: `late result ${i}` });
-    assert.ok(opened.ok);
-    const child = await freshSession(r.sessions, opened.sessionId);
+    const child = await r.openChild({ task: `late result ${i}` });
     const [run] = await r.runs.inFlightForThread(child.threadRef);
-    const claimed = await r.runs.claimById(run!.id, "child", 60_000);
-    await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: `late ${i}` });
+    await r.finish(run!, { status: "ok", reply: `late ${i}` });
     assert.equal(await deliverSubagentMail(deps, (await r.runs.get(run!.id))!), false);
   }
   await r.runs.complete(parent.run.id, active!.leaseToken!, { status: "silent" });
@@ -1342,14 +1195,10 @@ test("unread completions survive parent shutdown and share one pending wakeup", 
 
 test("legacy returned children with consumed mail release queued wakeups without cancelling user work", async () => {
   const r = await rig();
-  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
-  const opened = await r.syscallsFor(r.room).open({ task: "old completion" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const deps = r.deps;
+  const child = await r.openChild({ task: "old completion" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "child", 60_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  const finished = (await r.runs.get(run!.id))!;
+  const finished = await r.finish(run!, { status: "ok", reply: "done" });
   assert.equal(await deliverSubagentMail(deps, finished), false);
   await r.runs.markReturned(finished.id);
   const user = await r.runs.enqueue({
@@ -1372,14 +1221,10 @@ test("legacy returned children with consumed mail release queued wakeups without
 
 test("a completion wake that consumed mail and then retries retains its turn and delegation authority", async () => {
   const r = await rig();
-  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
-  const opened = await r.syscallsFor(r.room).open({ task: "finish" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const deps = r.deps;
+  const child = await r.openChild({ task: "finish" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "child", 60_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  const finished = (await r.runs.get(run!.id))!;
+  const finished = await r.finish(run!, { status: "ok", reply: "done" });
   await deliverSubagentMail(deps, finished);
   const wake = (await r.runs.inFlightForThread(r.room.threadRef))[0]!;
   const running = await r.runs.claimById(wake.id, "parent", 60_000);
@@ -1435,7 +1280,7 @@ for (const addressed of [true, false]) {
     const child = await r.runs.claimById(r.run.id, "child", 60000);
     await r.runs.complete(r.run.id, child!.leaseToken!, { status: "ok", reply: "verified result" });
     const result = (await r.runs.get(r.run.id))!;
-    await deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => true }, result);
+    await deliverSubagentMail(r.deps, result);
     const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
     assert.ok(wake);
     for (const [key, value] of Object.entries(inherited)) {
@@ -1456,9 +1301,7 @@ for (const addressed of [true, false]) {
 
 test("nested delegated work retains the reminder destination without exposing surface tools", async () => {
   const r = await rig();
-  const first = await r.syscallsFor(r.room).open({ task: "analyze and remind me" });
-  assert.ok(first.ok);
-  const child = await freshSession(r.sessions, first.sessionId);
+  const child = await r.openChild({ task: "analyze and remind me" });
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const second = await factory
@@ -1496,9 +1339,7 @@ for (const status of ["ok", "pending_approval"] as const) {
   test(`child ${status} forwards files once without creating approval deliveries`, async () => {
     const r = await rig();
     const deliveries = createDeliveryStore();
-    const out = await r.syscallsFor(r.room).open({ task: "prepare the report" });
-    assert.ok(out.ok);
-    const child = await freshSession(r.sessions, out.sessionId);
+    const child = await r.openChild({ task: "prepare the report" });
     const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
     const claimed = await r.runs.claimById(run.id, "worker", 60_000);
     const attachment = { name: "report.pdf", blobId: "report", mimetype: "application/pdf", sizeBytes: 42 };
@@ -1524,12 +1365,9 @@ for (const status of ["ok", "pending_approval"] as const) {
 test("file-only child completion is a result", async () => {
   const r = await rig();
   const deliveries = createDeliveryStore();
-  const out = await r.syscallsFor(r.room).open({ task: "make a chart" });
-  assert.ok(out.ok);
-  const child = await freshSession(r.sessions, out.sessionId);
+  const child = await r.openChild({ task: "make a chart" });
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
-  await r.runs.complete(run.id, claimed!.leaseToken!, {
+  await r.finish(run, {
     status: "ok",
     attachments: [{ name: "chart.png", blobId: "chart", mimetype: "image/png", sizeBytes: 1 }],
   });
@@ -1539,9 +1377,7 @@ test("file-only child completion is a result", async () => {
 
 test("stopping an idle coordinator cancels running and queued descendants and blocks new work", async () => {
   const r = await rig();
-  const out = await r.syscallsFor(r.room).open({ task: "work" });
-  assert.ok(out.ok);
-  const child = await freshSession(r.sessions, out.sessionId);
+  const child = await r.openChild({ task: "work" });
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(run.id, "worker", 60_000);
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
@@ -1559,22 +1395,14 @@ test("stopping an idle coordinator cancels running and queued descendants and bl
   const followup = await childApi.write({ target: grandchild.sessionId, followup: true, text: "late followup" });
   assert.equal(followup.ok, false);
   await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "late result" });
-  assert.equal(
-    await deliverSubagentMail(
-      { ...r, maxAttempts: 3, delegationEnabled: async () => true },
-      (await r.runs.get(run.id))!,
-    ),
-    true,
-  );
+  assert.equal(await deliverSubagentMail(r.deps, (await r.runs.get(run.id))!), true);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 0);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
 test("stop still signals a queued child claimed during withdrawal", async () => {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "race the claim" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
+  const child = await r.openChild({ task: "race the claim" });
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const runs = {
     ...r.runs,
@@ -1648,8 +1476,7 @@ for (const surface of ["slack", "web"] as const) {
       assert.deepEqual(files[0]!.attachments, [attachment]);
       assert.equal(files[0]!.destination.target, "D1");
       const parentRun = (await r.runs.enqueue({ sessionId: r.room.threadRef, request })).run;
-      const parentClaim = await r.runs.claimById(parentRun.id, "parent", 60_000);
-      await r.runs.complete(parentRun.id, parentClaim!.leaseToken!, { status: "ok", reply: "PUBLIC_PARENT_ANSWER" });
+      await r.finish(parentRun, { status: "ok", reply: "PUBLIC_PARENT_ANSWER" });
       await new Promise<void>((resolve) => setImmediate(resolve));
       const publicResults = await deliveries.pending(surface);
       assert.deepEqual(publicResults.map((item) => item.text).filter(Boolean), ["PUBLIC_PARENT_ANSWER"]);

@@ -180,23 +180,63 @@ const ITEM = {
   slack: { channelId: "C1", ts: "1.2" },
 };
 
+function itemCall(
+  w: World,
+  tail: "action" | "followup",
+  loop: { id: string },
+  item: { id: string },
+  body: unknown,
+  portal = false,
+) {
+  return call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/${tail}${portal ? "?principalId=josh" : ""}`,
+    body,
+    ...(portal ? { capability: PORTAL } : {}),
+  });
+}
+
+const act = (w: World, loop: { id: string }, item: { id: string }, body: unknown, portal = false) =>
+  itemCall(w, "action", loop, item, body, portal);
+
+const followup = (w: World, loop: { id: string }, item: { id: string }, body: unknown) =>
+  itemCall(w, "followup", loop, item, body);
+
+const viewOf = (out: { body: unknown }) => (out.body as { item: LedgerItemView }).item;
+
+const ingest = (w: World, loop: { id: string }, items: unknown[], over: Partial<Parameters<typeof call>[1]> = {}) =>
+  call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body: { items }, ...over });
+
+async function adapterlessLoop(w: World, over: Partial<Parameters<LoopServiceDeps["store"]["create"]>[0]> = {}) {
+  const { loop } = await w.loops.store.create({
+    owner: "josh",
+    createdBy: "josh",
+    ownerScopeId: "personal:josh",
+    name: "Sentry triage",
+    playbook: "triage",
+    successCondition: "fixed",
+    ...over,
+  });
+  return loop;
+}
+
 async function inboxLoop(w: World): Promise<Loop> {
   return ensureInboxLoop(w.loops.store, "josh");
 }
 
 async function seed(
-  w: World,
+  w: World = world(),
   item: Record<string, unknown> = ITEM,
 ): Promise<{ w: World; loop: Loop; item: LedgerItemView }> {
   const loop = await inboxLoop(w);
-  const out = await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body: { items: [item] } });
+  const out = await ingest(w, loop, [item]);
   assert.equal(out.status, 200, JSON.stringify(out.body));
   const listed = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items` });
   const items = (listed.body as { items: LedgerItemView[] }).items;
   return { w, loop, item: items[0]! };
 }
 
-test("ingest needs an agent capability, not a portal session", async () => {
+test("the ledger refuses a portal ingest, a shared-scope capability, and another person", async () => {
   const w = world();
   const loop = await inboxLoop(w);
   const fromPortal = await call(w, {
@@ -206,101 +246,46 @@ test("ingest needs an agent capability, not a portal session", async () => {
     capability: PORTAL,
   });
   assert.equal(fromPortal.status, 403);
-  const ok = await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body: { items: [ITEM] } });
+  const shared = { ...CAP, privateScope: false, scopeId: "channel:C9" };
+  assert.equal((await ingest(w, loop, [ITEM], { capability: shared })).status, 403);
+  assert.equal((await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items`, capability: shared })).status, 403);
+  const other = { ...CAP, actorId: "ada", scopeId: "personal:ada" };
+  assert.equal((await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items`, capability: other })).status, 403);
+  const ok = await ingest(w, loop, [ITEM]);
   assert.equal(ok.status, 200);
   assert.deepEqual(ok.body, { created: 1, updated: 0, skipped: 0 });
-});
-
-test("a personal loop's items stay out of a shared-scope capability's reach", async () => {
-  const w = world();
-  const loop = await inboxLoop(w);
-  const shared = { ...CAP, privateScope: false, scopeId: "channel:C9" };
-  assert.equal(
-    (await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body: { items: [ITEM] }, capability: shared }))
-      .status,
-    403,
-  );
-  assert.equal((await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items`, capability: shared })).status, 403);
-});
-
-test("another person cannot read the ledger at all", async () => {
-  const w = world();
-  const loop = await inboxLoop(w);
-  const out = await call(w, {
-    method: "GET",
-    path: `/v1/loops/${loop.id}/items`,
-    capability: { ...CAP, actorId: "ada", scopeId: "personal:ada" },
-  });
-  assert.equal(out.status, 403);
 });
 
 test("ingest stamps the drafting session from the caller's thread", async () => {
   const w = world();
   const loop = await inboxLoop(w);
-  await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items`,
-    body: { items: [ITEM] },
-    capability: { ...CAP, threadRef: "thread-9" },
-    sessionForThread: "sess-42",
-  });
+  await ingest(w, loop, [ITEM], { capability: { ...CAP, threadRef: "thread-9" }, sessionForThread: "sess-42" });
   const [item] = await w.loops.items.byLoop(loop.id);
   assert.equal(item?.proposal?.sessionId, "sess-42");
 });
 
-test("ingest rejects malformed items with a pointed message", async () => {
+test("ingest rejects malformed items and sources the loop does not declare", async () => {
   const w = world();
-  const loop = await inboxLoop(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items`,
-    body: { items: [{ ...ITEM, slack: undefined }] },
-  });
-  assert.equal(out.status, 400);
-  assert.match(String((out.body as { message: string }).message), /items\[0\]: slack items need/);
-});
-
-test("ingest refuses a source this loop does not declare", async () => {
-  const w = world();
-  const { loop } = await w.loops.store.create({
-    owner: "josh",
-    createdBy: "josh",
-    ownerScopeId: "personal:josh",
-    name: "Sentry triage",
-    sources: ["gmail"],
-    playbook: "triage",
-    successCondition: "fixed",
-  });
-  const out = await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body: { items: [ITEM] } });
-  assert.equal(out.status, 400);
-  assert.match(String((out.body as { message: string }).message), /does not accept "slack"/);
+  const malformed = await ingest(w, await inboxLoop(w), [{ ...ITEM, slack: undefined }]);
+  assert.equal(malformed.status, 400);
+  assert.match(String((malformed.body as { message: string }).message), /items\[0\]: slack items need/);
+  const undeclared = await ingest(w, await adapterlessLoop(w, { sources: ["gmail"] }), [ITEM]);
+  assert.equal(undeclared.status, 400);
+  assert.match(String((undeclared.body as { message: string }).message), /does not accept "slack"/);
 });
 
 test("a loop with no source adapter ingests an opaque payload", async () => {
   const w = world();
-  const { loop } = await w.loops.store.create({
-    owner: "josh",
-    createdBy: "josh",
-    ownerScopeId: "personal:josh",
-    name: "Sentry triage",
-    playbook: "triage",
-    successCondition: "fixed",
-  });
-  const ok = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items`,
-    body: {
-      items: [
-        {
-          dedupeKey: "SENTRY-42",
-          summary: "TypeError in checkout",
-          sourceAt: 99,
-          sourcePayload: { issue: "SENTRY-42", culprit: "checkout.ts", events: 12 },
-          proposal: { plan: "guard the null" },
-        },
-      ],
+  const loop = await adapterlessLoop(w);
+  const ok = await ingest(w, loop, [
+    {
+      dedupeKey: "SENTRY-42",
+      summary: "TypeError in checkout",
+      sourceAt: 99,
+      sourcePayload: { issue: "SENTRY-42", culprit: "checkout.ts", events: 12 },
+      proposal: { plan: "guard the null" },
     },
-  });
+  ]);
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   const [item] = await w.loops.items.byLoop(loop.id);
   assert.deepEqual(item?.sourcePayload, { issue: "SENTRY-42", culprit: "checkout.ts", events: 12 });
@@ -310,38 +295,16 @@ test("a loop with no source adapter ingests an opaque payload", async () => {
 
 test("an opaque item needs a dedupe key and an object payload", async () => {
   const w = world();
-  const { loop } = await w.loops.store.create({
-    owner: "josh",
-    createdBy: "josh",
-    ownerScopeId: "personal:josh",
-    name: "Sentry triage",
-    playbook: "triage",
-    successCondition: "fixed",
-  });
-  const noKey = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items`,
-    body: { items: [{ sourcePayload: {} }] },
-  });
-  assert.equal(noKey.status, 400);
-  const huge = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items`,
-    body: { items: [{ dedupeKey: "k", sourcePayload: { blob: "x".repeat(70_000) } }] },
-  });
+  const loop = await adapterlessLoop(w);
+  assert.equal((await ingest(w, loop, [{ sourcePayload: {} }])).status, 400);
+  const huge = await ingest(w, loop, [{ dedupeKey: "k", sourcePayload: { blob: "x".repeat(70_000) } }]);
   assert.equal(huge.status, 400);
   assert.match(String((huge.body as { message: string }).message), /sourcePayload must be under/);
-  const unknownSource = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items`,
-    body: { items: [{ source: "front", dedupeKey: "k", sourcePayload: {} }] },
-  });
-  assert.equal(unknownSource.status, 400);
+  assert.equal((await ingest(w, loop, [{ source: "front", dedupeKey: "k", sourcePayload: {} }])).status, 400);
 });
 
 test("listing returns the ledger view with per-state counts and filters", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
+  const { w, loop, item } = await seed();
   const listed = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items` });
   const body = listed.body as { items: LedgerItemView[]; counts: Record<string, number> };
   assert.equal(body.items.length, 1);
@@ -356,36 +319,25 @@ test("listing returns the ledger view with per-state counts and filters", async 
   const junk = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items?state=nonsense` });
   assert.equal(junk.status, 400);
   const one = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item.id}` });
-  assert.equal((one.body as { item: LedgerItemView }).item.id, item.id);
+  assert.equal(viewOf(one).id, item.id);
   const missing = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/nope` });
   assert.equal(missing.status, 404);
 });
 
 test("edit replaces the proposal and marks it the person's own", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action?principalId=josh`,
-    body: { kind: "edit", args: { proposal: { body: "Shorter." } } },
-    capability: PORTAL,
-  });
+  const { w, loop, item } = await seed();
+  const out = await act(w, loop, item, { kind: "edit", args: { proposal: { body: "Shorter." } } }, true);
   assert.equal(out.status, 200);
-  const view = (out.body as { item: LedgerItemView }).item;
+  const view = viewOf(out);
   assert.deepEqual(view.proposal?.data, { body: "Shorter." });
   assert.equal(view.proposal?.by, "human");
 });
 
 test("send posts through the source adapter, records the outcome, and refuses a resend", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const sent = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send" },
-  });
+  const { w, loop, item } = await seed();
+  const sent = await act(w, loop, item, { kind: "send" });
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
-  const view = (sent.body as { item: LedgerItemView }).item;
+  const view = viewOf(sent);
   assert.equal(view.state, "actioned");
   assert.equal(view.actionResult, "Looking now — back to you within the hour.");
   assert.deepEqual(w.sent, [
@@ -394,105 +346,53 @@ test("send posts through the source adapter, records the outcome, and refuses a 
       body: { channel: "C1", text: "Looking now — back to you within the hour.", parse: "none", thread_ts: "1.2" },
     },
   ]);
-  const again = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send" },
-  });
+  const again = await act(w, loop, item, { kind: "send" });
   assert.equal(again.status, 409);
   assert.equal(w.sent.length, 1, "a resend never reaches the source");
 });
 
 test("send takes a final edit in the same call and a refusal leaves the item held", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
+  const { w, loop, item } = await seed();
   w.slackOk = false;
-  const blocked = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send", args: { proposal: { body: "Final words." } } },
-  });
+  const blocked = await act(w, loop, item, { kind: "send", args: { proposal: { body: "Final words." } } });
   assert.equal(blocked.status, 502);
   const stored = await w.loops.items.get(item.id);
   assert.equal(stored?.status, "ready", "a refused send leaves the item held");
   assert.deepEqual(stored?.proposal?.data, { body: "Final words." }, "the edit still persisted");
   w.slackOk = true;
-  const ok = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send" },
-  });
+  const ok = await act(w, loop, item, { kind: "send" });
   assert.equal(ok.status, 200);
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Final words.");
 });
 
-test("a send with no connected account reads as a conflict, not a crash", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  w.tokens = false;
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send" },
-  });
-  assert.equal(out.status, 404);
-});
-
 test("dismiss, reopen and the actioned end-state", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const dismissed = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "dismiss" },
-  });
-  assert.equal((dismissed.body as { item: LedgerItemView }).item.state, "dismissed");
-  const reopened = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "reopen" },
-  });
-  assert.equal((reopened.body as { item: LedgerItemView }).item.state, "held");
+  const { w, loop, item } = await seed();
+  const dismissed = await act(w, loop, item, { kind: "dismiss" });
+  assert.equal(viewOf(dismissed).state, "dismissed");
+  const reopened = await act(w, loop, item, { kind: "reopen" });
+  assert.equal(viewOf(reopened).state, "held");
   await w.loops.items.recordAction(item.id, { kind: "send", outcome: "actioned" });
-  const again = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send" },
-  });
+  const again = await act(w, loop, item, { kind: "send" });
   assert.equal(again.status, 409);
 });
 
 test("react adds the emoji, records it on the item, and leaves the item held", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "react", args: { name: ":eyes:" } },
-  });
+  const { w, loop, item } = await seed();
+  const out = await act(w, loop, item, { kind: "react", args: { name: ":eyes:" } });
   assert.equal(out.status, 200, JSON.stringify(out.body));
-  const view = (out.body as { item: LedgerItemView }).item;
+  const view = viewOf(out);
   assert.equal(view.state, "held", "reacting never resolves the item");
   assert.deepEqual(view.sourcePayload.reactions, ["eyes"]);
   assert.equal(view.actionKind, undefined);
   assert.deepEqual(w.sent, [{ host: "reactions.add", body: { channel: "C1", timestamp: "1.2", name: "eyes" } }]);
-  const again = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "react", args: { name: "tada" } },
-  });
-  assert.deepEqual((again.body as { item: LedgerItemView }).item.sourcePayload.reactions, ["eyes", "tada"]);
+  const again = await act(w, loop, item, { kind: "react", args: { name: "tada" } });
+  assert.deepEqual(viewOf(again).sourcePayload.reactions, ["eyes", "tada"]);
 });
 
 test("a reaction slack refuses leaves the item untouched", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
+  const { w, loop, item } = await seed();
   w.slackOk = false;
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "react", args: { name: "eyes" } },
-  });
+  const out = await act(w, loop, item, { kind: "react", args: { name: "eyes" } });
   assert.equal(out.status, 502);
   const stored = await w.loops.items.get(item.id);
   assert.equal(stored?.status, "ready");
@@ -500,15 +400,10 @@ test("a reaction slack refuses leaves the item untouched", async () => {
 });
 
 test("replied closes an item the person answered outside QM and keeps their words", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "replied", args: { text: "  Answered in the thread.  " } },
-  });
+  const { w, loop, item } = await seed();
+  const out = await act(w, loop, item, { kind: "replied", args: { text: "  Answered in the thread.  " } });
   assert.equal(out.status, 200, JSON.stringify(out.body));
-  const view = (out.body as { item: LedgerItemView }).item;
+  const view = viewOf(out);
   assert.equal(view.state, "dismissed");
   assert.equal(view.actionKind, "replied");
   assert.equal(view.actionResult, "Answered in the thread.");
@@ -516,79 +411,46 @@ test("replied closes an item the person answered outside QM and keeps their word
 });
 
 test("replied reopens like any dismissal and never demotes what was sent from here", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "replied", args: { text: "handled it" } },
-  });
-  const reopened = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "reopen" },
-  });
-  const view = (reopened.body as { item: LedgerItemView }).item;
+  const { w, loop, item } = await seed();
+  await act(w, loop, item, { kind: "replied", args: { text: "handled it" } });
+  const reopened = await act(w, loop, item, { kind: "reopen" });
+  const view = viewOf(reopened);
   assert.equal(view.state, "held");
   assert.equal(view.actionKind, undefined);
   assert.equal(view.actionResult, undefined);
 
   await w.loops.items.recordAction(item.id, { kind: "send", outcome: "actioned" });
-  const late = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "replied", args: { text: "too late" } },
-  });
+  const late = await act(w, loop, item, { kind: "replied", args: { text: "too late" } });
   assert.equal(late.status, 409);
   assert.equal((await w.loops.items.get(item.id))?.actionKind, "send");
 });
 
 test("a replied text longer than the cap is clipped, and an absent one still closes the item", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const clipped = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "replied", args: { text: "x".repeat(900) } },
-  });
-  assert.equal((clipped.body as { item: LedgerItemView }).item.actionResult?.length, 500);
+  const { w, loop, item } = await seed();
+  const clipped = await act(w, loop, item, { kind: "replied", args: { text: "x".repeat(900) } });
+  assert.equal(viewOf(clipped).actionResult?.length, 500);
 
-  const bare = await seed(world());
-  const out = await call(bare.w, {
-    method: "POST",
-    path: `/v1/loops/${bare.loop.id}/items/${bare.item.id}/action`,
-    body: { kind: "replied" },
-  });
-  const view = (out.body as { item: LedgerItemView }).item;
+  const bare = await seed();
+  const out = await act(bare.w, bare.loop, bare.item, { kind: "replied" });
+  const view = viewOf(out);
   assert.equal(view.state, "dismissed");
   assert.equal(view.actionResult, undefined);
 });
 
 test("an action kind the source does not know is handed to the agent", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "escalate", args: { to: "ada" } },
-  });
+  const { w, loop, item } = await seed();
+  const out = await act(w, loop, item, { kind: "escalate", args: { to: "ada" } });
   assert.equal(out.status, 200);
   assert.deepEqual(w.actions, [{ kind: "escalate", args: { to: "ada" } }]);
-  const view = (out.body as { item: LedgerItemView }).item;
+  const view = viewOf(out);
   assert.equal(view.state, "actioned");
   assert.equal(view.actionKind, "escalate");
   assert.equal(view.thread.at(-1)?.text, "did escalate");
 });
 
 test("an action carrying a final edit persists it before acting", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action?principalId=josh`,
-    body: { kind: "escalate", args: { proposal: { body: "Final words." } } },
-    capability: PORTAL,
-  });
+  const { w, loop, item } = await seed();
+  await act(w, loop, item, { kind: "escalate", args: { proposal: { body: "Final words." } } }, true);
   const stored = await w.loops.items.get(item.id);
   assert.deepEqual(stored?.proposal?.data, { body: "Final words." });
   assert.equal(stored?.proposal?.by, "human");
@@ -597,36 +459,22 @@ test("an action carrying a final edit persists it before acting", async () => {
 test("a deployment without connectors answers 404 rather than pretending to send", async () => {
   const w = world({ tokens: false });
   const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send" },
-  });
+  const out = await act(w, loop, item, { kind: "send" });
   assert.equal(out.status, 404);
 });
 
 test("an action with no kind is refused", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { args: {} },
-  });
+  const { w, loop, item } = await seed();
+  const out = await act(w, loop, item, { args: {} });
   assert.equal(out.status, 400);
 });
 
 test("follow-up runs an agent turn scoped to the item and lands on its thread", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
-    body: { message: "make it shorter" },
-  });
+  const { w, loop, item } = await seed();
+  const out = await followup(w, loop, item, { message: "make it shorter" });
   assert.equal(out.status, 200);
   assert.deepEqual(w.followUps, [{ itemId: item.id, message: "make it shorter", actorId: "josh" }]);
-  const view = (out.body as { item: LedgerItemView }).item;
+  const view = viewOf(out);
   assert.deepEqual(
     view.thread.map((m) => [m.role, m.text]),
     [
@@ -638,27 +486,14 @@ test("follow-up runs an agent turn scoped to the item and lands on its thread", 
 });
 
 test("follow-up needs a message and a wired fire service", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const empty = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
-    body: { message: "   " },
-  });
+  const { w, loop, item } = await seed();
+  const empty = await followup(w, loop, item, { message: "   " });
   assert.equal(empty.status, 400);
-  const long = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
-    body: { message: "x".repeat(4_001) },
-  });
+  const long = await followup(w, loop, item, { message: "x".repeat(4_001) });
   assert.equal(long.status, 400);
   const unwired = world({ fire: false });
   const seeded = await seed(unwired);
-  const out = await call(unwired, {
-    method: "POST",
-    path: `/v1/loops/${seeded.loop.id}/items/${seeded.item.id}/followup`,
-    body: { message: "hi" },
-  });
+  const out = await followup(unwired, seeded.loop, seeded.item, { message: "hi" });
   assert.equal(out.status, 404);
 });
 
@@ -677,6 +512,8 @@ test("the inbox resolver reports no loop until sync is set up", async () => {
   assert.equal(stored.owner, "josh");
   assert.equal((stored.destination as { target: string }).target, "josh");
   assert.equal(stored.action, renderSourceInboxTask(body.loop.id, "gmail"));
+  assert.equal(body.loop.cronId, body.syncCron.id);
+  assert.match(stored.action ?? "", new RegExp(`/v1/loops/${body.loop.id}/items`));
   const after = await call(w, { method: "GET", path: "/v1/loops/inbox" });
   assert.equal((after.body as { loop: Loop }).loop.id, body.loop.id);
 });
@@ -697,61 +534,46 @@ test("sync-cron is created once, refreshes stale task text, and disables on requ
   assert.equal((disabled.body as { syncCron: { enabled: boolean } }).syncCron.enabled, false);
 });
 
-test("the sync cron the loop points at drives the ledger it names", async () => {
-  const w = world();
-  const created = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
-  const { loop, syncCron } = created.body as { loop: Loop; syncCron: { id: string } };
-  assert.equal(loop.cronId, syncCron.id);
-  assert.match(w.crons.get(syncCron.id)!.action ?? "", new RegExp(`/v1/loops/${loop.id}/items`));
-});
-
 test("a send carrying the draft it saw is refused when the agent redrafted in between", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
+  const { w, loop, item } = await seed();
   const seenAt = (await w.loops.items.get(item.id))!.proposal!.at;
   await sleep(2);
   await w.loops.items.setProposal(item.id, { data: { body: "newer agent draft" }, by: "agent" });
-  const stale = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send", args: { proposal: { body: "what I saw" }, expectedProposalAt: seenAt } },
+  const stale = await act(w, loop, item, {
+    kind: "send",
+    args: { proposal: { body: "what I saw" }, expectedProposalAt: seenAt },
   });
   assert.equal(stale.status, 409);
   assert.match((stale.body as { message: string }).message, /draft changed/);
   assert.equal(w.sent.length, 0, "nothing reached Slack");
   const fresh = (await w.loops.items.get(item.id))!.proposal!;
   assert.equal(fresh.by, "agent", "the stale edit did not overwrite the newer draft");
-  const ok = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send", args: { proposal: { body: "newer agent draft" }, expectedProposalAt: fresh.at } },
+  const ok = await act(w, loop, item, {
+    kind: "send",
+    args: { proposal: { body: "newer agent draft" }, expectedProposalAt: fresh.at },
   });
   assert.equal(ok.status, 200);
 });
 
 test("sending the agent's draft unchanged keeps it attributed to the agent", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
+  const { w, loop, item } = await seed();
   const held = (await w.loops.items.get(item.id))!;
-  const sent = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "send", args: { proposal: held.proposal!.data, expectedProposalAt: held.proposal!.at } },
+  const sent = await act(w, loop, item, {
+    kind: "send",
+    args: { proposal: held.proposal!.data, expectedProposalAt: held.proposal!.at },
   });
   assert.equal(sent.status, 200);
   assert.equal((await w.loops.items.get(item.id))!.proposal!.by, "agent");
 });
 
 test("an edit carrying the draft it was based on is refused when the agent redrafted in between", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
+  const { w, loop, item } = await seed();
   const basedOn = (await w.loops.items.get(item.id))!.proposal!.at;
   await sleep(2);
   await w.loops.items.setProposal(item.id, { data: { body: "newer agent draft" }, by: "agent" });
-  const stale = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "edit", args: { proposal: { body: "typed over the old one" }, expectedProposalAt: basedOn } },
+  const stale = await act(w, loop, item, {
+    kind: "edit",
+    args: { proposal: { body: "typed over the old one" }, expectedProposalAt: basedOn },
   });
   assert.equal(stale.status, 409);
   assert.match((stale.body as { message: string }).message, /draft changed/);
@@ -759,51 +581,33 @@ test("an edit carrying the draft it was based on is refused when the agent redra
 });
 
 test("a person's own typed mention stays live, while a capability caller's is disarmed", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const human = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action?principalId=josh`,
-    body: { kind: "send", args: { proposal: { body: "Heads up <!channel>" } } },
-    capability: PORTAL,
-  });
+  const { w, loop, item } = await seed();
+  const human = await act(w, loop, item, { kind: "send", args: { proposal: { body: "Heads up <!channel>" } } }, true);
   assert.equal(human.status, 200, JSON.stringify(human.body));
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Heads up <!channel>");
   const second = await seed(w, { ...ITEM, sourceKey: "t2", slack: { channelId: "C1", ts: "9.9" } });
-  const agent = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${second.loop.id}/items/${second.item.id}/action`,
-    body: { kind: "send", args: { body: "Heads up <!channel>" } },
-  });
+  const agent = await act(w, second.loop, second.item, { kind: "send", args: { body: "Heads up <!channel>" } });
   assert.equal(agent.status, 200, JSON.stringify(agent.body));
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Heads up @\u200bchannel");
 });
 
 test("a capability caller's edit is stored as the agent's draft, so its mentions stay in the disarm set", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const edited = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "edit", args: { proposal: { body: "Everyone <!here> please look" } } },
+  const { w, loop, item } = await seed();
+  const edited = await act(w, loop, item, {
+    kind: "edit",
+    args: { proposal: { body: "Everyone <!here> please look" } },
   });
   assert.equal(edited.status, 200);
   const stored = (await w.loops.items.get(item.id))!;
   assert.equal(stored.proposal!.by, "agent");
   assert.deepEqual(stored.agentMentionKeys, ["!here"]);
-  const sent = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action?principalId=josh`,
-    body: { kind: "send" },
-    capability: PORTAL,
-  });
+  const sent = await act(w, loop, item, { kind: "send" }, true);
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Everyone @\u200bhere please look");
 });
 
 test("concurrent source sends share a durable decision claim", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
+  const { w, loop, item } = await seed();
   const send = () =>
     call(w, { method: "POST", path: `/v1/loops/${loop.id}/items/${item.id}/action`, body: { kind: "send" } });
   const outcomes = await Promise.all([send(), send()]);
@@ -834,21 +638,12 @@ test("legacy and canonical item URLs serialize a concurrent send", async () => {
 });
 
 test("a conversational send refuses a stale draft before starting an agent turn", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
-    body: { message: "Send it", expectedProposalAt: item.proposal!.at - 1 },
-  });
+  const { w, loop, item } = await seed();
+  const out = await followup(w, loop, item, { message: "Send it", expectedProposalAt: item.proposal!.at - 1 });
   assert.equal(out.status, 409);
   assert.deepEqual(w.followUps, []);
   assert.deepEqual(w.sent, []);
-  const accepted = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
-    body: { message: "Send it", expectedProposalAt: item.proposal!.at },
-  });
+  const accepted = await followup(w, loop, item, { message: "Send it", expectedProposalAt: item.proposal!.at });
   assert.equal(accepted.status, 200);
   assert.equal(w.followUps.length, 1);
 });
@@ -905,27 +700,21 @@ test("Slack thread keys reuse a legacy item's identity, edits, and replied water
     },
   ]);
   const [original] = await w.loops.items.byLoop(loop.id);
-  const ingest = () =>
-    call(w, {
-      method: "POST",
-      path: `/v1/loops/${loop.id}/items`,
-      body: {
-        items: [
-          {
-            ...ITEM,
-            sourceKey: "D1:1.0",
-            receivedAt: 2000,
-            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0" },
-            draft: { body: "Agent replacement" },
-          },
-        ],
+  const reingest = () =>
+    ingest(w, loop, [
+      {
+        ...ITEM,
+        sourceKey: "D1:1.0",
+        receivedAt: 2000,
+        slack: { channelId: "D1", ts: "2.0", threadTs: "1.0" },
+        draft: { body: "Agent replacement" },
       },
-    });
-  assert.equal((await ingest()).status, 200);
+    ]);
+  assert.equal((await reingest()).status, 200);
   assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
   assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
   await w.loops.items.recordAction(original!.id, { kind: "replied", outcome: "dismissed", sourceAt: 3000 });
-  await ingest();
+  await reingest();
   assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
   assert.equal((await w.loops.items.get(original!.id))!.status, "skipped");
 });
@@ -962,29 +751,22 @@ test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", asyn
     },
   ]);
   const [original] = await w.loops.items.byLoop(loop.id);
-  const result = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items`,
-    body: {
-      items: [
-        {
-          ...ITEM,
-          sourceKey: "D1:1.0",
-          receivedAt: 3000,
-          slack: { channelId: "D1", ts: "3.0", threadTs: "1.0", isDirectMessage: true },
-          draft: { body: "Other ask" },
-        },
-      ],
+  const result = await ingest(w, loop, [
+    {
+      ...ITEM,
+      sourceKey: "D1:1.0",
+      receivedAt: 3000,
+      slack: { channelId: "D1", ts: "3.0", threadTs: "1.0", isDirectMessage: true },
+      draft: { body: "Other ask" },
     },
-  });
+  ]);
   assert.equal(result.status, 200);
   assert.equal((await w.loops.items.byLoop(loop.id)).length, 2);
   assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
 });
 
 test("followup accepts only typed runtime and staged attachment fields", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
+  const { w, loop, item } = await seed();
   const path = `/v1/loops/${loop.id}/items/${item.id}/followup`;
   let received: unknown;
   w.loops.fire!.followUp = async (_loop, held, _message, _actor, options) => {
@@ -1070,11 +852,8 @@ test("email classification is scoped to the owner's flagged personal inbox", asy
                   sourceKey: "thread-1",
                   gmail: { threadId: "thread-1" },
                 };
-          const response = await call(w, {
-            method: "POST",
-            path: `/v1/loops/${loop.id}/items`,
+          const response = await ingest(w, loop, [{ ...item, receivedAt, automated, probablyResolved: false }], {
             flagEnabled,
-            body: { items: [{ ...item, receivedAt, automated, probablyResolved: false }] },
           });
           assert.equal(response.status, 200);
           const [stored] = await w.loops.items.byLoop(loop.id);

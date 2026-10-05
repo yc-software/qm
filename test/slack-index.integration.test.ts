@@ -17,8 +17,6 @@ class FakeSlackClient {
   readonly ephemerals: any[] = [];
   readonly updates: any[] = [];
   readonly deletes: any[] = [];
-  readonly reactionsAdded: any[] = [];
-  readonly reactionsRemoved: any[] = [];
   readonly usersById = new Map<string, any>();
   readonly channelsById = new Map<string, any>();
   readonly membersByChannel = new Map<string, string[]>();
@@ -109,14 +107,8 @@ class FakeSlackClient {
     },
   };
   readonly reactions = {
-    add: async (body: any) => {
-      this.reactionsAdded.push(body);
-      return { ok: true };
-    },
-    remove: async (body: any) => {
-      this.reactionsRemoved.push(body);
-      return { ok: true };
-    },
+    add: async () => ({ ok: true }),
+    remove: async () => ({ ok: true }),
     get: async () => ({}),
   };
   readonly filesById = new Map<string, any>();
@@ -296,8 +288,6 @@ class FakeCore implements SlackCoreClient {
     this.turns.push(body);
     if (this.submitError) throw this.submitError;
     if (this.queuedRunId) {
-      // The first submit enqueues the run; a later one arrives while it is live, so core folds
-      // it in as a steer and answers with the LIVE run's id (src/api/app-turn.ts).
       const steered = this.heldRunClaimed;
       this.heldRunClaimed = true;
       return { status: "queued", runId: this.queuedRunId, ...(steered ? { steered: true as const } : {}) };
@@ -310,8 +300,6 @@ class FakeCore implements SlackCoreClient {
     if (this.runGate) await this.runGate;
     return this.result;
   }
-  /** Enqueue `runId` on the first submit and hold waitRun open; every later submit is a
-   *  mid-turn STEER answered with that same live run's id. `finishRun` releases the waiters. */
   holdRun(runId: string): void {
     this.queuedRunId = runId;
     this.heldRunClaimed = false;
@@ -466,6 +454,23 @@ async function fixture(
   return { app, client: app.client, core, stop: () => plugin.stop() };
 }
 
+function addGroup(client: FakeSlackClient, id: string, members = ["U1", "U2", "UBOT"]): void {
+  client.channelsById.set(id, { id, name: "", is_member: true, is_private: true, is_mpim: true });
+  client.membersByChannel.set(id, members);
+}
+
+async function inFixture(
+  run: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
+  options: Parameters<typeof fixture>[0] = {},
+): Promise<void> {
+  const f = await fixture(options);
+  try {
+    await run(f);
+  } finally {
+    await f.stop();
+  }
+}
+
 test("config is all-or-nothing and numeric tuning fails closed", () => {
   assert.equal(slackPluginConfigFromEnv({ SLACK_BOT_TOKEN: "xoxb" }), null);
   assert.equal(slackPluginConfigFromEnv({ SLACK_APP_TOKEN: "xapp" }), null);
@@ -479,9 +484,8 @@ test("config is all-or-nothing and numeric tuning fails closed", () => {
   assert.deepEqual(config, { botToken: "xoxb", appToken: "xapp", maxPrivateChannels: 10 });
 });
 
-test("a core failure the user is told about counts as handled; a quiet one reports failure and forgets the dedup key", async () => {
-  const f = await fixture();
-  try {
+test("a core failure the user is told about counts as handled; a quiet one reports failure and forgets the dedup key", () =>
+  inFixture(async (f) => {
     const gate: string[] = [];
     const ackGate = {
       persisted: () => gate.push("persisted"),
@@ -497,8 +501,7 @@ test("a core failure the user is told about counts as handled; a quiet one repor
         f.client.ephemerals.some((m: any) => String(m.text).includes("⚠️")),
     );
 
-    f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
+    addGroup(f.client, "G1");
     f.client.messagesByChannel.set("G1", [
       { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
       { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
@@ -519,14 +522,10 @@ test("a core failure the user is told about counts as handled; a quiet one repor
     await f.app.emitMessage(quiet, "Ev-300-replay", { ackGate });
     assert.equal(f.core.turns.length, turnsBefore + 1, "the replay is not swallowed by the in-process deduper");
     assert.deepEqual(gate, ["failed:string", "persisted"]);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a redelivery of a message still in flight on this instance is not treated as handled", async () => {
-  const f = await fixture();
-  try {
+test("a redelivery of a message still in flight on this instance is not treated as handled", () =>
+  inFixture(async (f) => {
     const gate: string[] = [];
     const ackGate = {
       persisted: () => gate.push("persisted"),
@@ -553,17 +552,10 @@ test("a redelivery of a message still in flight on this instance is not treated 
     assert.equal(f.core.turns.length, 1, "the in-flight turn is not run a second time");
     f.core.finishRun({ status: "ok", reply: "done" });
     await first;
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a mid-turn message that STEERS the live run does not post the reply twice", async () => {
-  const f = await fixture();
-  try {
-    // Core folds a message that lands mid-run into the LIVE run and answers the steering
-    // request with that run's id, flagged `steered` (src/api/app-turn.ts). Only the handler
-    // that started R1 owns its reply; the one that joined must not deliver it a second time.
+test("a mid-turn message that STEERS the live run does not post the reply twice", () =>
+  inFixture(async (f) => {
     f.core.holdRun("R1");
     const first = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "first ask", ts: "300.1" });
     await waitFor(() => f.core.polled.length === 1);
@@ -585,14 +577,10 @@ test("a mid-turn message that STEERS the live run does not post the reply twice"
       1,
       "the shared run's reply is posted once, by the handler that owns it",
     );
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a queued run's ok reply carries the recovery delivery's marker, so a replay reuses it", async () => {
-  const f = await fixture();
-  try {
+test("a queued run's ok reply carries the recovery delivery's marker, so a replay reuses it", () =>
+  inFixture(async (f) => {
     f.core.holdRun("R7");
     const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "ask", ts: "600.1" });
     await waitFor(() => f.core.polled.length === 1);
@@ -614,14 +602,10 @@ test("a queued run's ok reply carries the recovery delivery's marker, so a repla
     });
     assert.equal(replayed.ts, "posted-1", "the recovery probe finds the live handler's reply");
     assert.equal(f.client.posts.length, postsBefore, "an already-posted reply is never re-posted");
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a DM becomes one scoped live turn and one Slack reply", async () => {
-  const f = await fixture();
-  try {
+test("a DM becomes one scoped live turn and one Slack reply", () =>
+  inFixture(async (f) => {
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.1" });
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].text, "hello agent");
@@ -640,10 +624,14 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
       f.client.posts.map((p) => p.text),
       ["agent reply"],
     );
-  } finally {
-    await f.stop();
-  }
-});
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "!version", ts: "100.2" });
+    assert.equal(f.core.turns.length, 2);
+    assert.equal(f.core.turns[1].text, "!version", "a DM containing !version follows the ordinary turn path");
+    assert.deepEqual(
+      f.client.posts.map((p) => p.text),
+      ["agent reply", "agent reply"],
+    );
+  }));
 
 test("a forwarded Slack message reaches the turn with labeled nested content and files", async (t) => {
   const fetchMock = t.mock.method(
@@ -725,9 +713,8 @@ test("a forwarded Slack message reaches the turn with labeled nested content and
   }
 });
 
-test("public channel rosters stay current in the core directory", async () => {
-  const f = await fixture();
-  try {
+test("public channel rosters stay current in the core directory", () =>
+  inFixture(async (f) => {
     assert.ok(f.core.directories.some((d: any) => d.channelMembers));
     assert.deepEqual(
       f.core.directories
@@ -749,26 +736,21 @@ test("public channel rosters stay current in the core directory", async () => {
         .map((m: any) => m.principalId),
       ["U1"],
     );
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("full directory refreshes bound concurrent Slack roster reads", async () => {
-  const f = await fixture({ extraChannels: 5, membershipDelayMs: 10 });
-  try {
-    assert.equal(f.client.membershipListings.size, 8);
-    assert.ok(f.client.maxActiveMembershipListings > 1);
-    assert.ok(f.client.maxActiveMembershipListings <= 4);
-    assert.ok(f.core.directories.at(-1).channelsSyncedAt <= f.client.firstMembershipListingStartedAt!);
-  } finally {
-    await f.stop();
-  }
-});
+test("full directory refreshes bound concurrent Slack roster reads", () =>
+  inFixture(
+    async (f) => {
+      assert.equal(f.client.membershipListings.size, 8);
+      assert.ok(f.client.maxActiveMembershipListings > 1);
+      assert.ok(f.client.maxActiveMembershipListings <= 4);
+      assert.ok(f.core.directories.at(-1).channelsSyncedAt <= f.client.firstMembershipListingStartedAt!);
+    },
+    { extraChannels: 5, membershipDelayMs: 10 },
+  ));
 
-test("large public channels publish their complete roster and accept internal turns", async () => {
-  const f = await fixture();
-  try {
+test("large public channels publish their complete roster and accept internal turns", () =>
+  inFixture(async (f) => {
     const members = Array.from({ length: 201 }, (_, i) => `UL${i}`);
     for (const id of members) f.client.usersById.set(id, internalUser(id, id));
     f.client.membersByChannel.set("C1", [...members, "UBOT"]);
@@ -788,227 +770,202 @@ test("large public channels publish their complete roster and accept internal tu
       ts: "100.4",
     });
     assert.equal(f.core.turns.length, 1);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("failed background roster reads are marked unknown instead of clearing known capabilities", async () => {
-  const f = await fixture();
-  try {
+test("failed background roster reads are marked unknown instead of clearing known capabilities", () =>
+  inFixture(async (f) => {
     assert.ok(f.core.directories.at(-1).channelRosterIds.includes("CPX"));
     f.client.membershipFailures.add("CPX");
     const pushes = f.core.directories.length;
     await f.app.emitEvent("channel_rename", { channel: { id: "CPX" }, event_ts: "100.5" });
     await waitFor(() => f.core.directories.length > pushes);
     assert.ok(!f.core.directories.at(-1).channelRosterIds.includes("CPX"));
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a failed refresh after a leave event revokes only the departing member", async () => {
-  const f = await fixture();
-  try {
-    f.client.membershipFailures.add("CPX");
-    const pushes = f.core.directories.length;
-    await f.app.emitEvent("member_left_channel", { user: "U1", channel: "CPX", event_ts: "100.6" });
-    await waitFor(() => f.core.directories.length > pushes);
-    const pushed = f.core.directories.at(-1);
-    assert.ok(!pushed.channelRosterIds.includes("CPX"));
-    assert.deepEqual(pushed.channelRevocations, [{ channelId: "CPX", principalId: "U1" }]);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a failed email-mode refresh revokes the departing canonical principal", async () => {
-  const f = await fixture({ identityEmail: "1" });
-  try {
-    f.client.membershipFailures.add("CPX");
-    const pushes = f.core.directories.length;
-    await f.app.emitEvent("member_left_channel", { user: "U1", channel: "CPX", event_ts: "100.7" });
-    await waitFor(() => f.core.directories.length > pushes);
-    assert.deepEqual(f.core.directories.at(-1).channelRevocations, [
-      { channelId: "CPX", principalId: "alice@example.com" },
-    ]);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("Slack Connect directory rosters contain only internal principals", async () => {
-  const f = await fixture({ externalParticipants: true });
-  try {
-    const pushed = f.core.directories.at(-1);
-    assert.ok(pushed.channelRosterIds.includes("CX"));
-    assert.ok(pushed.channelRosterIds.includes("CPX"));
-    assert.equal(pushed.channels.find((channel: any) => channel.channelId === "CPX")?.isExternal, true);
-    assert.deepEqual(
-      pushed.channelMembers.filter((m: any) => m.channelId === "CX").map((m: any) => m.principalId),
-      ["U1"],
-    );
-    assert.deepEqual(
-      pushed.channelMembers.filter((m: any) => m.channelId === "CPX").map((m: any) => m.principalId),
-      ["U1"],
-    );
-    assert.ok(pushed.channelRosterIds.includes("CPX"));
-    f.client.membershipListings.set("CPX", 0);
-    f.client.membershipListings.set("C1", 0);
-    const pushes = f.core.directories.length;
-    await f.app.emitEvent("channel_rename", { channel: { id: "CPX" }, event_ts: "100.7" });
-    await waitFor(() => f.core.directories.length > pushes);
-    assert.equal(f.client.membershipListings.get("CPX"), 1);
-    assert.equal(f.client.membershipListings.get("C1"), 0);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a human's DM sets the conversation header to the serving model + web surface", async () => {
-  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
-  try {
-    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "100.1" });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(f.client.topics, [
-      {
-        channel: "D1",
-        topic: "Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
+for (const leave of [
+  { name: "a failed refresh after a leave event revokes only the departing member", principalId: "U1", ts: "100.6" },
+  {
+    name: "a failed email-mode refresh revokes the departing canonical principal",
+    principalId: "alice@example.com",
+    ts: "100.7",
+    identityEmail: "1" as const,
+  },
+]) {
+  test(leave.name, () =>
+    inFixture(
+      async (f) => {
+        f.client.membershipFailures.add("CPX");
+        const pushes = f.core.directories.length;
+        await f.app.emitEvent("member_left_channel", { user: "U1", channel: "CPX", event_ts: leave.ts });
+        await waitFor(() => f.core.directories.length > pushes);
+        const pushed = f.core.directories.at(-1);
+        assert.ok(!pushed.channelRosterIds.includes("CPX"));
+        assert.deepEqual(pushed.channelRevocations, [{ channelId: "CPX", principalId: leave.principalId }]);
       },
-    ]);
-    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(f.client.topics.length, 1);
-  } finally {
-    await f.stop();
-  }
-});
+      { identityEmail: leave.identityEmail },
+    ),
+  );
+}
 
-test("joining a channel posts the welcome and a pinned header naming the model and project page", async () => {
-  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
-  try {
-    f.core.headerPinScopes.add("channel:C1");
-    await f.app.emitEvent("member_joined_channel", { user: "UBOT", channel: "C1", event_ts: "100.1" }, "Ev-bot-join");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(
-      f.client.pinnedByChannel.get("C1")?.map((m) => m.text),
-      ["Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>"],
-    );
-    assert.deepEqual(f.client.topics, [], "a channel's topic stays the members' own scratch space");
-  } finally {
-    await f.stop();
-  }
-});
+test("Slack Connect directory rosters contain only internal principals", () =>
+  inFixture(
+    async (f) => {
+      const pushed = f.core.directories.at(-1);
+      assert.ok(pushed.channelRosterIds.includes("CX"));
+      assert.ok(pushed.channelRosterIds.includes("CPX"));
+      assert.equal(pushed.channels.find((channel: any) => channel.channelId === "CPX")?.isExternal, true);
+      assert.deepEqual(
+        pushed.channelMembers.filter((m: any) => m.channelId === "CX").map((m: any) => m.principalId),
+        ["U1"],
+      );
+      assert.deepEqual(
+        pushed.channelMembers.filter((m: any) => m.channelId === "CPX").map((m: any) => m.principalId),
+        ["U1"],
+      );
+      assert.ok(pushed.channelRosterIds.includes("CPX"));
+      f.client.membershipListings.set("CPX", 0);
+      f.client.membershipListings.set("C1", 0);
+      const pushes = f.core.directories.length;
+      await f.app.emitEvent("channel_rename", { channel: { id: "CPX" }, event_ts: "100.7" });
+      await waitFor(() => f.core.directories.length > pushes);
+      assert.equal(f.client.membershipListings.get("CPX"), 1);
+      assert.equal(f.client.membershipListings.get("C1"), 0);
+    },
+    { externalParticipants: true },
+  ));
 
-test("joining a channel with the toggle off (the default) posts only the welcome — no pin", async () => {
-  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
-  try {
-    await f.app.emitEvent("member_joined_channel", { user: "UBOT", channel: "C1", event_ts: "100.1" }, "Ev-bot-join");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(f.client.posts.length, 1, "only the welcome message lands");
-    assert.equal(f.client.pinnedByChannel.get("C1"), undefined);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("flipping the toggle on creates the pinned header; flipping it off removes it", async () => {
-  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
-  try {
-    assert.equal(f.core.headerPinChangeListeners.length, 1, "the plugin subscribes to toggle changes");
-    f.core.headerPinScopes.add("channel:C1");
-    for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(
-      f.client.pinnedByChannel.get("C1")?.map((m) => m.text),
-      ["Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>"],
-      "toggle-on posts and pins the header",
-    );
-    f.core.headerPinScopes.delete("channel:C1");
-    for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(f.client.pinnedByChannel.get("C1"), [], "toggle-off unpins the header");
-    assert.equal(f.client.deletes.length, 1, "and deletes the bot's header message");
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a mention in a channel with no pinned header never creates one", async () => {
-  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
-  try {
-    const mention = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> hi", ts: "100.1" };
-    f.client.messagesByChannel.set("C1", [mention]);
-    await f.app.emitEvent("app_mention", mention, "Ev-channel-header");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(f.client.pinnedByChannel.get("C1"), undefined);
-    assert.deepEqual(f.client.updates, []);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a scope's model change rewrites its channel's pinned header without waiting for a message", async () => {
-  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
-  try {
-    assert.equal(f.core.modelChangeListeners.length, 1, "the plugin subscribes to core's model changes");
-    f.core.headerPinScopes.add("channel:C1");
-    f.client.pinnedByChannel.set("C1", [
-      {
-        ts: "50.0",
-        user: "UBOT",
-        text: "Using Claude Sonnet 5 here. <https://claw.example.dev/projects/channel/C1|More settings>",
-      },
-    ]);
-    for (const listener of f.core.modelChangeListeners) listener("channel:C1");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(
-      f.client.updates.map((u) => ({ channel: u.channel, ts: u.ts, text: u.text })),
-      [
+test("a human's DM sets the conversation header to the serving model + web surface", () =>
+  inFixture(
+    async (f) => {
+      await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "100.1" });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(f.client.topics, [
         {
-          channel: "C1",
-          ts: "50.0",
-          text: "Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
+          channel: "D1",
+          topic: "Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
         },
-      ],
-    );
-    for (const listener of f.core.modelChangeListeners) listener("personal:alice@example.com");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
-  } finally {
-    await f.stop();
-  }
-});
+      ]);
+      await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(f.client.topics.length, 1);
+    },
+    { webUiPublicUrl: "https://claw.example.dev" },
+  ));
 
-test("an external guest's DM never reveals the model or the web surface", async () => {
-  const f = await fixture({ externalParticipants: true, webUiPublicUrl: "https://claw.example.dev" });
-  try {
-    await f.app.emitMessage({ channel: "DX", channel_type: "im", user: "UX", text: "hello", ts: "100.1" });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(f.client.topics, []);
-  } finally {
-    await f.stop();
-  }
-});
+for (const join of [
+  {
+    name: "joining a channel posts the welcome and a pinned header naming the model and project page",
+    pin: true,
+    posts: 2,
+    pinned: ["Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>"],
+  },
+  { name: "joining a channel with the toggle off (the default) posts only the welcome — no pin", posts: 1 },
+  {
+    name: "a gated account joining a channel stays silent — no welcome, no header",
+    pin: true,
+    posts: 0,
+    options: { identityEmail: "1" as const, allowFrom: ["staff@example.com"] },
+  },
+]) {
+  test(join.name, () =>
+    inFixture(
+      async (f) => {
+        if (join.pin) f.core.headerPinScopes.add("channel:C1");
+        await f.app.emitEvent(
+          "member_joined_channel",
+          { user: "UBOT", channel: "C1", event_ts: "100.1" },
+          "Ev-bot-join",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(f.client.posts.length, join.posts);
+        assert.deepEqual(
+          f.client.pinnedByChannel.get("C1")?.map((m) => m.text),
+          join.pinned,
+        );
+        assert.deepEqual(f.client.topics, [], "a channel's topic stays the members' own scratch space");
+      },
+      { webUiPublicUrl: "https://claw.example.dev", ...join.options },
+    ),
+  );
+}
 
-test("a DM containing !version follows the ordinary turn path", async () => {
-  const f = await fixture();
-  try {
-    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "!version", ts: "100.2" });
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].text, "!version");
-    assert.deepEqual(
-      f.client.posts.map((p) => p.text),
-      ["agent reply"],
-    );
-  } finally {
-    await f.stop();
-  }
-});
+test("flipping the toggle on creates the pinned header; flipping it off removes it", () =>
+  inFixture(
+    async (f) => {
+      assert.equal(f.core.headerPinChangeListeners.length, 1, "the plugin subscribes to toggle changes");
+      f.core.headerPinScopes.add("channel:C1");
+      for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(
+        f.client.pinnedByChannel.get("C1")?.map((m) => m.text),
+        ["Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>"],
+        "toggle-on posts and pins the header",
+      );
+      f.core.headerPinScopes.delete("channel:C1");
+      for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(f.client.pinnedByChannel.get("C1"), [], "toggle-off unpins the header");
+      assert.equal(f.client.deletes.length, 1, "and deletes the bot's header message");
+    },
+    { webUiPublicUrl: "https://claw.example.dev" },
+  ));
 
-test("Slack redelivery and app_mention/message fan-out cannot duplicate a turn", async () => {
-  const f = await fixture();
-  try {
+test("a mention in a channel with no pinned header never creates one", () =>
+  inFixture(
+    async (f) => {
+      const mention = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> hi", ts: "100.1" };
+      f.client.messagesByChannel.set("C1", [mention]);
+      await f.app.emitEvent("app_mention", mention, "Ev-channel-header");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(f.client.pinnedByChannel.get("C1"), undefined);
+      assert.deepEqual(f.client.updates, []);
+    },
+    { webUiPublicUrl: "https://claw.example.dev" },
+  ));
+
+test("a scope's model change rewrites its channel's pinned header without waiting for a message", () =>
+  inFixture(
+    async (f) => {
+      assert.equal(f.core.modelChangeListeners.length, 1, "the plugin subscribes to core's model changes");
+      f.core.headerPinScopes.add("channel:C1");
+      f.client.pinnedByChannel.set("C1", [
+        {
+          ts: "50.0",
+          user: "UBOT",
+          text: "Using Claude Sonnet 5 here. <https://claw.example.dev/projects/channel/C1|More settings>",
+        },
+      ]);
+      for (const listener of f.core.modelChangeListeners) listener("channel:C1");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(
+        f.client.updates.map((u) => ({ channel: u.channel, ts: u.ts, text: u.text })),
+        [
+          {
+            channel: "C1",
+            ts: "50.0",
+            text: "Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
+          },
+        ],
+      );
+      for (const listener of f.core.modelChangeListeners) listener("personal:alice@example.com");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
+    },
+    { webUiPublicUrl: "https://claw.example.dev" },
+  ));
+
+test("an external guest's DM never reveals the model or the web surface", () =>
+  inFixture(
+    async (f) => {
+      await f.app.emitMessage({ channel: "DX", channel_type: "im", user: "UX", text: "hello", ts: "100.1" });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(f.client.topics, []);
+    },
+    { externalParticipants: true, webUiPublicUrl: "https://claw.example.dev" },
+  ));
+
+test("Slack redelivery and app_mention/message fan-out cannot duplicate a turn", () =>
+  inFixture(async (f) => {
     const dm = { channel: "D1", channel_type: "im", user: "U1", text: "once", ts: "101.1" };
     await f.app.emitMessage(dm, "Ev-first-delivery");
     await f.app.emitMessage(dm, "Ev-second-delivery");
@@ -1020,144 +977,97 @@ test("Slack redelivery and app_mention/message fan-out cannot duplicate a turn",
 
     assert.equal(f.core.turns.length, 2);
     assert.equal(f.client.posts.length, 2);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("an unknown user fails closed even when Slack lookup returns no record", async () => {
-  const f = await fixture();
-  try {
-    await f.app.emitMessage({ channel: "DU", channel_type: "im", user: "UUNKNOWN", text: "hello", ts: "101.3" });
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(
-      f.core.ingests.flat().some((event) => event.text === "hello"),
-      false,
-    );
-    assert.match(f.client.posts[0].text, /isn't fully internal/);
-  } finally {
-    await f.stop();
-  }
-});
+for (const { name, ...refused } of [
+  {
+    name: "an unknown user fails closed even when Slack lookup returns no record",
+    channel: "DU",
+    user: "UUNKNOWN",
+    ts: "101.3",
+  },
+  {
+    name: "an external principal is refused in a DM before core sees the text",
+    channel: "DX",
+    user: "UX",
+    ts: "102.1",
+  },
+]) {
+  test(name, () =>
+    inFixture(async (f) => {
+      await f.app.emitMessage({ channel_type: "im", text: "exfiltrate this", ...refused });
+      assert.equal(f.core.turns.length, 0);
+      assert.equal(f.client.posts.length, 1);
+      assert.match(f.client.posts[0].text, /isn't fully internal/);
+      assert.equal(
+        f.core.ingests.flat().some((event) => event.text === "exfiltrate this"),
+        false,
+      );
+    }),
+  );
+}
 
-test("an external principal is refused in a DM before core sees the text", async () => {
-  const f = await fixture();
-  try {
-    await f.app.emitMessage({ channel: "DX", channel_type: "im", user: "UX", text: "exfiltrate this", ts: "102.1" });
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.client.posts.length, 1);
-    assert.match(f.client.posts[0].text, /isn't fully internal/);
-    assert.equal(
-      f.core.ingests.flat().some((event) => event.text === "exfiltrate this"),
-      false,
-    );
-  } finally {
-    await f.stop();
-  }
-});
+const peerBot = { id: "B1", team_id: "T1", is_bot: true, name: "peerbot", profile: { display_name: "Peer Bot" } };
 
-test("a bot-authored mention can become a turn", async () => {
-  const f = await fixture();
-  try {
-    f.client.usersById.set("B1", {
-      id: "B1",
-      team_id: "T1",
-      is_bot: true,
-      name: "peerbot",
-      profile: { display_name: "Peer Bot" },
-    });
-    f.client.membersByChannel.set("C1", ["U1", "U2", "B1", "UBOT"]);
-    await f.app.emitEvent("app_mention", {
-      channel: "C1",
-      channel_type: "channel",
-      user: "B1",
-      bot_id: "B-PEER",
-      text: "<@UBOT> hello",
-      ts: "102.2",
-    });
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].actor.externalId, "B1");
-    assert.equal(f.client.posts[0].text, "agent reply");
-  } finally {
-    await f.stop();
-  }
-});
+for (const bot of [
+  { name: "a bot-authored mention can become a turn", user: "B1", ts: "102.2", actor: "B1" },
+  {
+    name: "a bot-authored mention without a user resolves its bot principal",
+    record: { id: "B-PEER", user_id: "B1", name: "Peer Bot" },
+    ts: "102.25",
+    actor: "B1",
+  },
+  {
+    name: "a verified legacy bot without a user principal can become a turn",
+    record: { id: "B-LEGACY", name: "Legacy Bot" },
+    ts: "102.26",
+    actor: "B-LEGACY",
+  },
+]) {
+  test(bot.name, () =>
+    inFixture(async (f) => {
+      if (bot.actor === "B1") {
+        f.client.usersById.set("B1", peerBot);
+        f.client.membersByChannel.set("C1", ["U1", "U2", "B1", "UBOT"]);
+      }
+      if (bot.record) f.client.botsById.set(bot.record.id, bot.record);
+      await f.app.emitEvent("app_mention", {
+        channel: "C1",
+        channel_type: "channel",
+        ...(bot.user ? { user: bot.user } : {}),
+        bot_id: bot.record?.id ?? "B-PEER",
+        text: "<@UBOT> hello",
+        ts: bot.ts,
+      });
+      assert.equal(f.core.turns.length, 1);
+      assert.equal(f.core.turns[0].actor.externalId, bot.actor);
+      assert.equal(f.client.posts[0].text, "agent reply");
+    }),
+  );
+}
 
-test("a bot-authored mention without a user resolves its bot principal", async () => {
-  const f = await fixture();
-  try {
-    f.client.usersById.set("B1", {
-      id: "B1",
-      team_id: "T1",
-      is_bot: true,
-      name: "peerbot",
-      profile: { display_name: "Peer Bot" },
-    });
-    f.client.botsById.set("B-PEER", { id: "B-PEER", user_id: "B1", name: "Peer Bot" });
-    f.client.membersByChannel.set("C1", ["U1", "U2", "B1", "UBOT"]);
-    await f.app.emitEvent("app_mention", {
-      channel: "C1",
-      channel_type: "channel",
-      bot_id: "B-PEER",
-      text: "<@UBOT> hello",
-      ts: "102.25",
-    });
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].actor.externalId, "B1");
-  } finally {
-    await f.stop();
-  }
-});
+for (const stop of [
+  {
+    name: "a bot-authored stop can abort a live run",
+    message: { subtype: "bot_message", user: "B1", bot_id: "B-PEER", ts: "102.3" },
+  },
+  { name: "stop aborts the active run without enqueuing a second turn", message: { user: "U1", ts: "107.1" } },
+]) {
+  test(stop.name, () =>
+    inFixture(async (f) => {
+      f.client.usersById.set("B1", peerBot);
+      f.core.activeRun = "run-active";
+      await f.app.emitMessage({ channel: "D1", channel_type: "im", text: "stop", ...stop.message });
+      assert.deepEqual(f.core.abortedRuns, ["run-active"]);
+      assert.equal(f.core.turns.length, 0);
+      assert.equal(f.core.ackPicks.length, 0);
+      assert.equal(f.client.posts.length, 0);
+    }),
+  );
+}
 
-test("a verified legacy bot without a user principal can become a turn", async () => {
-  const f = await fixture();
-  try {
-    f.client.botsById.set("B-LEGACY", { id: "B-LEGACY", name: "Legacy Bot" });
-    await f.app.emitEvent("app_mention", {
-      channel: "C1",
-      channel_type: "channel",
-      bot_id: "B-LEGACY",
-      text: "<@UBOT> hello",
-      ts: "102.26",
-    });
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].actor.externalId, "B-LEGACY");
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a bot-authored stop can abort a live run", async () => {
-  const f = await fixture();
-  try {
-    f.client.usersById.set("B1", {
-      id: "B1",
-      team_id: "T1",
-      is_bot: true,
-      name: "peerbot",
-      profile: { display_name: "Peer Bot" },
-    });
-    f.core.activeRun = "run-active";
-    await f.app.emitMessage({
-      channel: "D1",
-      channel_type: "im",
-      subtype: "bot_message",
-      user: "B1",
-      bot_id: "B-PEER",
-      text: "stop",
-      ts: "102.3",
-    });
-    assert.deepEqual(f.core.abortedRuns, ["run-active"]);
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.core.ackPicks.length, 0);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a Slack Connect mention is refused ephemerally and never mirrored", async () => {
-  const f = await fixture();
-  try {
+test("a Slack Connect mention is refused ephemerally and never mirrored", () =>
+  inFixture(async (f) => {
     f.core.activeRun = "run-active";
     const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> stop", ts: "103.1" };
     await f.app.emitEvent("app_mention", event);
@@ -1168,14 +1078,10 @@ test("a Slack Connect mention is refused ephemerally and never mirrored", async 
     assert.equal(f.client.posts.length, 0);
     assert.equal(f.client.ephemerals.length, 1);
     assert.match(f.client.ephemerals[0].text, /isn't fully internal/);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("an unreadable channel roster fails closed before core or mirror ingestion", async () => {
-  const f = await fixture();
-  try {
+test("an unreadable channel roster fails closed before core or mirror ingestion", () =>
+  inFixture(async (f) => {
     f.client.membershipFailures.add("C1");
     await f.app.emitEvent("app_mention", {
       channel: "C1",
@@ -1187,51 +1093,45 @@ test("an unreadable channel roster fails closed before core or mirror ingestion"
     assert.equal(f.core.turns.length, 0);
     assert.equal(f.core.ingests.length, 0);
     assert.equal(f.client.ephemerals.length, 1);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("the admin external-participant toggle permits capability without hiding the guest audience", async () => {
-  const f = await fixture({ externalParticipants: true });
-  try {
-    const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> collaborate", ts: "103.3" };
-    f.client.messagesByChannel.set("CX", [event]);
-    await f.app.emitEvent("app_mention", event);
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(
-      f.core.turns[0].conversation.audience.some((a: any) => a.externalId === "UX" && a.isExternalGuest),
-      true,
-    );
-    assert.equal(f.client.posts[0].text, "agent reply");
-    assert.equal(
-      f.core.ingests.flat().some((e: any) => e.ts === "103.3"),
-      true,
-    );
-  } finally {
-    await f.stop();
-  }
-});
+test("the admin external-participant toggle permits capability without hiding the guest audience", () =>
+  inFixture(
+    async (f) => {
+      const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> collaborate", ts: "103.3" };
+      f.client.messagesByChannel.set("CX", [event]);
+      await f.app.emitEvent("app_mention", event);
+      assert.equal(f.core.turns.length, 1);
+      assert.equal(
+        f.core.turns[0].conversation.audience.some((a: any) => a.externalId === "UX" && a.isExternalGuest),
+        true,
+      );
+      assert.equal(f.client.posts[0].text, "agent reply");
+      assert.equal(
+        f.core.ingests.flat().some((e: any) => e.ts === "103.3"),
+        true,
+      );
+    },
+    { externalParticipants: true },
+  ));
 
-test("a core boundary refusal stays requester-only in a channel", async () => {
-  const f = await fixture({ externalParticipants: true });
-  try {
-    f.core.result = { status: "refused", reason: "conversation must be fully internal" };
-    const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> collaborate", ts: "103.4" };
-    f.client.messagesByChannel.set("CX", [event]);
-    await f.app.emitEvent("app_mention", event);
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.client.posts.length, 0);
-    assert.equal(f.client.ephemerals.length, 1);
-    assert.match(f.client.ephemerals[0].text, /fully internal/);
-  } finally {
-    await f.stop();
-  }
-});
+test("a core boundary refusal stays requester-only in a channel", () =>
+  inFixture(
+    async (f) => {
+      f.core.result = { status: "refused", reason: "conversation must be fully internal" };
+      const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> collaborate", ts: "103.4" };
+      f.client.messagesByChannel.set("CX", [event]);
+      await f.app.emitEvent("app_mention", event);
+      assert.equal(f.core.turns.length, 1);
+      assert.equal(f.client.posts.length, 0);
+      assert.equal(f.client.ephemerals.length, 1);
+      assert.match(f.client.ephemerals[0].text, /fully internal/);
+    },
+    { externalParticipants: true },
+  ));
 
-test("a blocked-thread result without approval details tells only the sender instead of posting a dead approval card", async () => {
-  const f = await fixture();
-  try {
+test("a blocked-thread result without approval details tells only the sender instead of posting a dead approval card", () =>
+  inFixture(async (f) => {
     f.core.result = {
       status: "pending_approval",
       sessionId: "S1",
@@ -1245,14 +1145,10 @@ test("a blocked-thread result without approval details tells only the sender ins
     assert.equal(f.client.ephemerals.length, 1);
     assert.match(f.client.ephemerals[0].text, /waiting for someone else/);
     assert.equal(f.client.ephemerals[0].blocks, undefined);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("an internal channel mention carries the complete audience and thread context", async () => {
-  const f = await fixture();
-  try {
+test("an internal channel mention carries the complete audience and thread context", () =>
+  inFixture(async (f) => {
     const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> status?", ts: "104.1" };
     f.client.messagesByChannel.set("C1", [event]);
     await f.app.emitEvent("app_mention", event);
@@ -1267,14 +1163,10 @@ test("an internal channel mention carries the complete audience and thread conte
       f.core.ingests.flat().some((e: any) => e.ts === "104.1" && e.handled && e.mentionsSelf),
       true,
     );
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("an unaddressed top-level channel message is mirrored but never becomes a turn", async () => {
-  const f = await fixture();
-  try {
+test("an unaddressed top-level channel message is mirrored but never becomes a turn", () =>
+  inFixture(async (f) => {
     await f.app.emitMessage({
       channel: "C1",
       channel_type: "channel",
@@ -1288,16 +1180,11 @@ test("an unaddressed top-level channel message is mirrored but never becomes a t
       f.core.ingests.flat().some((e: any) => e.ts === "104.2" && e.text === "ambient update" && !e.handled),
       true,
     );
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a group-DM thread-follow runs unprompted yet attests its author's liveness", async () => {
-  const f = await fixture();
-  try {
-    f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
+test("a group-DM thread-follow runs unprompted yet attests its author's liveness", () =>
+  inFixture(async (f) => {
+    addGroup(f.client, "G1");
     f.client.messagesByChannel.set("G1", [
       { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
       { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
@@ -1316,16 +1203,11 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
     assert.equal(f.core.turns[0].liveActor, true, "a member's own verbatim follow-up is a live act");
     assert.equal(f.core.turns[0].conversation.kind, "group");
     assert.equal(f.core.turns[0].conversation.threadRef, "grp:G1:300.1");
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a message from an unseen group DM resyncs the directory so it becomes addressable", async () => {
-  const f = await fixture();
-  try {
-    f.client.channelsById.set("G9", { id: "G9", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G9", ["U1", "U2", "UBOT"]);
+test("a message from an unseen group DM resyncs the directory so it becomes addressable", () =>
+  inFixture(async (f) => {
+    addGroup(f.client, "G9");
     const listedBefore = f.client.groupListings;
     await f.app.emitMessage({ channel: "G9", channel_type: "mpim", user: "U1", text: "hi", ts: "400.1" });
     await waitFor(() => f.client.groupListings > listedBefore);
@@ -1344,16 +1226,11 @@ test("a message from an unseen group DM resyncs the directory so it becomes addr
     await f.app.emitMessage({ channel: "G9", channel_type: "mpim", user: "U1", text: "again", ts: "400.2" });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(f.client.groupListings, listedAfter, "a group DM already seen does not resync on every message");
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a failed group listing pushes its fallback rows under the OLD stamp, never a fresh one", async () => {
-  const f = await fixture();
-  try {
-    f.client.channelsById.set("G7", { id: "G7", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G7", ["U1", "U2", "UBOT"]);
+test("a failed group listing pushes its fallback rows under the OLD stamp, never a fresh one", () =>
+  inFixture(async (f) => {
+    addGroup(f.client, "G7");
     await f.app.emitMessage({ channel: "G7", channel_type: "mpim", user: "U1", text: "hi", ts: "402.1" });
     await waitFor(() =>
       f.core.directories.some((d: any) => (d.groupMembers ?? []).some((g: any) => g.groupId === "G7")),
@@ -1362,7 +1239,7 @@ test("a failed group listing pushes its fallback rows under the OLD stamp, never
     assert.ok(goodStamp > 0);
 
     f.client.failGroupListing = true;
-    f.client.channelsById.set("G6", { id: "G6", name: "", is_member: true, is_private: true, is_mpim: true });
+    addGroup(f.client, "G6", []);
     await f.app.emitMessage({ channel: "G6", channel_type: "mpim", user: "U1", text: "hi", ts: "402.2" });
     await waitFor(() => f.core.directories.findLast((d: any) => d.channels)?.channelsSyncedAt > goodStamp);
     const last = f.core.directories.findLast((d: any) => d.channels);
@@ -1371,16 +1248,11 @@ test("a failed group listing pushes its fallback rows under the OLD stamp, never
       undefined,
       "a failed group listing must omit the groups section, never ship rows under a fresh stamp",
     );
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a failed group member read marks only that roster unknown", async () => {
-  const f = await fixture();
-  try {
-    f.client.channelsById.set("G5", { id: "G5", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G5", ["U1", "U2", "UBOT"]);
+test("a failed group member read marks only that roster unknown", () =>
+  inFixture(async (f) => {
+    addGroup(f.client, "G5");
     await f.app.emitMessage({ channel: "G5", channel_type: "mpim", user: "U1", text: "hi", ts: "403.1" });
     await waitFor(() =>
       f.core.directories.some((d: any) => (d.groupMembers ?? []).some((g: any) => g.groupId === "G5")),
@@ -1395,33 +1267,20 @@ test("a failed group member read marks only that roster unknown", async () => {
     assert.ok(last.groupIds.includes("G5"));
     assert.ok(!last.groupRosterIds.includes("G5"));
     assert.equal(last.groupMembers.filter((member: any) => member.groupId === "G5").length, 0);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("all listed group DMs reach the directory past the legacy private-channel cap", async () => {
-  const f = await fixture();
-  try {
-    for (let i = 0; i < 51; i++) {
-      const id = `G${i}`;
-      f.client.channelsById.set(id, { id, name: "", is_member: true, is_private: true, is_mpim: true });
-      f.client.membersByChannel.set(id, ["U1", "U2", "UBOT"]);
-    }
+test("all listed group DMs reach the directory past the legacy private-channel cap", () =>
+  inFixture(async (f) => {
+    for (let i = 0; i < 51; i++) addGroup(f.client, `G${i}`);
     const pushes = f.core.directories.length;
     await f.app.emitMessage({ channel: "G0", channel_type: "mpim", subtype: "group_join", ts: "403.3" });
     await waitFor(() => f.core.directories.length > pushes);
     assert.equal(new Set(f.core.directories.at(-1).groupMembers.map((member: any) => member.groupId)).size, 51);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a group DM whose listing fails is retried at most once, never once per message", async () => {
-  const f = await fixture();
-  try {
-    f.client.channelsById.set("G8", { id: "G8", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G8", ["U1", "U2", "UBOT"]);
+test("a group DM whose listing fails is retried at most once, never once per message", () =>
+  inFixture(async (f) => {
+    addGroup(f.client, "G8");
     f.client.failGroupListing = true;
     const listedBefore = f.client.groupListings;
     for (const ts of ["401.1", "401.2", "401.3"]) {
@@ -1433,14 +1292,10 @@ test("a group DM whose listing fails is retried at most once, never once per mes
       1,
       "a failing listing must not make every message trigger another full sync",
     );
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a peer bot's thread reply dispatches without attesting liveness", async () => {
-  const f = await fixture();
-  try {
+test("a peer bot's thread reply dispatches without attesting liveness", () =>
+  inFixture(async (f) => {
     f.client.usersById.set("UB2", { id: "UB2", team_id: "T1", name: "copilot", is_bot: true });
     f.client.membersByChannel.set("C1", ["U1", "U2", "UB2", "UBOT"]);
     f.client.messagesByChannel.set("C1", [
@@ -1460,10 +1315,7 @@ test("a peer bot's thread reply dispatches without attesting liveness", async ()
     assert.equal(f.core.turns[0].unprompted, true);
     assert.equal(f.core.turns[0].entryTs, "301.3");
     assert.equal(f.core.turns[0].liveActor, undefined, "a bot author is automation, never a live act");
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
 test("an untrusted inbound file URL is never fetched and reaches core only as a missing-file note", async (t) => {
   const f = await fixture();
@@ -1488,9 +1340,8 @@ test("an untrusted inbound file URL is never fetched and reaches core only as a 
   }
 });
 
-test("message edits and deletes update the mirror without creating turns", async () => {
-  const f = await fixture();
-  try {
+test("message edits and deletes update the mirror without creating turns", () =>
+  inFixture(async (f) => {
     await f.app.emitMessage({
       channel: "C1",
       channel_type: "channel",
@@ -1541,172 +1392,112 @@ test("message edits and deletes update the mirror without creating turns", async
     });
     const tombstone = f.core.ingests.flat().find((e: any) => e.ts === "105.9");
     assert.equal(tombstone?.deleted, true, "a tombstoned thread root reads as a deletion");
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("a stalled run keeps its still-working wording instead of the generic failure", async () => {
-  const f = await fixture();
-  try {
+test("a stalled run keeps its still-working wording instead of the generic failure", () =>
+  inFixture(async (f) => {
     f.core.submitError = Object.assign(new Error("run stalled"), { code: "run_stalled" });
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "106.0" });
     assert.equal(f.client.posts.length, 1);
     assert.match(f.client.posts[0].text, /taking unusually long/);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("raw core failures never leak through Slack", async () => {
-  const f = await fixture();
-  try {
+test("raw core failures never leak through Slack", () =>
+  inFixture(async (f) => {
     f.core.submitError = new Error("password=super-secret postgres://internal-db/run/abc");
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "106.1" });
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.client.posts.length, 1);
     assert.match(f.client.posts[0].text, /Something went wrong on my end/);
     assert.doesNotMatch(f.client.posts[0].text, /super-secret|postgres|run\/abc/);
-  } finally {
-    await f.stop();
-  }
-});
+  }));
 
-test("stop aborts the active run without enqueuing a second turn", async () => {
-  const f = await fixture();
-  try {
-    f.core.activeRun = "run-active";
-    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "stop", ts: "107.1" });
-    assert.deepEqual(f.core.abortedRuns, ["run-active"]);
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.client.posts.length, 0);
-  } finally {
-    await f.stop();
-  }
-});
+test("an allowFrom account answers listed members and is silent to everyone else", () =>
+  inFixture(
+    async (f) => {
+      await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "300.1" });
+      assert.equal(f.core.turns.length, 1);
+      assert.equal(f.core.turns[0].conversation.audience[0].externalId, "alice@example.com");
+    },
+    { identityEmail: "1", allowFrom: ["example.com"] },
+  ));
 
-test("an allowFrom account answers listed members and is silent to everyone else", async () => {
-  const f = await fixture({ identityEmail: "1", allowFrom: ["example.com"] });
-  try {
-    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "300.1" });
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].conversation.audience[0].externalId, "alice@example.com");
-  } finally {
-    await f.stop();
-  }
-});
+test("an allowFrom account drops unlisted members before any core work", () =>
+  inFixture(
+    async (f) => {
+      await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hey there", ts: "301.1" });
+      await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> ping", ts: "301.2" });
+      assert.equal(f.core.turns.length, 0);
+      assert.equal(f.core.ackPicks.length, 0);
+      assert.deepEqual(f.core.ingests, []);
+      assert.deepEqual(f.client.posts, []);
+      assert.deepEqual(f.client.ephemerals, []);
+    },
+    { identityEmail: "1", allowFrom: ["staff@example.com"] },
+  ));
 
-test("an allowFrom account drops unlisted members before any core work", async () => {
-  const f = await fixture({ identityEmail: "1", allowFrom: ["staff@example.com"] });
-  try {
-    await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hey there", ts: "301.1" });
-    await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> ping", ts: "301.2" });
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.core.ackPicks.length, 0);
-    assert.deepEqual(f.core.ingests, []);
-    assert.deepEqual(f.client.posts, []);
-    assert.deepEqual(f.client.ephemerals, []);
-  } finally {
-    await f.stop();
-  }
-});
+for (const coreSingleton of [false, true]) {
+  test(
+    coreSingleton
+      ? "the default account keeps every core-singleton subsystem and pushes the core directory"
+      : "a non-singleton account still serves turns but runs no core-singleton subsystems",
+    () =>
+      inFixture(
+        async (f) => {
+          const expected = coreSingleton ? 1 : 0;
+          if (coreSingleton) await waitFor(() => f.core.publishedEmojiCatalogs.length === 1);
+          assert.equal(f.core.directories.length > 0, coreSingleton);
+          assert.equal(f.core.deliverySubscriptions, expected);
+          assert.equal(f.core.contextSubscriptions, expected);
+          assert.equal(f.core.modelChangeListeners.length, expected);
+          assert.equal(f.core.headerPinChangeListeners.length, expected);
+          assert.equal(f.core.publishedEmojiCatalogs.length, expected);
+          await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "302.1" });
+          assert.equal(f.core.turns.length, 1);
+        },
+        coreSingleton ? {} : { coreSingleton },
+      ),
+  );
+}
+test("a gated account with a denyMessage answers direct approaches with it, once per user", () =>
+  inFixture(
+    async (f) => {
+      await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> help", ts: "500.1" });
+      assert.equal(f.client.ephemerals.length, 1);
+      assert.equal(f.client.ephemerals[0].user, "U2");
+      assert.equal(f.client.ephemerals[0].text, "I only work with Acme staff — ask your administrator.");
+      await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> hello?", ts: "500.2" });
+      assert.equal(f.client.ephemerals.length, 1);
+      await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hi", ts: "500.3" });
+      assert.equal(f.client.posts.length, 1);
+      assert.equal(f.client.posts[0].channel, "D2");
+      assert.equal(f.client.posts[0].text, "I only work with Acme staff — ask your administrator.");
+      await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hello??", ts: "500.4" });
+      assert.equal(f.client.posts.length, 1);
+      assert.equal(f.core.turns.length, 0);
+      assert.deepEqual(f.core.ingests, []);
+    },
+    {
+      identityEmail: "1",
+      allowFrom: ["staff@example.com"],
+      denyMessage: "I only work with Acme staff — ask your administrator.",
+    },
+  ));
 
-test("a non-singleton account still serves turns but runs no core-singleton subsystems", async () => {
-  const f = await fixture({ coreSingleton: false });
-  try {
-    assert.deepEqual(f.core.directories, []);
-    assert.equal(f.core.deliverySubscriptions, 0);
-    assert.equal(f.core.contextSubscriptions, 0);
-    assert.equal(f.core.modelChangeListeners.length, 0);
-    assert.equal(f.core.headerPinChangeListeners.length, 0);
-    assert.equal(f.core.publishedEmojiCatalogs.length, 0);
-    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "302.1" });
-    assert.equal(f.core.turns.length, 1);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("the default account keeps every core-singleton subsystem", async () => {
-  const f = await fixture();
-  try {
-    assert.equal(f.core.deliverySubscriptions, 1);
-    assert.equal(f.core.contextSubscriptions, 1);
-    assert.equal(f.core.modelChangeListeners.length, 1);
-    assert.equal(f.core.headerPinChangeListeners.length, 1);
-    await waitFor(() => f.core.publishedEmojiCatalogs.length === 1);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a gated account joining a channel stays silent — no welcome, no header", async () => {
-  const f = await fixture({
-    identityEmail: "1",
-    allowFrom: ["staff@example.com"],
-    webUiPublicUrl: "https://claw.example.dev",
-  });
-  try {
-    f.core.headerPinScopes.add("channel:C1");
-    await f.app.emitEvent("member_joined_channel", { user: "UBOT", channel: "C1", event_ts: "400.1" }, "Ev-gated-join");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(f.client.posts, []);
-    assert.equal(f.client.pinnedByChannel.get("C1"), undefined);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("the default account still pushes the core directory", async () => {
-  const f = await fixture();
-  try {
-    await waitFor(() => f.core.directories.length >= 1);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a gated account with a denyMessage answers direct approaches with it, once per user", async () => {
-  const f = await fixture({
-    identityEmail: "1",
-    allowFrom: ["staff@example.com"],
-    denyMessage: "I only work with Acme staff — ask your administrator.",
-  });
-  try {
-    await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> help", ts: "500.1" });
-    assert.equal(f.client.ephemerals.length, 1);
-    assert.equal(f.client.ephemerals[0].user, "U2");
-    assert.equal(f.client.ephemerals[0].text, "I only work with Acme staff — ask your administrator.");
-    await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> hello?", ts: "500.2" });
-    assert.equal(f.client.ephemerals.length, 1);
-    await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hi", ts: "500.3" });
-    assert.equal(f.client.posts.length, 1);
-    assert.equal(f.client.posts[0].channel, "D2");
-    assert.equal(f.client.posts[0].text, "I only work with Acme staff — ask your administrator.");
-    await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hello??", ts: "500.4" });
-    assert.equal(f.client.posts.length, 1);
-    assert.equal(f.core.turns.length, 0);
-    assert.deepEqual(f.core.ingests, []);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a denyMessage account stays silent on ambient channel chatter from unlisted members", async () => {
-  const f = await fixture({
-    identityEmail: "1",
-    allowFrom: ["staff@example.com"],
-    denyMessage: "Staff only, I fear.",
-  });
-  try {
-    await f.app.emitMessage({ channel: "C1", channel_type: "channel", user: "U2", text: "morning all", ts: "501.1" });
-    assert.deepEqual(f.client.posts, []);
-    assert.deepEqual(f.client.ephemerals, []);
-    assert.deepEqual(f.core.ingests, []);
-  } finally {
-    await f.stop();
-  }
-});
+test("a denyMessage account stays silent on ambient channel chatter from unlisted members", () =>
+  inFixture(
+    async (f) => {
+      await f.app.emitMessage({ channel: "C1", channel_type: "channel", user: "U2", text: "morning all", ts: "501.1" });
+      assert.deepEqual(f.client.posts, []);
+      assert.deepEqual(f.client.ephemerals, []);
+      assert.deepEqual(f.core.ingests, []);
+    },
+    {
+      identityEmail: "1",
+      allowFrom: ["staff@example.com"],
+      denyMessage: "Staff only, I fear.",
+    },
+  ));
 
 test("thread status is detached from reply delivery and steering cannot take ownership", async () => {
   const f = await fixture({ coreSingleton: false });
