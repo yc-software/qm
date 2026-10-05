@@ -1606,7 +1606,7 @@ async function awaitServiceTargets(
     failurePolls = new Map();
     if (waiting.length === 0) return;
     if (Date.now() > deadline) {
-      throw new CliError(`timed out waiting for the AWS rollout: still starting ${waiting.join(", ")}`);
+      throw new CliError(`timed out waiting for the AWS rollout: ${waiting.join(", ")}`);
     }
     note(`waiting on ${waiting.join(", ")}`);
     await sleep(pollMs);

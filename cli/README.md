@@ -136,8 +136,14 @@ requests without restarting ECS tasks. Activation waits for prior owners to stop
 claiming and every expected task to finish activation. Pausing stops new claims;
 in-flight turns can continue draining. Replacing or rolling back the active core
 cohort requires an explicit pause or handover and proof that every member has
-relinquished first; ECS then stops the old tasks after their stop timeout, and
-any turn still running there resumes on the replacement tasks. A demotion
+relinquished first; ECS then stops the old tasks once they exit or their
+`stopTimeout` elapses (core drains for `SHUTDOWN_DRAIN_MS`, 10 s by default), and
+any turn still running there resumes on the replacement tasks. The rollout wait
+requires every rolling service to reach `COMPLETED` with a single deployment; a
+timeout rolls the changed services back. The first `qm up` from this release
+against tasks from an older image can still meet a task that protected itself
+while busy, so run that one deploy with `QM_AWS_ROLLOUT_DEADLINE_MS` above an
+hour or when no long turn is in flight. A demotion
 refuses to pause a different current owner. Unresponsive members are never
 assumed dead: `awsRetireBackgroundWorkMembers` requires exact instance, task ARN,
 and generation identities plus ECS evidence that each task stopped. This recovery
