@@ -1979,10 +1979,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
+            const interrupted = typeof callId === "string" && entry.ref.interruptedResults?.delete(callId) === true;
+            const stripped = stripImageBytes(message, isTrigger ? turn.images : steer?.images);
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
-              payload: stripImageBytes(message, isTrigger ? turn.images : steer?.images),
+              payload: interrupted ? { ...(stripped as object), interrupted: true } : stripped,
               scopeLabel: resultScope ?? turn.scopeLabel,
               ...(isTrigger
                 ? {

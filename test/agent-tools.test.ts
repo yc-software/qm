@@ -4125,3 +4125,22 @@ test("every tool schema carries the optional retrySafe flag, which is stripped b
     "the flag never reaches the tool body or its result",
   );
 });
+
+test("a result recorded after the turn was aborted is marked interrupted so resume treats its outcome as unknown", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+    abortSignal: AbortSignal.abort(),
+  };
+  const history = createAgentTools(ref).find((t) => t.name === "history")!;
+  await callWith(history, "late", { query: "budget" });
+  const result = emitted.find((e) => e.type === "tool_result")!;
+  assert.equal(result.payload.interrupted, true);
+  assert.equal(result.payload.callId, "late");
+  assert.deepEqual([...(ref.interruptedResults ?? [])], ["late"], "the tape writer learns which row to mark");
+  assert.equal(emitted.find((e) => e.type === "tool_call")!.payload.interrupted, undefined);
+});

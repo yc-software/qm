@@ -753,3 +753,26 @@ test("dangling calls heal only after every image is rehydrated", async () => {
   );
   assert.ok(tapeNeedsInterruptHeal(rows, hydrated));
 });
+
+test("a toolResult row marked interrupted folds as the interrupted placeholder, so served turns match entry replay", () => {
+  const rows = [
+    user("run it"),
+    assistant([{ type: "toolCall", id: "c1", name: "execute", arguments: { command: "make" } }]),
+    row({
+      kind: "message",
+      payload: {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "execute",
+        content: [{ type: "text", text: "[exit 143]" }],
+        isError: false,
+        interrupted: true,
+      },
+    }),
+  ];
+  const fold = foldTape(rows) as Array<{ role: string; content: Array<{ text: string }>; isError?: boolean }>;
+  const result = fold.find((m) => m.role === "toolResult")!;
+  assert.equal(result.content[0]!.text, INTERRUPTED_TOOL_RESULT);
+  assert.equal(result.isError, true);
+  assert.ok(lintFold(fold).ok);
+});

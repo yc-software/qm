@@ -261,9 +261,15 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
       }
       continue;
     }
-    if (row.kind === "message" && row.payload != null) f.out.push(row.payload);
+    if (row.kind === "message" && row.payload != null) f.out.push(interruptedResultPlaceholder(row.payload));
   }
   return f.out;
+}
+
+function interruptedResultPlaceholder(message: unknown): unknown {
+  const msg = message as { role?: string; interrupted?: unknown; content?: unknown };
+  if (msg?.role !== "toolResult" || msg.interrupted !== true) return message;
+  return { ...msg, content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }], isError: true };
 }
 
 const LEGACY_CONTINUATION_LINE = "(continuing after the tool result above)";
