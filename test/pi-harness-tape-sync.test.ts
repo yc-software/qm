@@ -646,8 +646,9 @@ for (const abort of ["shutdown", "stop"] as const) {
       const tapedResult = tape.find(
         (row) => row.kind === "message" && (row.payload as { role?: string }).role === "toolResult",
       );
+      assert.ok(tapedResult);
       assert.equal(
-        (tapedResult?.payload as { interrupted?: unknown }).interrupted,
+        (tapedResult.payload as { interrupted?: unknown }).interrupted,
         abort === "shutdown" ? true : undefined,
       );
       const { openTapeToolCalls, foldTape, lintFold } = await import("../src/harness/tape-fold.ts");
