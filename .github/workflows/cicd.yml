@@ -460,3 +460,36 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           printf 'QM_CI_TREE={"sha":"%s","tree":"%s","runId":%s,"attempt":%s,"pr":%s}\n' "$GITHUB_SHA" "$(git rev-parse HEAD^{tree})" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$PR_NUMBER"
+
+  notify-deployments:
+    name: Notify deployments of green main
+    timeout-minutes: 3
+    continue-on-error: true
+    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Deliver the signed green-main receipt
+        env:
+          CHECKS: ${{ toJSON(needs) }}
+          WEBHOOK_URL: ${{ secrets.QM_GREEN_MAIN_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.QM_GREEN_MAIN_WEBHOOK_SECRET }}
+        run: |
+          test "$(jq -r '[.[] | .result] | all(. == "success")' <<<"$CHECKS")" = true
+          if test -z "$WEBHOOK_URL" || test -z "$WEBHOOK_SECRET"; then
+            echo "no deployment webhook configured"
+            exit 0
+          fi
+          body="$(jq -cn --arg sha "$GITHUB_SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{event: "main_green", repository: "yc-software/qm", sha: $sha, run_id: $run, attempt: $attempt}')"
+          signature="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -r | cut -d' ' -f1)"
+          status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            -H 'content-type: application/json' \
+            -H 'x-github-event: push' \
+            -H "x-hub-signature-256: sha256=$signature" \
+            --data "$body" "$WEBHOOK_URL" || true)"
+          case "$status" in
+            2*) echo "deployment webhook responded $status" ;;
+            *) echo "::warning::deployment webhook responded ${status:-000}; downstream will fall back to polling" ;;
+          esac

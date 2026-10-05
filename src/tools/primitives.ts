@@ -11,8 +11,6 @@ import { join } from "node:path";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import { ROUTE_CACHE_TTL_MS, type SandboxBackendName } from "../sandbox/sandbox-routing.ts";
-import type { SandboxMigrationRunner } from "../sandbox/sandbox-migration-runner.ts";
 import { CapabilityUnsupportedError, hasParentPathSegment, supportsAgentComputerExport } from "../sandbox/sandbox.ts";
 import type {
   ApprovalGrantModes,
@@ -226,7 +224,6 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<unknown>;
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
   restartComputer(sandboxId?: string): Promise<void>;
-  migrateComputer(to: string): Promise<{ from: string; to: string }>;
   read(path: string, signal?: AbortSignal): Promise<ReadResult>;
   skill(name: string, opts?: { path?: string; sandboxId?: string; signal?: AbortSignal }): Promise<SkillResult>;
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
@@ -474,10 +471,8 @@ export interface ToolContextDeps {
   grantedHandles: GrantedHandle[];
   context?: TurnContext;
   sharedMaterializeDir?: string;
-  sandboxMigration?: SandboxMigrationRunner;
   sandboxResources?: SandboxResources;
   invalidateProvision?: () => void;
-  migrateSettleMs?: number;
   workspace: WorkspaceStore;
   deploy: DeployService;
   acl: AclStore;
@@ -722,60 +717,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!writableScopeId) throw new Error("this turn has no scoped computer to restart");
       await deps.sandbox.restartComputer(writableScopeId);
     },
-    async migrateComputer(to: string): Promise<{ from: string; to: string }> {
-      if (writableScopeId && (await deps.sandboxResources?.resolve(writableScopeId)) !== undefined)
-        throw new Error("this scope uses sandbox resources; create a sandbox and change its default independently");
-      const runner = deps.sandboxMigration;
-      if (!runner) throw new Error("computer migration is not available on this deployment");
-      if (!writableScopeId) throw new Error("this turn has no scoped computer to migrate");
-      const available = runner.availableBackends();
-      if (!(available as string[]).includes(to)) {
-        throw new Error(
-          `${JSON.stringify(to)} is not an available backend here — choose one of: ${available.join(", ")}`,
-        );
-      }
-      const approvalCommand = `computer:"migrate" to:"${to}"`;
-      const approvalKey = `computer-migrate:${to}`;
-      if (!deps.authorizeCommand(approvalCommand, approvalKey)) {
-        throw new NeedsApproval(
-          approvalCommand,
-          `moving this computer to ${to} re-homes its files onto a different provider and can take several minutes`,
-          "approval",
-          undefined,
-          approvalKey,
-        );
-      }
-      try {
-        const result = await runner.migrateScope(writableScopeId, to as SandboxBackendName, "agent-requested", {
-          copyTimeoutSec: 1800,
-        });
-        deps.auditLog?.record({
-          at: Date.now(),
-          principalId: deps.createdBy,
-          action: "sandbox_routes.migrate",
-          resource: `${result.from}->${result.to} sha=${result.sha.slice(0, 12)}`,
-          scopeLabel: writableScopeId,
-        });
-        await new Promise((res) => setTimeout(res, deps.migrateSettleMs ?? ROUTE_CACHE_TTL_MS));
-        deps.invalidateProvision?.();
-        return { from: result.from, to: result.to };
-      } catch (err) {
-        deps.auditLog?.record({
-          at: Date.now(),
-          principalId: deps.createdBy,
-          action: "sandbox_routes.migrate_failed",
-          resource: errMessage(err).slice(0, 200),
-          scopeLabel: writableScopeId,
-        });
-        throw new Error(
-          errMessage(err).replace(
-            "Migrate with force to accept the loss.",
-            "An operator can force this from the admin console.",
-          ),
-          { cause: err },
-        );
-      }
-    },
     async execute(
       command: string,
       execOpts?: {
@@ -919,7 +860,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           } catch (error) {
             const message = errMessage(error);
             const masked = mask(message);
-            if (masked !== message) throw new MaskedExecutionError(masked);
+            if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
             throw error;
           }
           return reached ? { ...r, reached } : r;

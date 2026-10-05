@@ -1,62 +1,10 @@
 import type * as Sentry from "@sentry/node";
-import { basename } from "node:path";
-import { finishTiming, parseSampleRate, sanitizeTransactionEvent, type TimingResult } from "./timing.ts";
+import { finishTiming, parseSampleRate, type TimingResult } from "./timing.ts";
 import { swallow } from "./errors.ts";
 
 const FLUSH_MS = 2_000;
-const ERROR_TYPES = new Set([
-  "Error",
-  "TypeError",
-  "RangeError",
-  "ReferenceError",
-  "SyntaxError",
-  "URIError",
-  "EvalError",
-  "AggregateError",
-]);
 let client: typeof Sentry | undefined;
 let tracing = false;
-
-export function sanitizeErrorEvent(event: Sentry.ErrorEvent): Sentry.ErrorEvent {
-  const frames = (items: Sentry.StackFrame[] | undefined) =>
-    items?.map((frame) => ({
-      filename: frame.filename ? basename(frame.filename.split("?")[0]!) : undefined,
-      function: frame.function?.replace(/[^a-zA-Z0-9_.$<> [\]-]/g, "").slice(0, 160),
-      lineno: frame.lineno,
-      colno: frame.colno,
-      in_app: frame.in_app,
-    }));
-  return {
-    type: undefined,
-    event_id: event.event_id,
-    timestamp: event.timestamp,
-    platform: "node",
-    level: event.level,
-    environment: event.environment,
-    release: event.release,
-    tags: { service: event.tags?.service, deployment: event.tags?.deployment, error_code: event.tags?.error_code },
-    fingerprint: event.tags?.error_code ? ["{{ default }}", String(event.tags.error_code)] : undefined,
-    message: event.exception?.values?.length ? undefined : "Backend error; details retained in application logs",
-    exception: event.exception
-      ? {
-          values: event.exception.values?.map((exception) => ({
-            type: ERROR_TYPES.has(exception.type ?? "") ? exception.type : "Error",
-            value:
-              typeof event.tags?.error_code === "string"
-                ? event.tags.error_code
-                : "Details retained in application logs",
-            stacktrace: exception.stacktrace ? { frames: frames(exception.stacktrace.frames) } : undefined,
-            mechanism: exception.mechanism
-              ? {
-                  type: exception.mechanism.type,
-                  handled: exception.mechanism.handled,
-                }
-              : undefined,
-          })),
-        }
-      : undefined,
-  };
-}
 
 export function initializeErrorReporting(
   sdk: typeof Sentry,
@@ -71,17 +19,17 @@ export function initializeErrorReporting(
     release: env.SENTRY_RELEASE ?? env.GIT_SHA,
     serverName: "",
     defaultIntegrations: false,
-    integrations: [sdk.onUncaughtExceptionIntegration()],
+    integrations: [
+      sdk.onUncaughtExceptionIntegration(),
+      sdk.linkedErrorsIntegration(),
+      sdk.extraErrorDataIntegration({ depth: 8 }),
+    ],
     skipOpenTelemetrySetup: tracesSampleRate === 0,
     ...(tracesSampleRate > 0 ? { tracesSampleRate } : {}),
     tracePropagationTargets: [],
-    sendDefaultPii: false,
-    maxBreadcrumbs: 0,
     attachStacktrace: true,
     sendClientReports: false,
     initialScope: { tags: { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID } },
-    beforeSend: sanitizeErrorEvent,
-    beforeSendTransaction: (event) => sanitizeTransactionEvent(event, "node"),
     shutdownTimeout: FLUSH_MS,
   });
   client = sdk;
@@ -98,8 +46,11 @@ export function initializeErrorReporting(
   });
 }
 
-export function reportBackendError(error: unknown, code?: string): void {
-  client?.captureException(error, { tags: code && /^[a-zA-Z0-9_.:-]{1,120}$/.test(code) ? { error_code: code } : {} });
+export function reportBackendError(error: unknown, code?: string, extra?: Record<string, unknown>): string | undefined {
+  return client?.captureException(error, {
+    ...(code ? { tags: { error_code: code }, fingerprint: ["{{ default }}", code] } : {}),
+    ...(extra ? { extra } : {}),
+  });
 }
 
 export type FinishTiming = (result: TimingResult) => void;

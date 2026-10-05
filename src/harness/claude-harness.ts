@@ -47,9 +47,11 @@ import {
   oneShotRunner,
   tapeReplyCheckpoint,
   recordSteerIntake,
+  recordStoppedReply,
   type SteerIntake,
   transitionTask,
   type HarnessToolPlumbing,
+  withResumedToolCall,
 } from "./harness-shared.ts";
 import {
   recordedMessageTimestamps,
@@ -336,6 +338,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
     const bridged = toolsEnabled ? bridgedTools(ref, harnessToolOptions(opts, turn)) : [];
+    turn = await withResumedToolCall(turn, ref, bridged);
     const bridgedNames = bridged.map((definition) => `mcp__qm__${definition.name}`);
     const childToolNames = bridged
       .filter((definition) => nativeChildToolAllowed(definition.name))
@@ -747,11 +750,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
-            const finalEntry = await turn.emit({
-              type: "assistant",
-              payload: { text, ...(stopped ? { stopped: true } : {}) },
-              scopeLabel: turn.scopeLabel,
-            });
+            const finalEntry = await turn.emit({ type: "assistant", payload: { text }, scopeLabel: turn.scopeLabel });
             await tapeReplyCheckpoint(turn, finalEntry);
           }
           streamedText = "";
@@ -785,12 +784,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
         if (reply && !terminal) {
-          const finalEntry = await turn.emit({
-            type: "assistant",
-            payload: { text: reply, stopped: true },
-            scopeLabel: turn.scopeLabel,
-          });
-          await tapeReplyCheckpoint(turn, finalEntry);
+          const finalEntry = await recordStoppedReply(turn, reply);
+          if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
         }
         return {
           reply,

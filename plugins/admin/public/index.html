@@ -6844,6 +6844,7 @@
       for (const el of document.querySelectorAll("[data-brand-product]")) el.textContent = brandSelfLabel();
       document.title = `${brandSelfLabel()} Admin`;
       let page = 1;
+      let historyCursor = null;
 
       const FOCUS_STALE_MS = 60000;
       const viewLoadedAt = {};
@@ -7264,7 +7265,7 @@
           if (st.own) p.set("own", st.own);
           if (st.cron) p.set("cron", st.cron);
           if (st.historyKind && st.historyKind !== "conversation") p.set("kind", st.historyKind);
-          if (st.page > 1) p.set("page", st.page);
+          if (st.cursor) p.set("cursor", st.cursor);
           const q = p.toString();
           const path = scopeInPath ? API_BASE + "/history/scopes/" + scopeSegment : API_BASE + "/history";
           return q ? path + "?" + q : path;
@@ -7347,6 +7348,7 @@
           range: p.get("range") || null,
           historyKind: normalizedHistoryKind,
           page: Math.max(1, parseInt(p.get("page"), 10) || 1),
+          cursor: p.get("cursor") || null,
           container: p.get("container") || null,
           ts: p.get("ts") || null,
           decision: p.get("decision") || null,
@@ -7365,6 +7367,7 @@
         view = st.view;
         scope = st.scope;
         page = st.page || 1;
+        historyCursor = st.cursor || null;
         historyKind = st.historyKind || "conversation";
         $("app-view").classList.toggle("history-view", view === "history");
         $("app-view").classList.toggle("slack-view", view === "slack");
@@ -9189,7 +9192,8 @@
 
         if (view === "memory" && orgWideView() && urlToState().mem !== "edit") path = "/api/memory/scopes";
         if (view === "history") {
-          path += `&limit=${HISTORY_PAGE_SIZE}&offset=${(page - 1) * HISTORY_PAGE_SIZE}&category=${encodeURIComponent(historyCategory(historyKind))}`;
+          path += `&limit=${HISTORY_PAGE_SIZE}&category=${encodeURIComponent(historyCategory(historyKind))}`;
+          if (historyCursor) path += `&cursor=${encodeURIComponent(historyCursor)}`;
           if (historyKind === "cron") {
             path += `&origin=${encodeURIComponent(historyKind)}`;
             const cronSel = urlToState().cron;
@@ -10404,7 +10408,7 @@
           historyKind,
           historyKindMatches,
           cron: urlToState().cron,
-          pageSize: HISTORY_PAGE_SIZE,
+          cursor: historyCursor,
           scope,
           orgScope: "org:" + orgId,
           environments: environmentDir,
@@ -10425,12 +10429,6 @@
           errorStripBox,
           adminErrorCount,
           adminErrors,
-          correctPage: (next, cron) => {
-            if (next === page) return;
-            page = next;
-            const st = { view: "history", scope, session: null, page, historyKind, cron };
-            history.replaceState(st, "", stateToUrl(st));
-          },
         });
       }
 

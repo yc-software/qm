@@ -1154,6 +1154,7 @@ async function runGitHttpBackend(input: {
     child.stdout.on("data", (d) => stdout.push(Buffer.from(d)));
     child.stderr.on("data", (d) => stderr.push(Buffer.from(d)));
     child.on("error", reject);
+    child.stdin.on("error", () => {});
     child.on("close", (code) => {
       const out = Buffer.concat(stdout);
       const split = headerEnd(out);

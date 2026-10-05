@@ -105,7 +105,7 @@ import {
 } from "./inbox";
 import { openSkillById, renderSkills, resetActiveSkill, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
-import { applyTheme, renderSettings, watchSystemTheme } from "./settings";
+import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
@@ -1088,6 +1088,7 @@ export async function boot(): Promise<void> {
   const approvalsPrefetch = linkedId ? fetchSessionApprovals(linkedId) : null;
   const runtimeConfigFetch = fetchRuntimeConfig();
   const remoteSplitFetch = fetchRemoteSplit();
+  const openNewChatFetch = loadOpenNewChat();
 
   let r: Response;
   try {
@@ -1135,8 +1136,9 @@ export async function boot(): Promise<void> {
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
-  loadPersistedSplit();
-  if (!wantedSession && wanted !== "app-edit" && prefill === null) {
+  const restoreLast = viewIntent || !(await openNewChatFetch);
+  if (restoreLast) loadPersistedSplit();
+  if (restoreLast && !wantedSession && wanted !== "app-edit" && prefill === null) {
     const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {
       if (viewIntent && restoredCanvasNeedsSessionList()) await sessions;
     });
@@ -1148,7 +1150,7 @@ export async function boot(): Promise<void> {
   }
 
   const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
-  if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
+  if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
     const transcript = entriesPrefetch ?? loadLinkedTranscript(wantedSession);
@@ -1218,7 +1220,7 @@ export async function boot(): Promise<void> {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     exitSplitIfActive();
     await openSession(recent);
-  } else if (!mountRestoredCanvas() && !mainConversation().state.threadRef) {
+  } else if (!(restoreLast && mountRestoredCanvas()) && !mainConversation().state.threadRef) {
     mainConversation().newChat();
   }
 }

@@ -402,22 +402,17 @@ test("combined auth rejects two source secrets for the same environment name", (
   );
 });
 
-test("scope-selected providers require both Modal and Sprites credentials", () => {
+test("the retired SANDBOX_SCOPE_BACKENDS map no longer requires provider credentials", () => {
   const config = makeConfig({
-    env: { core: { SANDBOX_BACKEND: "sprites", SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' } },
+    env: {
+      core: { SANDBOX_BACKEND: "sprites", SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"superserve"}' },
+    },
   });
   const required = computedSecrets(config)
     .filter((secret) => secret.required)
     .map((secret) => secret.name);
-  for (const name of ["SPRITES_TOKEN", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"])
-    assert.ok(required.includes(name), name);
-});
-
-test("a scope routed to superserve requires its API key even when it is not the primary backend", () => {
-  const config = makeConfig({
-    env: { core: { SANDBOX_BACKEND: "local", SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}' } },
-  });
-  assert.equal(secretByName(config, "SUPERSERVE_API_KEY").required, true);
+  assert.ok(required.includes("SPRITES_TOKEN"));
+  for (const name of ["MODAL_TOKEN_ID", "SUPERSERVE_API_KEY"]) assert.ok(!required.includes(name), name);
 });
 
 test("shared Fly publishing requires private peers only when selected", () => {

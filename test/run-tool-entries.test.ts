@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -35,6 +36,7 @@ test("a run's tool entries are read from the session tape, bounded by its turn a
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-")) }));
   built.runtime.start();
   try {
+    await selectDefaultSandbox(built, "U1", "personal:U1");
     const first = await built.app.turn(dm("!run echo hi"));
     const run = await settled(built, first.runId!);
     const second = await built.app.turn(dm("plain follow-up"));
@@ -59,6 +61,7 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-goal-")) }));
   built.runtime.start();
   try {
+    await selectDefaultSandbox(built, "U1", "personal:U1");
     const first = await built.app.turn(dm("!run echo hi"));
     const run = await settled(built, first.runId!);
     const session = (await built.sessions.getByThread(run.sessionId))!;
@@ -111,6 +114,7 @@ test("each tool entry nudges the run stream once it is durable", async () => {
     return appended;
   };
   try {
+    await selectDefaultSandbox(built, "U1", "personal:U1");
     const turn = await built.app.turn(dm("!run echo hi"));
     const unsubscribe = built.app.subscribeRun(turn.runId!, (event) => {
       if (event.kind === "refresh") log.push("refresh");

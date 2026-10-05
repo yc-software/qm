@@ -2,7 +2,7 @@ import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { parseScopeId } from "./types.ts";
-import type { SandboxScopeDefaults } from "./sandbox/sandbox-routing.ts";
+import type { LegacySandboxScopeDefaults } from "./sandbox/sandbox-resource-upgrade.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
   parseProviderBaseUrl,
@@ -71,9 +71,8 @@ export interface Config {
   databaseDirectPoolMax?: number;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
-  sandboxResourcesEnabled: boolean;
   sharingPosture: SharingPosture;
-  sandboxScopeDefaults?: SandboxScopeDefaults;
+  legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "superserve";
   sandboxSecondaryBackend?:
     "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "superserve";
@@ -129,8 +128,6 @@ export interface Config {
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
   buildSha?: string;
-  ecsTaskProtection: boolean;
-  ecsAgentUri?: string;
   monitorPollMs: number;
   skillSyncPollMs: number;
   monitorHeartbeatMs: number;
@@ -935,7 +932,7 @@ export const CONFIG_DEFAULTS = {
   leaseTtlMs: 120_000,
   heartbeatIntervalMs: 10_000,
   reaperIntervalMs: 15_000,
-  shutdownDrainMs: 10_000,
+  shutdownDrainMs: 30_000,
   maxAttempts: 3,
   maxClaims: 8,
   processReaperIntervalMs: 30_000,
@@ -1269,7 +1266,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
-  const sandboxScopeDefaults: SandboxScopeDefaults = {};
+  const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
   if (env.SANDBOX_SCOPE_BACKENDS) {
     const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
     if (!values || typeof values !== "object" || Array.isArray(values))
@@ -1278,11 +1275,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       const parsed = parseScopeId(kind + ":scope").kind;
       if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
         throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
-      sandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
+      legacySandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
     }
   }
-  const superserveSelected =
-    sandboxBackend === "superserve" || Object.values(sandboxScopeDefaults).includes("superserve");
+  const superserveSelected = sandboxBackend === "superserve";
   if (superserveSelected && !env.SUPERSERVE_TEMPLATE?.trim()) {
     throw new Error(
       "SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE, the ready qm-agent-<release> template that carries the agent toolchain.",
@@ -1477,8 +1473,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { securityScreenProxy: { provider: proxyProvider!, endpoint: proxyEndpoint!, token: proxyToken! } }
       : {}),
     sandboxBackend,
-    sandboxScopeDefaults,
-    sandboxResourcesEnabled: boolEnvStrict("SANDBOX_RESOURCES_ENABLED", env.SANDBOX_RESOURCES_ENABLED) ?? false,
+    legacySandboxScopeDefaults,
     deployProvider,
     ...(env.EGRESS_SERVICE_HOSTS
       ? {
@@ -1566,8 +1561,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
       : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
-    ecsTaskProtection: boolEnvStrict("ECS_TASK_PROTECTION", env.ECS_TASK_PROTECTION) ?? true,
-    ...(env.ECS_AGENT_URI ? { ecsAgentUri: env.ECS_AGENT_URI } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
     skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,
     monitorHeartbeatMs:

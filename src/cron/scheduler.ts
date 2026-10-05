@@ -32,6 +32,8 @@ const STRANDED_SWEEP_INTERVAL_MS = 10 * 60_000;
 const FIRE_GC_INTERVAL_MS = 6 * 60 * 60_000;
 const BUSY_DEFER_MS = 30_000;
 const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
+const MAINTENANCE_INTERVAL_MS = 5000;
+const REPAIR_INTERVAL_MS = 60_000;
 
 type FireResult = { authzFailed: boolean; deferred?: boolean };
 
@@ -490,6 +492,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
     }
+  }
+
+  async function maintain(): Promise<void> {
     await sweepStranded(now());
     await gcFires(now());
     await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));
@@ -502,8 +507,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ? leaderLease.hold(TICK_LEASE_KEY, async (lost) => {
             let lockLost = false;
             void lost.then(() => (lockLost = true));
-            while (!stopped && !lockLost && deps.jobQueue!.healthy())
-              await Promise.race([sleep(1000, { unref: true }), lost, stopSignal.promise]);
+            let repairAt = 0;
+            while (!stopped && !lockLost && deps.jobQueue!.healthy()) {
+              if (Date.now() >= repairAt) {
+                repairAt = Date.now() + REPAIR_INTERVAL_MS;
+                await runQueueTask(reconcile);
+              }
+              await runQueueTask(maintain);
+              await Promise.race([sleep(MAINTENANCE_INTERVAL_MS, { unref: true }), lost, stopSignal.promise]);
+            }
           })
         : undefined,
     1000,
@@ -586,13 +598,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
       const observed = epoch;
       starting = deps.jobQueue
-        .start(
-          {
-            onFire: (job) => (observed === epoch ? runQueueTask(() => fireJob(job)) : Promise.resolve()),
-            onTick: () => (observed === epoch ? runQueueTask(reconcile) : Promise.resolve()),
-          },
-          intervalMs,
-        )
+        .start({
+          onFire: (job) => (observed === epoch ? runQueueTask(() => fireJob(job)) : Promise.resolve()),
+        })
         .then(
           () => {
             if (!stopped) leaseGuard.start();

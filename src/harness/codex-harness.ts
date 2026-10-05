@@ -33,10 +33,12 @@ import {
   oneShotRunner,
   tapeReplyCheckpoint,
   recordSteerIntake,
+  recordStoppedReply,
   type SteerIntake,
   transitionTask,
   type BridgedTool,
   type HarnessToolPlumbing,
+  withResumedToolCall,
 } from "./harness-shared.ts";
 import {
   recordedMessageTimestamps,
@@ -937,6 +939,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       toolAbort = new AbortController();
       ref.abortSignal = toolAbort.signal;
       tools = toolsEnabled ? bridgedTools(ref, harnessToolOptions(opts, turn)) : [];
+      turn = await withResumedToolCall(turn, ref, tools);
       dynamicTools = tools.map((tool) => ({
         type: "function",
         name: tool.name,
@@ -1187,11 +1190,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               scopeLabel: turn.scopeLabel,
             });
         }
-        await turn.emit({
-          type: "assistant",
-          payload: { text: state.stoppedReply ?? "", stopped: true },
-          scopeLabel: turn.scopeLabel,
-        });
+        await recordStoppedReply(turn, state.stoppedReply ?? "");
       })();
       return stoppedReplySaved;
     };
@@ -1328,14 +1327,13 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (reply && !terminal) {
           const finalEntry = await turn.emit({
             type: "assistant",
-            payload: { text: reply, ...(state.stopped ? { stopped: true } : {}) },
+            payload: { text: reply },
             scopeLabel: turn.scopeLabel,
           });
           await tapeReplyCheckpoint(turn, finalEntry);
         }
         turnResult = {
           reply,
-          ...(state.stopped ? { stopped: true as const } : {}),
           ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),

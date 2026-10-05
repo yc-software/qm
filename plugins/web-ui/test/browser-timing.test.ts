@@ -94,7 +94,7 @@ const me = (tracesSampleRate?: number) => ({
   browserErrors: { dsn: "https://public@sentry.example.com/1", release: "release-1", tracesSampleRate },
 });
 
-test("real browser SDK sends sanitized page load and request timings when sampled", async () => {
+test("real browser SDK preserves page URLs, request data and child spans when sampled", async () => {
   await withBrowser(async (sent) => {
     await initializeBrowserErrors(me(1));
     const sdk = await import("@sentry/browser");
@@ -136,8 +136,8 @@ test("real browser SDK sends sanitized page load and request timings when sample
     });
     await sdk.flush(1000);
     const payload = JSON.stringify(sent);
-    assert.equal(payload.includes("private"), false);
-    assert.equal(payload.includes("0f3a9c1e"), false);
+    assert.equal(payload.includes("private"), true);
+    assert.equal(payload.includes("0f3a9c1e"), true);
     const items = sent.map((envelope) => [envelope[1]!.type, envelope[2]!.transaction, envelope[2]]);
     assert.deepEqual(
       items.map(([type, name]) => [type, name]),
@@ -146,12 +146,18 @@ test("real browser SDK sends sanitized page load and request timings when sample
         ["transaction", "GET /api/sessions/*"],
         ["transaction", "PUT /api/ui-state"],
         ["transaction", "POST /api/runs"],
+        ["transaction", "GET /api/private/1234"],
         ["transaction", "GET /api/direct"],
       ],
     );
     const pageload = items[0]![2]!;
-    assert.deepEqual(pageload.tags, { page: "chats" });
-    assert.equal(pageload.contexts.trace.data, undefined);
+    assert.deepEqual(pageload.tags, { service: "web-ui-browser", org: "private-org" });
+    assert.equal(pageload.contexts.trace.data.page, "chats");
+    assert.equal(pageload.contexts.trace.data.url, `${origin}/s/private-session?token=private`);
+    assert.equal(
+      items[1]![2]!.contexts.trace.data.url,
+      `${origin}/api/sessions/0f3a9c1e-1d2b-4c5d-8e9f-abcdef012345/entries?after=private`,
+    );
     assert.deepEqual(pageload.measurements, {
       ttfb: { value: 120, unit: "millisecond" },
       dom_content_loaded: { value: 800, unit: "millisecond" },
@@ -164,19 +170,15 @@ test("real browser SDK sends sanitized page load and request timings when sample
     assert.equal(pageload.platform, "javascript");
     assert.equal(items[1]![2]!.contexts.trace.status, "ok");
     assert.equal(items[2]![2]!.contexts.trace.status, "invalid_argument");
-    assert.deepEqual(items[3]![2]!.tags, { http_status: "network" });
+    assert.equal(items[3]![2]!.contexts.trace.data.http_status, "network");
     assert.equal(items[3]![2]!.contexts.trace.status, "internal_error");
-    assert.deepEqual(items[4]![2]!.spans, []);
-    assert.deepEqual(items[4]![2]!.tags, {});
+    assert.equal(items[5]![2]!.spans[0].description, "private");
+    assert.equal(items[5]![2]!.request.url, "private");
+    assert.equal(items[5]![2]!.tags.private, "private");
+    assert.equal(items[5]![2]!.contexts.trace.data.private, 1);
     const traceIds = new Set(items.slice(0, 4).map(([, , event]) => event!.contexts.trace.trace_id));
     assert.equal(traceIds.size, 4);
-    for (const [, , event] of items) {
-      assert.equal(event!.user, undefined);
-      assert.equal(event!.request, undefined);
-      assert.equal(event!.breadcrumbs, undefined);
-      assert.deepEqual(Object.keys(sent[0]![0]!).sort(), ["event_id", "sdk", "sent_at"]);
-    }
-    assert.doesNotMatch(JSON.stringify(sent.map((envelope) => envelope[0]!.trace)), /private|user|segment/);
+    assert.equal(pageload.user.username, "private-user");
   });
 });
 

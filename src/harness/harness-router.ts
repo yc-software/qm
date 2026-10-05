@@ -86,6 +86,7 @@ async function runTurnEnforcingGoal(
       const remaining = remainingWallMs();
       result = await adapter.turns.runTurn({
         ...dispatched,
+        continueTurn: undefined,
         input: note,
         history: [...input.history, ...emitted],
         goal,

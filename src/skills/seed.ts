@@ -89,7 +89,10 @@ export function upsertSeedSkill(
   skills: SkillStore,
   input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; reviewer: string; pack?: Skill["pack"] },
 ): Promise<UpsertOutcome> {
-  return upsertQueue(`${input.scopeId}\0${input.manifest.name}`, () => upsertSeedSkillUnsafe(skills, input));
+  const run = () => upsertSeedSkillUnsafe(skills, input);
+  return upsertQueue(`${input.scopeId}\0${input.manifest.name}`, () =>
+    skills.withNameLock ? skills.withNameLock(input.scopeId, input.manifest.name, run) : run(),
+  );
 }
 
 async function upsertSeedSkillUnsafe(

@@ -1840,7 +1840,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   assert.deepEqual(await newAudience.start!({ fork: true }), { ok: false, message: unshareable });
   const hidden = await newAudience.list!();
   assert.ok(hidden.ok);
-  assert.ok(!hidden.sessions.some((s) => s.title === "room"));
+  assert.ok(hidden.sessions.some((s) => s.title === "room"));
   const slack = forTurn(true, { surface: "slack" });
   for (const out of [
     await slack.list!(),

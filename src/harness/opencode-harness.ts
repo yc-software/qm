@@ -45,9 +45,11 @@ import {
   oneShotRunner,
   tapeReplyCheckpoint,
   recordSteerIntake,
+  recordStoppedReply,
   type SteerIntake,
   type BridgedTool,
   type HarnessToolPlumbing,
+  withResumedToolCall,
 } from "./harness-shared.ts";
 import { recordedMessageTimestamps, reconstructMessagesFromHistory } from "./replay.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -899,6 +901,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
     const tools = bridgedTools(ref, harnessToolOptions(opts, turn));
+    turn = await withResumedToolCall(turn, ref, tools);
     const userEntry = await turn.emit({
       type: "user",
       payload: {
@@ -1167,17 +1170,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       for (const thinking of reasoningFromParts(parts))
         await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
       const reply = ref.runtimeHandoff || ref.silentRequested ? "" : textFromParts(parts);
+      const interrupted = state.stopped || turn.cancel?.aborted === true;
       if (reply) {
-        const finalEntry = await turn.emit({
-          type: "assistant",
-          payload: { text: reply, ...(state.stopped ? { stopped: true } : {}) },
-          scopeLabel: turn.scopeLabel,
-        });
-        await tapeReplyCheckpoint(turn, finalEntry);
+        const finalEntry = interrupted
+          ? await recordStoppedReply(turn, reply)
+          : await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+        if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
       }
       return {
         reply,
-        ...(state.stopped ? { stopped: true as const, stoppedByUser: true as const } : {}),
+        ...(interrupted ? { stopped: true as const } : {}),
+        ...(state.stopped ? { stoppedByUser: true as const } : {}),
         ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
         ...(ref.silentRequested ? { silent: true } : {}),
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),

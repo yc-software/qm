@@ -800,7 +800,7 @@ test("failed scratch initialization and deletion retain a safe retryable identit
     pending = error.handle;
     assert.equal(pending.backend, "sprites");
     assert.ok(fake.names().includes(pending.id));
-    assert.equal(error.cause, undefined);
+    assert.ok(error.cause);
     return true;
   });
   assert.ok(pending);

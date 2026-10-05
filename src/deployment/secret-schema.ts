@@ -58,11 +58,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
 ];
 
 function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolean {
-  if (env.SANDBOX_BACKEND?.trim() === backend) return true;
-  const scopes: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS || "{}");
-  if (!scopes || typeof scopes !== "object" || Array.isArray(scopes))
-    throw new Error("SANDBOX_SCOPE_BACKENDS must be an object");
-  return Object.values(scopes).some((value) => typeof value === "string" && value.trim() === backend);
+  return env.SANDBOX_BACKEND?.trim() === backend;
 }
 
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {

@@ -26,6 +26,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from ".
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -1512,6 +1513,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   assert.match(sys.reply ?? "", /Alice \(U_OWNER\): github/);
   assert.match(sys.reply ?? "", /no grant for this conversation/);
   assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
+  await selectDefaultSandbox(built, "U_ASKER", "channel:C1");
 
   let mark = fakeSprites.execScripts().length;
   assert.equal((await built.app.turn(channelTurn("!run true", "U_ASKER", audience))).status, "ok");
@@ -1533,6 +1535,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   assert.match(sys2.reply ?? "", /STANDING grant .*use my gh here for repo work/);
   assert.match(sys2.reply ?? "", new RegExp(`kc_${cred.id.slice(0, 12)}`));
 
+  await selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER");
   mark = fakeSprites.execScripts().length;
   const dm: TurnRequest = {
     surface: "test",

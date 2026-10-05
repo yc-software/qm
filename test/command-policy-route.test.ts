@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -34,6 +35,7 @@ const putPolicy = (base: string, b: unknown) =>
 test("a pending approval survives a surface restart: GET /v1/approvals/:id returns a replayable request", async () => {
   const srv = start();
   try {
+    await selectDefaultSandbox(srv.built, "U1", "personal:U1");
     const command = "git push --force origin main";
     const turn = {
       surface: "slack",

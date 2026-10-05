@@ -20,7 +20,7 @@ function dm(text: string, thread: string): TurnRequest {
 }
 
 test("background output selects the recorded private resource and fails closed when it is unavailable", async () => {
-  const built = buildApp(testConfig({ sandboxResourcesEnabled: true }));
+  const built = buildApp(testConfig({}));
   try {
     const root = await built.app.turn(dm("Start", "resource-output"));
     const resource = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Worker");

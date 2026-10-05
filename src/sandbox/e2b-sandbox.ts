@@ -5,7 +5,6 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { collectBlob } from "../persistence/blob-transfer.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
@@ -58,7 +57,6 @@ const WORKSPACE_BASENAME = "workspace";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
-const IN_MEMORY_ADOPT_MAX_BYTES = 256 * 1024 * 1024;
 
 const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 const DEFAULT_KEEP_WARM_SEC = 3600;
@@ -466,7 +464,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
         return handle;
       } catch (err) {
-        await cleanupFailedProvision(sandbox, handle);
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },
@@ -508,38 +506,6 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     },
 
     exportFiles: execExport.exportFiles,
-
-    async adoptHomeSnapshot(scopeId: string, blobId: string): Promise<void> {
-      const blobTransfer = opts.blobTransfer;
-      if (!blobTransfer) throw new Error("e2b adoptHomeSnapshot: no blob transfer store wired");
-      const ref = blobTransfer.s3Ref?.(blobId);
-      if (ref && snapshots.adoptFromS3) {
-        await snapshots.adoptFromS3(scopeId, ref);
-      } else {
-        const blob = await blobTransfer.open(blobId);
-        if (!blob) throw new Error(`e2b adoptHomeSnapshot: blob ${blobId} not found`);
-        if (blob.sizeBytes > IN_MEMORY_ADOPT_MAX_BYTES) {
-          blob.stream.destroy();
-          throw new Error(
-            `e2b adoptHomeSnapshot: blob is ${blob.sizeBytes} bytes; adopting over ${IN_MEMORY_ADOPT_MAX_BYTES} needs S3-backed blob and snapshot stores`,
-          );
-        }
-        await snapshots.put(scopeId, await collectBlob(blob.stream));
-      }
-      const name = sandboxScopeName(prefix, scopeId);
-      return provisionQueue(scopeId, async () => {
-        const session = sessionByName.get(name);
-        sessionByName.delete(name);
-        const stored = await store.get(scopeId);
-        const killGone = (e: unknown): void => {
-          if (!(e instanceof E2bSandboxGoneError)) throw e;
-        };
-        if (session) await session.kill().catch(killGone);
-        else if (stored) await client.kill(stored.sandboxId).catch(killGone);
-        await store.delete(scopeId);
-        await forgetSnapshot(stored?.recoverySnapshotId);
-      });
-    },
 
     async persistHomeSnapshot(scopeId: string): Promise<void> {
       const name = sandboxScopeName(prefix, scopeId);

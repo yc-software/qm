@@ -1,4 +1,11 @@
-import { recordSteerIntake, type SteerIntake } from "./harness-shared.ts";
+import {
+  recordSteerIntake,
+  recordStoppedReply,
+  resumeInterruptedToolCall,
+  tapeReplyCheckpoint,
+  type BridgedTool,
+  type SteerIntake,
+} from "./harness-shared.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
@@ -11,6 +18,7 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  type ToolDefinition,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -44,7 +52,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ClientToolDeclaration, ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
+import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
 import type {
   GapPhase,
   GapPhases,
@@ -53,7 +61,7 @@ import type {
   NewTapeRecord,
   TapeRecord,
 } from "../sessions/session-store.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
+import { tapeEntryMirrorRecord } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
@@ -100,8 +108,8 @@ import {
   type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
-import { assistantDroppedAtReplay, ELIDED_IMAGE_TEXT, planTapeSeed } from "./tape-fold.ts";
-import { estimateHistoryTokens } from "./context-compaction.ts";
+import { assistantDroppedAtReplay, ELIDED_IMAGE_TEXT, planTapeSeed, withResumedToolResult } from "./tape-fold.ts";
+import { estimateHistoryTokens, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
@@ -669,6 +677,15 @@ interface PiAgentWithPayloadHook {
   subscribe?(listener: (event: unknown) => Promise<void> | void): () => void;
 }
 
+export function endsAtRecordedToolResult(messages: readonly unknown[]): boolean {
+  const last = messages.at(-1) as { role?: unknown; content?: unknown } | undefined;
+  return last?.role === "toolResult" && textFromContent(last.content) !== INTERRUPTED_TOOL_RESULT;
+}
+
+function continueAssistantTurn(session: AgentSession): Promise<void> {
+  return (session as unknown as { _runAgentPrompt(messages: readonly unknown[]): Promise<void> })._runAgentPrompt([]);
+}
+
 interface PiSeedTarget {
   agent?: { state?: { messages?: unknown[] } };
   sessionManager?: { appendMessage?: (message: unknown) => unknown };
@@ -992,12 +1009,18 @@ export function piLastAssistantTextOrThrow(session: AssistantTextSession): strin
   return session.getLastAssistantText();
 }
 
+function messagesSince(session: AssistantTextSession, messagesBefore?: number): AssistantTextSession {
+  return messagesBefore === undefined
+    ? session
+    : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
+}
+
+function piRoundFailed(session: AssistantTextSession, messagesBefore: number): boolean {
+  return !!piFailedAssistant(messagesSince(session, messagesBefore));
+}
+
 export function piTurnError(session: AssistantTextSession, thrown: unknown, messagesBefore?: number): Error {
-  const fresh =
-    messagesBefore === undefined
-      ? session
-      : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-  const detailed = piAssistantFailure(fresh);
+  const detailed = piAssistantFailure(messagesSince(session, messagesBefore));
   if (detailed) return detailed;
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
@@ -1010,11 +1033,7 @@ export function isProviderRefusal(message: string | undefined): boolean {
 }
 
 export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
-  const fresh =
-    messagesBefore === undefined
-      ? session
-      : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-  const err = piAssistantError(fresh);
+  const err = piAssistantError(messagesSince(session, messagesBefore));
   return err && isProviderRefusal(err) ? err : null;
 }
 
@@ -1605,25 +1624,41 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
+  function createTurnTools(ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
+    return createAgentTools(ref, {
+      sessionTools: Boolean(turn.tools.sessionSyscalls),
+      delegateWork: turn.delegateWork === true,
+      scratchExec,
+      ownerAuthExec,
+      reachExec,
+      ...(mcpTools ? { mcpTools } : {}),
+      controlTools,
+      ...(turn.commandCredentialHandles?.length ? { commandCredentialHandles: turn.commandCredentialHandles } : {}),
+      ...(turn.surfaceTools ? { surfaceTools: true } : {}),
+      ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
+      ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
+      ...(turn.readOnly ? { readOnly: true } : {}),
+      ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
+      ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
+      ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
+      ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
+      sandboxResources: opts?.sandboxResources,
+    });
+  }
   async function createTurnSession(
     model: Model<Api>,
     sessionId: string,
     systemPrompt: string,
     history: SessionEntry[],
-    priorTurns?: ConversationTurn[],
-    readOnly?: boolean,
-    surfaceTools?: boolean,
-    surfaceName?: string,
-    turnScope?: ScopeId,
-    commandCredentialHandles?: readonly string[],
-    tapeRows?: TapeRecord[],
-    tapeMode?: "shadow" | "serve",
-    tapeFold?: unknown[],
-    tape?: HarnessTurnInput["tape"],
-    turnProviderKeys?: ProviderKeys,
-    sessionTools = false,
-    delegateWork = false,
-    clientTools?: readonly ClientToolDeclaration[],
+    priorTurns: ConversationTurn[] | undefined,
+    turnScope: ScopeId,
+    tapeRows: TapeRecord[] | undefined,
+    tapeMode: "shadow" | "serve" | undefined,
+    tapeFold: unknown[] | undefined,
+    tape: HarnessTurnInput["tape"],
+    turnProviderKeys: ProviderKeys | undefined,
+    ref: TurnSession["ref"],
+    tools: ToolDefinition[],
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
     let reconstructed: PiReplayMessage[] | null;
@@ -1661,7 +1696,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       turnProviderKeys ? undefined : modelGateway,
       systemCacheSplit ? "long" : undefined,
     );
-    const ref: TurnSession["ref"] = { current: null };
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       composedPrompt,
@@ -1675,25 +1709,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         modelRuntime,
         resourceLoader,
         settingsManager,
-        customTools: createAgentTools(ref, {
-          sessionTools,
-          delegateWork,
-          scratchExec,
-          ownerAuthExec,
-          reachExec,
-          ...(mcpTools ? { mcpTools } : {}),
-          controlTools,
-          ...(commandCredentialHandles?.length ? { commandCredentialHandles } : {}),
-          ...(surfaceTools ? { surfaceTools: true } : {}),
-          ...(surfaceName ? { surfaceName } : {}),
-          ...(clientTools?.length ? { clientTools } : {}),
-          ...(readOnly ? { readOnly: true } : {}),
-          ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
-          ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
-          ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
-          ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
-          sandboxResources: opts?.sandboxResources,
-        }),
+        customTools: tools,
         noTools: "builtin",
         sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
         cwd,
@@ -1724,7 +1740,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           await tape({
             kind: "context_event",
             payload: { event: "legacy_import", messages: seeded },
-            scopeLabel: turnScope!,
+            scopeLabel: turnScope,
           });
         } catch (err) {
           removeIsolatedDirs({ agentDir, ephemeralCwd });
@@ -1838,50 +1854,68 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       ]),
     },
     {
-      async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
-        const desiredModelId = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
-        const baseModel = getRequiredModel(desiredModelId, !turn.providerKeys);
-        const turnModelGateway = turn.providerKeys ? undefined : modelGateway;
-        const wantFast = wantsFastMode(turn.runtime?.fastMode, desiredModelId);
+      async runTurn(dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
+        const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
+        const baseModel = getRequiredModel(desiredModelId, !dispatched.providerKeys);
+        const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
+        const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
+        const ref: TurnSession["ref"] = {
+          current: dispatched.tools,
+          documents: dispatched.documents,
+          runtimeHandoff: undefined,
+          runtimeMutationPending: false,
+          runtimeInFlight: new Set(),
+          runtimeRunId: dispatched.runId,
+          runtimeActorId: dispatched.runtimeActorId,
+          pendingApprovals: [],
+          pausedOnApproval: undefined,
+          silentRequested: false,
+          pollFire: !!dispatched.pollFire,
+          screenToolResult: dispatched.screenToolResult,
+          verifyGoal: dispatched.verifyGoal,
+          emit: dispatched.emit,
+          scopeLabel: dispatched.scopeLabel,
+          orgScopeId: dispatched.orgScopeId,
+          toolApprovalGate: dispatched.toolApprovalGate,
+          shutdown: dispatched.shutdown,
+        };
+        const tools = createTurnTools(ref, dispatched);
+        const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
+        const turn = resumed
+          ? {
+              ...dispatched,
+              history: resumed.history,
+              ...(dispatched.tapeFold ? { tapeFold: withResumedToolResult(dispatched.tapeFold, resumed.message) } : {}),
+            }
+          : dispatched;
+        if (resumed) {
+          const callId = resumed.message.toolCallId;
+          const resultScope = ref.tapeResultScopes?.get(callId);
+          ref.tapeResultScopes?.delete(callId);
+          await turn.tape?.({
+            kind: "message",
+            harness: "pi",
+            payload: stripImageBytes(resumed.message),
+            scopeLabel: resultScope ?? turn.scopeLabel,
+          });
+        }
         const { entry, compileMs } = await createTurnSession(
           withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
           turn.session.id,
           turn.systemPrompt,
           turn.history,
           turn.priorTurns,
-          turn.readOnly,
-          turn.surfaceTools,
-          turn.surfaceName,
           turn.scopeLabel,
-          turn.commandCredentialHandles,
           turn.tapeRows,
           turn.tapeMode,
           turn.tapeFold,
           turn.tape,
           turn.providerKeys,
-          Boolean(turn.tools.sessionSyscalls),
-          turn.delegateWork,
-          turn.clientTools,
+          ref,
+          tools,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
-          entry.ref.current = turn.tools;
-          entry.ref.documents = turn.documents;
-          entry.ref.runtimeHandoff = undefined;
-          entry.ref.runtimeMutationPending = false;
-          entry.ref.runtimeInFlight = new Set();
-          entry.ref.runtimeRunId = turn.runId;
-          entry.ref.runtimeActorId = turn.runtimeActorId;
-          entry.ref.pendingApprovals = [];
-          entry.ref.pausedOnApproval = undefined;
-          entry.ref.silentRequested = false;
-          entry.ref.pollFire = !!turn.pollFire;
-          entry.ref.screenToolResult = turn.screenToolResult;
-          entry.ref.verifyGoal = turn.verifyGoal;
-          entry.ref.emit = turn.emit;
-          entry.ref.scopeLabel = turn.scopeLabel;
-          entry.ref.orgScopeId = turn.orgScopeId;
-          entry.ref.toolApprovalGate = turn.toolApprovalGate;
 
           const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
           entry.ref.fast = wantFast;
@@ -1903,16 +1937,25 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           turn.onGapWork?.(collectGapWork);
           entry.ref.onGapWork = collectGapWork;
-          const userEntry = await turn.emit({
-            type: "user",
-            payload: {
-              text: turn.input,
-              ...(turn.environment ? { environment: turn.environment } : {}),
-              ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-              ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-            },
-            scopeLabel: turn.scopeLabel,
-          });
+          const continueTurn = !!turn.continueTurn && endsAtRecordedToolResult(entry.agentSession.agent.state.messages);
+          if (turn.continueTurn && !continueTurn)
+            console.log(
+              `[pi] resume cannot continue the assistant turn — seeded context does not end at a recorded tool result; prompting the resume note session=${turn.session.id}`,
+            );
+          const userEntry = continueTurn
+            ? turn.history.find(
+                (e) => e.type === "user" && (e.payload as { runId?: unknown } | null)?.runId === turn.runId,
+              )
+            : await turn.emit({
+                type: "user",
+                payload: {
+                  text: turn.input,
+                  ...(turn.environment ? { environment: turn.environment } : {}),
+                  ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+                  ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+                },
+                scopeLabel: turn.scopeLabel,
+              });
           const grindMeter = createGrindMeter();
 
           if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history);
@@ -1933,7 +1976,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.pendingTransformContext = undefined;
           turn.recordModelCall({
             model: effectiveModel,
-            inputTokens: entry.composedPromptTokens + estimateHistoryTokens(turn.history) + countTokens(modelPrompt),
+            inputTokens:
+              entry.composedPromptTokens +
+              estimateHistoryTokens(turn.history) +
+              (continueTurn ? 0 : countTokens(modelPrompt)),
             entryCount: turn.history.length,
           });
 
@@ -1944,7 +1990,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const stepWindows: Array<{ gapStart?: number; gapEnd: number }> = [];
           let thinkTail: Promise<unknown> = Promise.resolve();
           let tapeError: Error | undefined;
-          let tapedTriggerUser = false;
+          let tapedTriggerUser = continueTurn;
           const toolAbort = new AbortController();
           const pendingSteerTapeMeta: Array<
             SteerIntake & {
@@ -1970,12 +2016,16 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
+            const taped = stripImageBytes(message, isTrigger ? turn.images : steer?.images);
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
-              payload: stripImageBytes(message, isTrigger ? turn.images : steer?.images),
+              payload:
+                role === "toolResult" && turn.shutdown?.aborted
+                  ? { ...(taped as Record<string, unknown>), interrupted: true }
+                  : taped,
               scopeLabel: resultScope ?? turn.scopeLabel,
-              ...(isTrigger
+              ...(isTrigger && userEntry
                 ? {
                     entrySeq: userEntry.seq,
                     meta: {
@@ -2092,7 +2142,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 : undefined;
               try {
                 await turn.recordLlmRequest({
-                  turnSeq: userEntry.seq,
+                  turnSeq: userEntry?.seq ?? null,
                   step,
                   model: captured[step]!.transport?.modelId ?? effectiveModel,
                   promptEnvelope: captured[step]!.envelope,
@@ -2119,22 +2169,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           }): Promise<void> => {
             if (!turn.tape) return;
             await turn.tape(tapeEntryMirrorRecord(mirrored));
-          };
-          const checkpointSubturn = async (
-            finalEntry: { seq: number; createdAt: number },
-            reply: string,
-          ): Promise<void> => {
-            if (!turn.tape) return;
-            await turn.tape({
-              kind: "annotation",
-              payload: tapeCheckpointPayload("subturnEnd", {
-                type: "assistant",
-                payload: { text: reply },
-                at: finalEntry.createdAt,
-              }),
-              scopeLabel: turn.scopeLabel,
-              entrySeq: finalEntry.seq,
-            });
           };
           let wallClock!: TurnWallClockOutcome;
           const messagesBefore = entry.agentSession.messages.length;
@@ -2218,15 +2252,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const rawRemainingCapMs = floorCap.remainingCapMs;
           const raceCapMs = floorCap.raceCapMs;
           const extendCapMs = floorCap.extendMs;
+          const refusedModelIds = new Set<string>();
           const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
             if (userAborted || turn.cancel?.aborted) return false;
             const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
+            if (fromId) refusedModelIds.add(fromId);
             const configured = opts?.resolveFallbackRuntime?.();
             const fallbackId = fromId
               ? refusalFallbackModelId(fromId, configured?.modelId, (id) => !!resolveModel(id, !turn.providerKeys))
               : undefined;
             const fallback = fallbackId ? resolveModel(fallbackId, !turn.providerKeys) : undefined;
-            if (!fallbackId || !fallback) return false;
+            if (!fallbackId || !fallback || refusedModelIds.has(fallbackId)) return false;
             const capMs = raceCapMs();
             if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
             console.error(
@@ -2259,18 +2295,32 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
             return true;
           };
+          const recoverRefusedRound = async (): Promise<void> => {
+            if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
+            const refusal = providerRefusalError(entry.agentSession, messagesBefore);
+            if (!refusal) return;
+            try {
+              await attemptRefusalFallback(refusal);
+            } catch (e) {
+              swallow("pi: refusal fallback", e);
+              throw new NonRetryableTurnError(refusal);
+            }
+          };
           try {
             const images = turn.images?.length
               ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
               : undefined;
             wallClock = await raceTurnWallClock(
-              entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
+              continueTurn
+                ? continueAssistantTurn(entry.agentSession)
+                : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
               {
                 capMs: raceCapMs(),
                 extendMs: extendCapMs,
                 abort: () => entry.agentSession.abort(),
               },
             );
+            if (wallClock === "ok") await recoverRefusedRound();
             const goalAfterPrompt = entry.ref.goal;
             if (
               wallClock === "ok" &&
@@ -2289,7 +2339,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   !!turn.cancel?.aborted ||
                   !!entry.ref.runtimeHandoff ||
                   !!entry.ref.pausedOnApproval ||
-                  !!entry.ref.pendingApprovals?.length,
+                  !!entry.ref.pendingApprovals?.length ||
+                  piRoundFailed(entry.agentSession, messagesBefore),
                 beforePrompt: async (note) => {
                   console.error(
                     `[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`,
@@ -2299,27 +2350,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   entry.ref.silentRequested = false;
                   await thinkTail;
                 },
-                prompt: (note) => {
-                  if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS)
-                    return Promise.resolve<TurnWallClockOutcome>("aborted");
-                  return raceTurnWallClock(entry.agentSession.prompt(note), {
+                prompt: async (note) => {
+                  if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
+                  const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
                     capMs: raceCapMs(),
                     extendMs: extendCapMs,
                     abort: () => entry.agentSession.abort(),
                   });
+                  if (outcome === "ok") await recoverRefusedRound();
+                  return outcome;
                 },
               });
-            }
-            if (wallClock === "ok" && !entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
-              const refusal = providerRefusalError(entry.agentSession, messagesBefore);
-              if (refusal) {
-                try {
-                  await attemptRefusalFallback(refusal);
-                } catch (e) {
-                  swallow("pi: refusal fallback", e);
-                  throw new NonRetryableTurnError(refusal);
-                }
-              }
             }
             const note = emptyEndingNote({
               wallClock,
@@ -2450,12 +2491,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               await tapeEntryMirror(goalEntry);
               if (g.status === "complete") entry.ref.goal = null;
             }
-            const finalEntry = await turn.emit({
-              type: "assistant",
-              payload: { text: reply, stopped: true },
-              scopeLabel: turn.scopeLabel,
-            });
-            const stoppedPartial = stoppedPartialTapeMessage(freshMessages, reply, finalEntry.createdAt);
+            const finalEntry = await recordStoppedReply(turn, reply);
+            const stoppedPartial = finalEntry && stoppedPartialTapeMessage(freshMessages, reply, finalEntry.createdAt);
             if (turn.tape && stoppedPartial) {
               await turn.tape({
                 kind: "message",
@@ -2464,7 +2501,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 scopeLabel: turn.scopeLabel,
               });
             }
-            await checkpointSubturn(finalEntry, reply);
+            if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
             const cacheUsage = sumCacheUsage(callStats);
             const base = {
               reply,
@@ -2495,7 +2532,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             payload: { text: reply },
             scopeLabel: turn.scopeLabel,
           });
-          await checkpointSubturn(finalEntry, reply);
+          await tapeReplyCheckpoint(turn, finalEntry);
           const pendingApprovals = entry.ref.pendingApprovals ?? [];
           const modelCalls = entry.ref.modelCalls ?? 0;
           const cacheUsage = sumCacheUsage(callStats);

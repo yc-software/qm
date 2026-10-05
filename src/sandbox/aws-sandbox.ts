@@ -461,7 +461,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
         return handle;
       } catch (error) {
-        await cleanupFailedProvision(sandbox, handle);
+        await cleanupFailedProvision(sandbox, handle, error);
         throw error;
       }
     },

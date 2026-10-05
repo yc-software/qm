@@ -623,7 +623,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             ? provisionQueue(`scratch:${scratch.key}`, provisionAndPrepare)
             : provisionQueue(scope, () => advisoryLock.withLock(lockKey(scope), provisionAndPrepare)));
         } catch (err) {
-          if (pendingHandle) await cleanupFailedProvision(sandbox, pendingHandle);
+          if (pendingHandle) await cleanupFailedProvision(sandbox, pendingHandle, err);
           throw err;
         }
       });

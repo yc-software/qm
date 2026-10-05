@@ -1,6 +1,7 @@
 import { forEachAttributedTurn, type AttributionInput } from "./attribution.ts";
 
 const DAY = 86_400_000;
+const EPOCH_DAY_TO_MONDAY = 3;
 
 export interface RetentionInput extends AttributionInput {
   sessionCount: number;
@@ -78,7 +79,7 @@ export function computeRetention(input: RetentionInput): RetentionReport {
     else returning++;
   }
 
-  const weekOf = (d: number) => Math.floor(d / 7);
+  const weekOf = (d: number) => Math.floor((d + EPOCH_DAY_TO_MONDAY) / 7);
   const weeksActive = new Map<string, Set<number>>();
   const cohortMembers = new Map<number, string[]>();
   for (const [u, set] of activeDays) {
@@ -99,7 +100,11 @@ export function computeRetention(input: RetentionInput): RetentionReport {
         const active = members.filter((u) => weeksActive.get(u)!.has(cw + off)).length;
         return members.length ? Math.round((active / members.length) * 100) : 0;
       });
-      return { week: new Date(cw * 7 * DAY).toISOString().slice(0, 10), size: members.length, retained };
+      return {
+        week: new Date((cw * 7 - EPOCH_DAY_TO_MONDAY) * DAY).toISOString().slice(0, 10),
+        size: members.length,
+        retained,
+      };
     });
 
   const sessionCounts = users.map((u) => sessionsByUser.get(u)?.size ?? 0).sort((a, b) => a - b);

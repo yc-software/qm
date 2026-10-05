@@ -150,7 +150,7 @@ on the memory self-API is the lighter path; see the memory skill.)
 ## Inspect activity & content
 
 ```bash
-GET /v1/admin/sessions?scope=&limit=&offset=  → conversation listing (turns, last activity)
+GET /v1/admin/sessions?scope=&limit=&cursor=  → conversation listing (turns, last activity); pass nextCursor for older rows
 GET /v1/admin/sessions/<id>?scope=            → a transcript
 GET /v1/admin/sessions/<id>/llm?scope=        → captured provider requests — what the model actually saw (debugging "why did it do X")
 GET /v1/admin/runs?scope=                     → queued/in-flight/recent runs

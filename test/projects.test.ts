@@ -499,7 +499,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.match(JSON.stringify(forked.entries), /after joining/);
   assert.equal((await built.sessions.get(forked.session.id))?.title ?? null, null);
 
-  const appendForFork = built.sessions.append.bind(built.sessions);
+  const appendForFork = built.sessions.appendMany.bind(built.sessions);
   let releaseForkCopy!: () => void;
   const forkCopyReleased = new Promise<void>((resolve) => {
     releaseForkCopy = resolve;
@@ -509,13 +509,13 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     forkCopyStarted = resolve;
   });
   let copyingSessionId: string | undefined;
-  built.sessions.append = async (lease, entry) => {
+  built.sessions.appendMany = async (lease, entries) => {
     if (!copyingSessionId && lease.sessionId !== first.id && lease.sessionId !== forked.session.id) {
       copyingSessionId = lease.sessionId;
       forkCopyStarted();
       await forkCopyReleased;
     }
-    return appendForFork(lease, entry);
+    return appendForFork(lease, entries);
   };
   const racingForkPromise = built.app.forkSession(first.id, "owner");
   await forkCopyStart;
@@ -527,7 +527,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(addSettled, false);
   releaseForkCopy();
   const [racingFork, addedDuringFork] = await Promise.all([racingForkPromise, addDuringFork]);
-  built.sessions.append = appendForFork;
+  built.sessions.appendMany = appendForFork;
   assert.ok(racingFork);
   assert.equal(addedDuringFork.status, "ok");
   assert.equal(racingFork.session.id, copyingSessionId);

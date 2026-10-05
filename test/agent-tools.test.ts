@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -24,9 +25,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       };
     },
     async restartComputer() {},
-    async migrateComputer(): Promise<{ from: string; to: string }> {
-      throw new Error("computer migration is not available on this deployment");
-    },
     async computerStatus() {
       return { machine: "healthy", guestResponsive: true };
     },
@@ -3962,7 +3960,7 @@ test("command exit codes are data; timeouts and thrown tool errors are failures"
         await assert.rejects(run, /sandbox provider unavailable/);
         const result = entries.find((e) => e.type === "tool_result")!.payload;
         assert.equal(result.isError, true);
-        assert.equal(result.result, "Command execution failed.");
+        assert.equal(result.result, "Command execution failed: sandbox provider unavailable");
         assert.equal(result.code, undefined);
         continue;
       }
@@ -4077,4 +4075,101 @@ test("background process guidance reflects the configured sandbox token lifetime
   const unlimited = guidance({ sandboxCapabilityTtlMs: 0 });
   assert.match(unlimited, /does not expire those turn tokens/);
   assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
+});
+
+test("every tool schema carries the optional retrySafe flag, which is stripped before the tool runs and recorded on the call", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tools = createAgentTools(ref, {
+    controlTools: true,
+    clientTools: [
+      { name: "page_state", description: "Read page state", inputSchema: { type: "object", properties: {} } },
+    ],
+  });
+  for (const tool of tools) {
+    const schema = tool.parameters as { properties?: Record<string, { type?: string }>; required?: string[] };
+    assert.equal(schema.properties?.retrySafe?.type, "boolean", `${tool.name} exposes retrySafe`);
+    assert.ok(!schema.required?.includes("retrySafe"), `${tool.name} keeps retrySafe optional`);
+  }
+  const history = tools.find((t) => t.name === "history")!;
+  assert.ok(Check(history.parameters, { query: "budget", retrySafe: true }));
+
+  await callWith(history, "safe", { query: "budget", retrySafe: true });
+  await callWith(history, "unsafe", { seq: 3, retrySafe: false });
+  await callWith(history, "unmarked", { seq: 3 });
+
+  const calls = emitted.filter((e) => e.type === "tool_call");
+  assert.deepEqual(
+    calls.map((e) => e.payload),
+    [
+      {
+        tool: "history",
+        query: "budget",
+        callId: "safe",
+        retrySafe: true,
+        rerun: { tool: "history", input: { query: "budget" } },
+      },
+      { tool: "history", seq: 3, callId: "unsafe", retrySafe: false },
+      { tool: "history", seq: 3, callId: "unmarked" },
+    ],
+  );
+  assert.equal(emitted.filter((e) => e.type === "tool_result").length, 3);
+  assert.doesNotMatch(
+    JSON.stringify(emitted.filter((e) => e.type === "tool_result")),
+    /retrySafe/,
+    "the flag never reaches the tool body or its result",
+  );
+});
+
+test("a tool result recorded after shutdown fires is marked interrupted; user Stop and plain completion are not", async () => {
+  const record = async (abort: "shutdown" | "stop" | "none", retrySafe = true) => {
+    const emitted: Emitted[] = [];
+    const shutdown = new AbortController();
+    const cancel = new AbortController();
+    const ref: ToolContextRef = {
+      current: fakeToolContext(),
+      emit: (e) => {
+        emitted.push(e as Emitted);
+      },
+      scopeLabel: "personal:U1",
+      shutdown: shutdown.signal,
+      abortSignal: cancel.signal,
+    };
+    const history = createAgentTools(ref).find((t) => t.name === "history")!;
+    if (abort === "shutdown") shutdown.abort();
+    if (abort !== "none") cancel.abort();
+    await callWith(history, `call-${abort}`, { query: "budget", retrySafe });
+    return emitted;
+  };
+  const strategy = (emitted: Emitted[]) => {
+    const entries = emitted.map((e, i) => ({ ...e, seq: i + 2 }) as unknown as SessionEntry);
+    return resumeStrategy(entries, { userSeq: 1, workEntries: entries.length });
+  };
+
+  const interrupted = await record("shutdown");
+  const result = interrupted.find((e) => e.type === "tool_result")!.payload;
+  assert.equal(result.interrupted, true);
+  assert.equal(typeof result.result, "string", "the recorded text is kept alongside the mark");
+  assert.deepEqual(strategy(interrupted), {
+    kind: "retry",
+    call: { callId: "call-shutdown", tool: "history", input: { query: "budget" } },
+  });
+  assert.deepEqual(
+    strategy(await record("shutdown", false)),
+    { kind: "note" },
+    "a killed call the model marked unsafe gets the unknown-outcome note, never a continue",
+  );
+
+  for (const abort of ["stop", "none"] as const) {
+    const emitted = await record(abort);
+    const payload = emitted.find((e) => e.type === "tool_result")!.payload;
+    assert.ok(!("interrupted" in payload), `${abort}: an ordinary result stays a real answer`);
+    assert.deepEqual(strategy(emitted), { kind: "continue" });
+  }
 });

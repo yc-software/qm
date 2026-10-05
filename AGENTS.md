@@ -1,5 +1,7 @@
 # qm
 
+**Read [`docs/SPEC.md`](./docs/SPEC.md) first.** It is the short source of truth for QM's north stars, subsystems and past mistakes. Where another doc disagrees, the spec wins.
+
 To run and test, see [`README.md`](./README.md).
 
 ## Working on the code
@@ -120,7 +122,7 @@ per-instance and wiped by every deploy. Anything an operator or the system reads
 later (audit, logs, resolved config, queued or in-flight work) must live in a durable
 store, never RAM alone. RAM-only is fine only as a cache in front of a durable store, or
 for genuinely disposable, re-derivable state. If you're adding a log, audit, queue, or
-resolved config, back it with Postgres; the spec's data-model & durability section tracks the gaps.
+resolved config, back it with Postgres; see the spec's “Free the brain” north star.
 
 > `CLAUDE.md` is a symlink to `AGENTS.md`, so every tool (Claude Code, Codex,
 > Cursor, …) reads the same guidance from this one file. If a tool-specific

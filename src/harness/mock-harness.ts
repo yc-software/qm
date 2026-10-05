@@ -11,6 +11,7 @@ import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
+import { recordStoppedReply } from "./harness-shared.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
@@ -84,6 +85,7 @@ export function createMockHarness(): Harness {
   const shedSessions = new Set<string>();
   const boomAlwaysSessions = new Set<string>();
   const resumePostSessions = new Map<string, string>();
+  const shutdownResumeSessions = new Set<string>();
   const flakyScreens = new Set<string>();
   return defineHarness(
     {
@@ -196,6 +198,27 @@ export function createMockHarness(): Harness {
           });
           usedTool = true;
           reply = r.ok ? "(posted after resume)" : `[not sent] ${r.message ?? "failed"}`;
+        } else if (command0.startsWith("(system note:") && shutdownResumeSessions.has(turn.session.id)) {
+          shutdownResumeSessions.delete(turn.session.id);
+          reply = "finished after resume";
+        } else if (command0 === "!work-until-shutdown") {
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "execute", callId: "build", command: "make build" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "execute", callId: "build", ok: true },
+            scopeLabel: turn.scopeLabel,
+          });
+          shutdownResumeSessions.add(turn.session.id);
+          await new Promise<void>((resolve) => {
+            if (!turn.cancel || turn.cancel.aborted) resolve();
+            else turn.cancel.addEventListener("abort", () => resolve(), { once: true });
+          });
+          await recordStoppedReply(turn, "(stopped)");
+          return { reply: "(stopped)", stopped: true, modelCalls: 1 };
         } else if (command0.startsWith("!post-lost-result ")) {
           const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
           await turn.emit({

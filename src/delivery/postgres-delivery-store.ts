@@ -218,6 +218,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q("SELECT * FROM deliveries WHERE id = $1", [id]);
       return rows[0] ? rowToDelivery(rows[0]) : null;
     },
+    async existingKeys(idempotencyKeys) {
+      if (!idempotencyKeys.length) return new Set();
+      const rows = await q("SELECT idempotency_key FROM deliveries WHERE idempotency_key = ANY($1::text[])", [
+        idempotencyKeys,
+      ]);
+      return new Set(rows.map((r) => r.idempotency_key as string));
+    },
     async recordRecipientThread(id, recipientThreadRef, at) {
       await query(
         `UPDATE deliveries

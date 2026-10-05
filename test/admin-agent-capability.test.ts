@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -584,6 +585,7 @@ for (const [name, input, expected] of [
   test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
     const s = start();
     try {
+      await selectDefaultSandbox(s.built, "admin-alice", "channel:C1");
       let cap: string | undefined;
       const provision = s.built.sandbox.provision.bind(s.built.sandbox);
       s.built.sandbox.provision = (layers, opts) => {

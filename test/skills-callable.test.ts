@@ -10,6 +10,12 @@ import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
+async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
+  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
+  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  return built;
+}
+
 function freshApp() {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-skill-")),
@@ -70,7 +76,7 @@ test("a channel session does NOT see a personal skill (scope boundary)", async (
 });
 
 test("ordinary sandbox work never touches the skills tree", async () => {
-  const { app, skills, sandbox } = freshApp();
+  const { app, skills, sandbox } = await withDefaultComputer(freshApp());
   await publishPersonalSkill(skills);
   const touched: string[] = [];
   const read = sandbox.readFile.bind(sandbox);
@@ -115,7 +121,7 @@ async function publishFileSkill(skills: ReturnType<typeof buildApp>["skills"], n
 }
 
 test("skill files live only for the turn that loaded them", async () => {
-  const { app, skills } = freshApp();
+  const { app, skills } = await withDefaultComputer(freshApp());
   const first = await publishFileSkill(skills, "helper");
   const request = {
     surface: "test",

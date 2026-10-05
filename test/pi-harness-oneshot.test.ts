@@ -128,7 +128,7 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       },
       piCaptureRequests: false,
       piSystemCacheSplit: true,
-      sandboxResourcesEnabled: true,
+
       scratchExecEnabled: true,
       reachExecEnabled: true,
       signingSecret: "sek",

@@ -643,15 +643,32 @@ function runInboxFeed(): Promise<void> {
   return consumeCoreFeed(
     "/v1/loop-items/events",
     "loop_item",
-    (data) => {
-      const ev = data as { owner?: string; loopId?: string; itemId?: string; op?: string };
-      if (!ev.owner || !ev.loopId || !ev.itemId) return;
-      for (const clients of deliveryClients.values()) for (const res of clients) sseEvent(res, "inbox_resync", {});
-    },
-    () => {
-      for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
-    },
+    (data) => void forwardInboxItem(data as { loopId?: string; itemId?: string; op?: string }),
+    resyncInbox,
   );
+}
+
+function resyncInbox(): void {
+  for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
+}
+
+async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
+  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
+  const r = await coreFetch(
+    "POST",
+    "/v1/inbox/viewers",
+    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
+  ).catch(() => null);
+  if (r?.status === 404) return;
+  let viewers: string[] | undefined;
+  try {
+    viewers = r?.status === 200 ? (JSON.parse(r.text) as { viewers?: string[] }).viewers : undefined;
+  } catch {
+    viewers = undefined;
+  }
+  if (!viewers) return resyncInbox();
+  const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
+  for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
 }
 
 async function coreFetch(

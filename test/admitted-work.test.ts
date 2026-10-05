@@ -8,7 +8,6 @@ test("pause fences new work while accepted work drains, then rollback resumes", 
   const work = createAdmittedWork();
   const finish = Promise.withResolvers<void>();
   const accepted = work.run(() => finish.promise);
-  assert.equal(work.busy(), true);
   work.pause();
   await assert.rejects(
     work.run(() => assert.fail("ran after pause")),
@@ -26,7 +25,6 @@ test("pause fences new work while accepted work drains, then rollback resumes", 
   finish.resolve();
   await accepted;
   await drain;
-  assert.equal(work.busy(), false);
 });
 
 test("already admitted callbacks can start nested work after pause without leaking admission", async () => {
@@ -67,22 +65,14 @@ test("detached async contexts lose admission when their accepting callback finis
   await assert.rejects(delayed, WorkAdmissionClosed);
 });
 
-test("admission is registered before callback execution and errors cannot strand busy state", async () => {
-  let admitted = false;
-  const work = createAdmittedWork({
-    onAdmitted: () => {
-      admitted = true;
-    },
-  });
+test("failed work does not strand drained", async () => {
+  const work = createAdmittedWork();
   await assert.rejects(
     work.run(() => {
-      assert.equal(admitted, true);
-      assert.equal(work.busy(), true);
       throw new Error("failed work");
     }),
     /failed work/,
   );
   work.pause();
   await work.drained();
-  assert.equal(work.busy(), false);
 });

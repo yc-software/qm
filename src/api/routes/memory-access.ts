@@ -1,8 +1,3 @@
-import {
-  buildMemoryContextSnapshot,
-  memoryContextPayload,
-  type MemoryContextSnapshot,
-} from "../../memory/context-boundary.ts";
 import { disclosedMemory } from "../../memory/disclosure.ts";
 import type { MemoryService } from "../../memory/memory-service.ts";
 import { parseScopeId, personalScope, type Principal } from "../../types.ts";
@@ -34,27 +29,4 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
     isCurrentSharedScopeMember: (person, scope) => ctx.app.isCurrentSharedScopeMember(person, scope),
     currentScopeMembers: (scope) => ctx.app.currentScopeMembers(scope),
   });
-}
-
-async function memorySnapshotForRequest(ctx: ApiCtx): Promise<MemoryContextSnapshot | null> {
-  const { capability, deps, app } = ctx;
-  if (!capability) return null;
-  const actor = deps.identity?.classify(capability.actorId) ?? { id: capability.actorId, type: "internal" as const };
-  const audience =
-    capability.scopeId === personalScope(actor.id) ? [actor] : await app.currentScopeMembers(capability.scopeId);
-  if (!audience?.length) return null;
-  return buildMemoryContextSnapshot({ targetScope: capability.scopeId, audience });
-}
-
-export async function memoryBoundaryForRequest(ctx: ApiCtx, sessionId: string) {
-  try {
-    const entries = await ctx.deps.sessions?.getEntries(sessionId);
-    const checkpoint = entries?.findLast((entry) => memoryContextPayload(entry));
-    const boundary = checkpoint && memoryContextPayload(checkpoint);
-    const snapshot = await memorySnapshotForRequest(ctx);
-    if (!boundary || !snapshot || boundary.snapshot.audience !== snapshot.audience) return null;
-    return { throughSeq: boundary.throughSeq, latestSeq: entries!.at(-1)!.seq };
-  } catch {
-    return null;
-  }
 }

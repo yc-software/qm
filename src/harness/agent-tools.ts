@@ -90,6 +90,7 @@ export interface ToolContextRef {
   onGapWork?: (work: GapWork) => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
 
@@ -345,7 +346,7 @@ export type CoreToolOptions = Omit<
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    sandboxResources: config.sandboxResourcesEnabled,
+    sandboxResources: true,
     scratchExec: config.scratchExecEnabled,
     // Availability is checked per turn; Open can be enabled without restarting the harness.
     ownerAuthExec: true,
@@ -429,11 +430,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const callId = (payload as { callId?: unknown } | null)?.callId;
       if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
+    if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload)) payload = { ...payload, interrupted: true };
     await ref.emit({ type, payload, scopeLabel });
   };
 
-  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...sandboxLog(payload), callId });
+  const retryMarks = new Map<string, RetryMark>();
+  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
+    const mark = retryMarks.get(callId);
+    return log("tool_call", {
+      ...sandboxLog(payload),
+      callId,
+      ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
+    });
+  };
 
   const resultQueue = createKeyedQueue();
   const quarantinedMessages = new Set<string>();
@@ -742,7 +751,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...sandboxLog({ tool: "execute", ...scopeNote }),
         callId,
         isError: true,
-        result: "Command execution failed.",
+        result: `Command execution failed: ${redactSecrets(errMessage(e))}`,
       });
       throw e;
     }
@@ -4347,8 +4356,63 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
   return active.map((t) =>
-    withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+    withRetrySafety(
+      withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+      retryMarks,
+    ),
   );
+}
+
+const RETRY_SAFE_FIELD = "retrySafe";
+
+const RETRY_SAFE_SCHEMA = Type.Optional(
+  Type.Boolean({
+    description:
+      "true if re-running this exact call is harmless (reads, searches, idempotent writes) so the platform may re-run it after an interruption; false if it would duplicate a side effect (sending a message, charging, creating a record).",
+  }),
+);
+const RERUN_INPUT_MAX_CHARS = 4_000;
+
+interface RetryMark {
+  safe: boolean;
+  rerun?: { tool: string; input: Record<string, unknown> };
+}
+
+function withRetrySafeField(parameters: unknown): unknown | null {
+  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return null;
+  if (RETRY_SAFE_FIELD in parameters.properties) return null;
+  return { ...parameters, properties: { ...parameters.properties, [RETRY_SAFE_FIELD]: RETRY_SAFE_SCHEMA } };
+}
+
+function stripRetrySafeField(params: unknown): { params: unknown; retrySafe?: boolean } {
+  if (!isObj(params) || !(RETRY_SAFE_FIELD in params)) return { params };
+  const { [RETRY_SAFE_FIELD]: retrySafe, ...rest } = params;
+  return { params: rest, ...(typeof retrySafe === "boolean" ? { retrySafe } : {}) };
+}
+
+function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): ToolDefinition {
+  const parameters = withRetrySafeField(tool.parameters);
+  if (!parameters) return tool;
+  const inner = tool.execute.bind(tool);
+  return {
+    ...tool,
+    parameters: parameters as ToolDefinition["parameters"],
+    async execute(callId: string, params: unknown, ...rest: unknown[]) {
+      const stripped = stripRetrySafeField(params);
+      if (stripped.retrySafe !== undefined && isObj(stripped.params)) {
+        const replayable = stripped.retrySafe && JSON.stringify(stripped.params).length <= RERUN_INPUT_MAX_CHARS;
+        marks.set(callId, {
+          safe: stripped.retrySafe,
+          ...(replayable ? { rerun: { tool: tool.name, input: stripped.params } } : {}),
+        });
+      }
+      try {
+        return await (inner as (...args: unknown[]) => unknown)(callId, stripped.params, ...rest);
+      } finally {
+        marks.delete(callId);
+      }
+    },
+  } as ToolDefinition;
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);

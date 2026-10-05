@@ -1,6 +1,6 @@
 # Background ownership
 
-A core deployment can transfer background work to another deployment without restarting either HTTP process. Existing runs retain their leases and heartbeats while the old deployment stops accepting background work. The deployment controller uses a shared PostgreSQL record to fence generations and record each process's acknowledgment.
+Production runs two core deployments (blue and green) against one PostgreSQL database. Exactly one of them may run background work at a time: Slack ingress, run claims, cron callbacks, and periodic maintenance. A single shared owner record names that deployment. Every core process polls the record and admits background work only while it names the process's own deployment.
 
 ## Enable the capability
 
@@ -13,111 +13,72 @@ Configure every core replica with:
 | `CORE_SIGNING_SECRET`       | The normal source request signing secret.                                                                                 |
 | `DATABASE_URL`              | The shared PostgreSQL database.                                                                                           |
 
-On ECS, `ECS_CONTAINER_METADATA_URI_V4` supplies the task ARN used to associate process membership with infrastructure termination evidence. A process without task metadata can enroll, but cannot participate in an ECS cohort bootstrap or task retirement.
+With `BACKGROUND_DEPLOYMENT_ID` set, `BACKGROUND_WORK_ENABLED` is ignored: the owner record alone decides. A fresh database has no owner, so no deployment runs background work until an operator sets one. Without `BACKGROUND_DEPLOYMENT_ID`, the process follows `BACKGROUND_WORK_ENABLED` as before and the legacy build-heartbeat supersession applies.
 
-Installing this capability does not activate the protocol. Until explicit bootstrap, each replica follows `BACKGROUND_WORK_ENABLED`. Upgrade both deployments and verify their exact current task cohort before bootstrapping. Do not fall back to boot-flag mutation after the protocol has been enabled.
+## The owner record
+
+The record lives in the `background_ownership` durable map under the key `ownership`:
+
+| Field               | Meaning                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| `ownerDeploymentId` | The deployment that may run background work, or `null` for nobody. |
+| `setAt`             | When the owner last changed.                                       |
+| `setBy`             | The deployment whose API accepted the change.                      |
+
+There are no per-process rows. Processes never write the record; only the operator endpoint does. A record written by the earlier member protocol (`enabled`, `desiredDeploymentId`, `members`, …) is read as `enabled ? desiredDeploymentId : null`; reads and no-op sets leave it untouched. The next owner change rewrites it, and the rewritten row also carries `enabled: true`, `desiredDeploymentId` equal to the owner, and the previous `generation` and `members` so that processes and CLIs still running the member protocol keep reading the same owner, acknowledge their relinquish normally, and refuse to admit: a build that predates this record can be replaced through the normal `qm up` path. If that older build's CLI changes `desiredDeploymentId` after the rewrite, the member fields win until the next owner change, so both builds always agree on the owner; do not use the older CLI once this one has set an owner. Ownership cannot be handed back to a color that still runs the member protocol with this CLI (its endpoint rejects the new request body), so the first rollout rolls forward only. The compatibility fields can go once no deployment runs the member protocol.
 
 ## Operator endpoint
 
 `GET /v1/background-work` and `POST /v1/background-work` require both normal source request signing and `Authorization: Bearer <DEPLOYMENT_CONTROL_SECRET>`. Agent capabilities cannot invoke these routes. Portal forwards only those exact methods and path, preserving the supplied credentials.
 
-Status includes `protocol: 1`, the responding process's `deploymentId` and `instanceId`, `enabled`, `generation`, `desiredDeploymentId`, `lastRequestId`, and durable `members`. Every member includes its deployment identity, process identity, task ARN, admission generation, state, readiness, and retirement flag.
-
-To bootstrap, post:
+Status is:
 
 ```json
 {
-  "expectedGeneration": 0,
-  "requestId": "ed73d35e-7dfd-49b9-8550-62955df7df7b",
-  "desiredDeploymentId": "core:release-a",
-  "bootstrapTaskArns": ["exact-task-arn-a", "exact-task-arn-b"]
+  "protocol": 2,
+  "deploymentId": "core:release-b",
+  "instanceId": "2b1c…",
+  "ownerDeploymentId": "core:release-a",
+  "setAt": "2026-10-04T18:02:11.148Z",
+  "setBy": "core:release-a",
+  "active": false
 }
 ```
 
-The cohort must match all enrolled, nonretired processes exactly. Later transitions omit `bootstrapTaskArns` and increment the generation using the same compare-and-swap contract. Set `desiredDeploymentId` to `null` to pause with no successor.
+`deploymentId` and `instanceId` identify the responding process; `active` says whether that process has finished starting background work and is admitting it. Because requests reach one process behind the load balancer, `active` describes one process; the CLI polls until it has seen every expected process of the deployment report the same state.
 
-Use a fresh UUID for each logical mutation and reuse that UUID only when retrying the same payload. After an uncertain response, inspect `lastRequestId`, generation, desired identity, and the affected member records. A matching desired identity alone does not prove that a particular request committed.
-
-## Admission, readiness, and draining
-
-A process records `admitted` before starting background resources. The desired deployment cannot admit while any earlier generation remains admitted. All replicas of the desired deployment may admit; existing per-job claims and leases continue to coordinate work within the deployment.
-
-`ready: true` means activation completed. A deployment operator should wait for every expected current task to have an admitted, ready process at the desired generation before considering activation successful.
-
-`relinquished` acknowledges that the process stopped new claims and closed its Slack ingress. Already admitted turns may still run. Cron polling can resume after rollback while earlier callbacks keep their queue connection and heartbeats. Maintenance callbacks that cannot relinquish safely are joined before acknowledgment.
-
-`drained` means the process's admitted background work has finished. Releasing ownership and making a deployment safe to replace are separate gates. Do not terminate a relinquished but undrained process merely to meet a rollout time target.
-
-Database errors or an expired local validity watchdog fence new local work. They do not establish durable relinquishment or authorize another deployment to bypass an outstanding member.
-
-## Terminated processes
-
-When a process cannot acknowledge, the trusted operator must independently prove that its exact infrastructure task has stopped. It can then post:
+To change the owner, post:
 
 ```json
-{
-  "expectedGeneration": 3,
-  "requestId": "e59f2af3-1d57-49a4-9453-91a391540c17",
-  "terminatedMembers": [{ "instanceId": "exact-process-id", "taskArn": "exact-stopped-task-arn", "generation": 2 }]
-}
+{ "ownerDeploymentId": "core:release-b", "expectedOwnerDeploymentId": "core:release-a" }
 ```
 
-Retirement preserves the ownership generation, updates `lastRequestId`, and marks only the matching members retired and drained. Retired task identities cannot enroll again. An unreachable HTTP endpoint, old heartbeat, or elapsed timeout is not termination evidence.
+`expectedOwnerDeploymentId` is an optional compare-and-swap guard: the change is refused with `409 background_ownership_conflict` when the current owner is neither the expected one nor already the requested one. Setting the owner to the value it already has is a no-op success, so a lost response is confirmed by re-reading the record or by repeating the same request. Set `ownerDeploymentId` to `null` to pause background work everywhere.
+
+## What processes do
+
+Each process polls the record every second. When the record names its deployment, it starts background work: run claims, the cron scheduler, maintenance, and Slack ingress. While it owns, it keeps a local validity window of ten seconds that each successful read renews; a failed or hanging read lets the window expire, which fences new local claims until the next successful read confirms ownership again.
+
+When the record stops naming its deployment, the process stops claiming new work and closes its Slack ingress within one poll interval, or within the ten-second validity window if its reads are failing. The new owner may start inside that window; run claims stay exclusive through the run store's leases, not through ownership, so the overlap costs at most a few redundant poll cycles. Turns and callbacks already admitted continue under their existing leases and heartbeats until they finish. There is no durable acknowledgment: the deploy workflow does not wait for old processes to report anything. It relies on ECS task replacement, which sends `SIGTERM` and allows a drain window, and on the new owner resuming any run whose lease lapses.
+
+Synchronous turns and manually started cron callbacks are admitted work too. A deployment that is not the owner refuses new synchronous execution while still accepting durable asynchronous submissions for the owner to pick up.
+
+## Deploying
+
+`qm up` and `qm rollback` refuse to replace a controlled stack's core tasks while the owner record names that stack. The deploy workflow therefore:
+
+1. Deploys the new release to the stack that is not the owner.
+2. Verifies it, then sets the owner record to the new stack (`awsSetBackgroundWork(..., true)`), which waits until every one of the new stack's core tasks has reported `active`.
+3. Switches public routing. The previous owner stops claiming within a second of the change and drains under `SIGTERM` when its tasks are later replaced.
+
+Rolling back ownership is the same operation in the other direction. Nothing needs to be retired, proven stopped, or cleaned up: a hard-killed process leaves nothing behind in the record. If the record names a deployment that no longer has tasks (for example after `qm down`), no background work runs until an operator sets the owner again; `awsSetBackgroundWork(..., true)` on the live stack does that, since its compare-and-swap expects whatever owner it just read.
 
 ## Live deployment session check
 
-A ready, active deployment accepts `POST /v1/deployment/live-session` with the
-same source signature and distinct deployment bearer credential. The exact body
-contains `requestId` (a fresh UUID), `expectedDeploymentId`, `expectedGeneration`,
-and `expectedTaskArns` (the exact healthy task cohort). The endpoint rejects
-unknown fields, inactive ownership, incomplete readiness, stale generations,
-and mismatched membership before starting work.
+A deployment that owns background work accepts `POST /v1/deployment/live-session` with the same source signature and distinct deployment bearer credential. The body contains exactly `requestId` (a fresh UUID) and `expectedDeploymentId`. The endpoint rejects unknown fields, a mismatched deployment, a non-owning deployment, and an inactive responder before starting work.
 
-The check runs the same fixed session command used by the standalone deployment
-smoke: a real model reply, persisted turns, generated title, session error log,
-session archival, then the configured PostgreSQL catalog checks. The request
-cannot select a principal, URL, model, prompt, or command. Model HTTP requests
-have a five-minute limit; other HTTP requests and database operations have
-30-second limits. These are failure bounds, not a release-duration claim.
+The check runs the same fixed session command used by the standalone deployment smoke: a real model reply, persisted turns, generated title, session error log, session archival, then the configured PostgreSQL catalog checks. The request cannot select a principal, URL, model, prompt, or command. Model HTTP requests have a five-minute limit; other HTTP requests and database operations have 30-second limits.
 
-The response is newline-delimited JSON with an initial newline and five-second
-whitespace heartbeats, followed by one final object containing `ok`, `requestId`,
-`deploymentId`, `instanceId`, `taskArn`, and `generation`. A failed result adds a
-fixed error code without raw model, database, or credential details. Ownership
-and cohort readiness are checked again before success. Heartbeats alone never
-prove success; the caller must receive and verify the complete final object.
+The response is newline-delimited JSON with an initial newline and five-second whitespace heartbeats, followed by one final object containing `ok`, `requestId`, `deploymentId`, and `instanceId`. A failed result adds a fixed error code without raw model, database, or credential details. Ownership is checked again before success. Heartbeats alone never prove success; the caller must receive and verify the complete final object.
 
-Request IDs are durably consumed across replicas and cannot be replayed. Each
-process permits one check at a time, including its cleanup. Disconnecting the
-caller does not cancel the check or release that guard before cleanup finishes.
-Singleflight is per process, and durable request IDs prevent replay. Requests with distinct IDs can run concurrently on different replicas. The release workflow serializes its own requests.
-An uncertain result must fail the release; do not retry automatically or fall
-back to a second canary execution.
-
-## Enrolling an active legacy deployment
-
-Before bootstrap, a controlled process with its legacy boot flag enabled publishes
-an enrollment-specific legacy build heartbeat only after its generation-zero
-membership is admitted and ready. Older legacy workers then stop claiming new
-runs even when both processes use the same image. Controlled processes ignore
-legacy supersession results and continue using durable ownership admission.
-Inactive, unready, or fenced processes do not publish this compatibility heartbeat;
-publishing also stops once durable ownership is enabled.
-
-This bridge preserves the legacy worker drain behavior and its running-turn task
-protection. It does not add missing lifecycle controls to older binaries: their
-Slack ingress, cron callbacks, and inline HTTP execution can remain active.
-Never treat the heartbeat as a deployment relinquishment acknowledgment or as
-proof that a legacy task is safe to terminate. Bootstrap still requires explicit
-infrastructure proof that every legacy task has retired, including pending tasks.
-Do not clear task protection or terminate live turns to finish enrollment.
-If enrollment is abandoned, the legacy heartbeat expiry permits older workers
-to resume their existing claim loop.
-
-Synchronous turns and manually started cron callbacks are admitted work too. A
-paused deployment refuses new synchronous execution while still accepting durable
-asynchronous submissions for the active workers. Accepted turns, scheduled
-callbacks, and their nested work keep running with their existing leases; their
-completion is part of the deployment's drain acknowledgment. Resuming ownership
-restores synchronous admission without restarting or canceling those calls.
-Task protection also counts admitted foreground work while the process drains.
+Request IDs are durably consumed across replicas and cannot be replayed. Each process permits one check at a time, including its cleanup. Disconnecting the caller does not cancel the check or release that guard before cleanup finishes. An uncertain result must fail the release; do not retry automatically or fall back to a second canary execution.

@@ -739,7 +739,7 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
   }
 });
 
-test("conversation listing pages by limit/offset; aggregates span the whole scope; offset clamps", async () => {
+test("conversation listing pages by keyset cursor; aggregates span the whole scope; offset is ignored", async () => {
   const s = start();
   try {
     for (let i = 0; i < 5; i++) {
@@ -752,22 +752,27 @@ test("conversation listing pages by limit/offset; aggregates span the whole scop
       assert.equal((await s.built.app.turn(dm)).status, "ok");
     }
 
-    const p1 = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&limit=2&offset=0");
+    const path = "/v1/admin/sessions?scope=org:default-org&limit=2";
+    const p1 = await getJson(s.base, path);
     assert.equal(p1.sessions.length, 2, "limit bounds the returned slice");
     assert.equal(p1.total, 5, "total spans the whole scope, not the page");
     assert.equal(p1.byType.dm, 5, "by-type aggregate spans the whole scope");
     assert.equal(p1.limit, 2);
-    assert.equal(p1.offset, 0);
+    assert.equal(p1.offset, undefined, "the listing no longer reports an offset");
 
-    const p2 = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&limit=2&offset=2");
-    const p3 = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&limit=2&offset=4");
+    const p2 = await getJson(s.base, `${path}&cursor=${encodeURIComponent(p1.nextCursor)}`);
+    const p3 = await getJson(s.base, `${path}&cursor=${encodeURIComponent(p2.nextCursor)}`);
     assert.equal(p3.sessions.length, 1, "the final page holds the remainder");
+    assert.equal(p3.nextCursor, undefined, "a short page ends the walk");
     const ids = new Set([...p1.sessions, ...p2.sessions, ...p3.sessions].map((x: { id: string }) => x.id));
     assert.equal(ids.size, 5, "the three pages cover every session exactly once");
 
-    const over = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&limit=2&offset=999");
-    assert.equal(over.offset, 4, "offset clamps to the last page");
-    assert.equal(over.sessions.length, 1, "clamped page returns the last page's rows");
+    const ignored = await getJson(s.base, `${path}&offset=4`);
+    assert.deepEqual(
+      ignored.sessions.map((x: { id: string }) => x.id),
+      p1.sessions.map((x: { id: string }) => x.id),
+      "an offset parameter cannot push the database into skipping rows",
+    );
   } finally {
     await s.close();
   }
@@ -903,13 +908,13 @@ test("the Crons history lists one row per cron; ?cron= paginates that cron's fir
 
     const p1 = await getJson(
       s.base,
-      `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron&cron=${cron.id}&limit=2&offset=0`,
+      `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron&cron=${cron.id}&limit=2`,
     );
     assert.equal(p1.total, 3, "drill-down total counts this cron's fires only");
     assert.equal(p1.sessions.length, 2);
     const p2 = await getJson(
       s.base,
-      `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron&cron=${cron.id}&limit=2&offset=2`,
+      `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron&cron=${cron.id}&limit=2&cursor=${encodeURIComponent(p1.nextCursor)}`,
     );
     assert.equal(p2.sessions.length, 1, "last page holds the remainder");
     const ids = new Set([...p1.sessions, ...p2.sessions].map((x: { id: string }) => x.id));

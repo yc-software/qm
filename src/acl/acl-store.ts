@@ -121,7 +121,9 @@ function createMemoryGrantPersistence(): GrantPersistence {
       });
     },
     async put(g) {
-      if (!grants.some((x) => sameGrant(x, g))) grants.push(g);
+      const existing = grants.findIndex((x) => sameGrant(x, g));
+      if (existing === -1) grants.push(g);
+      else grants[existing] = g;
     },
     async remove(g) {
       for (let i = grants.length - 1; i >= 0; i--) {

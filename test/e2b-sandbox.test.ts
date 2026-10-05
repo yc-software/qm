@@ -1,7 +1,6 @@
 import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
-import { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -303,26 +302,6 @@ test("a failing snapshot store fails the fallback provision instead of cold-star
   flaky.failReads(false);
   const b = await s.provision(layers);
   assert.equal(await s.readFile(b, "precious.txt"), "irreplaceable\n", "snapshot survives the outage");
-});
-
-test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets the scope's sandbox", async () => {
-  const { makeTar } = await import("../src/sandbox/tar.ts");
-  const blobs = createMemoryBlobTransferStore();
-  const s = make({ blobTransfer: blobs, capabilitySecret: "blob-secret", apiBaseUrl: "http://core.internal:8080" });
-
-  const a = await s.provision(layers);
-  await s.writeFile(a, "old.txt", "stale sprite-era sandbox\n");
-  await s.teardown(a, { keepWarm: true });
-
-  const tar = await makeTar([{ path: "migrated.txt", data: Buffer.from("came from sprites\n") }]);
-  const { blobId } = await blobs.put(Readable.from([Buffer.from(tar)]));
-  assert.ok(s.adoptHomeSnapshot);
-  await s.adoptHomeSnapshot!(scope, blobId);
-
-  const b = await s.provision(layers);
-  const migrated = await s.run(b, "cat ~/migrated.txt");
-  assert.equal(migrated.stdout, "came from sprites\n", "hydrates from the adopted snapshot");
-  assert.notEqual((await s.run(b, "cat ~/old.txt")).code, 0, "the pre-adopt sandbox was discarded, not reused");
 });
 
 test("blob staging is advertised only when the channel is actually wired", async () => {
@@ -744,7 +723,7 @@ test("failed scratch preparation retains the live session when rollback fails", 
             throw new Error("preparation failed");
           },
           async kill() {
-            if (kills++ === 0) throw new Error("sentinel-secret");
+            if (kills++ === 0) throw new Error("kill-boom");
             await session.kill();
           },
         };
@@ -755,8 +734,8 @@ test("failed scratch preparation retains the live session when rollback fails", 
   await assert.rejects(box.provision(layers, { scratch: { key: "failed-preparation" } }), (error: Error) => {
     assert.ok(error instanceof SandboxProvisionCleanupError);
     pending = error.handle;
-    assert.equal(error.cause, undefined);
-    assert.ok(!error.message.includes("sentinel-secret"));
+    assert.equal((error.cause as Error).message, "kill-boom");
+    assert.match(error.message, /preparation failed/);
     return true;
   });
   assert.ok(pending);

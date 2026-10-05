@@ -554,7 +554,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
 
         return handle;
       } catch (err) {
-        await cleanupFailedProvision(sandbox, handle);
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },

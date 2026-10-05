@@ -579,3 +579,91 @@ for (const failure of ["acknowledge", "tape"] as const) {
     }
   });
 }
+
+for (const abort of ["shutdown", "stop"] as const) {
+  test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted on entries and tape and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
+    const harness = createPiHarness({ apiKey: "sk-test" });
+    const store = createMemorySessionStore();
+    const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
+    const lease = (await store.acquireLease(session.id, "turn")).lease!;
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      if (++calls > 1) return sse(textReplyEvents("done"));
+      const events = textReplyEvents("");
+      events[1] = {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+      };
+      events[2] = {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read", retrySafe: true }) },
+      };
+      events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+      return sse(events);
+    }) as typeof fetch;
+    const shutdown = new AbortController();
+    const cancel = new AbortController();
+    const entries: SessionEntry[] = [];
+    try {
+      await harness.turns.runTurn(
+        turnInput(
+          session.id,
+          { entries: [], tape: [] },
+          {
+            session,
+            runId: `${abort}-tool`,
+            cancel: cancel.signal,
+            shutdown: shutdown.signal,
+            tools: {
+              memoryRead: async () => {
+                if (abort === "shutdown") shutdown.abort();
+                cancel.abort();
+                await new Promise((resolve) => setTimeout(resolve, 10));
+                return "[exit 143]";
+              },
+            } as HarnessTurnInput["tools"],
+            emit: async (entry) => {
+              const saved = await store.append(lease, entry);
+              entries.push(saved);
+              return saved;
+            },
+            tape: (row) => store.appendTape(lease, row),
+          },
+        ),
+      );
+      const result = entries.find((entry) => entry.type === "tool_result");
+      assert.ok(result);
+      assert.deepEqual(
+        (({ interrupted, result }) => ({ interrupted, result }))(result.payload as Record<string, unknown>),
+        abort === "shutdown"
+          ? { interrupted: true, result: "[exit 143]" }
+          : { interrupted: undefined, result: "[exit 143]" },
+      );
+      const tape = await store.getTape(session.id);
+      const tapedResult = tape.find(
+        (row) => row.kind === "message" && (row.payload as { role?: string }).role === "toolResult",
+      );
+      assert.ok(tapedResult);
+      assert.equal(
+        (tapedResult.payload as { interrupted?: unknown }).interrupted,
+        abort === "shutdown" ? true : undefined,
+      );
+      const { openTapeToolCalls, foldTape, lintFold } = await import("../src/harness/tape-fold.ts");
+      assert.deepEqual(openTapeToolCalls(tape).open, abort === "shutdown" ? ["read-memory"] : []);
+      assert.ok(lintFold(foldTape(tape)).ok, "the served fold keeps the result beside its call");
+      const { resumeStrategy } = await import("../src/core/turn-resume.ts");
+      const userSeq = entries.find((entry) => entry.type === "user")!.seq;
+      assert.equal(
+        resumeStrategy(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }).kind,
+        abort === "shutdown" ? "retry" : "note",
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+      await store.releaseLease(lease);
+      await harness.turns.close?.();
+    }
+  });
+}

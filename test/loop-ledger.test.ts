@@ -433,3 +433,48 @@ test("flagged summaries classify payload-only legacy email without changing stor
   assert.deepEqual(await ledger.summaries([LOOP]), before);
   assert.equal((await ledger.byLoop(LOOP))[0]!.source, undefined);
 });
+
+test("ingest batches per-loop locks and writes while resolving legacy IDs and duplicate events", async () => {
+  const backing = createMemoryMap<LoopItem>();
+  const seed = createLoopItemLedger(backing);
+  await seed.ingest([entry()]);
+  const original = (await seed.byLoop(LOOP))[0]!;
+  await backing.delete(original.id);
+  await backing.put("legacy", { ...original, id: "legacy" });
+  let selects = 0;
+  let writes = 0;
+  let locks = 0;
+  const ledger = createLoopItemLedger(
+    {
+      ...backing,
+      select: async (query) => {
+        selects++;
+        return backing.select(query);
+      },
+      get: async () => {
+        throw new Error("per-item read");
+      },
+      mutateMany: async (updates) => {
+        writes++;
+        return backing.mutateMany(updates);
+      },
+    },
+    undefined,
+    {
+      lock: {
+        withLock: async (_key, fn) => {
+          locks++;
+          return fn();
+        },
+      },
+      accepts: async () => true,
+    },
+  );
+  const batch = Array.from({ length: 100 }, (_, i) => entry({ dedupeKey: `new:${i}` }));
+  const outcome = await ledger.ingest([entry(), ...batch, ...batch]);
+  assert.deepEqual(outcome, { created: 100, updated: 0, skipped: 101 });
+  assert.deepEqual({ selects, writes, locks }, { selects: 1, writes: 1, locks: 1 });
+  assert.equal((await backing.all()).length, 101);
+  assert.ok(await backing.get("legacy"));
+  assert.equal(await backing.get(original.id), null);
+});

@@ -889,7 +889,7 @@ function cronDetail(root: HTMLElement, cron: Data | undefined, id: string, c: Co
   void c
     .api(
       "GET",
-      `/api/sessions?scope=${encodeURIComponent(c.scope)}&limit=25&offset=0&category=background&origin=cron&cron=${encodeURIComponent(id)}`,
+      `/api/sessions?scope=${encodeURIComponent(c.scope)}&limit=25&category=background&origin=cron&cron=${encodeURIComponent(id)}`,
     )
     .then((response: Data) => {
       if (!root.isConnected) return;
