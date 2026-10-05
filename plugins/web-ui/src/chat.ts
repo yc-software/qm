@@ -2425,7 +2425,7 @@ export function createChatSurface(
           ${icon(Terminal, 13)}
           ${
             j.purpose
-              ? html`<span class="bg-row-cmd">${j.purpose}</span>`
+              ? html`<span class="bg-row-cmd bg-job-purpose">${j.purpose}</span>`
               : html`<code class="bg-row-cmd">${j.command}</code>`
           }
           <span class="bg-row-meta">started ${relTime(j.startedAt)} · ${status}</span>

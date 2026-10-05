@@ -3439,7 +3439,8 @@ qm-markdown .tok-in {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11.5px;
 }
-.bg-row-cmd:not(code) {
+.bg-row.watch .bg-row-cmd,
+.bg-row-cmd.bg-job-purpose {
   font-family: inherit;
   font-size: 12px;
 }
