@@ -30,6 +30,8 @@ const env = {
   GITHUB_OAUTH_CLIENT_SECRET: "ghsecret",
   X_OAUTH_CLIENT_ID: "xid",
   X_OAUTH_CLIENT_SECRET: "xsecret",
+  LINEAR_OAUTH_CLIENT_ID: "lid",
+  LINEAR_OAUTH_CLIENT_SECRET: "lsec",
 } as NodeJS.ProcessEnv;
 
 const resolve = createSecretClientResolver(createEnvSecretSource(env));
