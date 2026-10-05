@@ -82,7 +82,7 @@
     "@opencode-ai/sdk": "1.18.31",
     "@sentry/node": "10.75.0",
     "@slack/bolt": "^4.7.3",
-    "@slack/socket-mode": "^2.0.7",
+    "@slack/socket-mode": "https://github.com/yc-software/qm/releases/download/vendored-slack-socket-mode-2.0.7-qm.1/slack-socket-mode-2.0.7-qm.1.tgz",
     "@slack/web-api": "^7.19.0",
     "@smithy/signature-v4": "^5.6.6",
     "@superserve/sdk": "^0.8.3",
@@ -118,7 +118,8 @@
     },
     "undici": "8.10.2",
     "ip-address": "10.7.2",
-    "protobufjs": "7.6.5"
+    "protobufjs": "7.6.5",
+    "@slack/socket-mode": "$@slack/socket-mode"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
