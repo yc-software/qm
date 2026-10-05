@@ -46,7 +46,7 @@ A process records `admitted` before starting background resources. The desired d
 
 `relinquished` acknowledges that the process stopped new claims and closed its Slack ingress. Already admitted turns may still run. Cron polling can resume after rollback while earlier callbacks keep their queue connection and heartbeats. Maintenance callbacks that cannot relinquish safely are joined before acknowledgment.
 
-`drained` means the process's admitted background work has finished. Releasing ownership and making a deployment safe to replace are separate gates: `qm up` replaces a cohort once every member has relinquished, and members still finishing admitted work keep running beside the new tasks under their leases and task protection until they drain. The ECS service's `maximumPercent` must leave room for those lingering tasks. Do not terminate a relinquished but undrained process merely to meet a rollout time target.
+`drained` means the process's admitted background work has finished. `qm up` replaces a cohort once every member has relinquished. Members still finishing admitted work get the shutdown drain window, after which the platform terminates them; a turn cut off that way releases its lease on exit and resumes on the replacement tasks.
 
 Database errors or an expired local validity watchdog fence new local work. They do not establish durable relinquishment or authorize another deployment to bypass an outstanding member.
 
@@ -104,13 +104,12 @@ legacy supersession results and continue using durable ownership admission.
 Inactive, unready, or fenced processes do not publish this compatibility heartbeat;
 publishing also stops once durable ownership is enabled.
 
-This bridge preserves the legacy worker drain behavior and its running-turn task
-protection. It does not add missing lifecycle controls to older binaries: their
-Slack ingress, cron callbacks, and inline HTTP execution can remain active.
+This bridge preserves the legacy worker drain behavior. It does not add missing
+lifecycle controls to older binaries: their Slack ingress, cron callbacks, and
+inline HTTP execution can remain active.
 Never treat the heartbeat as a deployment relinquishment acknowledgment or as
 proof that a legacy task is safe to terminate. Bootstrap still requires explicit
 infrastructure proof that every legacy task has retired, including pending tasks.
-Do not clear task protection or terminate live turns to finish enrollment.
 If enrollment is abandoned, the legacy heartbeat expiry permits older workers
 to resume their existing claim loop.
 
@@ -120,4 +119,3 @@ asynchronous submissions for the active workers. Accepted turns, scheduled
 callbacks, and their nested work keep running with their existing leases; their
 completion is part of the deployment's drain acknowledgment. Resuming ownership
 restores synchronous admission without restarting or canceling those calls.
-Task protection also counts admitted foreground work while the process drains.

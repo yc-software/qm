@@ -111,11 +111,10 @@ while changing durable ownership independently.
 The exported `awsBackgroundWorkCapacity(config, configDir, candidatePath?)` proves
 that an inactive controlled stack is currently reusable. It requires another
 owner, a current membership that has relinquished, stable native deployments and
-exact task inventories for every workload, resolved deployment preparation, and
-explicitly disabled protection on every current core task. It never changes task protection
-or deployment state. The deploy role needs `ecs:GetTaskProtection` on its tasks.
-The result binds the manifest and deployment identities, ownership generation,
-workload task definitions, native deployment IDs, task ARNs, and protection proof.
+exact task inventories for every workload, and resolved deployment preparation. It
+never changes deployment state. The result binds the manifest and deployment
+identities, ownership generation, workload task definitions, native deployment IDs,
+and task ARNs.
 `awsBackgroundWorkStatus` also returns the current manifest ID for an active-owner
 proof. A release coordinator can combine both snapshots with immutable candidate
 provenance and compare them again under its production lock before any mutation.
@@ -137,8 +136,8 @@ requests without restarting ECS tasks. Activation waits for prior owners to stop
 claiming and every expected task to finish activation. Pausing stops new claims;
 in-flight turns can continue draining. Replacing or rolling back the active core
 cohort requires an explicit pause or handover and proof that every member has
-relinquished first; members still finishing admitted work keep running under
-task protection beside the replacement tasks until they drain. A demotion
+relinquished first; ECS then stops the old tasks after their stop timeout, and
+any turn still running there resumes on the replacement tasks. A demotion
 refuses to pause a different current owner. Unresponsive members are never
 assumed dead: `awsRetireBackgroundWorkMembers` requires exact instance, task ARN,
 and generation identities plus ECS evidence that each task stopped. This recovery

@@ -68,15 +68,9 @@ test("detached async contexts lose admission when their accepting callback finis
 });
 
 test("admission is registered before callback execution and errors cannot strand busy state", async () => {
-  let admitted = false;
-  const work = createAdmittedWork({
-    onAdmitted: () => {
-      admitted = true;
-    },
-  });
+  const work = createAdmittedWork();
   await assert.rejects(
     work.run(() => {
-      assert.equal(admitted, true);
       assert.equal(work.busy(), true);
       throw new Error("failed work");
     }),

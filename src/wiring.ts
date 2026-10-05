@@ -342,7 +342,6 @@ import {
   createPostgresInstanceRegistry,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
-import { createEcsTaskProtection, type TaskProtection } from "./runs/task-protection.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
@@ -576,10 +575,8 @@ export function buildApp(
   } = {},
 ): BuiltApp {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
-  let noteAdmitted = () => {};
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
-    onAdmitted: () => noteAdmitted(),
   });
   let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
@@ -2574,14 +2571,7 @@ export function buildApp(
         );
       })
     : legacyRegistry;
-  const taskProtection: TaskProtection | null =
-    config.ecsTaskProtection && config.ecsAgentUri ? createEcsTaskProtection(config.ecsAgentUri) : null;
-  const drain: DrainController = createDrainController({
-    registry: instanceRegistry,
-    protection: taskProtection,
-    busy: () => admittedWork.busy() || workers.some((w) => w.busy()),
-  });
-  noteAdmitted = () => drain.noteBusy();
+  const drain: DrainController = createDrainController({ registry: instanceRegistry });
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
       admittedWork,
@@ -2592,7 +2582,6 @@ export function buildApp(
       errors,
       pollMs: 250,
       canClaim: () => backgroundAdmission() && drain.canClaim(),
-      onClaimed: () => drain.noteBusy(),
     }),
   );
   const processReaper: ProcessReaper | null = processes

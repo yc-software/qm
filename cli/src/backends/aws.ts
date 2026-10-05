@@ -1478,7 +1478,6 @@ interface RolloutTarget {
   taskDefinition: string;
   desiredCount: number;
   deploymentId?: string;
-  waitForDrain?: boolean;
 }
 
 async function awaitServiceTargets(
@@ -1488,7 +1487,6 @@ async function awaitServiceTargets(
 ): Promise<void> {
   const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 15_000);
   const deadline = Date.now() + (timeoutMs ?? envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 20 * 60_000));
-  let healthyStreak = 0;
   let failurePolls = new Map<string, number>();
   let describeFailures = 0;
   const failing = new Map<string, { polls: number; baseRunning: number }>();
@@ -1516,7 +1514,6 @@ async function awaitServiceTargets(
     const fail = (workload: string, kind: string, message: string): void =>
       void failures.push({ identity: `${workload}:${kind}`, message });
     const waiting: string[] = [];
-    let draining = 0;
     const failingNow = new Set<string>();
     for (const [workload, want] of Object.entries(expected)) {
       const state = states.get(workload)!;
@@ -1572,12 +1569,6 @@ async function awaitServiceTargets(
         }
       } else if (running < want.desiredCount) {
         waiting.push(`${workload} (${running}/${want.desiredCount})`);
-      } else if (
-        want.waitForDrain &&
-        (deployment.rolloutState !== "COMPLETED" || state.deployments?.length !== 1) &&
-        state.deploymentConfiguration?.strategy !== "BLUE_GREEN"
-      ) {
-        waiting.push(`${workload} (prior tasks are still draining)`);
       } else if (state.deploymentConfiguration?.strategy === "BLUE_GREEN") {
         const nativeStatus = nativeStatuses.get(workload);
         if (nativeStatus === "SUCCESSFUL") continue;
@@ -1586,15 +1577,14 @@ async function awaitServiceTargets(
         } else {
           waiting.push(`${workload} (blue/green traffic shift or bake is still in progress)`);
         }
-      } else if (deployment.rolloutState !== "COMPLETED") {
-        draining += 1;
+      } else if (deployment.rolloutState !== "COMPLETED" || state.deployments?.length !== 1) {
+        waiting.push(`${workload} (prior tasks are still stopping)`);
       }
     }
     for (const workload of failing.keys()) {
       if (!failingNow.has(workload)) failing.delete(workload);
     }
     if (failures.length) {
-      healthyStreak = 0;
       const next = new Map<string, number>();
       const confirmed: string[] = [];
       for (const failure of failures) {
@@ -1614,23 +1604,11 @@ async function awaitServiceTargets(
       continue;
     }
     failurePolls = new Map();
-    if (waiting.length === 0) {
-      if (draining === 0) return;
-      healthyStreak += 1;
-      if (healthyStreak >= 3) return;
-    } else {
-      healthyStreak = 0;
-    }
+    if (waiting.length === 0) return;
     if (Date.now() > deadline) {
-      throw new CliError(
-        `timed out waiting for the AWS rollout: ${waiting.length ? `still starting ${waiting.join(", ")}` : "confirming health while old tasks drain"}`,
-      );
+      throw new CliError(`timed out waiting for the AWS rollout: still starting ${waiting.join(", ")}`);
     }
-    note(
-      waiting.length
-        ? `waiting on ${waiting.join(", ")}`
-        : `new tasks healthy; old task(s) still draining protected turns (${healthyStreak}/3)`,
-    );
+    note(`waiting on ${waiting.join(", ")}`);
     await sleep(pollMs);
   }
 }
@@ -1979,8 +1957,6 @@ async function applyServiceTargets(
   targets: Record<string, string>,
   desiredCounts?: Record<string, number>,
   options: {
-    waitForDrain?: boolean;
-    waitForCompensationDrain?: boolean;
     timeoutMs?: number;
     webBeforePortal?: boolean;
     onSubmitted?: () => void;
@@ -2008,7 +1984,6 @@ async function applyServiceTargets(
             "web-ui": {
               taskDefinition: targets["web-ui"]!,
               desiredCount: expectedCounts["web-ui"]!,
-              waitForDrain: true,
             },
           },
           options.timeoutMs,
@@ -2038,7 +2013,6 @@ async function applyServiceTargets(
           {
             taskDefinition: targets[workload]!,
             desiredCount: expectedCounts[workload]!,
-            waitForDrain: options.waitForDrain,
           },
         ]),
       ),
@@ -2074,7 +2048,6 @@ async function applyServiceTargets(
               {
                 taskDefinition: before.tasks[workload]!,
                 desiredCount: before.counts[workload]!,
-                waitForDrain: options.waitForCompensationDrain,
               },
             ]),
           ),
@@ -2757,7 +2730,7 @@ export async function awsDown(config: QmConfig, configDir = process.cwd()): Prom
     releaseLease(aws, lease);
   }
   ok(
-    "AWS services set to zero desired tasks; protected tasks finish in-flight turns before stopping. Infrastructure and data were retained.",
+    "AWS services set to zero desired tasks; in-flight turns resume on the next deployment. Infrastructure and data were retained.",
   );
 }
 
@@ -3096,7 +3069,7 @@ async function awsBackgroundCohort(
   if (!count) throw new CliError("background ownership requires running core capacity");
   if (waitForReady)
     await awaitServiceTargets(config, {
-      core: { taskDefinition: before.tasks.core!, desiredCount: count, waitForDrain: false },
+      core: { taskDefinition: before.tasks.core!, desiredCount: count },
     });
   const taskArns =
     awsJson<{ taskArns?: string[] }>(aws, [
@@ -3159,7 +3132,6 @@ export interface AwsBackgroundWorkCapacity {
   deploymentId: string;
   generation: number;
   desiredDeploymentId: string;
-  coreTaskProtection: Record<string, false>;
   workloads: Record<string, { taskDefinition: string; deploymentId: string; desiredCount: number; taskArns: string[] }>;
 }
 
@@ -3279,7 +3251,6 @@ export async function awsBackgroundWorkCapacity(
     deploymentId: cohort.deploymentId,
     generation: ownership.generation,
     desiredDeploymentId: ownership.desiredDeploymentId,
-    coreTaskProtection: {},
     workloads: {},
   };
   for (const workload of [...workloads].sort()) {
@@ -3293,36 +3264,6 @@ export async function awsBackgroundWorkCapacity(
   }
   if (canonicalJson(proof.workloads.core?.taskArns) !== canonicalJson([...cohort.taskArns].sort()))
     throw new CliError("core task cohort changed while checking capacity");
-  for (const batch of chunks(proof.workloads.core!.taskArns, 100)) {
-    const response = awsJson<{
-      protectedTasks?: Array<{ taskArn?: string; protectionEnabled?: boolean }>;
-      failures?: unknown[];
-    }>(aws, ["ecs", "get-task-protection", "--cluster", aws.cluster, "--tasks", ...batch]);
-    const taskId = (arn: string | undefined): string | undefined => {
-      const prefix = `arn:aws:ecs:${aws.region}:${aws.accountId}:task/`;
-      if (!arn?.startsWith(prefix)) return undefined;
-      const parts = arn.slice(prefix.length).split("/");
-      if (parts.length === 1 && parts[0]) return parts[0];
-      if (parts.length === 2 && parts[0] === aws.cluster && parts[1]) return parts[1];
-      return undefined;
-    };
-    const requested = new Map(batch.map((arn) => [taskId(arn), arn]));
-    const received = response.protectedTasks?.map((task) => taskId(task.taskArn)) ?? [];
-    if (
-      requested.has(undefined) ||
-      requested.size !== batch.length ||
-      response.failures?.length ||
-      !Array.isArray(response.protectedTasks) ||
-      received.length !== batch.length ||
-      new Set(received).size !== batch.length ||
-      received.some((id) => !id || !requested.has(id)) ||
-      response.protectedTasks.some((task) => task.protectionEnabled !== false)
-    )
-      throw new CliError(
-        "capacity requires explicit unprotected status for every current core task; protection was not changed",
-      );
-    for (const taskArn of batch) proof.coreTaskProtection[taskArn] = false;
-  }
   const finalManifest = currentDeploymentManifest(aws);
   if (canonicalJson(finalManifest) !== canonicalJson(cohort.manifest))
     throw new CliError("deployment manifest changed while checking capacity");
@@ -3599,7 +3540,7 @@ export async function awsSetBackgroundWork(
       await awaitServiceTargets(
         config,
         {
-          core: { taskDefinition: before.tasks.core!, desiredCount: before.counts.core, waitForDrain: !enabled },
+          core: { taskDefinition: before.tasks.core!, desiredCount: before.counts.core },
         },
         timeoutMs,
       );
@@ -3610,12 +3551,7 @@ export async function awsSetBackgroundWork(
       const file = join(dir, "core.json");
       writeFileSync(file, JSON.stringify(desired));
       const target = registerTaskDefinition(config, file);
-      await applyServiceTargets(
-        config,
-        { core: target },
-        { core: before.counts.core },
-        { waitForDrain: !enabled, waitForCompensationDrain: true, timeoutMs },
-      );
+      await applyServiceTargets(config, { core: target }, { core: before.counts.core }, { timeoutMs });
       try {
         recordDeploymentManifest(
           aws,
@@ -3631,12 +3567,7 @@ export async function awsSetBackgroundWork(
       } catch (error) {
         const failures: string[] = [];
         try {
-          await applyServiceTargets(
-            config,
-            { core: before.tasks.core! },
-            { core: before.counts.core },
-            { waitForDrain: true, waitForCompensationDrain: true, timeoutMs },
-          );
+          await applyServiceTargets(config, { core: before.tasks.core! }, { core: before.counts.core }, { timeoutMs });
           manifestTransaction(aws, current, current.id);
         } catch (restoreError) {
           failures.push(`restoring background work: ${errMessage(restoreError)}`);
@@ -4975,12 +4906,7 @@ async function checkLive(
     }
     const primary = (state.deployments ?? []).filter((deployment) => deployment.status === "PRIMARY");
     const wantCount = workloadDesiredCount(config, service);
-    const draining = primary[0]?.rolloutState === "IN_PROGRESS" && (primary[0]?.runningCount ?? 0) >= wantCount;
-    if (
-      state.status !== "ACTIVE" ||
-      state.desiredCount !== wantCount ||
-      (draining ? (state.runningCount ?? 0) < wantCount : state.runningCount !== wantCount)
-    ) {
+    if (state.status !== "ACTIVE" || state.desiredCount !== wantCount || state.runningCount !== wantCount) {
       failures.push(
         `${service}: runtime is ${state.status ?? "missing"} with ${state.runningCount ?? 0}/${state.desiredCount ?? 0} running, expected ${wantCount}`,
       );
@@ -4988,7 +4914,7 @@ async function checkLive(
     if (
       primary.length !== 1 ||
       primary[0]?.taskDefinition !== state.taskDefinition ||
-      (primary[0]?.rolloutState !== "COMPLETED" && !draining)
+      primary[0]?.rolloutState !== "COMPLETED"
     ) {
       failures.push(`${service}: configured task is not the sole healthy PRIMARY deployment`);
     }
