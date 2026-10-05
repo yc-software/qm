@@ -319,6 +319,7 @@ export interface Webhook extends TriggerBase {
 export interface Monitor extends TriggerBase {
   processId: string;
   command: string;
+  purpose?: string;
   threadRef: string;
   instructions?: string;
   pattern?: string;

@@ -2423,11 +2423,15 @@ export function createChatSurface(
           @click=${() => toggleJobOutput(j.processId)}
         >
           ${icon(Terminal, 13)}
-          <code class="bg-row-cmd">${j.command}</code>
+          ${
+            j.purpose
+              ? html`<span class="bg-row-cmd">${j.purpose}</span>`
+              : html`<code class="bg-row-cmd">${j.command}</code>`
+          }
           <span class="bg-row-meta">started ${relTime(j.startedAt)} · ${status}</span>
           <span class="bg-row-toggle">${icon(ChevronRight, 13)}</span>
         </button>
-        ${open ? html`<pre class="bg-row-output">${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
+        ${open ? html`<pre class="bg-row-output">${j.purpose ? `${j.command}\n\n` : ""}${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
       </div>
     `;
   }

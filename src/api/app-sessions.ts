@@ -531,7 +531,13 @@ export function createSessionMethods(
       const jobs = ((await deps.processes?.listLive(now)) ?? [])
         .filter((r) => r.kind === "background" && r.sessionRef === session.threadRef)
         .sort((a, b) => b.startedAt - a.startedAt)
-        .map((r) => ({ processId: r.processId, command: r.command, startedAt: r.startedAt, expiresAt: r.expiresAt }));
+        .map((r) => ({
+          processId: r.processId,
+          command: r.command,
+          ...(r.purpose ? { purpose: r.purpose } : {}),
+          startedAt: r.startedAt,
+          expiresAt: r.expiresAt,
+        }));
       const watches = ((await deps.monitors?.enabled()) ?? [])
         .filter((m) => m.threadRef === session.threadRef && m.expiresAt > now)
         .sort((a, b) => b.createdAt - a.createdAt)

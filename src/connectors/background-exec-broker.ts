@@ -42,6 +42,7 @@ export interface BackgroundStopResult {
 export interface BackgroundJobSummary {
   processId: string;
   command: string;
+  purpose?: string;
   status: ProcessState;
   registryStatus: ProcessStatus;
   startedAt: number;
@@ -55,7 +56,7 @@ export interface BackgroundWriteResult {
 
 export interface BackgroundExecBroker {
   handleFor?(processId: string): Promise<SandboxHandle | null>;
-  start(handle: SandboxHandle, command: string, ttlMs?: number): Promise<BackgroundStartResult>;
+  start(handle: SandboxHandle, command: string, purpose: string, ttlMs?: number): Promise<BackgroundStartResult>;
   poll(
     handle: SandboxHandle,
     processId: string,
@@ -92,7 +93,9 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
       return deps.provisionSandbox(rec.sandboxId);
     },
-    async start(handle, command, ttlMs): Promise<BackgroundStartResult> {
+    async start(handle, command, purpose, ttlMs): Promise<BackgroundStartResult> {
+      if (!purpose?.trim()) throw new Error("background start requires a short purpose describing the job");
+      purpose = redactCommand(purpose.replace(/\s+/g, " ").trim(), handle.env);
       const ttl = Math.min(ttlMs ?? defaultTtlMs, maxTtlMs);
 
       const normalized = `bg: ${command.replace(/\s+/g, " ").trim()}`;
@@ -145,6 +148,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
           kind: "background",
           command: redacted,
+          purpose,
           ttlMs: ttl,
           ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
         });
@@ -220,6 +224,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         .map((r) => ({
           processId: r.processId,
           command: r.command,
+          ...(r.purpose ? { purpose: r.purpose } : {}),
           status: stateFromRow(r.status),
           registryStatus: r.status,
           startedAt: r.startedAt,
