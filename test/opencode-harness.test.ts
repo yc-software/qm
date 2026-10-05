@@ -1,3 +1,4 @@
+import { resumeNote } from "../src/core/turn-resume.ts";
 import test from "node:test";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
@@ -81,7 +82,11 @@ const okAssistant = `{
   parts: [{ id: "prt_1", sessionID: "ses_main", messageID: "msg_1", type: "text", text: "hello from fake" }],
 }`;
 
-function turnInput(entries: SessionEntry[], llmRows: HarnessLlmRequestRecord[]): HarnessTurnInput {
+function turnInput(
+  entries: SessionEntry[],
+  llmRows: HarnessLlmRequestRecord[],
+  overrides: Partial<HarnessTurnInput> = {},
+): HarnessTurnInput {
   const scope = { kind: "org", id: "test" } as unknown as ScopeId;
   const session = { id: "session-1" } as Session;
   return {
@@ -102,8 +107,26 @@ function turnInput(entries: SessionEntry[], llmRows: HarnessLlmRequestRecord[]):
     recordLlmRequest: async (rec) => {
       llmRows.push(rec);
     },
+    ...overrides,
   };
 }
+
+test("OpenCode ignores continueTurn and still records the resume note as this attempt's user entry", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
+  const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "resume", promptHandlers(okAssistant)) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const note = resumeNote({ strategy: { kind: "continue" } });
+  const result = await harness.turns.runTurn(
+    turnInput(entries, [], { input: note, continueTurn: true, runId: "run-resume" }),
+  );
+  assert.equal(result.reply, "hello from fake");
+  assert.equal(entries[0]?.type, "user");
+  assert.equal((entries[0]!.payload as { text: string }).text, note);
+});
 
 test("OpenCode surfaces a provider error as a non-retryable failure, never a successful empty reply", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));

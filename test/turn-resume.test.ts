@@ -285,6 +285,9 @@ test("resumeStrategy continues silently only when every call is answered and the
     kind: "note",
   });
   assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), killed(3)], partial), { kind: "note" });
+  assert.deepEqual(resumeStrategy([safeCall(0, true), user("go", 1), toolCall(2)], { userSeq: 1, workEntries: 1 }), {
+    kind: "note",
+  });
   assert.deepEqual(
     resumeStrategy([user("go", 1), toolCall(2), toolResult(3), safeCall(4, true), killed(5)], {
       userSeq: 1,

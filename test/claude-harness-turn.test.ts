@@ -5,6 +5,7 @@ import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { resumeNote } from "../src/core/turn-resume.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
@@ -733,4 +734,24 @@ test("Claude retains a queued message which the SDK never consumes", async () =>
   await createClaudeHarness({ signals }).turns.runTurn(turn);
   assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
   assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
+});
+
+test("Claude ignores continueTurn and still prompts the resume note as a user message", async () => {
+  const prompted: string[] = [];
+  currentScript = async function* (prompts) {
+    for await (const prompt of prompts) {
+      prompted.push(JSON.stringify(prompt.message.content));
+      break;
+    }
+    yield assistantMessage("msg_A", "picking up", { input_tokens: 3, output_tokens: 2 });
+    yield resultMessage("picking up");
+  };
+  const note = resumeNote({ strategy: { kind: "continue" } });
+  const harness = createClaudeHarness({});
+  const { turn, entries } = harnessTurn({ input: note, continueTurn: true, runId: "run-resume" });
+  const result = await harness.turns.runTurn(turn);
+  assert.equal(result.reply, "picking up");
+  assert.equal(entries[0]?.type, "user");
+  assert.equal((entries[0]!.payload as { text: string }).text, note);
+  assert.ok(prompted[0]!.includes("(system note:"), "the note reaches the model as a user prompt");
 });
