@@ -102,3 +102,27 @@ test("compactTranscript omits the stamp when an entry has no real timestamp", ()
   assert.match(out, /^user#1: hello$/m);
   assert.match(out, /^user#2: again$/m);
 });
+
+test("a tool_result marked interrupted still leaves its call reported as interrupted in the compaction transcript", () => {
+  const out = compactTranscript([
+    {
+      sessionId: "s",
+      seq: 1,
+      parentSeq: null,
+      type: "tool_call",
+      payload: { tool: "execute", callId: "c1", command: "make" },
+      scopeLabel: "org:o",
+      createdAt: 1,
+    },
+    {
+      sessionId: "s",
+      seq: 2,
+      parentSeq: null,
+      type: "tool_result",
+      payload: { callId: "c1", result: "[exit 143]", interrupted: true },
+      scopeLabel: "org:o",
+      createdAt: 2,
+    },
+  ]);
+  assert.ok(out.includes(`tool_result for tool_call#1 (none recorded): ${INTERRUPTED_TOOL_RESULT}`));
+});

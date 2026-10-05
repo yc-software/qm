@@ -101,8 +101,9 @@ export function compactTranscript(history: SessionEntry[]): string {
   const resultByCallId = new Map<string, true>();
   for (const entry of history) {
     if (entry.type !== "tool_result") continue;
-    const cid = (entry.payload as { callId?: unknown } | null)?.callId;
-    if (typeof cid === "string" && cid) resultByCallId.set(cid, true);
+    const payload = entry.payload as { callId?: unknown; interrupted?: unknown } | null;
+    if (typeof payload?.callId === "string" && payload.callId && payload.interrupted !== true)
+      resultByCallId.set(payload.callId, true);
   }
   const lines: string[] = [];
   const push = (line: string) => lines.push(headTailSlice(line, MAX_COMPACT_ENTRY_CHARS, COMPACT_ENTRY_TAIL_CHARS));
