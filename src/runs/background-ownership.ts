@@ -16,26 +16,34 @@ export class BackgroundOwnershipConflict extends Error {}
 
 interface MemberProtocolRecord {
   enabled: boolean;
+  generation: number;
   desiredDeploymentId: string | null;
+  members: unknown[];
 }
 
 type StoredOwnership = BackgroundOwnership | MemberProtocolRecord | (BackgroundOwnership & MemberProtocolRecord);
 
-function fromStored(value: StoredOwnership): BackgroundOwnership {
-  if ("ownerDeploymentId" in value)
-    return { ownerDeploymentId: value.ownerDeploymentId, setAt: value.setAt, setBy: value.setBy };
+function memberProtocolOwner(value: MemberProtocolRecord): BackgroundOwnership {
   return { ownerDeploymentId: value.enabled ? value.desiredDeploymentId : null, setAt: null, setBy: null };
 }
 
-function readableByMemberProtocol(state: BackgroundOwnership): BackgroundOwnership {
+function fromStored(value: StoredOwnership): BackgroundOwnership {
+  if (!("ownerDeploymentId" in value)) return memberProtocolOwner(value);
+  if ("desiredDeploymentId" in value && value.desiredDeploymentId !== value.ownerDeploymentId)
+    return memberProtocolOwner(value);
+  return { ownerDeploymentId: value.ownerDeploymentId, setAt: value.setAt, setBy: value.setBy };
+}
+
+function readableByMemberProtocol(state: BackgroundOwnership, previous?: StoredOwnership): BackgroundOwnership {
+  const members = previous && "members" in previous ? previous : { generation: 0, members: [] };
   return {
     ...state,
     enabled: true,
-    generation: 0,
+    generation: members.generation,
     desiredDeploymentId: state.ownerDeploymentId,
     lastRequestId: null,
     lastRequest: null,
-    members: [],
+    members: members.members,
   } as BackgroundOwnership;
 }
 
@@ -59,11 +67,10 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
         )
           throw new BackgroundOwnershipConflict("Background owner changed");
         if (current.ownerDeploymentId === change.ownerDeploymentId) return stored;
-        return readableByMemberProtocol({
-          ownerDeploymentId: change.ownerDeploymentId,
-          setAt: new Date().toISOString(),
-          setBy: change.setBy,
-        });
+        return readableByMemberProtocol(
+          { ownerDeploymentId: change.ownerDeploymentId, setAt: new Date().toISOString(), setBy: change.setBy },
+          stored,
+        );
       });
       if (!result) throw new Error("Background ownership disappeared");
       return fromStored(result);

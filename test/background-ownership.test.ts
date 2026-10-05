@@ -57,12 +57,34 @@ test("a member-protocol record is read as its enabled desired owner and stays re
   assert.deepEqual(await map.get("ownership"), {
     ...migrated,
     enabled: true,
-    generation: 0,
+    generation: 7,
     desiredDeploymentId: "core:green",
     lastRequestId: null,
     lastRequest: null,
-    members: [],
+    members: legacy.members,
   });
   await map.put("ownership", { ...legacy, enabled: false } as unknown as BackgroundOwnership);
   assert.equal((await store.get()).ownerDeploymentId, null);
+});
+
+test("a member-protocol transition written after the owner record wins until the next owner change", async () => {
+  const map = createMemoryMap<BackgroundOwnership>();
+  const store = createBackgroundOwnershipStore(map);
+  await store.set({ ownerDeploymentId: "core:green", setBy: "core:green" });
+  const stored = (await map.get("ownership")) as unknown as Record<string, unknown>;
+  await map.put("ownership", {
+    ...stored,
+    generation: 1,
+    desiredDeploymentId: "core:blue",
+  } as unknown as BackgroundOwnership);
+  assert.equal((await store.get()).ownerDeploymentId, "core:blue");
+  await map.put("ownership", { ...stored, generation: 1, desiredDeploymentId: null } as unknown as BackgroundOwnership);
+  assert.equal((await store.get()).ownerDeploymentId, null);
+  await assert.rejects(
+    store.set({ ownerDeploymentId: "core:green", expectedOwnerDeploymentId: "core:green", setBy: "core:green" }),
+    /changed/,
+  );
+  const reclaimed = await store.set({ ownerDeploymentId: "core:green", expectedOwnerDeploymentId: null, setBy: "x" });
+  assert.equal(reclaimed.ownerDeploymentId, "core:green");
+  assert.equal(((await map.get("ownership")) as unknown as Record<string, unknown>).desiredDeploymentId, "core:green");
 });

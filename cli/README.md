@@ -155,7 +155,7 @@ recover.
 
 Core secret uploads defer activation to a subsequent staged `up --restart core`.
 The generic upload path refuses changes to either control credential while a
-controlled cohort is recorded, because replacing credentials before coordinating
+controlled deployment is recorded, because replacing credentials before coordinating
 all running processes would break ownership control. Legacy AWS deployments keep
 the task replacement path when ownership control is not configured.
 

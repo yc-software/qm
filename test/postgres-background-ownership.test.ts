@@ -30,7 +30,7 @@ test(
         desiredDeploymentId: "core:blue",
         lastRequestId: null,
         lastRequest: null,
-        members: [],
+        members: [{ instanceId: "old", deploymentId: "core:blue", state: "admitted" }],
       } as unknown as BackgroundOwnership);
       assert.equal((await stores[1]!.get()).ownerDeploymentId, "core:blue");
       const migrated = await stores[1]!.set({
@@ -42,11 +42,11 @@ test(
       assert.deepEqual(await maps[0]!.get("ownership"), {
         ...migrated,
         enabled: true,
-        generation: 0,
+        generation: 3,
         desiredDeploymentId: "core:green",
         lastRequestId: null,
         lastRequest: null,
-        members: [],
+        members: [{ instanceId: "old", deploymentId: "core:blue", state: "admitted" }],
       });
     } finally {
       const pool = await factories[0]!.pool.pool();
