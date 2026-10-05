@@ -967,9 +967,14 @@ function parseProviderError(message: string): { type: string; message: string } 
   }
 }
 
+const STREAM_TRANSPORT_ERROR = /^(terminated|Connection error\.?|fetch failed|other side closed|socket hang up)$/i;
+
 function formatPiAssistantError(raw: string | undefined): string {
   const message = raw?.trim();
   if (!message) return "Pi agent stopped with an error";
+  if (STREAM_TRANSPORT_ERROR.test(message)) {
+    return `The connection to the model provider dropped before the reply finished (${message}).`;
+  }
   const provider = parseProviderError(message);
   if (!provider?.message) return message;
   return provider.type
