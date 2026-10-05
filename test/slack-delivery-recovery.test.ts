@@ -134,7 +134,6 @@ for (const [label, destination, method, error] of [
   ["unpin", { pin: { messageTs: "100.200", remove: true } }, "pins.remove", "no_pin"],
   ["unpin", { pin: { messageTs: "100.200", remove: true } }, "pins.remove", "not_pinned"],
   ["delete", { delete: { messageTs: "100.500" } }, "chat.delete", "message_not_found"],
-  ["delete", { delete: { messageTs: "100.500" } }, "chat.delete", "cant_delete_message"],
 ] as const) {
   test(`a recovered ${label} row acts without probing and acks when Slack answers ${error}`, async () => {
     const errors: string[] = [];
@@ -153,6 +152,23 @@ for (const [label, destination, method, error] of [
     }
   });
 }
+
+test("a delete refused for a reason other than a missing message still acks but is logged", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.join(" "));
+  };
+  try {
+    const h = harness({ errors: { "chat.delete": "cant_delete_message" } });
+    await h.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs: RECOVERED_AGE_MS });
+    assert.deepEqual(h.acknowledgements, ["D1"]);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0]!, /cant_delete_message/);
+  } finally {
+    console.error = original;
+  }
+});
 
 test("fresh and recovered reaction, pin and delete rows act directly", async () => {
   for (const ageMs of [0, RECOVERED_AGE_MS]) {

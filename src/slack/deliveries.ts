@@ -47,7 +47,6 @@ const PERMANENT_POST_ERRORS = new Set([
 ]);
 
 const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
-const SETTLED_DELETE_ERRORS = new Set(["message_not_found", "cant_delete_message"]);
 
 const DELIVERY_CLAIM_MARGIN_MS = 2_000;
 
@@ -271,7 +270,7 @@ export function createDeliveryPoller(deps: {
                   await client.chat.delete({ channel, ts: messageTs });
                 } catch (err) {
                   const code = slackErrorCode(err);
-                  if (!code || !SETTLED_DELETE_ERRORS.has(code))
+                  if (code !== "message_not_found")
                     console.error(
                       `[slack-plugin] delivery ${d.id} delete failed: ${code ?? (err as Error).message} (own messages only)`,
                     );
