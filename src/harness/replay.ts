@@ -214,8 +214,10 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
           role: "toolResult",
           toolCallId: cid,
           toolName: name,
-          content: [{ type: "text", text: String(rp.result ?? "") }],
-          isError: rp.isError === true,
+          content: [
+            { type: "text", text: rp.interrupted === true ? INTERRUPTED_TOOL_RESULT : String(rp.result ?? "") },
+          ],
+          isError: rp.isError === true || rp.interrupted === true,
           timestamp: re.createdAt,
         });
       } else {

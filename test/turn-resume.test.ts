@@ -261,3 +261,11 @@ test("the resume notes name the routine deploy, and only the retry note promises
   assert.doesNotMatch(handoff, /deploy/);
   assert.match(handoff, /unknown outcome/);
 });
+
+test("a tool_result marked interrupted does not answer its call, so the call is still resumable", () => {
+  const killed = ent("tool_result", { callId: "c4", result: "[exit 143]", interrupted: true }, 5);
+  const entries = [user("build and deploy the release", 1), safeCall(4, true), killed];
+  assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 2 }).kind, "retry");
+  const unsafe = [user("build and deploy the release", 1), safeCall(4, false), killed];
+  assert.deepEqual(resumeStrategy(unsafe, { userSeq: 1, workEntries: 2 }), { kind: "note" });
+});

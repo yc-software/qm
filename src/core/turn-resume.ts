@@ -83,7 +83,8 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   const turn = entries.filter((e) => e.seq > partial.userSeq);
   const answered = new Set<unknown>();
   for (const e of turn) {
-    if (e.type === "tool_result") answered.add((e.payload as { callId?: unknown } | null)?.callId);
+    const payload = e.payload as { callId?: unknown; interrupted?: unknown } | null;
+    if (e.type === "tool_result" && payload?.interrupted !== true) answered.add(payload?.callId);
   }
   const dangling = turn.filter(
     (e) => e.type === "tool_call" && !answered.has((e.payload as { callId?: unknown } | null)?.callId),
