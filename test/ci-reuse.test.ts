@@ -320,6 +320,8 @@ test("deployment notice fires only for a fully green main push and holds no repo
     job.includes("needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]"),
   );
   assert.ok(job.includes("permissions: {}"));
+  assert.ok(job.includes("continue-on-error: true"));
+  assert.ok(!job.includes("exit 1"));
   assert.ok(job.includes(`all(. == "success")`));
   assert.equal([...job.matchAll(/^ {6}- /gm)].length, 1);
   assert.ok(!job.includes("uses: actions/checkout"));

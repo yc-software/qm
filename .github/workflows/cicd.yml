@@ -464,6 +464,7 @@ jobs:
   notify-deployments:
     name: Notify deployments of green main
     timeout-minutes: 3
+    continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]
     runs-on: ubuntu-latest
@@ -483,10 +484,12 @@ jobs:
           body="$(jq -cn --arg sha "$GITHUB_SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
             '{event: "main_green", repository: "yc-software/qm", sha: $sha, run_id: $run, attempt: $attempt}')"
           signature="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -r | cut -d' ' -f1)"
-          status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+          status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
             -H 'content-type: application/json' \
             -H 'x-github-event: push' \
             -H "x-hub-signature-256: sha256=$signature" \
-            --data "$body" "$WEBHOOK_URL")"
-          echo "deployment webhook responded $status"
-          case "$status" in 2*) ;; *) exit 1 ;; esac
+            --data "$body" "$WEBHOOK_URL" || true)"
+          case "$status" in
+            2*) echo "deployment webhook responded $status" ;;
+            *) echo "::warning::deployment webhook responded ${status:-000}; downstream will fall back to polling" ;;
+          esac
