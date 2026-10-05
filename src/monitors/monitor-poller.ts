@@ -191,7 +191,8 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       return false;
     }
 
-    const exited = read.status.state === "exited";
+    const drained = read.cursor - m.cursor < MAX_READ_BYTES;
+    const exited = read.status.state === "exited" && drained;
     const expired = !exited && t >= m.expiresAt;
     const raw = (m.tail ?? "") + read.chunks;
     let events = raw;

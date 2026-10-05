@@ -519,3 +519,16 @@ test("an unwatch between the tick snapshot and the poll is honored", async () =>
   assert.equal((await h.monitors.get(fired.id))?.enabled, true);
   assert.equal(await h.monitors.get(victim.id), null);
 });
+
+test("a job that exits with more than one read of unseen output still reports its last lines", async () => {
+  const h = await harness({ minFireIntervalMs: 0 });
+  const m = await h.arm({ pattern: "FAILED" });
+  h.append("p-1", "noise line\n".repeat(10_000) + "FAILED: 3 tests\n");
+  h.finish("p-1", 1);
+  for (let i = 0; i < 5 && (await h.monitors.get(m.id))?.enabled; i++) await h.poller.tick();
+  assert.ok(
+    h.calls.some((c) => /FAILED: 3 tests/.test(c.text ?? "")),
+    "the failure line past the first read must reach the agent",
+  );
+  assert.ok(h.calls.some((c) => /exited with code 1/.test(c.text ?? "")));
+});
