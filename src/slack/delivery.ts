@@ -1,7 +1,6 @@
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
-import { slackErrorCode } from "./payloads.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
 export interface SlackReplyArgs {
@@ -535,7 +534,7 @@ export async function messageExists(
     })) as { messages?: Array<{ ts?: string }> };
     return (res.messages ?? []).some((m) => m.ts === timestamp);
   } catch (err) {
-    return slackErrorCode(err) === "thread_not_found" ? false : undefined;
+    return (err as { data?: { error?: string } }).data?.error === "thread_not_found" ? false : undefined;
   }
 }
 
