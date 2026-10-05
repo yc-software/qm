@@ -2001,7 +2001,7 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  wireRunResultDeliveries(runs, deliveries, tasks, recoveryAdminUrlFor, sessions);
+  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, tasks, recoveryAdminUrlFor, sessions);
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -2312,6 +2312,14 @@ export function buildApp(
         : advisoryLock.withLock("session-return-sweep", sweepSessionReturns),
     1_000,
     { label: "session-returns", immediate: true },
+  );
+  const runResultSweeper = createSweeper(
+    () =>
+      advisoryLock.tryWithLock
+        ? advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep())
+        : advisoryLock.withLock("run-result-sweep", () => runResultRecovery.sweep()),
+    60_000,
+    { label: "run-results" },
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
@@ -2684,6 +2692,7 @@ export function buildApp(
       swarms?.start();
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
+      runResultSweeper.start();
       approvalDeliverySweeper.start();
     };
     if (backgroundStopping)
@@ -2713,6 +2722,7 @@ export function buildApp(
       swarms?.stop(),
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
+      runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
       ...workers.map((worker) => worker.stopClaims()),
     ];

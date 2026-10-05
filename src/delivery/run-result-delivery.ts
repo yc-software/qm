@@ -138,24 +138,53 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
   }
 }
 
+const RUN_RESULT_SWEEP_LOOKBACK_MS = 60 * 60_000;
+const RUN_RESULT_SWEEP_GRACE_MS = 60_000;
+const RUN_RESULT_SWEEP_PAGE = 200;
+
+export interface RunResultRecovery {
+  sweep(now?: number): Promise<number>;
+}
+
 export function wireRunResultDeliveries(
-  runs: RunStore,
-  deliveries: DeliveryStore,
+  runs: Pick<RunStore, "onTerminal" | "terminalFinished">,
+  deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
   tasks?: TaskStore,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
-): void {
-  runs.onTerminal((run) => {
+): RunResultRecovery {
+  const recover = async (run: Run): Promise<void> => {
     if (sessions) {
       void recordRunFailureEntry(sessions, run).catch(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
-    void (async () => {
-      const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
-      const delivery = runResultDelivery(run, taskList, adminUrlFor);
-      if (!delivery) return;
-      await deliveries.enqueue(delivery);
-    })().catch(reportFailureAs("delivery: enqueue recovery delivery", undefined, `run=${run.id}`));
+    const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
+    const delivery = runResultDelivery(run, taskList, adminUrlFor);
+    if (delivery) await deliveries.enqueue(delivery);
+  };
+  runs.onTerminal((run) => {
+    void recover(run).catch(reportFailureAs("delivery: enqueue recovery delivery", undefined, `run=${run.id}`));
   });
+  return {
+    async sweep(now = Date.now()) {
+      const before = now - RUN_RESULT_SWEEP_GRACE_MS;
+      let cursor = { finishedAt: now - RUN_RESULT_SWEEP_LOOKBACK_MS, id: "" };
+      let recovered = 0;
+      for (;;) {
+        const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
+        const deliverable = batch.filter((run) => runResultDelivery(run, [], adminUrlFor) !== null);
+        const existing = await deliveries.existingKeys(deliverable.map((run) => `run:${run.id}`));
+        for (const run of deliverable) {
+          if (existing.has(`run:${run.id}`)) continue;
+          console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueuing its recovery delivery`);
+          await recover(run);
+          recovered += 1;
+        }
+        const last = batch.at(-1);
+        if (!last || batch.length < RUN_RESULT_SWEEP_PAGE) return recovered;
+        cursor = { finishedAt: last.finishedAt!, id: last.id };
+      }
+    },
+  };
 }

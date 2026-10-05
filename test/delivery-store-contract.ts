@@ -235,6 +235,13 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
     "an expired claim re-surfaces (at-least-once)",
   );
   await store.ack(abandoned.id, 700);
+
+  assert.deepEqual(
+    [...(await store.existingKeys(["fire-1", "run:r-2", "fire-race-2", "never-enqueued"]))].sort(),
+    ["fire-1", "fire-race-2", "run:r-2"],
+    "existing keys cover enqueued rows and ack tombstones alike",
+  );
+  assert.deepEqual(await store.existingKeys([]), new Set());
 }
 
 export async function exerciseDeliveryExpiry(makeStore: (opts: { maxAgeMs: number }) => DeliveryStore): Promise<void> {

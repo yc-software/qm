@@ -39,6 +39,11 @@ export interface Run {
   finishedAt: number | null;
 }
 
+interface TerminalCursor {
+  finishedAt: number;
+  id: string;
+}
+
 export interface EnqueueInput {
   sessionId: string;
   request: OrchestratorInput;
@@ -84,6 +89,7 @@ export interface RunStore {
 
   latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
+  terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
   deferReturn(runId: string, delayMs: number): Promise<void>;
 

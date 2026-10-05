@@ -186,6 +186,18 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         .sort((a, b) => a.id.localeCompare(b.id))
         .slice(0, limit);
     },
+    async terminalFinished(after, beforeMs, limit) {
+      return [...runs.values()]
+        .filter(
+          (run) =>
+            isTerminal(run.status) &&
+            run.finishedAt !== null &&
+            run.finishedAt <= beforeMs &&
+            (run.finishedAt > after.finishedAt || (run.finishedAt === after.finishedAt && run.id > after.id)),
+        )
+        .sort((a, b) => a.finishedAt! - b.finishedAt! || (a.id < b.id ? -1 : 1))
+        .slice(0, limit);
+    },
     async markReturned(runId) {
       returned.add(runId);
     },

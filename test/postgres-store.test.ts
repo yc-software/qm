@@ -1797,6 +1797,44 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
   }
 });
 
+test("pg run store: terminalFinished lists finished runs by (finishedAt, id) up to the bound", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
+  const tag = randomUUID();
+  try {
+    const ids: string[] = [];
+    for (const ref of ["a", "b", "c"]) {
+      const thread = `${tag}-${ref}`;
+      const run = (await runs.enqueue({ sessionId: thread, request: turn(ref) })).run;
+      const claimed = await runs.claimForSession(thread, "w", 5_000);
+      await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: ref });
+      ids.push(run.id);
+    }
+    const open = (await runs.enqueue({ sessionId: `${tag}-open`, request: turn("open") })).run;
+    await runs.claimForSession(`${tag}-open`, "w", 5_000);
+    const far = Date.now() + 60_000;
+    const listed = await runs.terminalFinished({ finishedAt: 0, id: "" }, far, 10_000);
+    const mine = listed.filter((run) => run.sessionId.startsWith(tag));
+    assert.deepEqual(new Set(mine.map((run) => run.id)), new Set(ids));
+    assert.ok(!listed.some((run) => run.id === open.id));
+    for (let i = 1; i < listed.length; i++) {
+      const prev = listed[i - 1]!;
+      const next = listed[i]!;
+      assert.ok(prev.finishedAt! < next.finishedAt! || (prev.finishedAt === next.finishedAt && prev.id < next.id));
+    }
+    const first = mine[0]!;
+    const after = await runs.terminalFinished({ finishedAt: first.finishedAt!, id: first.id }, far, 10_000);
+    assert.ok(!after.some((run) => run.id === first.id), "the cursor row itself is excluded");
+    assert.deepEqual(
+      await runs
+        .terminalFinished({ finishedAt: 0, id: "" }, mine[0]!.finishedAt! - 1, 10_000)
+        .then((rows) => rows.filter((run) => run.sessionId.startsWith(tag))),
+      [],
+    );
+  } finally {
+    await close();
+  }
+});
+
 test("pg run store: a session_busy completion frees the dedup key so the same key runs again", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
   try {

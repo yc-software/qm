@@ -1,6 +1,7 @@
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
+import { slackErrorCode } from "./payloads.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
 export interface SlackReplyArgs {
@@ -468,6 +469,74 @@ export async function findPostedByKey(
     cursor = page.response_metadata?.next_cursor?.trim() || undefined;
   } while (cursor);
   return undefined;
+}
+
+export function statusPlaceholderKey(runId: string): string {
+  return `status:run:${runId}`;
+}
+
+interface SlackStateClient {
+  reactions: { get(args: { channel: string; timestamp: string; full: boolean }): Promise<unknown> };
+  pins: { list(args: { channel: string }): Promise<unknown> };
+  conversations: {
+    replies(args: {
+      channel: string;
+      ts: string;
+      oldest: string;
+      latest: string;
+      inclusive: boolean;
+      limit: number;
+    }): Promise<unknown>;
+  };
+}
+
+export async function reactionPresent(
+  client: Pick<SlackStateClient, "reactions">,
+  channel: string,
+  timestamp: string,
+  name: string,
+): Promise<boolean | undefined> {
+  try {
+    const res = (await client.reactions.get({ channel, timestamp, full: true })) as {
+      message?: { reactions?: Array<{ name?: string; count?: number }> };
+    };
+    return (res.message?.reactions ?? []).some((r) => r.name === name && (r.count ?? 0) > 0);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function messagePinned(
+  client: Pick<SlackStateClient, "pins">,
+  channel: string,
+  timestamp: string,
+): Promise<boolean | undefined> {
+  try {
+    const res = (await client.pins.list({ channel })) as { items?: Array<{ message?: { ts?: string } }> };
+    return (res.items ?? []).some((item) => item.message?.ts === timestamp);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function messageExists(
+  client: Pick<SlackStateClient, "conversations">,
+  channel: string,
+  timestamp: string,
+): Promise<boolean | undefined> {
+  try {
+    const res = (await client.conversations.replies({
+      channel,
+      ts: timestamp,
+      oldest: timestamp,
+      latest: timestamp,
+      inclusive: true,
+      limit: 1,
+    })) as { messages?: Array<{ ts?: string }> };
+    return (res.messages ?? []).some((m) => m.ts === timestamp);
+  } catch (err) {
+    return slackErrorCode(err) === "thread_not_found" ? false : undefined;
+  }
 }
 
 export function recoveryVerifyOldest(createdAt: number | undefined, editRef: string | undefined): string | undefined {
