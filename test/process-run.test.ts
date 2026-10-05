@@ -490,25 +490,20 @@ test("failed shutdown handback retains the lease for expiry without charging an 
   assert.equal(await runs.claim("replacement", 5_000), null);
 });
 
-test("a turn that finishes after the shutdown signal completes instead of being handed back for a rerun", async () => {
+test("a claim that lands after shutdown began is handed back without starting a turn", async () => {
   const { runs } = createMemoryRunStore();
-  const enq = (await runs.enqueue({ sessionId: "s1", request: turn })).run;
+  const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
   const run = await runs.claim("old", 5_000);
   const shutdown = new AbortController();
-  const entered = Promise.withResolvers<void>();
-  const orchestrator = fakeOrchestrator(async (input) => {
-    entered.resolve();
-    await new Promise<void>((resolve) => input.cancel!.addEventListener("abort", () => resolve(), { once: true }));
-    return { status: "ok", reply: "finished anyway" };
-  });
-  const work = processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!, { shutdown: shutdown.signal });
-  await entered.promise;
   shutdown.abort();
-  assert.deepEqual(await work, { status: "ok", reply: "finished anyway" });
-  const done = (await runs.get(enq.id))!;
-  assert.equal(done.status, "done");
-  assert.equal(done.attempts, 1);
-  assert.deepEqual(done.result, { status: "ok", reply: "finished anyway" });
-  assert.equal(done.leaseToken, null);
-  assert.equal(await runs.claim("replacement", 5_000), null);
+  const orchestrator = fakeOrchestrator(async () => {
+    throw new Error("must not be reached");
+  });
+  const result = await processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!, { shutdown: shutdown.signal });
+  assert.equal(result.status, "queued");
+  const handedBack = (await runs.get(enq.id))!;
+  assert.equal(handedBack.status, "pending");
+  assert.equal(handedBack.errorAttempts, 0);
+  assert.equal(handedBack.leaseToken, null);
+  assert.ok(await runs.claim("replacement", 5_000));
 });

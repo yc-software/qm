@@ -214,14 +214,17 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       if (deps.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
       const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
       if (claimed) {
-        await processRun(
-          { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
-          claimed,
-          { shutdown: deps.shutdown },
-        ).catch((error: unknown) => {
+        try {
+          const result = await processRun(
+            { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
+            claimed,
+            { shutdown: deps.shutdown },
+          );
+          if (claimed.id === runId && !deps.shutdown?.aborted) return withAdminLink(result);
+        } catch (error) {
           if (claimed.id === runId && !deps.shutdown?.aborted) throw error;
           swallow("inline run did not complete", error);
-        });
+        }
         continue;
       }
       const remaining = deadline - performance.now();

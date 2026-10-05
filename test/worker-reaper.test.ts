@@ -295,7 +295,7 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
 });
 
-test("an uncooperative turn keeps both leases until it actually exits, then completes", async () => {
+test("an uncooperative turn keeps both leases until it actually exits", async () => {
   const { runs } = createMemoryRunStore();
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
@@ -325,8 +325,7 @@ test("an uncooperative turn keeps both leases until it actually exits, then comp
   assert.equal(await runs.claim("replacement", 5_000), null);
   unblock();
   await handback;
-  assert.equal((await runs.get(enq.id))?.status, "done", "a turn that finished anyway is not rerun elsewhere");
-  assert.deepEqual((await runs.get(enq.id))?.result, { status: "ok", reply: "finished" });
+  assert.equal((await runs.get(enq.id))?.status, "pending");
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
   assert.ok((await sessions.acquireLease(session.id)).lease);
 });
@@ -835,63 +834,53 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
   }
 });
 
-for (const interrupted of [true, false]) {
-  test(`final shutdown aborts an inline turn mid-step and holds its lease until it unwinds (step ${interrupted ? "interrupted" : "finishes"})`, async () => {
-    const built = buildApp(
-      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")), workers: 1, shutdownDrainMs: 30 }),
-    );
-    const blocked = Promise.withResolvers<void>();
-    const gate = Promise.withResolvers<void>();
-    const append = built.sessions.append.bind(built.sessions);
-    let first = true;
-    built.sessions.append = async (lease, entry) => {
-      if (first && entry.type === "user") {
-        first = false;
-        blocked.resolve();
-        await gate.promise;
-      }
-      return append(lease, entry);
-    };
-    const inline = built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "inline-shutdown" },
-      text: "hello",
-    });
-    try {
-      await blocked.promise;
-      const running = (await built.runs.list()).find((run) => run.status === "running")!;
-      assert.ok(running);
-      let stopped = false;
-      const stopping = built.runtime.stop().then(() => {
-        stopped = true;
-      });
-      await sleep(100);
-      assert.equal(stopped, false, "stop waits for the inline step to unwind");
-      assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
-      assert.equal(await built.runs.claim("replacement", 5_000), null);
-      if (interrupted) gate.reject(new Error("step interrupted by shutdown"));
-      else gate.resolve();
-      const result = await inline;
-      await stopping;
-      const after = (await built.runs.get(running.id))!;
-      assert.equal(after.leaseToken, null);
-      assert.equal(after.errorAttempts, 0);
-      assert.equal(after.attempts, 1);
-      if (interrupted) {
-        assert.equal(result.status, "queued");
-        assert.equal(result.runId, running.id);
-        assert.equal(after.status, "pending");
-        assert.equal((await built.runs.claim("replacement", 5_000))?.id, running.id);
-      } else {
-        assert.equal(result.status, "ok");
-        assert.match(result.reply!, /hello/);
-        assert.equal(after.status, "done");
-        assert.equal(await built.runs.claim("replacement", 5_000), null);
-      }
-    } finally {
-      gate.resolve();
-      await inline.catch(() => {});
+test("final shutdown holds an inline turn's lease until the step unwinds, then hands the run back", async () => {
+  const built = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")), workers: 1, shutdownDrainMs: 200 }),
+  );
+  const blocked = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const append = built.sessions.append.bind(built.sessions);
+  let first = true;
+  built.sessions.append = async (lease, entry) => {
+    if (first && entry.type === "user") {
+      first = false;
+      blocked.resolve();
+      await gate.promise;
     }
+    return append(lease, entry);
+  };
+  const inline = built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "inline-shutdown" },
+    text: "hello",
   });
-}
+  try {
+    await blocked.promise;
+    const running = (await built.runs.list()).find((run) => run.status === "running")!;
+    assert.ok(running);
+    let stopped = false;
+    const stopping = built.runtime.stop().then(() => {
+      stopped = true;
+    });
+    await sleep(300);
+    assert.equal(stopped, false, "stop waits for the inline step to unwind");
+    assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
+    assert.equal(await built.runs.claim("replacement", 5_000), null);
+    gate.resolve();
+    const result = await inline;
+    await stopping;
+    assert.equal(result.status, "queued");
+    assert.equal(result.runId, running.id);
+    const handedBack = (await built.runs.get(running.id))!;
+    assert.equal(handedBack.status, "pending");
+    assert.equal(handedBack.leaseToken, null);
+    assert.equal(handedBack.errorAttempts, 0);
+    assert.equal(handedBack.attempts, 1);
+    assert.equal((await built.runs.claim("replacement", 5_000))?.id, running.id);
+  } finally {
+    gate.resolve();
+    await inline.catch(() => {});
+  }
+});

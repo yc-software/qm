@@ -2738,7 +2738,12 @@ export function buildApp(
   }
   async function releaseInFlightRuns(): Promise<void> {
     inlineShutdown.abort();
-    await Promise.all([admittedWork.drained(), ...workers.map((w) => w.releaseInFlight())]);
+    await Promise.all([
+      withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "inline turn handback").catch(
+        swallowAs("wiring: inline turn handback failed", undefined),
+      ),
+      ...workers.map((w) => w.releaseInFlight()),
+    ]);
   }
   const runtime: Runtime = {
     start() {
