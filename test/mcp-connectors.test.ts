@@ -10,13 +10,11 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
-function jsonResponse(body: unknown, status = 200, contentType = "application/json") {
-  return {
-    ok: status >= 200 && status < 300,
+function jsonResponse(body: unknown, status = 200, contentType = "application/json", headers = {}) {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body), {
     status,
-    text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
-    headers: { get: (n: string) => (n.toLowerCase() === "content-type" ? contentType : null) },
-  };
+    headers: { "content-type": contentType, ...headers },
+  });
 }
 
 const TOOLS = [
@@ -86,6 +84,47 @@ test("mcp client sends bearer auth", async () => {
   assert.equal((await client.listTools()).length, 2);
   const bad = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
   await assert.rejects(() => bad.listTools(), /HTTP 401/);
+});
+
+test("mcp client retries refused calls and reports the server's reason when it keeps refusing", async () => {
+  let attempts = 0;
+  const flaky: McpFetch = async (_url, init) => {
+    attempts++;
+    const req = JSON.parse(init.body) as { id: number };
+    if (attempts < 3) return jsonResponse({ error: "busy" }, 429, "application/json", { "retry-after": "0" });
+    return jsonResponse({ jsonrpc: "2.0", id: req.id, result: { content: [{ type: "text", text: "done" }] } });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: flaky });
+  assert.equal(mcpResultText(await client.callTool("query", {})), "done");
+  assert.equal(attempts, 3);
+
+  let refused = 0;
+  const busy: McpFetch = async () => {
+    refused++;
+    return jsonResponse(
+      { error: "connection_busy", message: "Another call is still running; this call was not executed." },
+      429,
+      "application/json",
+      { "retry-after": "0" },
+    );
+  };
+  const blocked = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: busy });
+  await assert.rejects(
+    blocked.callTool("update", {}),
+    /mcp tools\/call failed \(HTTP 429\): connection_busy: Another call is still running; this call was not executed\./,
+  );
+  assert.equal(refused, 4);
+});
+
+test("mcp client never retries a call the server may have executed", async () => {
+  let attempts = 0;
+  const failing: McpFetch = async () => {
+    attempts++;
+    return jsonResponse({ error: "upstream" }, 503, "application/json", { "retry-after": "0" });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: failing });
+  await assert.rejects(client.callTool("update", {}), /HTTP 503\): upstream/);
+  assert.equal(attempts, 1);
 });
 
 test("server id validation", () => {
@@ -237,6 +276,83 @@ test("MCP HTTP transport refuses redirects before sending a user token to anothe
   });
   await assert.rejects(client.callTool("query", {}));
   assert.equal(targetRequests, 0);
+});
+
+test("per-user calls run one at a time for each person and concurrently across people", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const users = tokenStore();
+  const host = "accounts.example.com";
+  await users.setConnectorToken(host, "internal:alice", { accessToken: "alice-token" });
+  await users.setConnectorToken(host, "internal:bob", { accessToken: "bob-token" });
+  const inFlight = new Map<string, number>();
+  const peak = new Map<string, number>();
+  let overall = 0;
+  let overallPeak = 0;
+  const service = createMcpToolService({
+    servers: store,
+    userTokens: users,
+    fetchImpl: async (_url, init) => {
+      const rpc = JSON.parse(init.body);
+      if (rpc.method === "tools/list") return jsonResponse({ result: { tools: TOOLS } });
+      const who = init.headers.authorization!;
+      inFlight.set(who, (inFlight.get(who) ?? 0) + 1);
+      peak.set(who, Math.max(peak.get(who) ?? 0, inFlight.get(who)!));
+      overallPeak = Math.max(overallPeak, ++overall);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight.set(who, inFlight.get(who)! - 1);
+      overall--;
+      return jsonResponse({ result: { content: [{ type: "text", text: rpc.params.arguments.q }] } });
+    },
+  });
+  t.after(() => service.close());
+  await store.put(server({ credentialScope: "per-user", credentialHost: host }));
+  await service.refresh();
+  assert.deepEqual(
+    await Promise.all([
+      service.call("crm_query", { q: "a1" }, "internal:alice"),
+      service.call("crm_query", { q: "a2" }, "internal:alice"),
+      service.call("crm_query", { q: "a3" }, "internal:alice"),
+      service.call("crm_query", { q: "b1" }, "internal:bob"),
+    ]),
+    ["a1", "a2", "a3", "b1"],
+  );
+  assert.equal(peak.get("Bearer alice-token"), 1);
+  assert.equal(peak.get("Bearer bob-token"), 1);
+  assert.equal(overallPeak, 2);
+});
+
+test("a stopped turn's queued per-user call is never sent", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const users = tokenStore();
+  const host = "accounts.example.com";
+  await users.setConnectorToken(host, "internal:alice", { accessToken: "alice-token" });
+  const sent: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const service = createMcpToolService({
+    servers: store,
+    userTokens: users,
+    fetchImpl: async (_url, init) => {
+      const rpc = JSON.parse(init.body);
+      if (rpc.method === "tools/list") return jsonResponse({ result: { tools: TOOLS } });
+      sent.push(rpc.params.arguments.q);
+      if (rpc.params.arguments.q === "first") await held;
+      return jsonResponse({ result: { content: [{ type: "text", text: rpc.params.arguments.q }] } });
+    },
+  });
+  t.after(() => service.close());
+  await store.put(server({ credentialScope: "per-user", credentialHost: host }));
+  await service.refresh();
+  const stop = new AbortController();
+  const first = service.call("crm_query", { q: "first" }, "internal:alice");
+  const second = service.call("crm_query", { q: "second" }, "internal:alice", stop.signal);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  stop.abort();
+  await assert.rejects(second, { name: "AbortError" });
+  release();
+  assert.equal(await first, "first");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(sent, ["first"]);
 });
 
 test("per-user connectors select an explicit account slot without falling back to another slot", async (t) => {

@@ -9,20 +9,17 @@
 // policy. See mcp-tool-service.ts for the layer that turns registered
 // servers into agent tools.
 
+import { fetchWithRetry } from "../util/async.ts";
+
 const TOKEN_SKEW_MS = 60_000;
 const MCP_ACCEPT = "application/json, text/event-stream";
-
-interface McpHttpResponse {
-  ok: boolean;
-  status: number;
-  text(): Promise<string>;
-  headers?: { get(name: string): string | null };
-}
+const MCP_REQUEST_TIMEOUT_MS = 10 * 60_000;
+const MAX_ERROR_DETAIL_CHARS = 300;
 
 export type McpFetch = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
-) => Promise<McpHttpResponse>;
+  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
+) => Promise<Response>;
 
 const realFetch: McpFetch = (url, init) => fetch(url, { ...init, redirect: "error" });
 
@@ -44,6 +41,15 @@ function safeJson(text: string): unknown {
   } catch {
     return null;
   }
+}
+
+async function httpFailure(what: string, res: Response): Promise<Error> {
+  const body = safeJson(await res.text().catch(() => "")) as { error?: unknown; message?: unknown } | null;
+  const detail = [body?.error, body?.message]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join(": ")
+    .slice(0, MAX_ERROR_DETAIL_CHARS);
+  return new Error(`${what} failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}`);
 }
 
 interface McpEnvelope {
@@ -111,7 +117,7 @@ export interface McpClient {
   readonly base: string;
   readonly host: string;
   listTools(): Promise<McpRemoteTool[]>;
-  callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolResult>;
 }
 
 interface CachedToken {
@@ -132,18 +138,23 @@ export function createMcpClient(opts: {
   let cached: CachedToken | null = null;
   let rpcId = 0;
 
+  function post(url: string, headers: Record<string, string>, body: string, signal?: AbortSignal): Promise<Response> {
+    const send = (combined: AbortSignal) => fetchImpl(url, { method: "POST", headers, body, signal: combined });
+    return fetchWithRetry(send, "refused", { timeoutMs: MCP_REQUEST_TIMEOUT_MS, ...(signal ? { signal } : {}) });
+  }
+
   async function mintToken(clientId: string, clientSecret: string): Promise<string> {
     if (cached && now() < cached.expiresAt - TOKEN_SKEW_MS) return cached.accessToken;
-    const res = await fetchImpl(`${base}/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-      body: new URLSearchParams({
+    const res = await post(
+      `${base}/token`,
+      { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+      new URLSearchParams({
         grant_type: "client_credentials",
         client_id: clientId,
         client_secret: clientSecret,
       }).toString(),
-    });
-    if (!res.ok) throw new Error(`mcp token mint failed (HTTP ${res.status})`);
+    );
+    if (!res.ok) throw await httpFailure("mcp token mint", res);
     const body = (safeJson(await res.text()) ?? {}) as { access_token?: unknown; expires_in?: unknown };
     const accessToken = typeof body.access_token === "string" ? body.access_token : "";
     if (!accessToken) throw new Error("mcp token mint returned no access_token");
@@ -159,19 +170,16 @@ export function createMcpClient(opts: {
     return { authorization: `Bearer ${await mintToken(auth.clientId, auth.clientSecret)}` };
   }
 
-  async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
+  async function rpc(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     const id = ++rpcId;
-    const res = await fetchImpl(`${base}/mcp`, {
-      method: "POST",
-      headers: {
-        ...(await authHeaders()),
-        "content-type": "application/json",
-        accept: MCP_ACCEPT,
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-    });
-    if (!res.ok) throw new Error(`mcp ${method} failed (HTTP ${res.status})`);
-    const parsed = parseMcpEnvelope(await res.text(), res.headers?.get("content-type"), id);
+    const res = await post(
+      `${base}/mcp`,
+      { ...(await authHeaders()), "content-type": "application/json", accept: MCP_ACCEPT },
+      JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      signal,
+    );
+    if (!res.ok) throw await httpFailure(`mcp ${method}`, res);
+    const parsed = parseMcpEnvelope(await res.text(), res.headers.get("content-type"), id);
     if (!parsed) throw new Error(`mcp ${method} returned non-JSON`);
     if (parsed.error) throw new Error(`mcp ${method} error: ${parsed.error.message ?? "unknown"}`);
     return parsed.result ?? {};
@@ -198,8 +206,8 @@ export function createMcpClient(opts: {
       }
       return out;
     },
-    async callTool(name, args) {
-      const result = (await rpc("tools/call", { name, arguments: args })) as McpToolResult;
+    async callTool(name, args, signal) {
+      const result = (await rpc("tools/call", { name, arguments: args }, signal)) as McpToolResult;
       if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
       return result;
     },

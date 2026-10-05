@@ -22,14 +22,7 @@ const defaultMemory: MemoryService = {
 };
 
 function response(body: unknown) {
-  return {
-    ok: true,
-    status: 200,
-    headers: { get: () => "application/json" },
-    async text() {
-      return JSON.stringify(body);
-    },
-  };
+  return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 }
 
 test("configured provider runs OAuth MCP recall and explicit capture end to end", async () => {
