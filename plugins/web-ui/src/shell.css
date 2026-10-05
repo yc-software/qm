@@ -2800,7 +2800,6 @@ qm-markdown .tok-in {
 }
 .session-message {
   flex: 1 1 0;
-  margin-left: 4px;
 }
 .tool-row.tool-approval {
   color: var(--foreground);
