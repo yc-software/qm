@@ -618,7 +618,7 @@ export interface App {
 export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
-  shutdown?: AbortSignal;
+  shutdown?: () => AbortSignal;
   resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;

@@ -581,7 +581,7 @@ export function buildApp(
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
     onAdmitted: () => noteAdmitted(),
   });
-  const inlineShutdown = new AbortController();
+  let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   if (config.databaseUrl && !config.connectorSecretKey) {
@@ -2103,7 +2103,7 @@ export function buildApp(
   const app = createApp({
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
-    shutdown: inlineShutdown.signal,
+    shutdown: () => inlineShutdown.signal,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -2747,6 +2747,7 @@ export function buildApp(
   }
   const runtime: Runtime = {
     start() {
+      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
