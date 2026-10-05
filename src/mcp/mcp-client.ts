@@ -161,15 +161,21 @@ export function createMcpClient(opts: {
 
   async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
     const id = ++rpcId;
-    const res = await fetchImpl(`${base}/mcp`, {
-      method: "POST",
-      headers: {
-        ...(await authHeaders()),
-        "content-type": "application/json",
-        accept: MCP_ACCEPT,
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-    });
+    const send = async () =>
+      fetchImpl(`${base}/mcp`, {
+        method: "POST",
+        headers: {
+          ...(await authHeaders()),
+          "content-type": "application/json",
+          accept: MCP_ACCEPT,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      });
+    let res = await send();
+    if (res.status === 401 && opts.auth.mode === "client-credentials" && cached) {
+      cached = null;
+      res = await send();
+    }
     if (!res.ok) throw new Error(`mcp ${method} failed (HTTP ${res.status})`);
     const parsed = parseMcpEnvelope(await res.text(), res.headers?.get("content-type"), id);
     if (!parsed) throw new Error(`mcp ${method} returned non-JSON`);
