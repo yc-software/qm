@@ -438,22 +438,30 @@ export function createSessionMethods(
           if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
         }
       }
+      const working = sessions.filter((s) => workingThreadRefs.has(s.threadRef));
+      const idleChildren = sessions.filter(
+        (s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id),
+      );
+      const [latestRuns, recentEntries] = await Promise.all([
+        deps.runs.latestForThreads([...working, ...idleChildren].map((s) => s.threadRef)),
+        deps.sessions.getRecentEntries(
+          working.map((s) => s.id),
+          GOAL_LOOKBACK_ENTRIES,
+        ),
+      ]);
       const failedChildren = new Set<string>();
-      for (const s of sessions) {
-        if (!s.parentSessionId || workingThreadRefs.has(s.threadRef) || waiting.has(s.id)) continue;
-        const run = await deps.runs.latestForThread(s.threadRef);
+      for (const s of idleChildren) {
+        const run = latestRuns.get(s.threadRef);
         if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
       }
       const goals = new Map<
         string,
         { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> }
       >();
-      for (const s of sessions) {
-        if (!workingThreadRefs.has(s.threadRef)) continue;
-        const since = Math.max(0, (await deps.sessions.latestEntrySeq(s.id)) - GOAL_LOOKBACK_ENTRIES);
-        const goal = latestGoalRecord(await deps.sessions.getEntries(s.id, { sinceSeq: since }));
+      for (const s of working) {
+        const goal = latestGoalRecord(recentEntries.get(s.id) ?? []);
         if (!goal) continue;
-        const runningSince = (await deps.runs.latestForThread(s.threadRef))?.startedAt ?? undefined;
+        const runningSince = latestRuns.get(s.threadRef)?.startedAt ?? undefined;
         if (goal.status === "active")
           goals.set(s.id, {
             objective: goal.objective,

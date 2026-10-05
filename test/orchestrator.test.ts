@@ -2194,7 +2194,20 @@ test("priorTurns are routed to the harness as structured roled turns (PR3)", asy
 });
 
 test("overheard messages are imported ONCE into the durable log, author-labeled, and handed to the harness", async () => {
-  const { app } = freshApp();
+  const { app, sessions } = freshApp();
+  const entryBatches: number[] = [];
+  const tapeBatches: number[] = [];
+  const appendMany = sessions.appendMany.bind(sessions);
+  const appendTapeMany = sessions.appendTapeMany.bind(sessions);
+  sessions.appendMany = async (lease, entries) => {
+    if (entries.some((entry) => (entry.payload as { overheard?: boolean })?.overheard))
+      entryBatches.push(entries.length);
+    return appendMany(lease, entries);
+  };
+  sessions.appendTapeMany = async (lease, records) => {
+    if (records.some((record) => record.meta?.overheard)) tapeBatches.push(records.length);
+    return appendTapeMany(lease, records);
+  };
   const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
     entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
 
@@ -2243,6 +2256,8 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
     ["100.001", "100.002", "100.003", "100.004"],
     "append-only: each message recorded exactly once",
   );
+  assert.deepEqual(entryBatches, [3, 1]);
+  assert.deepEqual(tapeBatches, [3, 1]);
 });
 
 test("a message answered on one turn is not re-imported as overheard on the next (full-stack dedupe)", async () => {

@@ -156,6 +156,16 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return true;
     },
 
+    async latestForThreads(threadRefs, opts) {
+      const wanted = new Set(threadRefs);
+      const latest = new Map<string, Run>();
+      for (const run of runs.values()) {
+        if (!wanted.has(run.sessionId) || (opts?.excludePrivateMessages && run.request.privateSessionMessage)) continue;
+        if (!latest.has(run.sessionId) || latest.get(run.sessionId)!.createdAt <= run.createdAt)
+          latest.set(run.sessionId, run);
+      }
+      return latest;
+    },
     async latestForThread(threadRef, opts) {
       return (
         [...runs.values()]

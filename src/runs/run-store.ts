@@ -87,6 +87,10 @@ export interface RunStore {
 
   noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
 
+  latestForThreads(
+    threadRefs: readonly string[],
+    opts?: { excludePrivateMessages?: boolean },
+  ): Promise<Map<string, Run>>;
   latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;

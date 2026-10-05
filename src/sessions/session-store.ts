@@ -730,6 +730,7 @@ export interface SessionStore {
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
+  getRecentEntries(sessionIds: readonly string[], lookback: number): Promise<Map<string, SessionEntry[]>>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   canReadTranscriptSuffix(sessionId: string, beforeSeq: number): Promise<boolean>;
@@ -738,6 +739,7 @@ export interface SessionStore {
   latestEntrySeq(sessionId: string): Promise<number>;
   clearSecurityTaint(sessionId: string): Promise<boolean>;
 
+  appendTapeMany(lease: Lease, records: readonly NewTapeRecord[]): Promise<TapeRecord[]>;
   appendTape(lease: Lease, rec: NewTapeRecord): Promise<TapeRecord>;
   getTape(sessionId: string, opts?: GetTapeOptions): Promise<TapeRecord[]>;
   tapeCoverage(sessionId: string): Promise<number>;

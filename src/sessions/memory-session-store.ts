@@ -306,6 +306,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       });
     },
 
+    async getRecentEntries(sessionIds, lookback) {
+      return new Map(
+        sessionIds.map((id) => {
+          const log = entries.get(id) ?? [];
+          const since = Math.max(0, (log.at(-1)?.seq ?? -1) - lookback);
+          return [id, log.filter((entry) => entry.seq >= since)];
+        }),
+      );
+    },
     async getEntries(sessionId, opts?: GetEntriesOptions) {
       const log = entries.get(sessionId) ?? [];
       const since = opts?.sinceSeq ?? 0;
@@ -372,14 +381,22 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
+      return (await this.appendTapeMany(lease, [rec]))[0]!;
+    },
+    async appendTapeMany(lease, records): Promise<TapeRecord[]> {
       const held = leases.get(lease.sessionId);
       if (!held || held.token !== lease.token || now() >= held.expiresAt)
         throw new Error("tape append without a valid session lease");
       held.expiresAt = now() + leaseTtlMs;
       const log = tape.get(lease.sessionId) ?? [];
       tape.set(lease.sessionId, log);
-      const full: TapeRecord = { ...rec, sessionId: lease.sessionId, seq: log.length, createdAt: now() };
-      log.push(full);
+      const full = records.map((rec, index) => ({
+        ...rec,
+        sessionId: lease.sessionId,
+        seq: log.length + index,
+        createdAt: now(),
+      }));
+      log.push(...full);
       return full;
     },
 

@@ -1005,33 +1005,40 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await withManagedRosterVersion(async () => {
             await reconcileSessionParticipants(session.id);
             await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
-            for (const overheard of screenedOverheard) {
-              const imported = await deps.sessions.append(lease, {
+            const importedEntries = await deps.sessions.appendMany(
+              lease,
+              screenedOverheard.map((overheard) => ({
                 type: "user",
                 payload: { ...overheard, securityTainted: true },
                 scopeLabel: scopeId,
-              });
-              await deps.sessions.appendTape(lease, {
-                kind: "message",
-                payload: {
-                  role: "user",
-                  content: [{ type: "text", text: renderOverheard(overheard) }],
-                  timestamp: imported.createdAt,
-                },
-                scopeLabel: scopeId,
-                entrySeq: imported.seq,
-                meta: {
-                  overheard: true,
-                  ...(overheard.sourceRole ? { sourceRole: overheard.sourceRole } : {}),
-                  bareText: overheard.text,
-                  ts: overheard.ts,
-                  ...(overheard.name ? { author: overheard.name } : {}),
-                  ...(overheard.files?.length ? { attachments: overheard.files } : {}),
-                  securityTainted: true,
-                  entryCreatedAt: imported.createdAt,
-                },
-              });
-            }
+              })),
+            );
+            await deps.sessions.appendTapeMany(
+              lease,
+              screenedOverheard.map((overheard, index) => {
+                const imported = importedEntries[index]!;
+                return {
+                  kind: "message",
+                  payload: {
+                    role: "user",
+                    content: [{ type: "text", text: renderOverheard(overheard) }],
+                    timestamp: imported.createdAt,
+                  },
+                  scopeLabel: scopeId,
+                  entrySeq: imported.seq,
+                  meta: {
+                    overheard: true,
+                    ...(overheard.sourceRole ? { sourceRole: overheard.sourceRole } : {}),
+                    bareText: overheard.text,
+                    ts: overheard.ts,
+                    ...(overheard.name ? { author: overheard.name } : {}),
+                    ...(overheard.files?.length ? { attachments: overheard.files } : {}),
+                    securityTainted: true,
+                    entryCreatedAt: imported.createdAt,
+                  },
+                };
+              }),
+            );
             const taintedPayload: Record<string, unknown> = {
               ...swarmEntryProvenance,
               text: input.text,
@@ -2988,44 +2995,48 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.entries)))
             .catch(swallowAs("orchestrator: overheard catch-up import", [] as OverheardEntryPayload[]));
-          for (const p of toImport) {
-            let imported;
-            try {
-              imported = await withManagedRosterVersion(() =>
-                deps.sessions.append(lease, {
-                  type: "user",
-                  payload: p,
-                  scopeLabel: scopeId,
-                }),
-              );
-            } catch (e) {
-              if (e instanceof ProjectRosterChanged) throw e;
-              swallow("orchestrator: overheard catch-up import", e);
-              break;
-            }
-            importedOverheard.push(p);
-            preAppendedSeqs.push(imported.seq);
+          let importedEntries: SessionEntry[] = [];
+          try {
+            importedEntries = await withManagedRosterVersion(() =>
+              deps.sessions.appendMany(
+                lease,
+                toImport.map((p) => ({ type: "user", payload: p, scopeLabel: scopeId })),
+              ),
+            );
+          } catch (e) {
+            if (e instanceof ProjectRosterChanged) throw e;
+            swallow("orchestrator: overheard catch-up import", e);
+          }
+          if (importedEntries.length) {
+            importedOverheard.push(...toImport);
+            preAppendedSeqs.push(...importedEntries.map((entry) => entry.seq));
             await withManagedRosterVersion(() =>
-              deps.sessions.appendTape(lease, {
-                kind: "message",
-                payload: {
-                  role: "user",
-                  content: [{ type: "text", text: renderOverheard(p) }],
-                  timestamp: imported.createdAt,
-                },
-                scopeLabel: scopeId,
-                entrySeq: imported.seq,
-                meta: {
-                  overheard: true,
-                  ...(p.sourceRole ? { sourceRole: p.sourceRole } : {}),
-                  bareText: p.text,
-                  ts: p.ts,
-                  ...(p.changeTime ? { changeTime: p.changeTime } : {}),
-                  ...(p.name ? { author: p.name } : {}),
-                  ...(p.files?.length ? { attachments: p.files } : {}),
-                  entryCreatedAt: imported.createdAt,
-                },
-              }),
+              deps.sessions.appendTapeMany(
+                lease,
+                toImport.map((p, index) => {
+                  const imported = importedEntries[index]!;
+                  return {
+                    kind: "message",
+                    payload: {
+                      role: "user",
+                      content: [{ type: "text", text: renderOverheard(p) }],
+                      timestamp: imported.createdAt,
+                    },
+                    scopeLabel: scopeId,
+                    entrySeq: imported.seq,
+                    meta: {
+                      overheard: true,
+                      ...(p.sourceRole ? { sourceRole: p.sourceRole } : {}),
+                      bareText: p.text,
+                      ts: p.ts,
+                      ...(p.changeTime ? { changeTime: p.changeTime } : {}),
+                      ...(p.name ? { author: p.name } : {}),
+                      ...(p.files?.length ? { attachments: p.files } : {}),
+                      entryCreatedAt: imported.createdAt,
+                    },
+                  };
+                }),
+              ),
             );
           }
         }

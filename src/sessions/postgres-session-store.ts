@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool, type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { jsonbStringify } from "../persistence/durable-map.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
@@ -802,40 +803,55 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return fn(client);
     });
 
-  const insertTapeRow = async (client: PoolClient, sessionId: string, rec: NewTapeRecord): Promise<TapeRecord> => {
+  const insertTapeRows = async (
+    client: PoolClient,
+    sessionId: string,
+    records: readonly NewTapeRecord[],
+  ): Promise<TapeRecord[]> => {
+    if (!records.length) return [];
     const max = await client.query("SELECT COALESCE(MAX(seq), -1) + 1 AS n FROM session_tape WHERE session_id = $1", [
       sessionId,
     ]);
-    const seq = Number(max.rows[0]!.n);
-    const stored = jsonbSafeStringify(rec.payload ?? null);
-    const createdAt = now();
+    const firstSeq = Number(max.rows[0]!.n);
+    const full = records.map((rec, index) => ({
+      ...rec,
+      payload: JSON.parse(jsonbSafeStringify(rec.payload ?? null)),
+      sessionId,
+      seq: firstSeq + index,
+      createdAt: now(),
+    }));
     await client.query(
       `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, bare_text, ts, change_time, hidden, overheard, author, attachments, display, security_tainted, entry_created_at, entry_seq, covers_entry_seq, created_at, source_role)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+       SELECT $1, seq, kind, harness, payload, scope_label, bare_text, ts, change_time, hidden, overheard, author, attachments, display, security_tainted, entry_created_at, entry_seq, covers_entry_seq, created_at, source_role
+       FROM jsonb_to_recordset($2::jsonb) AS batch(seq int, kind text, harness text, payload text, scope_label text, bare_text text, ts text, change_time text, hidden boolean, overheard boolean, author text, attachments text, display text, security_tainted boolean, entry_created_at bigint, entry_seq int, covers_entry_seq int, created_at bigint, source_role text)`,
       [
         sessionId,
-        seq,
-        rec.kind,
-        rec.harness ?? null,
-        stored,
-        rec.scopeLabel,
-        rec.meta?.bareText ?? null,
-        rec.meta?.ts ?? null,
-        rec.meta?.changeTime ?? null,
-        rec.meta?.hidden ?? null,
-        rec.meta?.overheard ?? null,
-        rec.meta?.author ?? null,
-        rec.meta?.attachments !== undefined ? jsonbSafeStringify(rec.meta.attachments) : null,
-        rec.meta?.display ?? null,
-        rec.meta?.securityTainted ?? null,
-        rec.meta?.entryCreatedAt ?? null,
-        rec.entrySeq ?? null,
-        rec.coversEntrySeq ?? null,
-        createdAt,
-        rec.meta?.sourceRole ?? null,
+        jsonbStringify(
+          full.map((rec) => ({
+            seq: rec.seq,
+            kind: rec.kind,
+            harness: rec.harness,
+            payload: JSON.stringify(rec.payload),
+            scope_label: rec.scopeLabel,
+            bare_text: rec.meta?.bareText,
+            ts: rec.meta?.ts,
+            change_time: rec.meta?.changeTime,
+            hidden: rec.meta?.hidden,
+            overheard: rec.meta?.overheard,
+            author: rec.meta?.author,
+            attachments: rec.meta?.attachments !== undefined ? jsonbSafeStringify(rec.meta.attachments) : undefined,
+            display: rec.meta?.display,
+            security_tainted: rec.meta?.securityTainted,
+            entry_created_at: rec.meta?.entryCreatedAt,
+            entry_seq: rec.entrySeq,
+            covers_entry_seq: rec.coversEntrySeq,
+            created_at: rec.createdAt,
+            source_role: rec.meta?.sourceRole,
+          })),
+        ),
       ],
     );
-    return { ...rec, payload: JSON.parse(stored), sessionId, seq, createdAt };
+    return full;
   };
 
   return {
@@ -1069,7 +1085,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           [sessionId],
         );
         for (const row of updated.rows) {
-          await insertTapeRow(client, sessionId, tapeTranscriptEntryRecord(rowToEntry(row)));
+          await insertTapeRows(client, sessionId, [tapeTranscriptEntryRecord(rowToEntry(row))]);
         }
         if (updated.rows.length > 0) return true;
         return (await client.query("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).rows.length === 1;
@@ -1107,8 +1123,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
+      return (await this.appendTapeMany(lease, [rec]))[0]!;
+    },
+
+    async appendTapeMany(lease, records) {
       return withLease(lease, "tape append without a valid session lease", (client) =>
-        insertTapeRow(client, lease.sessionId, rec),
+        insertTapeRows(client, lease.sessionId, records),
       );
     },
 
@@ -1152,6 +1172,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Number(rows[0]?.n ?? -1);
     },
 
+    async getRecentEntries(sessionIds, lookback) {
+      const result = new Map<string, SessionEntry[]>(sessionIds.map((id) => [id, []]));
+      if (!sessionIds.length) return result;
+      const rows = await q(
+        `SELECT recent.* FROM unnest($1::text[]) AS sessions(id)
+         CROSS JOIN LATERAL (
+           SELECT * FROM session_entries WHERE session_id = sessions.id
+           AND seq >= GREATEST(0, (SELECT COALESCE(MAX(seq), -1) FROM session_entries WHERE session_id = sessions.id) - $2)
+           ORDER BY seq
+         ) recent ORDER BY recent.session_id, recent.seq`,
+        [[...result.keys()], lookback],
+      );
+      for (const row of rows) result.get(row.session_id as string)!.push(rowToEntry(row));
+      return result;
+    },
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = "SELECT * FROM session_entries WHERE session_id = $1 AND seq >= $2";
