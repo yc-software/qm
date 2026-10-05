@@ -153,7 +153,7 @@ export function wireRunResultDeliveries(
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
 ): RunResultRecovery {
-  const recover = async (run: Run): Promise<void> => {
+  const recover = async (run: Run): Promise<boolean> => {
     if (sessions) {
       void recordRunFailureEntry(sessions, run).catch(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
@@ -161,7 +161,9 @@ export function wireRunResultDeliveries(
     }
     const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
     const delivery = runResultDelivery(run, taskList, adminUrlFor);
-    if (delivery) await deliveries.enqueue(delivery);
+    if (!delivery) return false;
+    await deliveries.enqueue(delivery);
+    return true;
   };
   runs.onTerminal((run) => {
     void recover(run).catch(reportFailureAs("delivery: enqueue recovery delivery", undefined, `run=${run.id}`));
@@ -173,12 +175,10 @@ export function wireRunResultDeliveries(
       let recovered = 0;
       for (;;) {
         const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
-        const deliverable = batch.filter((run) => runResultDelivery(run, [], adminUrlFor) !== null);
-        const existing = await deliveries.existingKeys(deliverable.map((run) => `run:${run.id}`));
-        for (const run of deliverable) {
-          if (existing.has(`run:${run.id}`)) continue;
-          console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueuing its recovery delivery`);
-          await recover(run);
+        const existing = await deliveries.existingKeys(batch.map((run) => `run:${run.id}`));
+        for (const run of batch) {
+          if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
+          console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
           recovered += 1;
         }
         const last = batch.at(-1);

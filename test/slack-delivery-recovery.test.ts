@@ -42,8 +42,12 @@ function harness(opts: {
     },
   };
   const acknowledgements: string[] = [];
+  const checkpoints: Array<[string, string]> = [];
   const queue: unknown[] = [];
   const core = {
+    reportRunEditRef: async (runId: string, editRef: string) => {
+      checkpoints.push([runId, editRef]);
+    },
     holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
     claimDeliveries: async () => queue.splice(0),
     ackDelivery: async (id: string) => {
@@ -59,6 +63,7 @@ function harness(opts: {
   return {
     calls,
     acknowledgements,
+    checkpoints,
     methods: () => calls.map((c) => c.method),
     deliver: async (row: {
       destination: Record<string, unknown>;
@@ -95,6 +100,11 @@ test("a recovered run reply adopts the status placeholder it finds by metadata i
   assert.equal(update.ts, "100.300");
   assert.equal(update.text, "the answer");
   assert.deepEqual(update.metadata, { event_type: "qm_delivery", event_payload: { idempotency_key: "run:r1" } });
+  assert.deepEqual(
+    h.checkpoints,
+    [["r1", "100.300"]],
+    "the adopted placeholder is checkpointed before it is finalized",
+  );
   assert.deepEqual(h.acknowledgements, ["D1"]);
 });
 
@@ -103,6 +113,7 @@ test("a recovered run reply with no placeholder in the thread posts normally aft
   await h.deliver({ destination: {}, idempotencyKey: "run:r1", text: "the answer", ageMs: RECOVERED_AGE_MS });
   assert.deepEqual(h.methods(), ["conversations.replies", "conversations.replies", "chat.postMessage"]);
   assert.equal(h.calls[2]!.args.text, "the answer");
+  assert.deepEqual(h.checkpoints, []);
 });
 
 test("a recovered empty run reply deletes the orphaned placeholder it finds by metadata", async () => {

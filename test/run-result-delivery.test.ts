@@ -303,7 +303,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   );
 
   const fresh = await finish("sD", "just finished");
-  deliveries.ackByKey(`run:${fresh.id}`, Date.now());
+  await deliveries.ackByKey(`run:${fresh.id}`, Date.now());
   const bare = createDeliveryStore();
   const bareRecovery = wireRunResultDeliveries(runs, bare);
   assert.equal(await bareRecovery.sweep(Date.now()), 0, "runs finished inside the grace window are not swept yet");

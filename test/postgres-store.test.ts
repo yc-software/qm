@@ -1812,7 +1812,8 @@ test("pg run store: terminalFinished lists finished runs by (finishedAt, id) up 
     const open = (await runs.enqueue({ sessionId: `${tag}-open`, request: turn("open") })).run;
     await runs.claimForSession(`${tag}-open`, "w", 5_000);
     const far = Date.now() + 60_000;
-    const listed = await runs.terminalFinished({ finishedAt: 0, id: "" }, far, 10_000);
+    const started = (await runs.get(ids[0]!))!.startedAt! - 1;
+    const listed = await runs.terminalFinished({ finishedAt: started, id: "" }, far, 10_000);
     const mine = listed.filter((run) => run.sessionId.startsWith(tag));
     assert.deepEqual(new Set(mine.map((run) => run.id)), new Set(ids));
     assert.ok(!listed.some((run) => run.id === open.id));
@@ -1824,12 +1825,7 @@ test("pg run store: terminalFinished lists finished runs by (finishedAt, id) up 
     const first = mine[0]!;
     const after = await runs.terminalFinished({ finishedAt: first.finishedAt!, id: first.id }, far, 10_000);
     assert.ok(!after.some((run) => run.id === first.id), "the cursor row itself is excluded");
-    assert.deepEqual(
-      await runs
-        .terminalFinished({ finishedAt: 0, id: "" }, mine[0]!.finishedAt! - 1, 10_000)
-        .then((rows) => rows.filter((run) => run.sessionId.startsWith(tag))),
-      [],
-    );
+    assert.deepEqual(await runs.terminalFinished({ finishedAt: started, id: "" }, first.finishedAt! - 1, 10_000), []);
   } finally {
     await close();
   }

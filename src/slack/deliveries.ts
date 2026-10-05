@@ -280,18 +280,19 @@ export function createDeliveryPoller(deps: {
                 }
                 return undefined;
               }
-              const editRef =
-                d.destination.editRef ??
-                (runId
-                  ? (
-                      await findPostedByKey(
-                        client,
-                        { channel, ...(threadTs ? { thread_ts: threadTs } : {}) },
-                        statusPlaceholderKey(runId),
-                        String((d.createdAt - STATUS_PLACEHOLDER_LOOKBACK_MS) / 1000),
-                      ).catch(swallowAs("slack: status-placeholder probe", undefined))
-                    )?.ts
-                  : undefined);
+              let editRef = d.destination.editRef;
+              if (!editRef && runId) {
+                const placeholder = await findPostedByKey(
+                  client,
+                  { channel, ...(threadTs ? { thread_ts: threadTs } : {}) },
+                  statusPlaceholderKey(runId),
+                  String((d.createdAt - STATUS_PLACEHOLDER_LOOKBACK_MS) / 1000),
+                ).catch(swallowAs("slack: status-placeholder probe", undefined));
+                if (placeholder) {
+                  await core.reportRunEditRef(runId, placeholder.ts);
+                  editRef = placeholder.ts;
+                }
+              }
               let text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
               const replayAttachments = async (root?: string): Promise<void> => {
                 if (!d.attachments?.length) return;
