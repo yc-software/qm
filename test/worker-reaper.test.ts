@@ -938,3 +938,62 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
     await inline.catch(() => {});
   }
 });
+
+test("worker survives sustained claim failures and processes work after recovery", async (t) => {
+  const { runs } = createMemoryRunStore();
+  const queued = (await runs.enqueue({ sessionId: "claim-recovery", request: turn })).run;
+  const claim = runs.claim.bind(runs);
+  let attempts = 0;
+  t.mock.method(runs, "claim", async (...args: Parameters<typeof claim>) => {
+    attempts++;
+    if (attempts <= 25) throw new Error("database unavailable");
+    return claim(...args);
+  });
+  const errors = t.mock.method(console, "error", () => {});
+  t.mock.method(console, "warn", () => {});
+  const worker = createWorker({
+    runs,
+    orchestrator: { handleTurn: async () => ({ status: "silent" }) } as unknown as Orchestrator,
+    leaseTtlMs: 5_000,
+    pollMs: 1,
+  });
+  worker.start();
+  try {
+    const result = await runs.waitFor(queued.id, 5_000);
+    assert.equal(result?.status, "done");
+    assert.ok(attempts > 25);
+    assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("persistent claim failure")));
+  } finally {
+    await worker.stopClaims();
+    await worker.drained();
+  }
+});
+
+test("runtime shutdown contains store close failures and waits for remaining stores", async (t) => {
+  const built = buildApp(testConfig());
+  const closing = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  built.runs.close = async () => {
+    throw new Error("run store disconnect failed");
+  };
+  built.signals.close = async () => {
+    closing.resolve();
+    await release.promise;
+  };
+  const errors = t.mock.method(console, "error", () => {});
+  let stopped = false;
+  const stopping = built.runtime.stop().then(() => {
+    stopped = true;
+  });
+  try {
+    await closing.promise;
+    await sleep(10);
+    assert.equal(stopped, false);
+    release.resolve();
+    await stopping;
+    assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("close event stores")));
+  } finally {
+    release.resolve();
+    await stopping;
+  }
+});
