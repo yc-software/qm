@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText, type McpFetch } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
-import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { createMcpToolService, mcpToolName, providerSafeInputSchema } from "../src/mcp/mcp-tool-service.ts";
 import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createServer } from "node:http";
@@ -261,4 +261,68 @@ test("per-user connectors select an explicit account slot without falling back t
   assert.equal(await service.call("crm_query", {}, "internal:alice"), "ran query");
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
+});
+
+test("MCP tool names stay within the 64-char provider limit and never collide after sanitizing", async (t) => {
+  const tools = [
+    { name: "a".repeat(60), inputSchema: { type: "object", properties: {} } },
+    { name: "list.items", inputSchema: { type: "object", properties: {} } },
+    { name: "list_items", inputSchema: { type: "object", properties: {} } },
+  ];
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({
+    servers: store,
+    refreshIntervalMs: 3600_000,
+    fetchImpl: async (_url, init) => {
+      const rpc = JSON.parse(init.body);
+      return jsonResponse({ id: rpc.id, result: rpc.method === "tools/list" ? { tools } : { content: [] } });
+    },
+  });
+  t.after(() => service.close());
+  await store.put(server({ id: "a-very-long-connector-name-for-crm" }));
+  await service.refresh();
+  const names = service.toolDefs().map((d) => d.name);
+  assert.equal(names.length, 3, "no tool is silently dropped");
+  assert.equal(new Set(names).size, 3);
+  for (const name of names) assert.match(name, /^[a-zA-Z0-9_-]{1,64}$/);
+  assert.deepEqual(
+    service.toolDefs().map((d) => d.remoteName),
+    tools.map((tool) => tool.name),
+  );
+  assert.equal(mcpToolName("crm", "query", new Set()), "crm_query", "short unique names are unchanged");
+});
+
+test("MCP input schemas are made provider-safe at the top level only", () => {
+  const object = { type: "object", properties: { q: { type: "string" } }, required: ["q"] };
+  assert.equal(providerSafeInputSchema(object), object, "already-valid schemas pass through by identity");
+  assert.deepEqual(providerSafeInputSchema({ properties: { q: { type: "string" } } }), {
+    type: "object",
+    properties: { q: { type: "string" } },
+  });
+  const union = providerSafeInputSchema({
+    anyOf: [
+      { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      { type: "object", properties: { email: { type: "string" } }, required: ["email"] },
+    ],
+  });
+  assert.equal(union.type, "object");
+  assert.ok(!("anyOf" in union) && !("required" in union));
+  assert.deepEqual(Object.keys(union.properties as object), ["id", "email"]);
+  const ref = providerSafeInputSchema({
+    $ref: "#/$defs/Args",
+    $defs: {
+      Args: { type: "object", properties: { n: { type: "number" } }, required: ["n"] },
+      Node: { type: "object" },
+    },
+  });
+  assert.equal(ref.type, "object");
+  assert.deepEqual(ref.required, ["n"]);
+  assert.ok("$defs" in ref, "nested $refs keep their definitions");
+  const allOf = providerSafeInputSchema({
+    allOf: [
+      { type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+      { type: "object", properties: { b: { type: "string" } }, required: ["b"] },
+    ],
+  });
+  assert.deepEqual(allOf.required, ["a", "b"]);
 });
