@@ -81,19 +81,53 @@ function parseMcpEnvelope(text: string, contentType: string | null | undefined, 
   return safeJson(text) as McpEnvelope | null;
 }
 
+interface McpContentBlock {
+  type?: string;
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  uri?: string;
+  name?: string;
+  resource?: { uri?: string; mimeType?: string; text?: string; blob?: string };
+}
+
 export interface McpToolResult {
-  content?: Array<{ type?: string; text?: string }>;
+  content?: McpContentBlock[];
   structuredContent?: unknown;
   isError?: boolean;
 }
 
+function base64Size(data: string | undefined): string {
+  const bytes = Math.floor(((data ?? "").replace(/=+$/, "").length * 3) / 4);
+  return bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
+}
+
+/**
+ * Text the model sees for an MCP result. Non-text blocks become a short descriptor instead of
+ * vanishing, so an image-only or resource-only result no longer reads as "[empty result]".
+ */
+function blockText(c: McpContentBlock): string {
+  switch (c?.type) {
+    case "text":
+      return String(c.text ?? "");
+    case "image":
+    case "audio":
+      return `[${c.type}: ${c.mimeType ?? "unknown type"}, ${base64Size(c.data)}]`;
+    case "resource": {
+      const r = c.resource ?? {};
+      if (typeof r.text === "string") return r.uri ? `[resource ${r.uri}]\n${r.text}` : r.text;
+      return `[resource: ${r.uri ?? "unnamed"}${r.mimeType ? `, ${r.mimeType}` : ""}, ${base64Size(r.blob)}]`;
+    }
+    case "resource_link":
+      return `[resource link: ${c.name ? `${c.name} ` : ""}${c.uri ?? ""}${c.mimeType ? ` (${c.mimeType})` : ""}]`;
+    default:
+      return c?.type ? `[${c.type} content]` : "";
+  }
+}
+
 export function mcpResultText(result: McpToolResult): string {
   if (!Array.isArray(result.content)) return "";
-  return result.content
-    .filter((c) => c?.type === "text")
-    .map((c) => String(c.text ?? ""))
-    .join("\n")
-    .trim();
+  return result.content.map(blockText).filter(Boolean).join("\n").trim();
 }
 
 interface McpRemoteTool {
