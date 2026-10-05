@@ -103,6 +103,7 @@ export interface HarnessTurnInput {
   session: Session;
   runId?: string;
   cancel?: AbortSignal;
+  continueTurn?: boolean;
   input: string;
   triggerTs?: string;
   entryTs?: string;

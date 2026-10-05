@@ -102,7 +102,7 @@ import {
   type SeededMessage,
 } from "./replay.ts";
 import { assistantDroppedAtReplay, ELIDED_IMAGE_TEXT, planTapeSeed } from "./tape-fold.ts";
-import { estimateHistoryTokens } from "./context-compaction.ts";
+import { estimateHistoryTokens, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
@@ -668,6 +668,15 @@ interface PiAgentWithPayloadHook {
     signal?: unknown,
   ) => Promise<{ terminate?: boolean } | undefined> | { terminate?: boolean } | undefined;
   subscribe?(listener: (event: unknown) => Promise<void> | void): () => void;
+}
+
+export function endsAtRecordedToolResult(messages: readonly unknown[]): boolean {
+  const last = messages.at(-1) as { role?: unknown; content?: unknown } | undefined;
+  return last?.role === "toolResult" && textFromContent(last.content) !== INTERRUPTED_TOOL_RESULT;
+}
+
+function continueAssistantTurn(session: AgentSession): Promise<void> {
+  return (session as unknown as { _runAgentPrompt(messages: readonly unknown[]): Promise<void> })._runAgentPrompt([]);
 }
 
 interface PiSeedTarget {
@@ -1912,16 +1921,25 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           turn.onGapWork?.(collectGapWork);
           entry.ref.onGapWork = collectGapWork;
-          const userEntry = await turn.emit({
-            type: "user",
-            payload: {
-              text: turn.input,
-              ...(turn.environment ? { environment: turn.environment } : {}),
-              ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-              ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-            },
-            scopeLabel: turn.scopeLabel,
-          });
+          const continueTurn = !!turn.continueTurn && endsAtRecordedToolResult(entry.agentSession.agent.state.messages);
+          if (turn.continueTurn && !continueTurn)
+            console.log(
+              `[pi] resume cannot continue the assistant turn — seeded context does not end at a recorded tool result; prompting the resume note session=${turn.session.id}`,
+            );
+          const userEntry = continueTurn
+            ? turn.history.find(
+                (e) => e.type === "user" && (e.payload as { runId?: unknown } | null)?.runId === turn.runId,
+              )
+            : await turn.emit({
+                type: "user",
+                payload: {
+                  text: turn.input,
+                  ...(turn.environment ? { environment: turn.environment } : {}),
+                  ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+                  ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+                },
+                scopeLabel: turn.scopeLabel,
+              });
           const grindMeter = createGrindMeter();
 
           if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history);
@@ -1942,7 +1960,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.pendingTransformContext = undefined;
           turn.recordModelCall({
             model: effectiveModel,
-            inputTokens: entry.composedPromptTokens + estimateHistoryTokens(turn.history) + countTokens(modelPrompt),
+            inputTokens:
+              entry.composedPromptTokens +
+              estimateHistoryTokens(turn.history) +
+              (continueTurn ? 0 : countTokens(modelPrompt)),
             entryCount: turn.history.length,
           });
 
@@ -1953,7 +1974,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const stepWindows: Array<{ gapStart?: number; gapEnd: number }> = [];
           let thinkTail: Promise<unknown> = Promise.resolve();
           let tapeError: Error | undefined;
-          let tapedTriggerUser = false;
+          let tapedTriggerUser = continueTurn;
           const toolAbort = new AbortController();
           const pendingSteerTapeMeta: Array<
             SteerIntake & {
@@ -1984,7 +2005,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               harness: "pi",
               payload: stripImageBytes(message, isTrigger ? turn.images : steer?.images),
               scopeLabel: resultScope ?? turn.scopeLabel,
-              ...(isTrigger
+              ...(isTrigger && userEntry
                 ? {
                     entrySeq: userEntry.seq,
                     meta: {
@@ -2101,7 +2122,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 : undefined;
               try {
                 await turn.recordLlmRequest({
-                  turnSeq: userEntry.seq,
+                  turnSeq: userEntry?.seq ?? null,
                   step,
                   model: captured[step]!.transport?.modelId ?? effectiveModel,
                   promptEnvelope: captured[step]!.envelope,
@@ -2273,7 +2294,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
               : undefined;
             wallClock = await raceTurnWallClock(
-              entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
+              continueTurn
+                ? continueAssistantTurn(entry.agentSession)
+                : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
               {
                 capMs: raceCapMs(),
                 extendMs: extendCapMs,
