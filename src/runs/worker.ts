@@ -128,7 +128,6 @@ export interface WorkerDeps extends ProcessDeps {
   recoveryPollMs?: number;
   workerId?: string;
   canClaim?: () => boolean;
-  onClaimed?: () => void;
   admittedWork?: AdmittedWork;
 }
 
@@ -223,7 +222,6 @@ export function createWorker(deps: WorkerDeps): Worker {
       console.log(`[worker] claimed worker=${workerId} run=${run.id} thread=${run.sessionId}`);
       claimed();
       claimDone = null;
-      deps.onClaimed?.();
       try {
         const work = () => processRun(deps, run, { background: true, shutdown: shutdown.signal });
         if (deps.admittedWork) await deps.admittedWork.run(work);

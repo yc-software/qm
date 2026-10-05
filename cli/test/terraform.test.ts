@@ -389,8 +389,7 @@ test("the deploy role can run and inspect only stack-scoped deployment canaries"
 
   const inspect = policy.match(/Sid\s*= "InspectDeploymentCanaries"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
   assert.match(inspect, /ecs:DescribeTasks/);
-  assert.match(inspect, /ecs:GetTaskProtection/);
-  assert.doesNotMatch(policy, /ecs:UpdateTaskProtection/);
+  assert.doesNotMatch(mainTf, /TaskProtection/);
   assert.match(inspect, /task\/\$\{var\.cluster_name\}\/\*/);
   assert.doesNotMatch(inspect, /Resource\s*= "\*"/);
 });
@@ -677,7 +676,7 @@ test("AWS module reuses account OIDC, guards account and passes configured task 
     /Sid\s*= "ManageDeploymentLayers"[\s\S]*"s3:GetObject", "s3:PutObject"[\s\S]*deployment\/layers\/\*/,
   );
   assert.match(mainTf, /Sid\s*= "InspectGithubOidcProvider"[\s\S]*iam:GetOpenIDConnectProvider/);
-  assert.match(mainTf, /"ecs:GetTaskProtection", "ecs:UpdateTaskProtection", "ecs:DescribeTasks"/);
+  assert.match(mainTf, /Action {3}= \["ecs:DescribeTasks"\]\n\s+Resource = "arn:aws:ecs:/);
   assert.match(mainTf, /task\/\$\{var\.cluster_name\}\/\*/);
   assert.match(mainTf, /"lambda:RunMicrovm"[\s\S]*"lambda:CreateMicrovmAuthToken"/);
   assert.match(mainTf, /"lambda:ListMicrovmImages"/);

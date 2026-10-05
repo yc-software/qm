@@ -6,9 +6,7 @@ export class WorkAdmissionClosed extends Error {
   }
 }
 
-export function createAdmittedWork(
-  options: { paused?: boolean; canStart?: () => boolean; onAdmitted?: () => void | Promise<void> } = {},
-) {
+export function createAdmittedWork(options: { paused?: boolean; canStart?: () => boolean } = {}) {
   const context = new AsyncLocalStorage<{ active: boolean }>();
   const pending = new Set<Promise<unknown>>();
   let paused = options.paused ?? false;
@@ -25,12 +23,7 @@ export function createAdmittedWork(
     run<T>(work: () => T | Promise<T>): Promise<T> {
       if (!canRun()) return Promise.reject(new WorkAdmissionClosed());
       const admission = { active: true };
-      const task = context.run(admission, () =>
-        Promise.resolve().then(async () => {
-          await options.onAdmitted?.();
-          return work();
-        }),
-      );
+      const task = context.run(admission, () => Promise.resolve().then(work));
       pending.add(task);
       void task
         .finally(() => {
