@@ -1009,3 +1009,22 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
 });
+
+test("a garbled provider stream chunk is retried instead of ending the turn", () => {
+  for (const raw of [
+    "Expected property name or '}' in JSON at position 1 (line 1 column 2)",
+    "Unexpected end of JSON input",
+    `Unexpected token 'o', "not json" is not valid JSON`,
+  ]) {
+    const session = {
+      getLastAssistantText: () => "ok",
+      messages: [
+        { role: "assistant", stopReason: "error", errorMessage: raw, content: [{ type: "text", text: "ok" }] },
+      ],
+    } as unknown as Parameters<typeof piLastAssistantTextOrThrow>[0];
+    assert.throws(
+      () => piLastAssistantTextOrThrow(session),
+      (err: Error) => err instanceof ProviderTurnError,
+    );
+  }
+});
