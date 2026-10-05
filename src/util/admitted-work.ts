@@ -13,7 +13,6 @@ export function createAdmittedWork(options: { paused?: boolean; canStart?: () =>
   const canRun = () => context.getStore()?.active === true || (!paused && (options.canStart?.() ?? true));
   return {
     canRun,
-    busy: () => pending.size > 0,
     pause() {
       paused = true;
     },

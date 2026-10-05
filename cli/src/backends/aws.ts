@@ -1575,7 +1575,10 @@ async function awaitServiceTargets(
         } else {
           waiting.push(`${workload} (blue/green traffic shift or bake is still in progress)`);
         }
-      } else if (deployment.rolloutState !== "COMPLETED" || state.deployments?.length !== 1) {
+      } else if (
+        deployment.rolloutState !== "COMPLETED" ||
+        (state.deployments ?? []).some((item) => item !== deployment && (item.runningCount ?? 0) > 0)
+      ) {
         waiting.push(`${workload} (prior tasks are still stopping)`);
       }
     }

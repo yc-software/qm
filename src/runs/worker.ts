@@ -138,7 +138,6 @@ export interface Worker {
   drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
   releaseInFlight(): Promise<void>;
-  busy(): boolean;
 }
 
 const STOP_DRAIN_MS = 2_000;
@@ -257,9 +256,6 @@ export function createWorker(deps: WorkerDeps): Worker {
       loopDone = loop().finally(() => {
         loopDone = null;
       });
-    },
-    busy() {
-      return inFlight !== null;
     },
     async releaseInFlight() {
       await stopClaims();

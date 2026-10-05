@@ -252,6 +252,7 @@ function statefulAws(
     failPromotion?: boolean;
     promotionAlreadyCurrent?: boolean;
     drainPolls?: number;
+    inactiveDeploymentRunning?: number;
     primaryFailedTasks?: boolean;
     rolloutFailed?: boolean;
     transientFailedTaskPolls?: number;
@@ -387,7 +388,7 @@ else if (a.includes("ecs describe-services")) {
         : blueGreenBakePolls
           ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }]
         : [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: transientFailedTaskPolls && s.updated ? 1 : 0 }];
-    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments: deployments.map(deployment => ({ pendingCount: 0, ...deployment })), pendingCount: 0, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
+    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments: [...deployments, ...(${JSON.stringify(opts.inactiveDeploymentRunning === undefined ? [] : [{ id: "inactive", status: "INACTIVE", rolloutState: "COMPLETED", runningCount: opts.inactiveDeploymentRunning, failedTasks: 0 }])}).map(deployment => ({ taskDefinition: service.taskDefinition, ...deployment }))].map(deployment => ({ pendingCount: 0, ...deployment })), pendingCount: 0, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
   }), failures: names.filter((name) => !s.services[name]).map((name) => ({ arn: name, reason: "MISSING" })) }));
 }
 else if (a.includes("ecs list-service-deployments") && ${JSON.stringify(opts.failNativeStatusOnceAfterUpdate ?? false)} && s.updated && !s.nativeStatusFailedOnce) {
@@ -4710,6 +4711,34 @@ test("AWS up still fails fast on a FAILED rollout state — the ECS circuit-brea
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const running of [0, 1]) {
+  test(`AWS up treats a lingering INACTIVE deployment as retired only once its tasks stop: runningCount=${running}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-inactive-deployment-"));
+    const dockerBin = join(dir, "docker");
+    writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
+    chmodSync(dockerBin, 0o755);
+    const fake = statefulAws(dir, oneServiceConfig(), {}, { inactiveDeploymentRunning: running });
+    const priorPath = process.env.PATH;
+    const priorDeadline = process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+    process.env.PATH = `${dir}:${priorPath}`;
+    process.env.QM_AWS_ROLLOUT_DEADLINE_MS = "1500";
+    try {
+      if (running === 0) await awsUp(oneServiceConfig(), dir, { yes: true });
+      else
+        await assert.rejects(
+          () => awsUp(oneServiceConfig(), dir, { yes: true }),
+          /timed out waiting for the AWS rollout/,
+        );
+    } finally {
+      process.env.PATH = priorPath;
+      if (priorDeadline === undefined) delete process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+      else process.env.QM_AWS_ROLLOUT_DEADLINE_MS = priorDeadline;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("AWS up preserves the staging tag when stable-label promotion fails", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-promotion-"));

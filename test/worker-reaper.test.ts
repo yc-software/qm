@@ -274,14 +274,12 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
   await sleep(20);
   assert.equal(signal.aborted, true, "shutdown reaches the existing cancellation signal immediately");
   assert.equal(released, false, "handback waits for the cancellation checkpoint and finally block");
-  assert.equal(worker.busy(), true);
   assert.equal((await runs.get(enq.id))?.status, "running");
   assert.equal(await runs.claim("replacement", 5_000), null);
   assert.equal((await sessions.acquireLease(session.id)).lease, null);
   const second = worker.releaseInFlight();
   unwind();
   await Promise.all([handback, second]);
-  assert.equal(worker.busy(), false);
   assert.equal((await runs.get(enq.id))?.status, "pending");
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
   const replacement = await runs.claim("replacement", 5_000);

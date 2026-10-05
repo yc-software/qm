@@ -44,20 +44,23 @@ test("a superseded worker stops claiming; in-flight turns finish; claiming resum
 
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 });
   await sleep(50);
-  assert.equal(worker.busy(), true, "the first run was claimed");
+  assert.equal(turns.length, 1, "the first run was claimed");
 
   superseded = true;
   await sleep(50);
   await runs.enqueue({ sessionId: "s2", request: turn, maxAttempts: 3 });
   release!();
   await sleep(80);
-  assert.equal(worker.busy(), false, "the in-flight turn finished");
-  const pending = (await runs.list()).filter((r) => r.status === "pending");
-  assert.equal(pending.length, 1, "the new run was NOT claimed while superseded");
+  const statuses = (await runs.list()).map((r) => r.status).sort();
+  assert.deepEqual(
+    statuses,
+    ["done", "pending"],
+    "the in-flight turn finished and the new run was NOT claimed while superseded",
+  );
 
   superseded = false;
   await sleep(80);
-  assert.equal(worker.busy(), true, "claiming resumed once the newer build disappeared");
+  assert.equal(turns.length, 2, "claiming resumed once the newer build disappeared");
   release!();
   await worker.stop();
   await drain.stop();
