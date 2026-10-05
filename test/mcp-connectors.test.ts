@@ -152,6 +152,7 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     userTokens: users,
     fetchImpl: async (_url, init) => {
       const rpc = JSON.parse(init.body);
+      if (rpc.method === "initialize" || rpc.method.startsWith("notifications/")) return jsonResponse({ result: {} });
       if (rpc.method === "tools/list") {
         catalogAuth.push(init.headers.authorization!);
         return jsonResponse({ result: { tools: TOOLS } });
@@ -262,3 +263,131 @@ test("per-user connectors select an explicit account slot without falling back t
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
+
+test("mcp client speaks the Streamable HTTP lifecycle to a stateful official-SDK server, and re-initializes after the server drops the session", async (t) => {
+  const { McpServer: SdkServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+  const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+  const { z } = await import("zod");
+  const { createServer } = await import("node:http");
+  const { randomUUID } = await import("node:crypto");
+  const sessions = new Map<string, InstanceType<typeof StreamableHTTPServerTransport>>();
+  let inits = 0;
+  const http = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
+    const sid = req.headers["mcp-session-id"];
+    if (typeof sid === "string" && !sessions.has(sid)) {
+      res.writeHead(404).end();
+      return;
+    }
+    let transport = typeof sid === "string" ? sessions.get(sid) : undefined;
+    if (!transport) {
+      inits++;
+      const created: InstanceType<typeof StreamableHTTPServerTransport> = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => void sessions.set(id, created),
+      });
+      transport = created;
+      const s = new SdkServer({ name: "fixture", version: "1" });
+      s.tool("echo", { msg: z.string() }, async ({ msg }) => ({ content: [{ type: "text", text: `echo:${msg}` }] }));
+      await s.connect(transport);
+    }
+    await transport.handleRequest(req, res, body);
+  });
+  await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
+  t.after(() => http.close());
+  const port = (http.address() as { port: number }).port;
+  const client = createMcpClient({ url: `http://127.0.0.1:${port}/mcp`, auth: { mode: "none" } });
+  assert.deepEqual(
+    (await client.listTools()).map((tool) => tool.name),
+    ["echo"],
+  );
+  assert.equal(mcpResultText(await client.callTool("echo", { msg: "hi" })), "echo:hi");
+  sessions.clear(); // server restart / session expiry
+  assert.equal(mcpResultText(await client.callTool("echo", { msg: "again" })), "echo:again");
+  assert.equal(inits, 2, "one handshake, plus one after the session was dropped");
+});
+
+test("a client-credentials token rejected before its expiry is re-minted once instead of failing until restart", async () => {
+  let minted = 0;
+  let valid = "";
+  const fetch: McpFetch = async (url, init) => {
+    if (url.endsWith("/token")) {
+      minted++;
+      valid = `tok-${minted}`;
+      return jsonResponse({ access_token: valid });
+    }
+    if (init.headers.authorization !== `Bearer ${valid}`) return jsonResponse({ error: "unauthorized" }, 401);
+    const rpc = JSON.parse(init.body);
+    return jsonResponse({ id: rpc.id, result: rpc.method === "tools/list" ? { tools: TOOLS } : {} });
+  };
+  const client = createMcpClient({
+    url: "https://mcp.example.com/mcp",
+    auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
+    fetchImpl: fetch,
+  });
+  assert.equal((await client.listTools()).length, 2);
+  valid = "rotated-server-side";
+  assert.equal((await client.listTools()).length, 2);
+  assert.equal(minted, 2);
+});
+
+test("per-user MCP clients are reused per token, so the session handshake isn't paid on every call", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const users = tokenStore();
+  const host = "accounts.example.com";
+  await users.setConnectorToken(host, "internal:alice", { accessToken: "alice-1" });
+  const handshakes: string[] = [];
+  const service = createMcpToolService({
+    servers: store,
+    userTokens: users,
+    refreshIntervalMs: 3600_000,
+    fetchImpl: async (_url, init) => {
+      const rpc = JSON.parse(init.body);
+      if (rpc.method === "initialize") handshakes.push(init.headers.authorization!);
+      if (rpc.method === "initialize" || rpc.method.startsWith("notifications/")) return jsonResponse({ result: {} });
+      if (rpc.method === "tools/list") return jsonResponse({ id: rpc.id, result: { tools: TOOLS } });
+      return jsonResponse({ id: rpc.id, result: { content: [{ type: "text", text: "ok" }] } });
+    },
+  });
+  t.after(() => service.close());
+  await store.put(
+    server({ auth: "bearer", bearerToken: "catalog", credentialScope: "per-user", credentialHost: host }),
+  );
+  await service.refresh();
+  handshakes.length = 0;
+  for (let i = 0; i < 3; i++) await service.call("crm_query", {}, "internal:alice");
+  assert.deepEqual(handshakes, ["Bearer alice-1"]);
+  await users.setConnectorToken(host, "internal:alice", { accessToken: "alice-2" });
+  await service.call("crm_query", {}, "internal:alice");
+  assert.deepEqual(handshakes, ["Bearer alice-1", "Bearer alice-2"], "a refreshed token gets a fresh client");
+});
+
+for (const status of [400, 405]) {
+  test(`a legacy server that answers initialize with ${status} still serves tools/list and tools/call without a session`, async () => {
+    const seen: Array<{ method: string; session?: string }> = [];
+    const fetch: McpFetch = async (_url, init) => {
+      const rpc = JSON.parse(init.body);
+      seen.push({ method: rpc.method, session: init.headers["mcp-session-id"] });
+      if (rpc.method === "initialize") return jsonResponse({ error: "unsupported" }, status);
+      if (rpc.method === "tools/list") return jsonResponse({ id: rpc.id, result: { tools: TOOLS } });
+      if (rpc.method === "tools/call")
+        return jsonResponse({ id: rpc.id, result: { content: [{ type: "text", text: `ran ${rpc.params.name}` }] } });
+      return jsonResponse({ error: "unexpected" }, 500);
+    };
+    const client = createMcpClient({ url: "https://legacy.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+    assert.equal((await client.listTools()).length, 2);
+    const result = await client.callTool(TOOLS[0]!.name, {});
+    assert.equal(mcpResultText(result), `ran ${TOOLS[0]!.name}`);
+    assert.deepEqual(
+      seen.map((s) => s.method),
+      ["initialize", "tools/list", "tools/call"],
+      "initialize is tried once, no initialized ack, then plain requests",
+    );
+    assert.ok(
+      seen.every((s) => s.session === undefined),
+      "no Mcp-Session-Id is ever sent",
+    );
+  });
+}

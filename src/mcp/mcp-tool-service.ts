@@ -15,6 +15,9 @@ import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const MAX_TOOLS_PER_SERVER = 64;
 const MAX_RESULT_CHARS = 60_000;
+/** Per-user clients are reused for this long, so a session handshake isn't paid on every call. */
+const USER_CLIENT_TTL_MS = 5 * 60_000;
+const MAX_USER_CLIENTS = 500;
 
 export interface McpToolDescriptor {
   /** Namespaced tool name exposed to the model, e.g. "salesforce_query". */
@@ -55,6 +58,7 @@ export function createMcpToolService(opts: {
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
+  const userClients = new Map<string, { client: McpClient; expiresAt: number }>();
   let snapshot: McpToolDescriptor[] = [];
   let closed = false;
 
@@ -94,12 +98,21 @@ export function createMcpToolService(opts: {
       server.credentialAccountType,
     );
     if (!token) throw new Error(`Connect your account for MCP server ${server.id} before using this tool`);
-    return createMcpClient({
+    // Keyed by the token itself: a refreshed or revoked token never reuses a stale client.
+    const key = JSON.stringify([server.id, server.url, principalId, token]);
+    const t = now();
+    const hit = userClients.get(key);
+    if (hit && hit.expiresAt > t) return hit.client;
+    for (const [k, v] of userClients) if (v.expiresAt <= t) userClients.delete(k);
+    while (userClients.size >= MAX_USER_CLIENTS) userClients.delete(userClients.keys().next().value!);
+    const client = createMcpClient({
       url: server.url,
       auth: { mode: "bearer", token },
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       now,
     });
+    userClients.set(key, { client, expiresAt: t + USER_CLIENT_TTL_MS });
+    return client;
   }
 
   async function refresh(): Promise<void> {
@@ -168,6 +181,7 @@ export function createMcpToolService(opts: {
     close() {
       closed = true;
       clearInterval(timer);
+      userClients.clear();
       unsubscribe();
     },
   };
