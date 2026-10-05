@@ -581,6 +581,7 @@ export function buildApp(
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
     onAdmitted: () => noteAdmitted(),
   });
+  let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   if (config.databaseUrl && !config.connectorSecretKey) {
@@ -2102,6 +2103,7 @@ export function buildApp(
   const app = createApp({
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
+    shutdown: () => inlineShutdown.signal,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -2734,8 +2736,18 @@ export function buildApp(
     backgroundStopping = draining;
     return draining;
   }
+  async function releaseInFlightRuns(): Promise<void> {
+    inlineShutdown.abort();
+    await Promise.all([
+      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
+        swallowAs("wiring: inline turn handback failed", undefined),
+      ),
+      ...workers.map((w) => w.releaseInFlight()),
+    ]);
+  }
   const runtime: Runtime = {
     start() {
+      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
@@ -2753,9 +2765,7 @@ export function buildApp(
       await backgroundStopping;
       await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
     },
-    async releaseInFlightRuns() {
-      await Promise.all(workers.map((w) => w.releaseInFlight()));
-    },
+    releaseInFlightRuns,
     async stop() {
       await stopBackground();
       await Promise.all([
@@ -2764,7 +2774,7 @@ export function buildApp(
         ),
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await Promise.all(workers.map((w) => w.releaseInFlight()));
+      await releaseInFlightRuns();
       await drain.stop();
       runs.close?.();
       void runSignals.close?.();

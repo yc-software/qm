@@ -934,7 +934,7 @@ export const CONFIG_DEFAULTS = {
   leaseTtlMs: 120_000,
   heartbeatIntervalMs: 10_000,
   reaperIntervalMs: 15_000,
-  shutdownDrainMs: 10_000,
+  shutdownDrainMs: 30_000,
   maxAttempts: 3,
   maxClaims: 8,
   processReaperIntervalMs: 30_000,
