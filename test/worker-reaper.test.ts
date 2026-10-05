@@ -14,6 +14,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
+import type { RunStore } from "../src/runs/run-store.ts";
 import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -294,7 +295,7 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
 });
 
-test("an uncooperative turn keeps both leases until it actually exits", async () => {
+test("an uncooperative turn keeps both leases until it actually exits, then completes", async () => {
   const { runs } = createMemoryRunStore();
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
@@ -324,9 +325,57 @@ test("an uncooperative turn keeps both leases until it actually exits", async ()
   assert.equal(await runs.claim("replacement", 5_000), null);
   unblock();
   await handback;
-  assert.equal((await runs.get(enq.id))?.status, "pending");
+  assert.equal((await runs.get(enq.id))?.status, "done", "a turn that finished anyway is not rerun elsewhere");
+  assert.deepEqual((await runs.get(enq.id))?.result, { status: "ok", reply: "finished" });
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
   assert.ok((await sessions.acquireLease(session.id)).lease);
+});
+
+test("shutdown aborts the blocked step before the handback, and the next worker resumes it exactly once", async () => {
+  const store = createMemoryRunStore();
+  const events: string[] = [];
+  const runs: RunStore = {
+    ...store.runs,
+    async releaseLease(runId, token) {
+      events.push("release");
+      return store.runs.releaseLease(runId, token);
+    },
+  };
+  const blocked = Promise.withResolvers<void>();
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      if (input.attempt === 1) {
+        events.push("step1");
+        blocked.resolve();
+        await new Promise<void>((resolve) => input.cancel!.addEventListener("abort", () => resolve(), { once: true }));
+        events.push("abort");
+        return { status: "silent" as const, stopped: true };
+      }
+      events.push(`resume@${input.attempt}`);
+      events.push("step2");
+      return { status: "ok" as const, reply: "finished" };
+    },
+  } as unknown as Orchestrator;
+  const enq = (await store.runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
+  const old = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "old" });
+  old.start();
+  await blocked.promise;
+  await old.stop(1);
+  await old.releaseInFlight();
+  assert.deepEqual(events, ["step1", "abort", "release"]);
+  const handedBack = (await runs.get(enq.id))!;
+  assert.equal(handedBack.status, "pending");
+  assert.equal(handedBack.errorAttempts, 0);
+  assert.equal(handedBack.leaseToken, null);
+
+  const fresh = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "fresh" });
+  fresh.start();
+  const done = await runs.waitFor(enq.id, 2_000);
+  await fresh.stop();
+  assert.equal(done.status, "done");
+  assert.equal(done.attempts, 2);
+  assert.deepEqual(done.result, { status: "ok", reply: "finished" });
+  assert.deepEqual(events, ["step1", "abort", "release", "resume@2", "step2"]);
 });
 
 test("a thrown claim neither kills the worker loop nor blocks the drain handback", async () => {
@@ -785,3 +834,64 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
     await built.runtime.stop();
   }
 });
+
+for (const interrupted of [true, false]) {
+  test(`final shutdown aborts an inline turn mid-step and holds its lease until it unwinds (step ${interrupted ? "interrupted" : "finishes"})`, async () => {
+    const built = buildApp(
+      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")), workers: 1, shutdownDrainMs: 30 }),
+    );
+    const blocked = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const append = built.sessions.append.bind(built.sessions);
+    let first = true;
+    built.sessions.append = async (lease, entry) => {
+      if (first && entry.type === "user") {
+        first = false;
+        blocked.resolve();
+        await gate.promise;
+      }
+      return append(lease, entry);
+    };
+    const inline = built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "inline-shutdown" },
+      text: "hello",
+    });
+    try {
+      await blocked.promise;
+      const running = (await built.runs.list()).find((run) => run.status === "running")!;
+      assert.ok(running);
+      let stopped = false;
+      const stopping = built.runtime.stop().then(() => {
+        stopped = true;
+      });
+      await sleep(100);
+      assert.equal(stopped, false, "stop waits for the inline step to unwind");
+      assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
+      assert.equal(await built.runs.claim("replacement", 5_000), null);
+      if (interrupted) gate.reject(new Error("step interrupted by shutdown"));
+      else gate.resolve();
+      const result = await inline;
+      await stopping;
+      const after = (await built.runs.get(running.id))!;
+      assert.equal(after.leaseToken, null);
+      assert.equal(after.errorAttempts, 0);
+      assert.equal(after.attempts, 1);
+      if (interrupted) {
+        assert.equal(result.status, "queued");
+        assert.equal(result.runId, running.id);
+        assert.equal(after.status, "pending");
+        assert.equal((await built.runs.claim("replacement", 5_000))?.id, running.id);
+      } else {
+        assert.equal(result.status, "ok");
+        assert.match(result.reply!, /hello/);
+        assert.equal(after.status, "done");
+        assert.equal(await built.runs.claim("replacement", 5_000), null);
+      }
+    } finally {
+      gate.resolve();
+      await inline.catch(() => {});
+    }
+  });
+}

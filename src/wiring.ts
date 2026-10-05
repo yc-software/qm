@@ -581,6 +581,7 @@ export function buildApp(
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
     onAdmitted: () => noteAdmitted(),
   });
+  const inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   if (config.databaseUrl && !config.connectorSecretKey) {
@@ -2102,6 +2103,7 @@ export function buildApp(
   const app = createApp({
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
+    shutdown: inlineShutdown.signal,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -2734,6 +2736,10 @@ export function buildApp(
     backgroundStopping = draining;
     return draining;
   }
+  async function releaseInFlightRuns(): Promise<void> {
+    inlineShutdown.abort();
+    await Promise.all([admittedWork.drained(), ...workers.map((w) => w.releaseInFlight())]);
+  }
   const runtime: Runtime = {
     start() {
       flyTunnel?.monitor();
@@ -2753,9 +2759,7 @@ export function buildApp(
       await backgroundStopping;
       await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
     },
-    async releaseInFlightRuns() {
-      await Promise.all(workers.map((w) => w.releaseInFlight()));
-    },
+    releaseInFlightRuns,
     async stop() {
       await stopBackground();
       await Promise.all([
@@ -2764,7 +2768,7 @@ export function buildApp(
         ),
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await Promise.all(workers.map((w) => w.releaseInFlight()));
+      await releaseInFlightRuns();
       await drain.stop();
       runs.close?.();
       void runSignals.close?.();

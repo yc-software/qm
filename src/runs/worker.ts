@@ -88,7 +88,7 @@ export async function processRun(
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
     stopBeat();
-    if (opts?.shutdown?.aborted) return result;
+    if (opts?.shutdown?.aborted && result.stopped) return result;
     if (!(await deps.runs.complete(run.id, token, result))) {
       throw new Error(`run ${run.id} lost its lease before completion`);
     }
