@@ -10,6 +10,7 @@
 // servers into agent tools.
 
 const TOKEN_SKEW_MS = 60_000;
+const MAX_TOOL_PAGES = 50;
 const MCP_ACCEPT = "application/json, text/event-stream";
 
 interface McpHttpResponse {
@@ -181,21 +182,30 @@ export function createMcpClient(opts: {
     base,
     host,
     async listTools() {
-      const result = (await rpc("tools/list", {})) as { tools?: unknown };
-      if (!Array.isArray(result.tools)) return [];
       const out: McpRemoteTool[] = [];
-      for (const raw of result.tools) {
-        const t = raw as { name?: unknown; description?: unknown; inputSchema?: unknown };
-        if (typeof t.name !== "string" || !t.name) continue;
-        out.push({
-          name: t.name,
-          description: typeof t.description === "string" ? t.description : "",
-          inputSchema:
-            t.inputSchema && typeof t.inputSchema === "object"
-              ? (t.inputSchema as Record<string, unknown>)
-              : { type: "object", properties: {} },
-        });
-      }
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const result = (await rpc("tools/list", cursor ? { cursor } : {})) as { tools?: unknown; nextCursor?: unknown };
+        if (!Array.isArray(result.tools)) break;
+        for (const raw of result.tools) {
+          const t = raw as { name?: unknown; description?: unknown; inputSchema?: unknown };
+          if (typeof t.name !== "string" || !t.name) continue;
+          out.push({
+            name: t.name,
+            description: typeof t.description === "string" ? t.description : "",
+            inputSchema:
+              t.inputSchema && typeof t.inputSchema === "object"
+                ? (t.inputSchema as Record<string, unknown>)
+                : { type: "object", properties: {} },
+          });
+        }
+        cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : undefined;
+        if (cursor !== undefined) {
+          if (seen.has(cursor) || seen.size >= MAX_TOOL_PAGES) break;
+          seen.add(cursor);
+        }
+      } while (cursor !== undefined);
       return out;
     },
     async callTool(name, args) {

@@ -262,3 +262,19 @@ test("per-user connectors select an explicit account slot without falling back t
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
+
+test("mcp client follows tools/list pagination cursors", async () => {
+  const pages: Record<string, { tools: typeof TOOLS; nextCursor?: string }> = {
+    "": { tools: [TOOLS[0]!], nextCursor: "p2" },
+    p2: { tools: [TOOLS[1]!] },
+  };
+  const fetch: McpFetch = async (_url, init) => {
+    const req = JSON.parse(init.body) as { id: number; params: { cursor?: string } };
+    return jsonResponse({ jsonrpc: "2.0", id: req.id, result: pages[req.params.cursor ?? ""] });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  assert.deepEqual(
+    (await client.listTools()).map((t) => t.name),
+    ["query", "update"],
+  );
+});
