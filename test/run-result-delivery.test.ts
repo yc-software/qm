@@ -140,6 +140,16 @@ test("runResultDelivery recovers a security quarantine without exposing its inte
   assert.doesNotMatch(d?.text ?? "", /internal screening details/);
 });
 
+test("runResultDelivery recovers an addressed model-budget refusal with its explanation", () => {
+  const reason =
+    "This workspace has used up its $1,000 daily model budget, so I can't run until it resets. An admin can raise the limit.";
+  const spine = run({ result: { status: "refused", refusalKind: "model_budget", reason } });
+  spine.request = { ...spine.request, surfaceTools: true, addressed: true };
+  assert.equal(runResultDelivery(spine)?.text, reason);
+  spine.request = { ...spine.request, addressed: false, origin: { kind: "ambient" } };
+  assert.equal(runResultDelivery(spine), null);
+});
+
 test("runResultDelivery keeps an unprompted quarantine silent — a replay has no live handler to suppress it", () => {
   const spine = run({ result: { status: "refused", refusalKind: "security_quarantine" } });
   spine.request = { ...spine.request, surfaceTools: true, origin: { kind: "ambient" } };

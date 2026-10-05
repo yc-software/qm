@@ -167,7 +167,13 @@ import {
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
-import { NonRetryableTurnError, TitleRejected, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
+import {
+  modelBudgetRefusal,
+  NonRetryableTurnError,
+  TitleRejected,
+  turnFailureMessage,
+  type TurnFailurePayload,
+} from "./turn-error.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -4583,17 +4589,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
           return { status: "refused", sessionId: session.id, reason: err.message };
         }
+        const budgetRefusal = input.cancel?.aborted
+          ? undefined
+          : modelBudgetRefusal(errMessage(err), deps.modelBudgetNote);
         deps.errors?.record(
           {
             category: "turn",
-            code: "error",
+            code: budgetRefusal ? "model_budget" : "error",
             message: errMessage(err),
             scopeLabel: scopeId,
             sessionId: session.id,
           },
           err,
         );
-        if ((err instanceof NonRetryableTurnError || input.finalAttempt) && !input.cancel?.aborted) {
+        if ((budgetRefusal || err instanceof NonRetryableTurnError || input.finalAttempt) && !input.cancel?.aborted) {
           const mirrorFailureEntry = async (entry: SessionEntry | undefined): Promise<void> => {
             if (!entry) return;
             await deps.sessions
@@ -4608,7 +4617,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           const payload: TurnFailurePayload = {
             kind: "turn_failure",
-            message: turnFailureMessage(err),
+            message: budgetRefusal ?? turnFailureMessage(err),
             ...(input.runId ? { runId: input.runId } : {}),
           };
           await deps.sessions
@@ -4616,6 +4625,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .then(mirrorFailureEntry)
             .catch(swallowAs("orchestrator: terminal turn failure record", undefined));
         }
+        if (budgetRefusal)
+          return { status: "refused", sessionId: session.id, reason: budgetRefusal, refusalKind: "model_budget" };
         throw err;
       } finally {
         if (input.runId) deps.turnStream?.end(input.runId);

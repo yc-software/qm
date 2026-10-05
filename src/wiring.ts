@@ -1922,6 +1922,7 @@ export function buildApp(
     auditLog,
     rateLimiter,
     budget,
+    ...(config.modelBudgetNote ? { modelBudgetNote: config.modelBudgetNote } : {}),
     harness,
     memory,
     deploy: deployService,

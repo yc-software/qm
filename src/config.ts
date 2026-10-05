@@ -115,6 +115,7 @@ export interface Config {
   budgetUsdPerWindow?: number;
   orgBudgetUsdPerWindow?: number;
   budgetWindowMs: number;
+  modelBudgetNote?: string;
   maxContextTokens?: number;
   execTimeoutDefaultMs: number;
   execTimeoutMaxMs: number;
@@ -1535,6 +1536,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { orgBudgetUsdPerWindow: numEnvStrict("ORG_BUDGET_USD_PER_WINDOW", env.ORG_BUDGET_USD_PER_WINDOW) }
       : {}),
     budgetWindowMs: numEnvStrict("BUDGET_WINDOW_MS", env.BUDGET_WINDOW_MS) ?? CONFIG_DEFAULTS.budgetWindowMs,
+    ...(env.MODEL_BUDGET_NOTE?.trim() ? { modelBudgetNote: env.MODEL_BUDGET_NOTE.trim() } : {}),
     ...(numEnvStrict("MAX_CONTEXT_TOKENS", env.MAX_CONTEXT_TOKENS) !== undefined
       ? { maxContextTokens: numEnvStrict("MAX_CONTEXT_TOKENS", env.MAX_CONTEXT_TOKENS) }
       : {}),

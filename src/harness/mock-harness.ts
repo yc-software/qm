@@ -255,6 +255,10 @@ export function createMockHarness(): Harness {
           });
           await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
           throw new Error("boom: simulated mid-turn fault");
+        } else if (command0 === "!over-budget") {
+          throw new Error(
+            'OpenAI API error (429): {"message":"ExceededBudget: Team=team-a over 1d budget. Spend=$1011.5675, Limit=$1000.00","type":"budget_exceeded","param":null,"code":"429"}',
+          );
         } else if (command0 === "!refuse") {
           throw new NonRetryableTurnError(
             "API integrators: you can reduce refusals for your users by configuring a fallback model",

@@ -27,6 +27,15 @@ test("refusalNote: no adminUrl ⇒ reason only, no dangling link", () => {
   assert.doesNotMatch(note, /Full error/);
 });
 
+test("refusalNote: an exhausted model budget reads as its own explanation, with no retry advice or link", () => {
+  const reason =
+    "This workspace has used up its $1,000 daily model budget, so I can't run until it resets. An admin can raise the limit.";
+  for (const kind of ["dm", "channel"] as const) {
+    const note = refusalNote({ status: "refused", reason, refusalKind: "model_budget", adminUrl: ADMIN_URL }, kind);
+    assert.equal(note, reason);
+  }
+});
+
 test("refusalNote: a busy session reads as a human note, with no error framing and no link", () => {
   const note = refusalNote(
     { status: "refused", refusalKind: "session_busy", reason: SESSION_BUSY_USER_TEXT, adminUrl: ADMIN_URL },

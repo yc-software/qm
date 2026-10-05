@@ -4084,6 +4084,40 @@ test("repeated terminal failures keep failing loudly — history is never rewrit
   );
 });
 
+test("an exhausted model budget refuses the turn with a plain explanation instead of failing or retrying", async () => {
+  const { app, runs, errors } = freshApp();
+  const t1 = await app.turn(dm("hello"));
+  assert.equal(t1.status, "ok");
+
+  const refused = await app.turn(dm("!over-budget", { idempotencyKey: "over-budget-1" }));
+  assert.equal(refused.status, "refused");
+  assert.equal(refused.refusalKind, "model_budget");
+  assert.equal(
+    refused.reason,
+    "This workspace has used up its $1,000 daily model budget, so I can't run until it resets. An admin can raise the limit.",
+  );
+  assert.equal(await runs.activeForThread("dm:U1:t1"), null, "nothing is requeued to hit the same limit again");
+
+  const found = await app.getSession(t1.sessionId!);
+  const failures = found!.entries.filter((e) => turnFailure(e));
+  assert.equal(failures.length, 1, "the explanation survives a reload");
+  assert.equal(turnFailure(failures[0]!)!.message, refused.reason);
+  const logged = (await errors.list()).find((e) => e.category === "turn" && e.code === "model_budget");
+  assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
+});
+
+test("a deployment note replaces the generic advice on an exhausted model budget", async () => {
+  const { app } = freshApp({
+    modelBudgetNote: "Daily budgets reset at midnight UTC; ask the platform team to raise yours.",
+  });
+  const refused = await app.turn(dm("!over-budget"));
+  assert.equal(refused.status, "refused");
+  assert.equal(
+    refused.reason,
+    "This workspace has used up its $1,000 daily model budget, so I can't run until it resets. Daily budgets reset at midnight UTC; ask the platform team to raise yours.",
+  );
+});
+
 test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async () => {
   const { app, runs, errors } = freshApp();
   const t1 = await app.turn(dm("hello"));

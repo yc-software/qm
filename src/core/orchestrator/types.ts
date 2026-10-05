@@ -134,6 +134,7 @@ export interface OrchestratorDeps {
   auditLog: AuditLog;
   rateLimiter: RateLimiter;
   budget?: BudgetTracker;
+  modelBudgetNote?: string;
   maxContextTokens?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
