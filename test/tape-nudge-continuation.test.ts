@@ -540,10 +540,10 @@ test("overheard imports are this turn's own witnessed appends: served, watermark
 
 test("a failed overheard mirror fails the turn loudly; the next turn's read heals the gap", async () => {
   const { modes, folds, sessions, session, orchestrator, input } = await runScenario();
-  const realAppendTape = sessions.appendTape.bind(sessions);
-  sessions.appendTape = async (lease, rec) => {
-    if (rec.kind === "message" && rec.meta?.overheard) throw new Error("mirror down");
-    return realAppendTape(lease, rec);
+  const realAppendTapeMany = sessions.appendTapeMany.bind(sessions);
+  sessions.appendTapeMany = async (lease, records) => {
+    if (records.some((rec) => rec.kind === "message" && rec.meta?.overheard)) throw new Error("mirror down");
+    return realAppendTapeMany(lease, records);
   };
   await assert.rejects(
     orchestrator.handleTurn(
@@ -553,7 +553,7 @@ test("a failed overheard mirror fails the turn loudly; the next turn's read heal
     ),
     /mirror down/,
   );
-  sessions.appendTape = realAppendTape;
+  sessions.appendTapeMany = realAppendTapeMany;
   const withheld = await sessions.getEntries(session.id);
   assert.ok(
     (await sessions.tapeCoverage(session.id)) < withheld.at(-1)!.seq,
