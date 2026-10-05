@@ -9,7 +9,7 @@ import {
 } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../persistence/durable-map.ts";
 import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
-import { reportFailure } from "../util/errors.ts";
+import { reportFailure, reportFailureAs } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
 import type {
   NewSessionPin,
@@ -891,52 +891,33 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     return full;
   };
 
-  type UserPreviews = { first: string | null; last: string | null };
+  type UserPreviews = { first: string; last: string };
   const userPreviews = async (rows: Rows, options: PgQueryOptions): Promise<Map<string, UserPreviews>> => {
     const out = new Map<string, UserPreviews>();
     const missing: string[] = [];
     for (const r of rows) {
-      const first = (r.first_user_preview as string | null) ?? null;
-      const last = (r.last_user_preview as string | null) ?? null;
-      out.set(r.id as string, { first, last });
+      const first = r.first_user_preview as string | null;
+      const last = r.last_user_preview as string | null;
+      out.set(r.id as string, { first: first ?? "", last: last ?? "" });
       if ((first === null || last === null) && (r.turns == null || Number(r.turns) > 0)) missing.push(r.id as string);
     }
     if (!missing.length) return out;
-    const derived = (
-      await q(
-        `SELECT s.id, s.first_user_preview, s.last_user_preview,
-                (SELECT fe.payload FROM session_entries fe
-                  WHERE fe.session_id = s.id AND ${userTurn("fe")} ORDER BY fe.seq ASC LIMIT 1) AS first_user,
-                (SELECT le.payload FROM session_entries le
-                  WHERE le.session_id = s.id AND ${userTurn("le")} ORDER BY le.seq DESC LIMIT 1) AS last_user,
-                CASE WHEN s.turns IS NULL
-                     THEN (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = s.id AND ${userTurn("t")})
-                END AS turns
-           FROM sessions s WHERE s.id = ANY($1)`,
-        [missing],
-        options,
-      )
-    ).map((r) => ({
-      id: r.id as string,
-      first:
-        (r.first_user_preview as string | null) ??
-        (r.first_user == null ? null : storedPreview(parsedPayload(r.first_user), FIRST_PREVIEW_LEN)),
-      last:
-        (r.last_user_preview as string | null) ??
-        (r.last_user == null ? null : storedPreview(parsedPayload(r.last_user), LAST_PREVIEW_LEN)),
-      turns: r.turns == null ? null : Number(r.turns),
-    }));
-    for (const d of derived) out.set(d.id, { first: d.first, last: d.last });
-    await q(
-      `UPDATE sessions s
-          SET first_user_preview = COALESCE(s.first_user_preview, d.first),
-              last_user_preview = COALESCE(s.last_user_preview, d.last),
-              turns = COALESCE(s.turns, d.turns)
-         FROM jsonb_to_recordset($1::jsonb) AS d(id text, first text, last text, turns int)
-        WHERE s.id = d.id`,
-      [JSON.stringify(derived)],
+    const derived = await q(
+      `SELECT s.id, s.first_user_preview, s.last_user_preview,
+              (SELECT fe.payload FROM session_entries fe
+                WHERE fe.session_id = s.id AND ${userTurn("fe")} ORDER BY fe.seq ASC LIMIT 1) AS first_user,
+              (SELECT le.payload FROM session_entries le
+                WHERE le.session_id = s.id AND ${userTurn("le")} ORDER BY le.seq DESC LIMIT 1) AS last_user
+         FROM sessions s WHERE s.id = ANY($1)`,
+      [missing],
       options,
-    );
+    ).catch(reportFailureAs("sessions: derive legacy user previews", [] as Rows));
+    for (const r of derived) {
+      out.set(r.id as string, {
+        first: (r.first_user_preview as string | null) ?? storedPreview(parsedPayload(r.first_user), FIRST_PREVIEW_LEN),
+        last: (r.last_user_preview as string | null) ?? storedPreview(parsedPayload(r.last_user), LAST_PREVIEW_LEN),
+      });
+    }
     return out;
   };
 
@@ -1815,8 +1796,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         messages: Number(r.messages ?? 0),
         lastActivity: Number(r.last_activity),
         createdAt: Number(r.created_at),
-        firstMessage: previews.get(r.id as string)?.first ?? "",
-        lastMessage: previews.get(r.id as string)?.last ?? "",
+        firstMessage: previews.get(r.id as string)!.first,
+        lastMessage: previews.get(r.id as string)!.last,
       }));
     },
 

@@ -191,6 +191,8 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const originFilter: AdminSessionOrigin | undefined =
     originParam === "cron" || originParam === "other_background" ? originParam : undefined;
   const cronId = url.searchParams.get("cron") || undefined;
+  const disconnected = new AbortController();
+  res.once("close", () => disconnected.abort());
   const sessionStore = deps.sessions;
   const stats = (sessionStore
     ? await sharedScopeAggregate(
@@ -255,17 +257,21 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const cursorParam = url.searchParams.get("cursor");
   const cursorMatch = cursorParam ? /^(\d+)~(.+)$/.exec(cursorParam) : null;
   const before = cursorMatch ? { lastActivity: Number(cursorMatch[1]), id: cursorMatch[2]! } : undefined;
-  const disconnected = new AbortController();
-  res.once("close", () => disconnected.abort());
   const summaries =
-    (await deps.sessions?.scopeSessionSummaries(scope, orgWide, {
-      limit,
-      signal: disconnected.signal,
-      ...(before ? { before } : {}),
-      ...(categoryFilter ? { category: categoryFilter } : {}),
-      ...(originFilter ? { origin: originFilter } : {}),
-      ...(cronId ? { cronId } : {}),
-    })) ?? [];
+    (await deps.sessions
+      ?.scopeSessionSummaries(scope, orgWide, {
+        limit,
+        signal: disconnected.signal,
+        ...(before ? { before } : {}),
+        ...(categoryFilter ? { category: categoryFilter } : {}),
+        ...(originFilter ? { origin: originFilter } : {}),
+        ...(cronId ? { cronId } : {}),
+      })
+      .catch((error: unknown) => {
+        if (disconnected.signal.aborted) return null;
+        throw error;
+      })) ?? [];
+  if (disconnected.signal.aborted) return;
   const categories = new Map(summaries.map((s) => [s.id, sessionCategory(s.origin)]));
   const background = summaries.filter((s) => categories.get(s.id) === "background");
   const sentCounts =

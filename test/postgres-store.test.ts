@@ -1308,89 +1308,97 @@ test("pg appendMany maintains first/last user previews across batches", { skip }
   await s.releaseLease(lease!);
 });
 
-test("pg scopeSessionSummaries: legacy rows derive previews once, only for the requested page", { skip }, async () => {
-  let clock = Date.now() + 5_000_000;
-  const s = createPostgresSessionStore(URL!, { now: () => (clock += 120_000) });
-  const scope = scopeId("channel", "pvw-legacy");
-  const ids: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    const session = await s.getOrCreateByThread(`pvwLegacy${i}`, "channel", scope);
-    const { lease } = await s.acquireLease(session.id);
-    await s.append(lease!, { type: "user", payload: { text: `open ${i}` }, scopeLabel: scope });
-    await s.append(lease!, { type: "user", payload: { text: `close ${i}` }, scopeLabel: scope });
-    await s.releaseLease(lease!);
-    ids.push(session.id);
-  }
-  const empty = await s.getOrCreateByThread("pvwLegacyEmpty", "channel", scope);
-  const junk = await s.getOrCreateByThread("pvwLegacyJunk", "channel", scope);
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  const columns = async (sessionIds: string[]) =>
-    (
-      await raw.query(
-        "SELECT id, first_user_preview AS f, last_user_preview AS l, turns FROM sessions WHERE id = ANY($1)",
-        [sessionIds],
-      )
-    ).rows.reduce((m, r) => m.set(r.id, [r.f, r.l, r.turns]), new Map<string, unknown[]>());
-  try {
-    for (const [seq, payload] of [
-      [0, '{"text":"poisoned\\u0000tail"}'],
-      [1, '{"text":"truncated'],
-    ] as const) {
-      await raw.query(
-        "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        [junk.id, seq, seq - 1, "user", payload, scope, 1],
-      );
+test(
+  "pg scopeSessionSummaries: legacy rows derive previews read-only, only for the requested page",
+  { skip },
+  async () => {
+    let clock = Date.now() + 5_000_000;
+    const s = createPostgresSessionStore(URL!, { now: () => (clock += 120_000) });
+    const scope = scopeId("channel", "pvw-legacy");
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const session = await s.getOrCreateByThread(`pvwLegacy${i}`, "channel", scope);
+      const { lease } = await s.acquireLease(session.id);
+      await s.append(lease!, { type: "user", payload: { text: `open ${i}` }, scopeLabel: scope });
+      await s.append(lease!, { type: "user", payload: { text: `close ${i}` }, scopeLabel: scope });
+      await s.releaseLease(lease!);
+      ids.push(session.id);
     }
-    await raw.query(
-      "UPDATE sessions SET first_user_preview = NULL, last_user_preview = NULL, turns = NULL WHERE id = ANY($1)",
-      [[...ids, empty.id, junk.id]],
-    );
-    await raw.query("UPDATE sessions SET last_activity = 1 WHERE id = ANY($1)", [[empty.id, junk.id]]);
+    const empty = await s.getOrCreateByThread("pvwLegacyEmpty", "channel", scope);
+    const junk = await s.getOrCreateByThread("pvwLegacyJunk", "channel", scope);
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    const columns = async (sessionIds: string[]) =>
+      (
+        await raw.query(
+          "SELECT id, first_user_preview AS f, last_user_preview AS l, turns FROM sessions WHERE id = ANY($1)",
+          [sessionIds],
+        )
+      ).rows.reduce((m, r) => m.set(r.id, [r.f, r.l, r.turns]), new Map<string, unknown[]>());
+    try {
+      for (const [seq, payload] of [
+        [0, '{"text":"poisoned\\u0000tail"}'],
+        [1, '{"text":"truncated'],
+      ] as const) {
+        await raw.query(
+          "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+          [junk.id, seq, seq - 1, "user", payload, scope, 1],
+        );
+      }
+      await raw.query(
+        "UPDATE sessions SET first_user_preview = NULL, last_user_preview = NULL, turns = NULL WHERE id = ANY($1)",
+        [[...ids, empty.id, junk.id]],
+      );
+      await raw.query("UPDATE sessions SET last_activity = 1 WHERE id = ANY($1)", [[empty.id, junk.id]]);
 
-    const page = await s.scopeSessionSummaries(scope, false, { limit: 2 });
-    assert.deepEqual(
-      page.map((r) => [r.firstMessage, r.lastMessage]),
-      [
-        ["open 3", "close 3"],
-        ["open 2", "close 2"],
-      ],
-      "a page of legacy rows reads back the same previews the append path would store",
-    );
-    const after = await columns(ids);
-    assert.deepEqual(after.get(ids[3]!), ["open 3", "close 3", 2], "derived previews and turns are written back");
-    assert.deepEqual(after.get(ids[2]!), ["open 2", "close 2", 2]);
-    assert.deepEqual(after.get(ids[1]!), [null, null, null], "rows beyond the page are left for a later read");
-    assert.deepEqual(after.get(ids[0]!), [null, null, null]);
+      const page = await s.scopeSessionSummaries(scope, false, { limit: 2 });
+      assert.deepEqual(
+        page.map((r) => [r.firstMessage, r.lastMessage]),
+        [
+          ["open 3", "close 3"],
+          ["open 2", "close 2"],
+        ],
+        "a page of legacy rows reads back the same previews the append path would store",
+      );
+      const xmin = async () =>
+        (await raw.query("SELECT id, xmin::text AS v FROM sessions WHERE id = ANY($1) ORDER BY id", [ids])).rows;
+      const versions = await xmin();
+      await s.scopeSessionSummaries(scope, false, { limit: 2 });
+      assert.deepEqual(await xmin(), versions, "a listing read never writes session rows");
+      assert.deepEqual(
+        [...(await columns(ids)).values()].map((v) => v.slice(0, 2)),
+        ids.map(() => [null, null]),
+        "legacy previews are derived per read, not persisted from a GET",
+      );
 
-    const all = await s.scopeSessionSummaries(scope, false, { limit: 50 });
-    assert.deepEqual(
-      all.filter((r) => ids.includes(r.id)).map((r) => r.lastMessage),
-      ["close 3", "close 2", "close 1", "close 0"],
-    );
-    const junkRow = all.find((r) => r.id === junk.id)!;
-    assert.deepEqual(
-      [junkRow.firstMessage, junkRow.lastMessage],
-      ["poisonedtail", ""],
-      "a null-byte escape is dropped and malformed JSON previews as empty, never a fatal cast",
-    );
-    const filled = await columns([empty.id, junk.id]);
-    assert.deepEqual(filled.get(empty.id), [null, null, 0], "an entry-less legacy row settles at zero turns");
-    assert.deepEqual(filled.get(junk.id), ["poisonedtail", "", 2]);
+      const all = await s.scopeSessionSummaries(scope, false, { limit: 50 });
+      assert.deepEqual(
+        all.filter((r) => ids.includes(r.id)).map((r) => r.lastMessage),
+        ["close 3", "close 2", "close 1", "close 0"],
+      );
+      const junkRow = all.find((r) => r.id === junk.id)!;
+      assert.deepEqual(
+        [junkRow.firstMessage, junkRow.lastMessage],
+        ["poisonedtail", ""],
+        "a null-byte escape is dropped and malformed JSON previews as empty, never a fatal cast",
+      );
+      const emptyRow = all.find((r) => r.id === empty.id)!;
+      assert.deepEqual([emptyRow.firstMessage, emptyRow.lastMessage], ["", ""], "an entry-less legacy row is blank");
 
-    const { lease } = await s.acquireLease(ids[0]!);
-    await s.append(lease!, { type: "user", payload: { text: "fresh" }, scopeLabel: scope });
-    await s.releaseLease(lease!);
-    const resumed = (await s.scopeSessionSummaries(scope, false, { limit: 50 })).find((r) => r.id === ids[0])!;
-    assert.deepEqual(
-      [resumed.firstMessage, resumed.lastMessage],
-      ["open 0", "fresh"],
-      "a legacy row's first preview stays its opener after new appends",
-    );
-  } finally {
-    await raw.end();
-  }
-});
+      const { lease } = await s.acquireLease(ids[0]!);
+      await s.append(lease!, { type: "user", payload: { text: "fresh" }, scopeLabel: scope });
+      await s.releaseLease(lease!);
+      const resumed = (await s.scopeSessionSummaries(scope, false, { limit: 50 })).find((r) => r.id === ids[0])!;
+      assert.deepEqual(
+        [resumed.firstMessage, resumed.lastMessage],
+        ["open 0", "fresh"],
+        "a legacy row's first preview stays its opener after new appends",
+      );
+    } finally {
+      await raw.end();
+    }
+  },
+);
 
 test("pg scopeSessionSummaries: keyset pages break last_activity ties by id without gaps", { skip }, async () => {
   const at = Date.now() + 9_000_000;
@@ -1448,7 +1456,7 @@ test("pg scopeSessionSummaries: the listing plan is an index walk with no per-ro
   const captured: { text: string; values: unknown[] }[] = [];
   t.mock.method(pg.Client.prototype, "query", function (this: InstanceType<typeof pg.Client>, ...args: unknown[]) {
     const config = args[0] as { text?: string; values?: unknown[] } | string;
-    if (typeof config === "object" && config.text?.includes("first_user_preview, s.last_user_preview")) {
+    if (typeof config === "object" && config.text?.includes("AS last_activity, s.first_user_preview")) {
       captured.push({ text: config.text, values: config.values ?? [] });
     }
     return Reflect.apply(execute, this, args);
