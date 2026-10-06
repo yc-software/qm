@@ -13279,3 +13279,15 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   white-space: pre-wrap;
   min-width: 80px;
 }
+
+.file-video {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(480px, 100%);
+}
+.file-video video {
+  width: 100%;
+  border-radius: 10px;
+  background: #000;
+}

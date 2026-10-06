@@ -6,7 +6,7 @@ import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, normalize } from "node:path";
@@ -211,6 +211,7 @@ const SPA_CSP = [
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
+  "media-src 'self' blob:",
   "font-src 'self' data:",
   `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
   "frame-src 'self' data: https:",
@@ -1116,6 +1117,36 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
   return res.end(Buffer.from(await r.arrayBuffer()));
 }
 
+const VIDEO_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+};
+
+// Videos saved before their extension was mapped are stored as octet-stream, which browsers won't play.
+function fileContentType(type: string | null, name = ""): string {
+  if (type && type !== "application/octet-stream") return type;
+  return VIDEO_TYPES[extname(name).toLowerCase()] ?? "application/octet-stream";
+}
+
+function byteSlice(start: number, end: number, done: () => void): Transform {
+  let pos = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, next) {
+      const from = Math.max(0, start - pos);
+      const to = Math.min(chunk.length, end + 1 - pos);
+      pos += chunk.length;
+      if (from < to) this.push(chunk.subarray(from, to));
+      if (pos > end) {
+        this.push(null);
+        done();
+      }
+      next();
+    },
+  });
+}
+
 async function serveFileContent(c: WebCtx, playground = false): Promise<unknown> {
   const { res, user, url } = c;
   const id = c.params.id!;
@@ -1135,7 +1166,7 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
     res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
   }
-  const contentType = r.headers.get("content-type") ?? "application/octet-stream";
+  const contentType = fileContentType(r.headers.get("content-type"), c.params.name);
   if (playground && !contentType.toLowerCase().startsWith("text/html")) {
     res.writeHead(415, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: "not_a_playground" }));
@@ -1154,8 +1185,31 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
   const csp = scriptCapableContentType(contentType)
     ? `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${FILE_FRAME_ANCESTORS}`
     : FILE_FRAME_ANCESTORS;
+  const size = Number(r.headers.get("content-length"));
+  const range = /^bytes=(\d*)-(\d*)$/.exec(c.req.headers.range ?? "");
+  if (range && size > 0 && (range[1] || range[2])) {
+    // Safari only plays <video> from servers that answer byte-range requests.
+    const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+    const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start > end) {
+      void r.body.cancel();
+      res.writeHead(416, { "content-range": `bytes */${size}` });
+      return res.end();
+    }
+    const headers = {
+      "content-type": contentType,
+      "content-length": String(end - start + 1),
+      "content-range": `bytes ${start}-${end}/${size}`,
+      "accept-ranges": "bytes",
+      "x-content-type-options": "nosniff",
+    };
+    res.writeHead(206, framedByOwnSurfaces(res, headers, csp));
+    const source = Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]);
+    return source.pipe(byteSlice(start, end, () => source.destroy())).pipe(res);
+  }
   const headers = {
     "content-type": contentType,
+    ...(size > 0 ? { "accept-ranges": "bytes" } : {}),
     ...(r.headers.get("content-length") ? { "content-length": r.headers.get("content-length")! } : {}),
     ...(r.headers.get("content-disposition") ? { "content-disposition": r.headers.get("content-disposition")! } : {}),
     "x-content-type-options": "nosniff",

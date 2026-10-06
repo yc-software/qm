@@ -3234,6 +3234,20 @@ export function createChatSurface(
     return chipBadge(Paperclip, name, size, href, false, mimetype);
   }
 
+  function inlineVideoName(name?: string, mimeType?: string): boolean {
+    return /^video\/(mp4|webm|quicktime)\b/i.test(mimeType ?? "") || /\.(mp4|m4v|mov|webm)$/i.test(name ?? "");
+  }
+
+  function inlineVideo(name: string, src: string, size?: number, href?: string): TemplateResult {
+    return html`<span class="file-video"
+      ><video src=${`${src}#t=0.1`} controls playsinline preload="metadata" aria-label=${name}></video>${fileChip(
+        name,
+        size,
+        href,
+      )}</span
+    >`;
+  }
+
   function inlineHtmlName(name?: string, mimeType?: string): boolean {
     if (mimeType?.split(";", 1)[0]?.trim().toLowerCase() === "text/html") return true;
     return /\.html?$/i.test(name ?? "");
@@ -3360,6 +3374,8 @@ export function createChatSurface(
       }
       return chipBadge(FileImage, a.fileName, a.size, href || undefined, true);
     }
+    const videoSrc = artifactHref ?? localContentUrl(a);
+    if (videoSrc && inlineVideoName(a.fileName, a.mimeType)) return inlineVideo(a.fileName, videoSrc, a.size, videoSrc);
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;
       if (!src && a.content) {
@@ -3379,6 +3395,7 @@ export function createChatSurface(
         ><img src=${href} alt=${file.name} loading="lazy"
       /></a>`;
     }
+    if (inlineVideoName(file.name, file.mimetype)) return inlineVideo(file.name, href, file.sizeBytes, href);
     if (inlineHtmlName(file.name, file.mimetype)) return inlineHtmlFrame(file.name, href, file.sizeBytes, href);
     return fileChip(file.name, file.sizeBytes, href, file.mimetype);
   }
