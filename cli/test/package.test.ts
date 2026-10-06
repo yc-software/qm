@@ -145,7 +145,7 @@ test(
 
       assert.ok(existsSync(join(deployment, "deployment.md")));
       assert.ok(existsSync(join(deployment, ".codex", "skills", "deploy-qm", "SKILL.md")));
-      for (const provider of ["fly", "aws", "slack", "email", "sign-in", "model-gateway"]) {
+      for (const provider of ["docker", "fly", "aws", "slack", "email", "sign-in", "model-gateway"]) {
         assert.ok(existsSync(join(deployment, ".codex", "skills", "deploy-qm", "references", `${provider}.md`)));
       }
       assert.equal(statSync(join(deployment, ".env")).mode & 0o777, 0o600);

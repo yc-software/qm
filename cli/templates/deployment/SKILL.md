@@ -1,9 +1,13 @@
 ---
 name: deploy-qm
-description: Deploy the QM package from an organization-owned deployment repository to Fly.io or AWS, onboard an administrator, configure connectors, and optionally activate Slack.
+description: Deploy the QM package from an organization-owned deployment repository to local Docker, Fly.io, AWS, or Porter, onboard an administrator, configure connectors, and optionally activate Slack.
 ---
 
 # Deploy QM
+
+Offer local Docker alongside Fly.io, AWS, and Porter. For Docker, read
+`references/docker.md` before configuring services and secrets; no cloud account
+is required. Use its local acceptance checks, not the unsupported `check --live`.
 
 Read `../../../deployment.md` completely and follow it as the authoritative
 workflow. Read only the selected provider reference. Read `references/email.md`

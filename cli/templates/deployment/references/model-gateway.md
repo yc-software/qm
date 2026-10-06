@@ -57,7 +57,8 @@ local ID as `model`. Do not invent capabilities for an unknown model. See
 for alias behavior and metadata requirements.
 
 After deployment, confirm the chosen model is available in the web model picker
-and run `npm exec qm -- check --live`. Then verify a real web reply and generated
+and run `npm exec qm -- check --live` on Fly or AWS (use `docker.md`
+acceptance checks for local Docker). Then verify a real web reply and generated
 sidebar title. A configured endpoint or a green direct-provider check is not
 proof of router inference. Do not expose router administration endpoints or
 request an administrative key just to enable discovery.

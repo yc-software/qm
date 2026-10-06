@@ -11,11 +11,11 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
-test("package-consumer deployment skill covers both self-owned providers and the completion contract", () => {
+test("package-consumer deployment skill covers supported hosting targets and the completion contract", () => {
   const root = read("cli/templates/deployment/deployment.md");
   for (const phrase of [
-    "Before cloud mutation",
-    "Fly.io, AWS, or Porter",
+    "Before deployment changes",
+    "local Docker, Fly.io, AWS, or Porter",
     "deployment repository",
     "npm ci",
     "slack render",
@@ -257,6 +257,62 @@ test("documented gateway config requires only a core gateway key, not direct pro
       ),
       "Bearer test-router-key",
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("local Docker is a first-class onboarding target with honest acceptance checks", () => {
+  const root = read("cli/templates/deployment/deployment.md");
+  assert.match(root, /hosting target: local Docker, Fly.io, AWS, or Porter/);
+  assert.match(root, /--target <docker-or-fly-or-aws>/);
+  assert.match(root, /references\/docker\.md/);
+  assert.doesNotMatch(root, /outside this\s+workflow|quick local test drive only/);
+  for (const path of [".codex/skills/deploy-qm/SKILL.md", "cli/templates/deployment/SKILL.md"]) {
+    assert.match(read(path), /local Docker/);
+    assert.match(read(path), /references\/docker\.md/);
+  }
+  const docker = read("cli/templates/deployment/references/docker.md");
+  for (const phrase of [
+    "PUBLIC_API_URL",
+    "host.docker.internal",
+    "sandbox",
+    "local",
+    "portal",
+    "auth",
+    "8081",
+    "Docker socket",
+    "check --live",
+    "not implemented",
+    "qm.scope",
+    "--purge",
+  ])
+    assert.ok(docker.includes(phrase), `Docker reference covers ${phrase}`);
+  assert.match(
+    read(".codex/skills/deploy-qm/references/docker.md"),
+    /cli\/templates\/deployment\/references\/docker\.md/,
+  );
+});
+
+test("documented Docker settings enable sign-in and local computers in a valid config", () => {
+  const reference = read("cli/templates/deployment/references/docker.md");
+  const snippet = reference.match(/```json\n([\s\S]*?)\n```/);
+  assert.ok(snippet);
+  const dir = mkdtempSync(join(tmpdir(), "qm-docker-doc-"));
+  try {
+    const path = join(dir, "qm.config.jsonc");
+    writeFileSync(path, JSON.stringify({ contract: 1, orgId: "acme", target: "docker", ...JSON.parse(snippet[1]!) }));
+    const { config } = loadConfigAt(path);
+    assert.equal(config.sandbox?.backend, "local");
+    assert.equal(config.publicUrl, "http://localhost:8081");
+    assert.ok(config.services.includes("auth"));
+    assert.ok(config.services.includes("admin"));
+    const required = computedSecrets(config)
+      .filter((secret) => secret.required)
+      .map((secret) => secret.name);
+    assert.ok(required.includes("ADMIN_GRANTS"));
+    assert.ok(required.includes("PUBLIC_API_URL"));
+    assert.ok(!required.some((name) => /^(FLY_|AWS_|SUPERSERVE_)/.test(name)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

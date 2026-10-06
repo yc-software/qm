@@ -1,9 +1,13 @@
 ---
 name: deploy-qm
-description: Deploy the QM package from an organization-owned repository into Fly.io or AWS, onboard an administrator, configure connectors, and optionally activate Slack.
+description: Deploy the QM package from an organization-owned repository to local Docker, Fly.io, AWS, or Porter, onboard an administrator, configure connectors, and optionally activate Slack.
 ---
 
 # Deploy QM
+
+Offer local Docker alongside Fly.io, AWS, and Porter. For Docker, read
+`references/docker.md` before configuring services and secrets; no cloud account
+is required. Use its local acceptance checks, not the unsupported `check --live`.
 
 Read [`../../../deployment.md`](../../../deployment.md) completely and follow it
 as the authoritative workflow. Read only the selected provider reference. Read
@@ -21,6 +25,6 @@ provider key or a new provider account.
 
 Use the installed `@yc-software/qm` dependency through `npm exec qm -- <command>`. Do
 not require or clone the QM source repository. Complete every acceptance check
-and return the handoff required by `deployment.md`. Treat `qm check --live` and
+and return the handoff required by `deployment.md`. For Fly and AWS, treat `qm check --live` and
 its private live session canary as the automated release gate; still complete
 the administrator's manual sign-in and web acceptance check.

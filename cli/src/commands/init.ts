@@ -246,7 +246,7 @@ function scaffoldDeploymentSkill(dir: string): void {
     ["deployment.md"],
     [".codex", "skills", "deploy-qm", "SKILL.md"],
     [".codex", "skills", "deploy-qm", "agents", "openai.yaml"],
-    ...["fly", "aws", "slack", "email", "sign-in", "model-gateway"].map((name) => [
+    ...["docker", "fly", "aws", "slack", "email", "sign-in", "model-gateway"].map((name) => [
       ".codex",
       "skills",
       "deploy-qm",
