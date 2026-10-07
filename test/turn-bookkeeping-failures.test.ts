@@ -206,25 +206,40 @@ test("a cancel-stopped turn still persists and surfaces its pending approvals", 
 test("an overheard import failure aborts the batch instead of skipping one message", async () => {
   const { orchestrator, sessions, input } = buildScenario();
   await orchestrator.handleTurn(input("prime"));
-  const append = sessions.append.bind(sessions);
-  sessions.append = async (lease, entry) => {
-    const payload = entry.payload as { overheard?: unknown; ts?: unknown } | null;
-    if (payload?.overheard === true && payload.ts === "200.2") throw new Error("append refused");
-    return append(lease, entry);
+  const appendMany = sessions.appendMany.bind(sessions);
+  sessions.appendMany = async (lease, entries) => {
+    if (
+      entries.some((entry) => {
+        const payload = entry.payload as { overheard?: unknown; ts?: unknown } | null;
+        return payload?.overheard === true && payload.ts === "200.2";
+      })
+    )
+      throw new Error("append refused");
+    return appendMany(lease, entries);
   };
-  const result = await orchestrator.handleTurn(
-    input("what did I miss?", {
-      overheard: [
-        { role: "user", name: "Ann", text: "first overheard", ts: "100.1" },
-        { role: "user", name: "Bob", text: "second overheard", ts: "200.2" },
-        { role: "user", name: "Cee", text: "third overheard", ts: "300.3" },
-      ],
-    }),
-  );
+  const request = input("what did I miss?", {
+    overheard: [
+      { role: "user", name: "Ann", text: "first overheard", ts: "100.1" },
+      { role: "user", name: "Bob", text: "second overheard", ts: "200.2" },
+      { role: "user", name: "Cee", text: "third overheard", ts: "300.3" },
+    ],
+  });
+  const result = await orchestrator.handleTurn(request);
   assert.equal(result.status, "ok");
   const session = (await sessions.getByThread(conversation.threadRef))!;
   const overheardTexts = (await sessions.getEntries(session.id))
     .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
     .map((e) => (e.payload as { text?: string }).text);
-  assert.deepEqual(overheardTexts, ["first overheard"], "the batch stops at the failure; nothing lands out of order");
+  assert.deepEqual(overheardTexts, [], "the atomic batch leaves no partial history on failure");
+  sessions.appendMany = appendMany;
+  await orchestrator.handleTurn(request);
+  await orchestrator.handleTurn(request);
+  const recovered = (await sessions.getEntries(session.id))
+    .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
+    .map((e) => (e.payload as { text?: string }).text);
+  assert.deepEqual(
+    recovered,
+    ["first overheard", "second overheard", "third overheard"],
+    "retry imports the whole batch once, in order",
+  );
 });

@@ -87,7 +87,14 @@ const schemaRequired = (tool: ReturnType<typeof createAgentTools>[number]): stri
 test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "credentials"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "sandbox_id",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+    "retrySafe",
+  ]);
   assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
   await call(execute, { command: "echo hi" });
   assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
@@ -105,6 +112,7 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
     "credentials",
     "scope",
     "durable",
+    "retrySafe",
   ]);
 
   await call(execute, { command: "echo hi" });
@@ -293,7 +301,14 @@ test("execute rejects unavailable, conflicting, and reached credential requests"
 test("execute schema lists exact command credential handles", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc }, { commandCredentialHandles: ["kc_github12345"] });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "credentials"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "sandbox_id",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+    "retrySafe",
+  ]);
 
   await call(execute, { command: "gh api user", credentials: ["kc_github12345"] });
   assert.deepEqual(seen.at(-1)?.opts, { credentials: ["kc_github12345"] });

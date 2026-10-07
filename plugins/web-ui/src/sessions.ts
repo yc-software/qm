@@ -860,7 +860,14 @@ function chatPageRow(s: CoreSession): TemplateResult {
   `;
 }
 
-export function addPendingSession(threadRef: string, scopeId: string | null, channelName: string | null): void {
+const pendingForkThreads = new Set<string>();
+
+export function addPendingSession(
+  threadRef: string,
+  scopeId: string | null,
+  channelName: string | null,
+  pendingFork = false,
+): void {
   const scope = scopeId ?? personalScopeId();
   let type: CoreSession["type"] = "dm";
   if (scope?.startsWith("group:")) type = "group";
@@ -871,15 +878,24 @@ export function addPendingSession(threadRef: string, scopeId: string | null, cha
     scopeId: scope ?? "",
     threadRef,
     createdAt: Date.now(),
-    title: null,
+    title: pendingFork ? "Forking…" : null,
     channelName,
     archived: false,
   };
+  if (pendingFork) pendingForkThreads.add(threadRef);
   sessionsState.list = withPendingSession(sessionsState.list, pending);
   renderList();
 }
 
+export function replacePendingSession(threadRef: string, session: CoreSession): void {
+  sessionPatchEpoch++;
+  pendingForkThreads.delete(threadRef);
+  sessionsState.list = withPendingSession(withoutUnsentPending(sessionsState.list, threadRef), session);
+  renderList();
+}
+
 export function dropPendingSession(threadRef: string): void {
+  pendingForkThreads.delete(threadRef);
   sessionsState.list = withoutUnsentPending(sessionsState.list, threadRef);
   renderList();
 }
@@ -961,7 +977,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const working = sessionWorking(s);
   const color = displaySessionColor(s.color);
   let titleContent: string | TemplateResult = groupDmTitle(s);
-  if (refreshingTitle) {
+  if (refreshingTitle || pendingForkThreads.has(s.threadRef)) {
     titleContent = html`<span class="sheen-label title-sheen thinking-sheen" data-sheen=${title}>${title}</span>`;
   } else if (untitledProjectChild) {
     titleContent = title;
@@ -988,7 +1004,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
       <a
         class="session"
         href=${saved ? deepLinkPath(UI_BASE, "chats", s.id) : nothing}
-        aria-busy=${refreshingTitle ? "true" : "false"}
+        aria-busy=${refreshingTitle || pendingForkThreads.has(s.threadRef) ? "true" : "false"}
+        aria-disabled=${pendingForkThreads.has(s.threadRef) ? "true" : nothing}
         aria-label=${ariaLabel}
         aria-keyshortcuts="Space Shift+Space Control+Space Meta+Space"
         draggable=${saved ? "true" : "false"}
@@ -1722,6 +1739,7 @@ export async function openSession(
   entriesPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
+  if (pendingForkThreads.has(s.threadRef)) return;
   if (appState.currentView !== "chats") {
     appState.currentView = "chats";
     appState.viewRenderSeq++;
@@ -1744,6 +1762,7 @@ export async function openSessionInto(
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   tracked = conv === mainConversation(),
 ): Promise<void> {
+  if (pendingForkThreads.has(s.threadRef)) return;
   if (!s.id) {
     if (conv.state.threadRef !== s.threadRef) {
       conv.mountContinuable(s.threadRef, null, s.scopeId || null, [], s.channelName ?? null);

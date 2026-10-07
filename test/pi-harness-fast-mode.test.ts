@@ -283,7 +283,7 @@ function responsesReply(text: string, usage: Record<string, unknown>, serviceTie
   ]);
 }
 
-function anthropicReply(text: string, usage: Record<string, unknown>): Response {
+function anthropicReply(text: string, usage: Record<string, unknown>, stopReason = "end_turn"): Response {
   return sse([
     {
       type: "message_start",
@@ -294,7 +294,7 @@ function anthropicReply(text: string, usage: Record<string, unknown>): Response 
     { type: "content_block_stop", index: 0 },
     {
       type: "message_delta",
-      delta: { stop_reason: "end_turn" },
+      delta: { stop_reason: stopReason },
       usage: { output_tokens: usage.output_tokens as number },
     },
     { type: "message_stop" },
@@ -435,16 +435,7 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
 test("a refusal fallback prices each step on its actual model and tier", async () => {
   const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
     index === 0
-      ? new Response(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "api_error",
-              message: "Output blocked by content filtering policy: this would violate Anthropic's usage policy.",
-            },
-          }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        )
+      ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
       : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
   );
   assert.equal(payloads.length, 2);
@@ -459,7 +450,7 @@ test("a refusal fallback prices each step on its actual model and tier", async (
       [1, "claude-opus-5"],
     ],
   );
-  assertUsd(rows[0]!.usage!.costUsd, 0);
+  assertUsd(rows[0]!.usage!.costUsd, 0.03); // a stop_reason refusal is a billed 200 response
   assertUsd(rows[1]!.usage!.costUsd, 0.15);
 });
 
@@ -480,24 +471,13 @@ for (const gateway of [true, false]) {
   });
 }
 
-const USAGE_POLICY_REFUSAL =
-  "This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy. To learn more, see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback.";
-
-test("a current Usage Policy refusal retries on the admin-configured fallback runtime", async () => {
+test("a stop_reason refusal retries on the admin-configured fallback runtime", async () => {
   const { payloads } = await runTurn(
     "refusal-configured-fallback",
     "claude-sonnet-5",
     false,
     (_payload, index) =>
-      index === 0
-        ? new Response(
-            JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: USAGE_POLICY_REFUSAL } }),
-            {
-              status: 400,
-              headers: { "content-type": "application/json" },
-            },
-          )
-        : responsesReply("recovered", ASTRA_WIRE_USAGE),
+      index === 0 ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal") : responsesReply("recovered", ASTRA_WIRE_USAGE),
     false,
     { resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol", effortLevel: "low" }) },
   );
@@ -506,8 +486,8 @@ test("a current Usage Policy refusal retries on the admin-configured fallback ru
   assert.equal((payloads[1]?.reasoning as { effort?: string } | undefined)?.effort, "low");
 });
 
-test("an unavailable gateway model retries on the configured fallback instead of failing the turn", async () => {
-  const { payloads } = await runTurn(
+test("an unavailable gateway model fails the turn without fallback (no structured signal)", async () => {
+  const outcome = await runTurn(
     "unavailable-configured-fallback",
     "claude-sonnet-5",
     false,
@@ -523,11 +503,11 @@ test("an unavailable gateway model retries on the configured fallback instead of
       },
       resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol", effortLevel: "low" }),
     },
+  ).then(
+    ({ payloads }) => payloads,
+    () => [],
   );
-  assert.deepEqual(
-    payloads.map((p) => p.model),
-    ["gpt-6-sol"],
-  );
+  assert.deepEqual(outcome, []);
 });
 
 test("compaction retries a refused summary on the configured fallback model", async () => {
@@ -543,13 +523,7 @@ test("compaction retries a refused summary on the configured fallback model", as
     const payload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     models.push(payload.model);
     return models.length === 1
-      ? new Response(
-          JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: USAGE_POLICY_REFUSAL } }),
-          {
-            status: 400,
-            headers: { "content-type": "application/json" },
-          },
-        )
+      ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
       : responsesReply("summary of the work", ASTRA_WIRE_USAGE);
   }) as typeof globalThis.fetch;
   try {

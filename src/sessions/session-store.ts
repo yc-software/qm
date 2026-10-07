@@ -306,11 +306,11 @@ interface ListLlmRequestsOptions {
 
 export interface SessionPage {
   limit: number;
-  offset: number;
   before?: { lastActivity: number; id: string };
   category?: SessionCategory;
   origin?: SessionOriginFilter;
   cronId?: string;
+  signal?: AbortSignal;
 }
 
 export interface CronGroupSummary {
@@ -729,6 +729,8 @@ export interface SessionStore {
   forceReleaseLease(sessionId: string): Promise<void>;
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
+  appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
+  getRecentEntries(sessionIds: readonly string[], lookback: number): Promise<Map<string, SessionEntry[]>>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   canReadTranscriptSuffix(sessionId: string, beforeSeq: number): Promise<boolean>;
@@ -737,6 +739,7 @@ export interface SessionStore {
   latestEntrySeq(sessionId: string): Promise<number>;
   clearSecurityTaint(sessionId: string): Promise<boolean>;
 
+  appendTapeMany(lease: Lease, records: readonly NewTapeRecord[]): Promise<TapeRecord[]>;
   appendTape(lease: Lease, rec: NewTapeRecord): Promise<TapeRecord>;
   getTape(sessionId: string, opts?: GetTapeOptions): Promise<TapeRecord[]>;
   tapeCoverage(sessionId: string): Promise<number>;
@@ -783,12 +786,7 @@ export interface SessionStore {
 
   distinctScopes(): Promise<DistinctScope[]>;
 
-  scopeSessionSummaries(
-    scope: ScopeId,
-    orgWide: boolean,
-    page?: SessionPage,
-    sessionIds?: string[],
-  ): Promise<SessionSummary[]>;
+  scopeSessionSummaries(scope: ScopeId, orgWide: boolean, page: SessionPage): Promise<SessionSummary[]>;
 
   lastUserMessages(sessionIds: string[]): Promise<Map<string, string>>;
 
