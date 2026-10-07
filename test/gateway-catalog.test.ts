@@ -8,7 +8,10 @@ import assert from "node:assert/strict";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { buildModelRuntime } from "../src/harness/pi-harness.ts";
 import {
+  MODEL_REGISTRY,
   modelIdReserved,
   modelUnavailableReason,
   modelServiceable,
@@ -318,4 +321,87 @@ test("gateway document support uses provider metadata rather than vision alone",
   assert.equal(nativeDocumentFormat(resolveModel("gateway/google-docs")!, pdf), "chat");
   for (const id of ["unknown-docs", "mixed-docs"])
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
+});
+
+const providerFor = { "anthropic-messages": "anthropic", "openai-responses": "openai" } as const;
+
+test("discovered groups inherit thinking constraints from the QM model they name", async () => {
+  const constrained = MODEL_REGISTRY.flatMap(({ id }) => {
+    const model = resolveModel(id, false);
+    const provider = model && providerFor[model.api as keyof typeof providerFor];
+    return provider && model.thinkingLevelMap && Object.keys(model.thinkingLevelMap).length > 0
+      ? [{ model, provider }]
+      : [];
+  });
+  assert.ok(constrained.some(({ model }) => model.id === "claude-opus-5-5"));
+  const f = fixture(
+    constrained.map(({ model, provider }) =>
+      group(`${provider}/${model.id}`, { providers: [provider], supports_reasoning: true }),
+    ),
+  );
+  await f.catalog.refresh();
+  for (const { model, provider } of constrained) {
+    const discovered = resolveModel(`gateway/${provider}/${model.id}`)!;
+    assert.equal(discovered.api, model.api, model.id);
+    assert.deepEqual(discovered.thinkingLevelMap, model.thinkingLevelMap, model.id);
+    assert.deepEqual(getSupportedThinkingLevels(discovered), getSupportedThinkingLevels(model), model.id);
+    if (model.api === "anthropic-messages")
+      assert.equal(
+        (discovered.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking === true,
+        (model.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking === true,
+        model.id,
+      );
+  }
+});
+
+test("thinking inheritance follows explicit aliases and never crosses protocols or unrelated names", async () => {
+  const f = fixture(
+    [
+      group("prod-opus", { providers: ["anthropic"], supports_reasoning: true }),
+      group("claude-opus-5-5", { providers: ["anthropic"], supports_reasoning: true }),
+      group("bedrock/claude-opus-5-5", { providers: ["bedrock"], supports_reasoning: true }),
+      group("azure/claude-opus-5-5", { providers: ["anthropic"], supports_reasoning: true }),
+      group("vendor/new-model", { providers: ["anthropic"], supports_reasoning: true }),
+    ],
+    { "claude-opus-5-5": "prod-opus", "claude-opus-5": "claude-opus-5-5" },
+  );
+  await f.catalog.refresh();
+  for (const id of ["gateway/prod-opus", "gateway/claude-opus-5-5"]) {
+    assert.equal(resolveModel(id)!.thinkingLevelMap?.off, null, id);
+    assert.equal((resolveModel(id)!.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking, true, id);
+  }
+  for (const id of ["gateway/bedrock/claude-opus-5-5", "gateway/azure/claude-opus-5-5", "gateway/vendor/new-model"])
+    assert.equal(resolveModel(id)!.thinkingLevelMap, undefined, id);
+});
+
+test("thinking off on a discovered Opus 5.5 group never sends disabled thinking", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const f = fixture([group("anthropic/claude-opus-5-5", { providers: ["anthropic"], supports_reasoning: true })]);
+  await f.catalog.refresh();
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    const events = [
+      {
+        type: "message_start",
+        message: { id: "m", type: "message", role: "assistant", model: "m", content: [], usage: { input_tokens: 1 } },
+      },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ];
+    return new Response(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }) as typeof fetch;
+  const runtime = await buildModelRuntime({}, f.catalog.transport);
+  const model = resolveModel("gateway/anthropic/claude-opus-5-5")!;
+  assert.ok(!getSupportedThinkingLevels(model).includes("off"));
+  const context = { messages: [{ role: "user" as const, content: "Reply OK.", timestamp: 0 }] };
+  const response = await runtime.streamSimple(model, context, { maxRetries: 0 }).result();
+  assert.equal(response.stopReason, "stop", response.errorMessage);
+  assert.equal(bodies.at(-1)!.model, "anthropic/claude-opus-5-5");
+  assert.notDeepEqual(bodies.at(-1)!.thinking, { type: "disabled" });
 });

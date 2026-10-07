@@ -1,6 +1,6 @@
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
-import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
+import { modelOfferedInWebui, resolveBuiltinModel, selectableBaseModels } from "./pi-models.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_MODELS = 1_000;
@@ -35,7 +35,30 @@ function price(value: unknown): number | undefined {
     : undefined;
 }
 
-function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): GatewayModel | undefined {
+function underlyingModel(
+  group: string,
+  api: GatewayModel["api"],
+  providers: readonly unknown[],
+  aliases: Readonly<Record<string, string>>,
+) {
+  const [prefix, ...rest] = group.split("/");
+  const candidates = [
+    group,
+    ...(rest.length > 0 && providers.includes(prefix) ? [rest.join("/")] : []),
+    ...Object.entries(aliases).flatMap(([id, target]) => (target === group ? [id] : [])),
+  ];
+  return candidates
+    .filter((id) => !id.startsWith(GATEWAY_MODEL_PREFIX))
+    .map((id) => resolveBuiltinModel(id))
+    .find((model) => model?.api === api);
+}
+
+function parseModel(
+  value: unknown,
+  allowed: Set<string>,
+  baseUrl: string,
+  aliases: Readonly<Record<string, string>>,
+): GatewayModel | undefined {
   const info = record(value);
   if (!info || !modelId(info.model_group) || !allowed.has(info.model_group)) return undefined;
   if (info.mode !== "chat" || info.supports_function_calling !== true) return undefined;
@@ -57,6 +80,7 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
   let documentInput: GatewayModel["documentInput"];
   if (openai) documentInput = "files";
   else if (pdf) documentInput = "pdf";
+  const underlying = underlyingModel(info.model_group, api, providers, aliases);
   return {
     documentInput,
     id: GATEWAY_MODEL_PREFIX + info.model_group,
@@ -66,6 +90,7 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
     baseUrl: anthropic ? baseUrl.replace(/\/v1$/, "") : baseUrl,
     reasoning: (anthropic || openai) && info.supports_reasoning === true,
     input: info.supports_vision === true ? ["text", "image"] : ["text"],
+    ...(underlying?.thinkingLevelMap ? { thinkingLevelMap: { ...underlying.thinkingLevelMap } } : {}),
     contextWindow,
     maxTokens,
     cost: {
@@ -79,7 +104,10 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
       supportsStore: false,
       supportsStrictMode: false,
       supportsStrictTools: false,
-      forceAdaptiveThinking: anthropic && info.supports_adaptive_thinking === true,
+      forceAdaptiveThinking:
+        anthropic &&
+        (info.supports_adaptive_thinking === true ||
+          (underlying?.compat as { forceAdaptiveThinking?: boolean } | undefined)?.forceAdaptiveThinking === true),
       supportsLongCacheRetention: false,
       supportsReasoningEffort:
         Array.isArray(info.supported_openai_params) && info.supported_openai_params.includes("reasoning_effort"),
@@ -166,7 +194,7 @@ export function createGatewayCatalog(
           }),
         );
         const models = metadata.flatMap((entry) => {
-          const model = parseModel(entry, allowed, baseUrl);
+          const model = parseModel(entry, allowed, baseUrl, config.models);
           return model ? [model] : [];
         });
         const next: Record<string, string> = Object.fromEntries(
