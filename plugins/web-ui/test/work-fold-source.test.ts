@@ -76,7 +76,7 @@ test("thinking stays in sequence but is independently collapsible", () => {
 test("dense activity rows let their icons carry repeated type labels", () => {
   assert.match(chat, /thinkingPresentation\(/);
   assert.match(chat, /activityLabel\(row, status\)/);
-  assert.match(chat, />\$\{visible\}<\/span>/);
+  assert.match(chat, /sessionText \?\? visible\}<\/span>/);
   assert.doesNotMatch(chat, />Thinking\$\{preview/);
   assert.doesNotMatch(chat, />\$\{label\}\$\{detail/);
 });
@@ -97,9 +97,8 @@ test("stopped work shares posted reply rendering and shows one status without ac
 });
 
 test("session rows preserve aggregate details and only render named target chips", () => {
-  assert.match(
-    chat,
-    /sessionView\?\.chipTitle \? subagentChip\(sessionView.chipTitle, sessionView.sessionId\) : nothing/,
-  );
+  assert.match(chat, /session && sessionView\?\.chipTitle \? html/);
+  assert.match(chat, /subagentChip\(sessionView.chipTitle, sessionView.sessionId\)/);
+  assert.match(chat, /\[session.label, sessionDetail\].filter\(Boolean\).join\(" "\)/);
   assert.match(chat, /const sessionDetail = \[sessionView\?\.detail, session\?\.preview\]/);
 });

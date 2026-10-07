@@ -125,6 +125,15 @@ test("runResultDelivery still posts a surface-spine turn's FAILURE note", () => 
   assert.equal(runResultDelivery(spine)?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
 });
 
+test("runResultDelivery recovers an addressed model-budget refusal with its explanation", () => {
+  const reason = "This workspace has used up its model budget, so I can't run until it resets.";
+  const spine = run({ result: { status: "refused", refusalKind: "model_budget", reason } });
+  spine.request = { ...spine.request, surfaceTools: true, addressed: true };
+  assert.equal(runResultDelivery(spine)?.text, reason);
+  spine.request = { ...spine.request, addressed: false, origin: { kind: "ambient" } };
+  assert.equal(runResultDelivery(spine), null);
+});
+
 test("runResultDelivery recovers a security quarantine without exposing its internal reason", () => {
   const d = runResultDelivery(
     run({

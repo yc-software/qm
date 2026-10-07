@@ -57,7 +57,7 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .slice(0, OBLIGATIONS_CAP)
-      .map((m) => `- job watch on \`${m.processId}\`: ${snippet(m.command)}`),
+      .map((m) => `- job watch on \`${m.processId}\`: ${snippet(m.purpose ?? m.command)}`),
   ];
   return [
     "## Already scheduled here",

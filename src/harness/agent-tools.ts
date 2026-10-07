@@ -1862,7 +1862,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
       ),
       purpose: Type.Optional(
-        Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Start preview server')." }),
+        Type.String({
+          description:
+            "Short job description, about 5 words (e.g. 'App preview server'). Required for start; displayed to the user instead of code.",
+        }),
       ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
       process_id: Type.Optional(
@@ -1946,7 +1949,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 text("[error] background start requires `command`."),
                 true,
               );
+            if (!params.purpose?.trim())
+              return recordResult(
+                callId,
+                { tool: "background", action: params.action, error: "start requires purpose" },
+                text("[error] background start requires `purpose`: a short description of the job, about 5 words."),
+                true,
+              );
             const r = await tc.backgroundStart(params.command, {
+              purpose: params.purpose,
               ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
               ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
             });
@@ -2144,7 +2155,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                       ? jobs
                           .map(
                             (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.command}`,
+                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
                           )
                           .join("\n")
                       : "(no background jobs)",
@@ -2209,7 +2220,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     purpose: Type.Optional(
       Type.String({
         description:
-          "Human-readable intent label, at most 4 words (e.g. 'Check Python version'). Describe the purpose, not the code. Required for exec and management actions; optional for process actions.",
+          "Human-readable intent label, about 5 words (e.g. 'App preview server'). Describe what the job does, not the code. Required for exec, management actions, and start_process; optional for other process actions.",
       }),
     ),
     timeout_seconds: Type.Optional(
@@ -2244,7 +2255,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     set_default: ["purpose", "sandbox_id"],
     retire: ["purpose", "sandbox_id"],
     exec: ["purpose", "command"],
-    start_process: ["command"],
+    start_process: ["purpose", "command"],
     read_process: ["process_id"],
     write_stdin: ["process_id", "data"],
     signal_process: ["process_id"],

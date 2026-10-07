@@ -18,7 +18,7 @@ In Isolated posture, agent inventory and operations stay in the current owning s
 | `status`, `restart` | optional `sandbox_id`, `purpose`                                                                            |
 | `retire`            | `sandbox_id`, `purpose`                                                                                     |
 | `exec`              | `command`, `purpose`, optional `sandbox_id`, `timeout_seconds`, and supported routing/credential parameters |
-| `start_process`     | `command`, optional `sandbox_id`, `timeout_seconds`, `purpose`; returns a process ID                        |
+| `start_process`     | `command`, `purpose`, optional `sandbox_id`, `timeout_seconds`; returns a process ID                        |
 | `read_process`      | `process_id`, optional `since_cursor`, `wait_seconds`, `max_bytes`                                          |
 | `write_stdin`       | `process_id`, `data`; newline is not appended                                                               |
 | `signal_process`    | `process_id`, optional `signal` (`TERM`, `KILL`, `INT`, `HUP`, `QUIT`)                                      |
@@ -26,7 +26,7 @@ In Isolated posture, agent inventory and operations stay in the current owning s
 | `watch_process`     | `process_id`, optional `since_cursor`, `pattern`, `instructions`; returns a monitor ID                      |
 | `unwatch_process`   | `monitor_id`                                                                                                |
 
-Process actions also accept optional `purpose` for approval context. Unrelated fields are rejected rather than silently ignored. `exec` retains the enabled scoped, scratch, owner-auth and reached-room routing options and command credential handles. Process starts use the default or a named authorized resource; subsequent operations use the process ID's durable saved target, even after the scope default changes. Watches retain their durable monitor registration and wake this conversation with output or exit. Provider loss or expiry can still interrupt a process.
+`start_process` requires a short `purpose` (about five words) describing the job. It is saved with the process and displayed instead of the command; the raw command remains available in expanded job output. Other process actions accept optional `purpose` for approval context. Unrelated fields are rejected rather than silently ignored. `exec` retains the enabled scoped, scratch, owner-auth and reached-room routing options and command credential handles. Process starts use the default or a named authorized resource; subsequent operations use the process ID's durable saved target, even after the scope default changes. Watches retain their durable monitor registration and wake this conversation with output or exit. Provider loss or expiry can still interrupt a process.
 
 Execution and process handlers retain their existing approval and output-screening paths. Strict sandbox approvals are scoped to each action (`tool:sandbox:exec`, for example); an older broad `tool:sandbox` grant does not authorize newly exposed command or process actions. Transcript entries identify the actual `sandbox` action. Files publication, application deployment, and file read/write remain separate capabilities; unsupported resize and clone actions are not advertised.
 

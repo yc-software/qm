@@ -344,7 +344,6 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
     redirectPath: "linear/callback",
     consentMode: "standard",
     egressRule: ["api.linear.app"],
-    refresh: null,
     setupGuide: {
       console: "Linear → Settings → API → OAuth applications",
       url: "https://linear.app/settings/api/applications",

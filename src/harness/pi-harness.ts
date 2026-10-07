@@ -24,8 +24,6 @@ import {
 import {
   calculateCost,
   InMemoryCredentialStore,
-  isContextOverflow,
-  isRetryableAssistantError,
   type Api,
   type AssistantMessage,
   type Context,
@@ -63,6 +61,7 @@ import type {
 } from "../sessions/session-store.ts";
 import { tapeEntryMirrorRecord } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
+import { providerTurnError } from "./provider-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -83,7 +82,11 @@ import {
   codexProviderModelId,
 } from "../model/pi-models.ts";
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import {
+  GatewayModelUnavailableError,
+  modelGatewayRequest,
+  type ModelGatewayTransportConfig,
+} from "../model/provider-endpoints.ts";
 import {
   defineHarness,
   promptEnvelopeWithoutHistory,
@@ -948,60 +951,32 @@ export function textFromContent(content: unknown): string {
 
 type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
 
-function parseProviderError(message: string): { type: string; message: string } | null {
-  const jsonAt = message.indexOf("{");
-  if (jsonAt < 0) return null;
-  try {
-    const parsed = JSON.parse(message.slice(jsonAt)) as {
-      type?: unknown;
-      message?: unknown;
-      error?: { type?: unknown; message?: unknown };
-    };
-    const body = parsed.error && typeof parsed.error === "object" ? parsed.error : parsed;
-    const providerMessage = typeof body.message === "string" ? body.message.trim() : "";
-    const providerType = typeof body.type === "string" ? body.type.trim() : "";
-    return providerMessage || providerType ? { type: providerType, message: providerMessage } : null;
-  } catch (e) {
-    swallow("pi: assistant error json parse", e);
-    return null;
-  }
-}
-
-function formatPiAssistantError(raw: string | undefined): string {
-  const message = raw?.trim();
-  if (!message) return "Pi agent stopped with an error";
-  const provider = parseProviderError(message);
-  if (!provider?.message) return message;
-  return provider.type
-    ? `Model provider API error (${provider.type}): ${provider.message}`
-    : `Model provider API error: ${provider.message}`;
-}
-
-const TRANSIENT_PROVIDER_ERROR_TYPES = new Set(["overloaded_error", "api_error", "rate_limit_error", "timeout_error"]);
-
-function piErrorRetryable(failed: AssistantMessage): boolean {
-  const providerType = failed.errorMessage ? parseProviderError(failed.errorMessage)?.type : undefined;
-  if (providerType && !TRANSIENT_PROVIDER_ERROR_TYPES.has(providerType)) return false;
-  return isRetryableAssistantError(failed) && !isContextOverflow(failed);
-}
-
 function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
   const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant") as
     AssistantMessage | undefined;
   return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
 }
 
-function piAssistantError(session: AssistantTextSession): string | null {
-  const failed = piFailedAssistant(session);
-  return failed ? formatPiAssistantError(failed.errorMessage) : null;
+function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
+  const ok = [...session.messages]
+    .reverse()
+    .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
+    AssistantMessage | undefined;
+  const u = ok?.usage;
+  return u ? u.input + u.cacheRead + u.cacheWrite : undefined;
 }
 
-function piAssistantFailure(session: AssistantTextSession): Error | null {
+function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
   const failed = piFailedAssistant(session);
   if (!failed) return null;
-  const message = formatPiAssistantError(failed.errorMessage);
-  return piErrorRetryable(failed) ? new ProviderTurnError(message) : new NonRetryableTurnError(message);
+  const contextWindow = (
+    failed.model ? (resolveModel(failed.model) as { contextWindow?: number } | undefined) : undefined
+  )?.contextWindow;
+  return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
 }
+
+/** Codes that retry the turn on the configured fallback model. */
+const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
   const err = piAssistantFailure(session);
@@ -1025,16 +1000,9 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
 
-const PROVIDER_REFUSAL_PATTERN =
-  /violate Anthropic(?:'|’)?s (?:Terms of Service|usage policy)|under Anthropic(?:'|’)?s usage policy|refusals-and-fallback|reduce refusals for your users by configuring a fallback model|the model refused to complete the request|gateway model is unavailable/i;
-
-export function isProviderRefusal(message: string | undefined): boolean {
-  return !!message && PROVIDER_REFUSAL_PATTERN.test(message);
-}
-
 export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
-  const err = piAssistantError(messagesSince(session, messagesBefore));
-  return err && isProviderRefusal(err) ? err : null;
+  const err = piAssistantFailure(messagesSince(session, messagesBefore));
+  return err && FALLBACK_CODES.has(err.code) ? err.message : null;
 }
 
 export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
@@ -1096,7 +1064,7 @@ export function emptyEndingNote(opts: {
   if (opts.pollFire) return null;
   const calls = opts.ref.modelCalls ?? 0;
   if (calls === 0) return null;
-  if (piAssistantError(opts.session)) return null;
+  if (piFailedAssistant(opts.session)) return null;
   if ((opts.session.getLastAssistantText() ?? "").trim()) return null;
   if (opts.turnWallClockMs > 0 && opts.turnWallClockMs - opts.elapsedMs < EMPTY_ENDING_MIN_BUDGET_MS) return null;
   return EMPTY_ENDING_NOTE;
@@ -1311,7 +1279,7 @@ export async function buildModelRuntime(
       options: wireModelId(routed, model, async () => {
         await modelGateway?.refresh?.();
         const current = modelGatewayRequest(modelGateway, model);
-        if (!current) throw new Error(`Gateway model is unavailable: ${model.id}`);
+        if (!current) throw new GatewayModelUnavailableError(model.id);
         return current.target;
       }),
     };
@@ -1411,8 +1379,10 @@ export async function probeModel(
     )
     .result();
   signal.throwIfAborted();
+  if (response.stopReason === "aborted") throw new DOMException("Model verification was aborted", "AbortError");
+  if (response.stopReason === "error") throw providerTurnError(response);
   if (response.stopReason !== "stop" || !response.content.some((part) => part.type === "text" && part.text.trim()))
-    throw new Error(response.errorMessage || "Model verification did not produce a completed text response");
+    throw new Error("Model verification did not produce a completed text response");
 }
 
 const FAST_MODE_BETA = "fast-mode-2026-02-01";
@@ -2412,7 +2382,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (!userAborted && !cancelAbortRejection) {
               const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
               let recovered = false;
-              if (isProviderRefusal(turnErr.message)) {
+              if (turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
                 try {
                   recovered = await attemptRefusalFallback(turnErr.message);
                 } catch (e) {
@@ -2597,8 +2567,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             (id) => !!resolveModel(id),
           );
           if (
-            !(error instanceof Error) ||
-            !isProviderRefusal(error.message) ||
+            !(error instanceof ProviderTurnError) ||
+            error.code !== "refusal" ||
             !fallbackId ||
             !resolveModel(fallbackId)
           )

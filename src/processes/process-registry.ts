@@ -16,6 +16,7 @@ export interface ProcessRecord {
   sandboxId?: string;
   kind: ProcessKind;
   command: string;
+  purpose?: string;
   startedAt: number;
   expiresAt: number;
   status: ProcessStatus;
@@ -29,6 +30,7 @@ interface NewProcessRecord {
   sandboxId?: string;
   kind: ProcessKind;
   command: string;
+  purpose?: string;
   ttlMs: number;
   sessionRef?: string;
   runId?: string;
@@ -54,6 +56,7 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
     ...(rec.sandboxId ? { sandboxId: rec.sandboxId } : {}),
     kind: rec.kind,
     command: rec.command,
+    ...(rec.purpose ? { purpose: rec.purpose } : {}),
     startedAt: now,
     expiresAt: now + rec.ttlMs,
     status: "running",
@@ -107,6 +110,7 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
     ...(r.sandbox_id ? { sandboxId: r.sandbox_id as string } : {}),
     kind: r.kind as ProcessKind,
     command: r.command as string,
+    ...(r.purpose ? { purpose: r.purpose as string } : {}),
     startedAt: Number(r.started_at),
     expiresAt: Number(r.expires_at),
     status: r.status as ProcessStatus,
@@ -132,12 +136,20 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"],
   };
   pg.registerMigration(migration);
+  const purposeMigration = {
+    id: "processes/registry/0003",
+    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"],
+  };
+  pg.registerMigration(purposeMigration);
   let ready: Promise<void> | undefined;
   const q: typeof pg.q = async (...args) => {
-    ready ??= pg.migrate(migration).catch((error) => {
-      ready = undefined;
-      throw error;
-    });
+    ready ??= pg
+      .migrate(migration)
+      .then(() => pg.migrate(purposeMigration))
+      .catch((error) => {
+        ready = undefined;
+        throw error;
+      });
     await ready;
     return pg.q(...args);
   };
@@ -145,8 +157,8 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async register(rec) {
       const row = newRecord(rec, Date.now());
       await q(
-        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           row.processId,
           row.scopeId,
@@ -158,6 +170,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.sessionRef ?? null,
           row.runId ?? null,
           row.sandboxId ?? null,
+          row.purpose ?? null,
         ],
       );
       return row;

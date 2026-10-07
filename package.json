@@ -74,8 +74,8 @@
     "@aws-sdk/client-sts": "^3.1075.0",
     "@aws-sdk/credential-provider-node": "^3.972.70",
     "@aws-sdk/s3-request-presigner": "^3.1061.0",
-    "@earendil-works/pi-ai": "0.82.0",
-    "@earendil-works/pi-coding-agent": "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.5/earendil-works-pi-coding-agent-0.82.0-qm-security.5.tgz",
+    "@earendil-works/pi-ai": "https://github.com/yc-software/qm/releases/download/vendored-pi-ai-0.82.0-qm.1/earendil-works-pi-ai-0.82.0-qm.1.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.6/earendil-works-pi-coding-agent-0.82.0-qm-security.6.tgz",
     "@fly/sprites": "0.2.3",
     "@openai/codex": "0.156.1",
     "@opencode-ai/plugin": "1.18.31",
@@ -118,7 +118,8 @@
     },
     "undici": "8.10.2",
     "ip-address": "10.7.2",
-    "protobufjs": "7.6.5"
+    "protobufjs": "7.6.5",
+    "@earendil-works/pi-ai": "$@earendil-works/pi-ai"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

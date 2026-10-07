@@ -70,7 +70,7 @@ test("execute, read, write and background never trigger skill synchronization", 
   });
   await tc.execute("cd skills/google-workspace && python scripts/gmail.py");
   await tc.read("skills/google-workspace/SKILL.md");
-  await tc.backgroundStart("sh skills/.packs/selected/job.sh");
+  await tc.backgroundStart("sh skills/.packs/selected/job.sh", { purpose: "Run background tests" });
   assert.equal(loads, 0);
   assert.equal(calls.length, 2);
 });

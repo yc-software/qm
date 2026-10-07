@@ -313,11 +313,14 @@ test("Open personal credentials never flow into another shared computer", async 
 
 test("background starts use the authorized personal target and recheck revocation", async () => {
   const f = fixture();
-  await f.tools.backgroundStart("node work.js", { sandboxId: "personal-box" });
+  await f.tools.backgroundStart("node work.js", { purpose: "Run background tests", sandboxId: "personal-box" });
   assert.equal(f.starts[0]?.scopeId, "personal:alice");
   assert.equal(f.starts[0]?.env, undefined);
   f.state.member = false;
-  await assert.rejects(f.tools.backgroundStart("node work.js", { sandboxId: "personal-box" }), /authorized/);
+  await assert.rejects(
+    f.tools.backgroundStart("node work.js", { purpose: "Run background tests", sandboxId: "personal-box" }),
+    /authorized/,
+  );
 });
 
 test("untrusted background authority and copying room command credentials are refused", async () => {
@@ -338,7 +341,9 @@ test("target command denials and approvals apply before either execution path ca
     const f = fixture();
     f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "blocked", decision }] };
     await assert.rejects(f.tools.execute("blocked", { sandboxId: "personal-box" }));
-    await assert.rejects(f.tools.backgroundStart("blocked", { sandboxId: "personal-box" }));
+    await assert.rejects(
+      f.tools.backgroundStart("blocked", { purpose: "Run background tests", sandboxId: "personal-box" }),
+    );
     assert.deepEqual(f.provisions, []);
   }
 });
@@ -404,17 +409,23 @@ test("two requiring policies produce one target-qualified one-shot approval", as
     f.state.sourcePolicy = { mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] };
     f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "command", decision: "require_approval" }] };
     let approvalKey = "";
-    await assert.rejects(f.tools[method]("protected command", { sandboxId: "personal-box" }), (err: unknown) => {
-      assert.ok(err instanceof NeedsApproval);
-      assert.deepEqual(err.grantModes, { session: false, always: false });
-      approvalKey = err.approvalKey!;
-      assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
-      return true;
-    });
+    await assert.rejects(
+      f.tools[method]("protected command", { purpose: "Run background tests", sandboxId: "personal-box" }),
+      (err: unknown) => {
+        assert.ok(err instanceof NeedsApproval);
+        assert.deepEqual(err.grantModes, { session: false, always: false });
+        approvalKey = err.approvalKey!;
+        assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
+        return true;
+      },
+    );
     assert.deepEqual(f.approvalCalls, [[approvalKey, true]]);
     f.approve(approvalKey);
-    await f.tools[method]("protected command", { sandboxId: "personal-box" });
-    await assert.rejects(f.tools[method]("protected command", { sandboxId: "personal-box" }), NeedsApproval);
+    await f.tools[method]("protected command", { purpose: "Run background tests", sandboxId: "personal-box" });
+    await assert.rejects(
+      f.tools[method]("protected command", { purpose: "Run background tests", sandboxId: "personal-box" }),
+      NeedsApproval,
+    );
   }
 });
 

@@ -103,6 +103,7 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
       scopeId: scope,
       kind: "dev-server",
       command: "npm run dev",
+      purpose: "Preview app server",
       ttlMs: 60_000,
     });
     assert.equal(rec.status, "running");
@@ -113,6 +114,7 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
     assert.equal(live.length, 1);
     assert.equal(live[0]!.processId, id(1));
     assert.equal(typeof live[0]!.expiresAt, "number");
+    assert.equal(live[0]!.purpose, "Preview app server");
 
     await reg2.register({ processId: id(2), scopeId: scope, kind: "build", command: "y", ttlMs: -1 });
     assert.equal(
@@ -131,3 +133,19 @@ function id(n: number): string {
   const s = n.toString(16).padStart(12, "0");
   return `00000000-0000-0000-0000-${s}`;
 }
+
+test("registry preserves purpose without replacing the command and accepts legacy rows", async () => {
+  const registry = createMemoryProcessRegistry();
+  for (const purpose of [undefined, "Preview app server"]) {
+    const row = await registry.register({
+      processId: purpose ?? "legacy",
+      scopeId: "personal:U1",
+      kind: "background",
+      command: "bg: node server.js",
+      ttlMs: 60_000,
+      ...(purpose ? { purpose } : {}),
+    });
+    assert.equal((await registry.get(row.processId))?.purpose, purpose);
+    assert.equal((await registry.get(row.processId))?.command, "bg: node server.js");
+  }
+});

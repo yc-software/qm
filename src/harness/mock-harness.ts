@@ -7,7 +7,7 @@ import {
   type HarnessTurnResult,
 } from "./harness.ts";
 import { classifyScopeLabel } from "../classify/scope-classifier.ts";
-import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -229,6 +229,13 @@ export function createMockHarness(): Harness {
           await turn.tools.post(msg);
           resumePostSessions.set(turn.session.id, `${msg} (repost)`);
           throw new Error("boom: simulated fault before the post's tool result landed");
+        } else if (command0 === "!over-budget") {
+          throw new ProviderTurnError("Model provider API error (budget_exceeded): ExceededBudget", {
+            code: "model_budget",
+            retryable: false,
+            status: 429,
+            raw: '429: {"message":"ExceededBudget: Team=team-a over 1d budget.","type":"budget_exceeded"}',
+          });
         } else if (command0.startsWith("!post-then-boom ")) {
           const rest = cmd.slice(cmd.indexOf("!post-then-boom ") + "!post-then-boom ".length);
           const bar = rest.indexOf("|");

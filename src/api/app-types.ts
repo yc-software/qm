@@ -217,7 +217,7 @@ interface DeploymentGitUrl {
 }
 
 interface SessionBackgroundView {
-  jobs: Array<{ processId: string; command: string; startedAt: number; expiresAt: number }>;
+  jobs: Array<{ processId: string; command: string; purpose?: string; startedAt: number; expiresAt: number }>;
   watches: Array<{
     id: string;
     processId: string;
