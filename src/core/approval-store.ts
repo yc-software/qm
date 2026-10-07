@@ -40,7 +40,8 @@ export function createApprovalStore(
       await deliver(id, record).catch(swallowAs("approvals: enqueue delivery", undefined));
     },
     async deliverPending(): Promise<void> {
-      for (const [id, record] of await backing.entries()) await deliver(id, record);
+      for (const [id, record] of await backing.entries())
+        await deliver(id, record).catch(swallowAs("approvals: redeliver pending", undefined));
     },
   };
 }
