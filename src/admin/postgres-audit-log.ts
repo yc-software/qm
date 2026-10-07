@@ -2,6 +2,7 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { likeContains } from "../persistence/like.ts";
 
 function rowToEvent(r: Record<string, unknown>): AuditEvent {
   return {
@@ -105,8 +106,8 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         conds.push(`at >= $${params.length}`);
       }
       if (resourceContains !== undefined) {
-        params.push(`%${resourceContains}%`);
-        conds.push(`resource LIKE $${params.length}`);
+        params.push(likeContains(resourceContains));
+        conds.push(`resource LIKE $${params.length} ESCAPE '\\'`);
       }
       const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
       params.push(limit);

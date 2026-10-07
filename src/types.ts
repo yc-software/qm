@@ -319,6 +319,7 @@ export interface Webhook extends TriggerBase {
 export interface Monitor extends TriggerBase {
   processId: string;
   command: string;
+  purpose?: string;
   threadRef: string;
   instructions?: string;
   pattern?: string;
@@ -790,7 +791,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy";
+  refusalKind?: "security_quarantine" | "session_busy" | "model_budget";
   adminUrl?: string;
   runId?: string;
   steered?: true;

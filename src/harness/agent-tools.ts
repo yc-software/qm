@@ -90,6 +90,7 @@ export interface ToolContextRef {
   onGapWork?: (work: GapWork) => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
 
@@ -429,11 +430,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const callId = (payload as { callId?: unknown } | null)?.callId;
       if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
+    if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload)) payload = { ...payload, interrupted: true };
     await ref.emit({ type, payload, scopeLabel });
   };
 
-  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...sandboxLog(payload), callId });
+  const retryMarks = new Map<string, RetryMark>();
+  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
+    const mark = retryMarks.get(callId);
+    return log("tool_call", {
+      ...sandboxLog(payload),
+      callId,
+      ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
+    });
+  };
 
   const resultQueue = createKeyedQueue();
   const quarantinedMessages = new Set<string>();
@@ -1847,7 +1856,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
       ),
       purpose: Type.Optional(
-        Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Start preview server')." }),
+        Type.String({
+          description:
+            "Short job description, about 5 words (e.g. 'App preview server'). Required for start; displayed to the user instead of code.",
+        }),
       ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
       process_id: Type.Optional(
@@ -1931,7 +1943,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 text("[error] background start requires `command`."),
                 true,
               );
+            if (!params.purpose?.trim())
+              return recordResult(
+                callId,
+                { tool: "background", action: params.action, error: "start requires purpose" },
+                text("[error] background start requires `purpose`: a short description of the job, about 5 words."),
+                true,
+              );
             const r = await tc.backgroundStart(params.command, {
+              purpose: params.purpose,
               ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
               ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
             });
@@ -2129,7 +2149,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                       ? jobs
                           .map(
                             (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.command}`,
+                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
                           )
                           .join("\n")
                       : "(no background jobs)",
@@ -2194,7 +2214,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     purpose: Type.Optional(
       Type.String({
         description:
-          "Human-readable intent label, at most 4 words (e.g. 'Check Python version'). Describe the purpose, not the code. Required for exec and management actions; optional for process actions.",
+          "Human-readable intent label, about 5 words (e.g. 'App preview server'). Describe what the job does, not the code. Required for exec, management actions, and start_process; optional for other process actions.",
       }),
     ),
     timeout_seconds: Type.Optional(
@@ -2229,7 +2249,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     set_default: ["purpose", "sandbox_id"],
     retire: ["purpose", "sandbox_id"],
     exec: ["purpose", "command"],
-    start_process: ["command"],
+    start_process: ["purpose", "command"],
     read_process: ["process_id"],
     write_stdin: ["process_id", "data"],
     signal_process: ["process_id"],
@@ -4341,8 +4361,63 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
   return active.map((t) =>
-    withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+    withRetrySafety(
+      withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+      retryMarks,
+    ),
   );
+}
+
+const RETRY_SAFE_FIELD = "retrySafe";
+
+const RETRY_SAFE_SCHEMA = Type.Optional(
+  Type.Boolean({
+    description:
+      "true if re-running this exact call is harmless (reads, searches, idempotent writes) so the platform may re-run it after an interruption; false if it would duplicate a side effect (sending a message, charging, creating a record).",
+  }),
+);
+const RERUN_INPUT_MAX_CHARS = 4_000;
+
+interface RetryMark {
+  safe: boolean;
+  rerun?: { tool: string; input: Record<string, unknown> };
+}
+
+function withRetrySafeField(parameters: unknown): unknown | null {
+  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return null;
+  if (RETRY_SAFE_FIELD in parameters.properties) return null;
+  return { ...parameters, properties: { ...parameters.properties, [RETRY_SAFE_FIELD]: RETRY_SAFE_SCHEMA } };
+}
+
+function stripRetrySafeField(params: unknown): { params: unknown; retrySafe?: boolean } {
+  if (!isObj(params) || !(RETRY_SAFE_FIELD in params)) return { params };
+  const { [RETRY_SAFE_FIELD]: retrySafe, ...rest } = params;
+  return { params: rest, ...(typeof retrySafe === "boolean" ? { retrySafe } : {}) };
+}
+
+function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): ToolDefinition {
+  const parameters = withRetrySafeField(tool.parameters);
+  if (!parameters) return tool;
+  const inner = tool.execute.bind(tool);
+  return {
+    ...tool,
+    parameters: parameters as ToolDefinition["parameters"],
+    async execute(callId: string, params: unknown, ...rest: unknown[]) {
+      const stripped = stripRetrySafeField(params);
+      if (stripped.retrySafe !== undefined && isObj(stripped.params)) {
+        const replayable = stripped.retrySafe && JSON.stringify(stripped.params).length <= RERUN_INPUT_MAX_CHARS;
+        marks.set(callId, {
+          safe: stripped.retrySafe,
+          ...(replayable ? { rerun: { tool: tool.name, input: stripped.params } } : {}),
+        });
+      }
+      try {
+        return await (inner as (...args: unknown[]) => unknown)(callId, stripped.params, ...rest);
+      } finally {
+        marks.delete(callId);
+      }
+    },
+  } as ToolDefinition;
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);

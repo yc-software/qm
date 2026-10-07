@@ -128,8 +128,6 @@ export interface Config {
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
   buildSha?: string;
-  ecsTaskProtection: boolean;
-  ecsAgentUri?: string;
   monitorPollMs: number;
   skillSyncPollMs: number;
   monitorHeartbeatMs: number;
@@ -934,7 +932,7 @@ export const CONFIG_DEFAULTS = {
   leaseTtlMs: 120_000,
   heartbeatIntervalMs: 10_000,
   reaperIntervalMs: 15_000,
-  shutdownDrainMs: 10_000,
+  shutdownDrainMs: 30_000,
   maxAttempts: 3,
   maxClaims: 8,
   processReaperIntervalMs: 30_000,
@@ -1563,8 +1561,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
       : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
-    ecsTaskProtection: boolEnvStrict("ECS_TASK_PROTECTION", env.ECS_TASK_PROTECTION) ?? true,
-    ...(env.ECS_AGENT_URI ? { ecsAgentUri: env.ECS_AGENT_URI } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
     skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,
     monitorHeartbeatMs:

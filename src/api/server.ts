@@ -384,7 +384,7 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     return;
   }
   reportBackendError(err);
-  console.error("[server] 500 %s %s: %s", req.method ?? "?", req.url ?? "?", errMessage(err));
+  console.error("[server] 500 %s %s: %s", req.method ?? "?", loggablePath(req.url), errMessage(err));
   if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "internal server error" });
   else res.destroy();
 }
@@ -454,7 +454,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
 
   fastify.setErrorHandler((err, request, reply) => {
     reportBackendError(err);
-    console.error("%s", `[server] 500 ${request.raw.method ?? "?"} ${request.raw.url ?? "?"}:`, errMessage(err));
+    console.error("%s", `[server] 500 ${request.raw.method ?? "?"} ${loggablePath(request.raw.url)}:`, errMessage(err));
     return reply.code(500).send({ error: "internal_error", message: "internal server error" });
   });
 
@@ -594,6 +594,12 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     routing(req, res);
   }
   return server;
+}
+
+export function loggablePath(url: string | undefined): string {
+  if (!url) return "?";
+  const query = url.indexOf("?");
+  return query < 0 ? url : `${url.slice(0, query)}?<query omitted>`;
 }
 
 export function createServer(app: App, deps: ServerOptions = {}): Server {

@@ -239,7 +239,10 @@ export interface ToolContext extends SurfaceToolDeps {
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<ClientToolResult | "timeout" | "cancelled">;
-  backgroundStart(command: string, opts?: { ttlSeconds?: number; sandboxId?: string }): Promise<BackgroundStartResult>;
+  backgroundStart(
+    command: string,
+    opts: { purpose: string; ttlSeconds?: number; sandboxId?: string },
+  ): Promise<BackgroundStartResult>;
   backgroundPoll(
     processId: string,
     opts?: { sinceCursor?: number; maxBytes?: number; waitSeconds?: number },
@@ -1183,7 +1186,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async backgroundStart(
       command: string,
-      opts?: { ttlSeconds?: number; sandboxId?: string },
+      opts: { purpose: string; ttlSeconds?: number; sandboxId?: string },
     ): Promise<BackgroundStartResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       let handle: SandboxHandle;
@@ -1200,6 +1203,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           deps.backgroundBroker!.start(
             handle,
             deps.scopedCommand?.(command, handle.env) ?? command,
+            opts.purpose,
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
           ),
         () => true,

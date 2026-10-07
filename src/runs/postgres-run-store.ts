@@ -126,6 +126,12 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_created ON runs(created_at DESC)`,
         ],
       },
+      {
+        id: "runs/store/0006-terminal-finished",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done','failed')`,
+        ],
+      },
     ],
     [
       {
@@ -377,6 +383,24 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rowCount > 0;
     },
 
+    async latestForThreads(threadRefs, opts) {
+      if (!threadRefs.length) return new Map();
+      const { rows } = await q(
+        `SELECT latest.* FROM unnest($1::text[]) AS threads(id)
+         CROSS JOIN LATERAL (
+           SELECT * FROM runs WHERE session_id = threads.id
+           AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
+           ORDER BY created_at DESC, seq DESC LIMIT 1
+         ) latest`,
+        [[...new Set(threadRefs)], Boolean(opts?.excludePrivateMessages)],
+      );
+      return new Map(
+        rows.map((row) => {
+          const run = rowToRun(row);
+          return [run.sessionId, run];
+        }),
+      );
+    },
     async latestForThread(threadRef, opts) {
       const { rows } = await q(
         "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
@@ -398,6 +422,15 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            AND child.id > $2
          ) pending WHERE retry_after <= $3 ORDER BY id LIMIT $1`,
         [limit, afterId, Date.now()],
+      );
+      return rows.map(rowToRun);
+    },
+    async terminalFinished(after, beforeMs, limit) {
+      const { rows } = await q(
+        `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
+           AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
+         ORDER BY finished_at, id LIMIT $4`,
+        [beforeMs, after.finishedAt, after.id, limit],
       );
       return rows.map(rowToRun);
     },

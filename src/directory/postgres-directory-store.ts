@@ -1,3 +1,4 @@
+import { likeEscape } from "../persistence/like.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { createHash } from "node:crypto";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
@@ -142,10 +143,6 @@ function channelRow(r: Record<string, unknown>): DirectoryChannel {
 
 function hashRoster(rows: string[]): string {
   return createHash("sha256").update(rows.slice().sort().join("\n")).digest("hex");
-}
-
-function likeEscape(s: string): string {
-  return s.replace(/([\\%_])/g, "\\$1");
 }
 
 function dedupPairs<T>(rows: T[], idOf: (r: T) => string, pidOf: (r: T) => string): T[] {

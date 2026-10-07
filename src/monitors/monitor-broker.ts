@@ -149,6 +149,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         ...(deps.destination ? { destination: deps.destination } : {}),
         processId,
         command: rec.command,
+        ...(rec.purpose ? { purpose: rec.purpose } : {}),
         threadRef: deps.threadRef,
         ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
         ...(opts?.pattern !== undefined ? { pattern: opts.pattern } : {}),

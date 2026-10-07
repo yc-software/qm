@@ -1136,6 +1136,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "finalAttempt",
     "background",
     "cancel",
+    "shutdown",
     "queueMs",
     "modelAccount",
     "privateSessionMessage",

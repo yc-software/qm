@@ -1,3 +1,4 @@
+import { resumeNote, turnAtSeq } from "../src/core/turn-resume.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -15,7 +16,6 @@ import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import {
   codexChildEnv,
-  codexNonRetryable,
   codexProviderFailure,
   codexUsageTotals,
   codexChildToolAllowed,
@@ -30,7 +30,7 @@ import {
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
-import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
 import { CodexAppServer } from "../src/harness/codex-app-server.ts";
@@ -529,6 +529,39 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
     [{ title: "return ALPHA", status: "completed" }],
   );
+});
+
+test("Codex ignores continueTurn and still records the resume note as this attempt's user entry", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const session = { id: "session-1" } as Session;
+  const note = resumeNote({ strategy: { kind: "continue" } });
+  const result = await harness.turns.runTurn({
+    session,
+    runId: "run-resume",
+    continueTurn: true,
+    input: note,
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => {
+      const saved = { ...entry, sessionId: session.id, seq: entries.length + 1, createdAt: Date.now() } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+  });
+  assert.equal(result.reply, "hello");
+  assert.equal(entries[0]?.type, "user");
+  assert.equal((entries[0]!.payload as { text: string }).text, note);
 });
 
 test("Codex task titles stay concise when the provider includes the parent request", () => {
@@ -1428,58 +1461,28 @@ test("cancelling one Codex setup does not kill another active turn", async (t) =
   assert.equal((await first).reply, "FIRST-OK");
 });
 
-test("Codex classifies deterministic provider failures as terminal and leaves transient ones retryable", () => {
-  const terminal = [
-    "Codex 401: Incorrect API key provided",
-    "Codex app-server exited (1): stream error: unauthorized",
-    "You exceeded your current quota, please check your plan and billing details",
-    "The model `gpt-5.6-sol` does not exist or you do not have access to it",
-    "Not logged in. Run `codex login` to authenticate.",
-    "Codex -32000: invalid_api_key",
-    "403 Forbidden",
-    "HTTP 402 Payment Required",
-    "Your organization must be verified to stream this model",
-    "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
-    "You've reached your workspace credit limit",
-    "Your workspace is out of credits. Ask your workspace owner to add more.",
-    "workspace_owner_credits_depleted",
+test("Codex classifies failures from codexErrorInfo, never from message text", () => {
+  const cases: Array<[Parameters<typeof codexProviderFailure>[1], string, boolean, number?]> = [
+    ["contextWindowExceeded", "context_too_long", false],
+    ["sessionBudgetExceeded", "model_budget", false],
+    ["usageLimitExceeded", "rate_limit", true],
+    ["rateLimitExceeded", "rate_limit", true],
+    ["serverOverloaded", "transient", true],
+    ["unauthorized", "auth", false],
+    ["cyberPolicy", "refusal", false],
+    ["badRequest", "bad_request", false],
+    ["other", "unknown", true],
+    [null, "unknown", true],
+    [{ httpConnectionFailed: { httpStatusCode: 502 } }, "transient", true, 502],
+    [{ responseStreamConnectionFailed: { httpStatusCode: 401 } }, "auth", false, 401],
+    [{ responseTooManyFailedAttempts: { httpStatusCode: 429 } }, "rate_limit", true, 429],
   ];
-  for (const message of terminal) {
-    assert.equal(codexNonRetryable(message), true, message);
-    assert.ok(codexProviderFailure(message) instanceof NonRetryableTurnError, message);
+  for (const [info, code, retryable, status] of cases) {
+    // The text says "401 invalid_api_key" every time; only codexErrorInfo decides.
+    const err = codexProviderFailure("Codex 401: invalid_api_key", info);
+    assert.ok(err instanceof ProviderTurnError);
+    assert.deepEqual([err.code, err.retryable, err.status], [code, retryable, status], JSON.stringify(info));
   }
-
-  const transient = [
-    "Rate limit reached for gpt-5.6-sol, please retry",
-    "429 Too Many Requests",
-    "The server had an error while processing your request",
-    "socket hang up",
-    "Codex app-server exited (null): ECONNRESET",
-    "Codex turn failed",
-    "rate_limit_reached",
-    "You've hit your usage limit for gpt-5.6-sol",
-    "workspace_member_usage_limit_reached",
-    "407 Proxy Authentication Required",
-  ];
-  for (const message of transient) {
-    assert.equal(codexNonRetryable(message), false, message);
-    assert.ok(!(codexProviderFailure(message) instanceof NonRetryableTurnError), message);
-  }
-});
-
-test("Codex never classifies its own infrastructure failures as terminal", () => {
-  const ours = [
-    "permission denied for table session_entries",
-    "EACCES: permission denied, open '/data/tape/x.jsonl'",
-    "Codex app-server exited (1): thread panicked at src/client.rs:403:9",
-    "Codex app-server exited (1): WARN retrying request: 401 Unauthorized (attempt 1); INFO recovered",
-    "connect ECONNREFUSED 127.0.0.1:403",
-  ];
-  for (const message of ours) {
-    assert.ok(codexProviderFailure(message) instanceof Error, message);
-  }
-  assert.equal(codexProviderFailure("Codex turn failed").message, "Codex turn failed");
-  assert.ok(!(codexProviderFailure("socket hang up") instanceof NonRetryableTurnError));
   assert.equal(
     codexProviderFailure("401 access_token=provider-secret-123456").message.includes("provider-secret"),
     false,
@@ -1515,7 +1518,7 @@ rl.on("line", (line) => {
       mode === "startRejected"
         ? `return send({ id: msg.id, error: { code: 401, message: "Incorrect API key provided" } });`
         : `send({ id: msg.id, result: { turn: { id: "turn-fail", status: "inProgress", items: [] } } });
-    return send({ method: "turn/completed", params: { threadId: "thread-fail", turn: { id: "turn-fail", status: "failed", error: { message: "You exceeded your current quota" }, items: [] } } });`
+    return send({ method: "turn/completed", params: { threadId: "thread-fail", turn: { id: "turn-fail", status: "failed", error: { message: "You exceeded your current quota", codexErrorInfo: "unauthorized" }, items: [] } } });`
     }
   }
   if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
@@ -1527,7 +1530,7 @@ rl.on("line", (line) => {
 }
 
 for (const mode of ["turnFailed", "startRejected"] as const) {
-  test(`Codex parks the run on a provider auth/quota failure (${mode}) instead of burning retries`, async (t) => {
+  test(`Codex classifies a ${mode} provider failure structurally`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "qm-codex-fail-test-"));
     const harness = createCodexHarness({
       binaryPath: failingProviderCodexBinary(dir, mode),
@@ -1551,7 +1554,10 @@ for (const mode of ["turnFailed", "startRejected"] as const) {
         emit: async (entry) => ({ ...entry, sessionId: "fail-session", seq: 1, createdAt: Date.now() }) as SessionEntry,
         recordModelCall: () => {},
       }),
-      (error: unknown) => error instanceof NonRetryableTurnError,
+      (error: unknown) =>
+        error instanceof ProviderTurnError &&
+        // turn/completed carries codexErrorInfo; a bare JSON-RPC rejection has no structured cause.
+        (mode === "turnFailed" ? error.code === "auth" && !error.retryable : error.code === "unknown"),
     );
   });
 }
@@ -2135,4 +2141,63 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   });
   assert.equal(result.reply, "denied");
   assert.equal(shared, false);
+});
+
+test("Codex skips the stopped reply when shutdown cancels the turn, leaving it open for resume", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-shutdown-stop-"));
+  const harness = createCodexHarness({
+    binaryPath: stopReportsFailedCodexBinary(dir, true, true),
+    env: testHarnessEnv(dir),
+    turnWallClockMs: 5_000,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const cancel = new AbortController();
+  const shutdown = new AbortController();
+  const received = Promise.withResolvers<void>();
+  const entries: SessionEntry[] = [];
+  const scope = "personal:test" as ScopeId;
+  const running = harness.turns.runTurn({
+    session: { id: "shutdown-stop" } as Session,
+    runId: "shutdown-stop-run",
+    input: "check",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    cancel: cancel.signal,
+    shutdown: shutdown.signal,
+    emit: async (entry) => {
+      const saved = {
+        ...entry,
+        sessionId: "shutdown-stop",
+        seq: entries.length + 1,
+        createdAt: Date.now(),
+      } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+    onDelta: (text) => {
+      if (text === "Partial answer") received.resolve();
+    },
+  });
+  await received.promise;
+  shutdown.abort();
+  cancel.abort();
+  const result = await running;
+  assert.equal(result.stopped, true);
+  assert.equal(result.reply, "Partial answer");
+  assert.deepEqual(
+    entries.filter((entry) => entry.type === "assistant"),
+    [],
+  );
+  assert.deepEqual(
+    entries.filter((entry) => entry.type === "text").map((entry) => entry.payload),
+    [{ text: "Checking.", phase: "commentary" }],
+  );
+  assert.equal(turnAtSeq(entries, entries[0]!.seq)?.answer, undefined);
 });
