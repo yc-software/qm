@@ -196,6 +196,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: false,
     webui: true,
     base: true,
+    auxiliary: true,
     clone: {
       template: "claude-opus-4-8",
       input: 0.1,
@@ -207,7 +208,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       tiers: [{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
     },
   },
-  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, webui: true, base: true, auxiliary: true },
+  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, webui: true, base: true },
   {
     id: "gpt-5.6-sol",
     buttonLabel: "5.6 Sol",

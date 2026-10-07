@@ -165,13 +165,13 @@ test("the curated catalog contains only current model families", () => {
 test("auxiliary models come from the configured base model's own provider", () => {
   assert.equal(
     auxiliaryModelFor("claude-opus-5"),
-    "claude-haiku-4-5",
+    "claude-haiku-5-5",
     "the deployment default resolves an Anthropic auxiliary",
   );
-  assert.equal(auxiliaryModelFor("claude-opus-5-5"), "claude-haiku-4-5");
-  assert.equal(auxiliaryModelFor("claude-opus-4-8"), "claude-haiku-4-5");
-  assert.equal(auxiliaryModelFor("claude-fable-5-1"), "claude-haiku-4-5");
-  assert.equal(auxiliaryModelFor("claude-fable-5"), "claude-haiku-4-5");
+  assert.equal(auxiliaryModelFor("claude-opus-5-5"), "claude-haiku-5-5");
+  assert.equal(auxiliaryModelFor("claude-opus-4-8"), "claude-haiku-5-5");
+  assert.equal(auxiliaryModelFor("claude-fable-5-1"), "claude-haiku-5-5");
+  assert.equal(auxiliaryModelFor("claude-fable-5"), "claude-haiku-5-5");
   assert.equal(
     auxiliaryModelFor("gpt-5.6-sol"),
     "gpt-5.6-luna",
@@ -181,7 +181,7 @@ test("auxiliary models come from the configured base model's own provider", () =
 });
 
 test("the Anthropic auxiliary is resolvable by provider, so Anthropic-only surfaces keep working", () => {
-  assert.equal(auxiliaryModelForProvider("anthropic"), "claude-haiku-4-5");
+  assert.equal(auxiliaryModelForProvider("anthropic"), "claude-haiku-5-5");
   assert.equal(auxiliaryModelForProvider("openai"), "gpt-5.6-luna");
   assert.equal(auxiliaryModelForProvider("nope"), undefined);
 });

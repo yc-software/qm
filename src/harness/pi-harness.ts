@@ -397,14 +397,16 @@ async function directAnthropicJson(
     body: JSON.stringify({
       model: gateway?.target ?? requestModel.id,
       max_tokens: 64,
+      // Haiku 5.5 thinks by default; a 64-token budget would go entirely to thinking.
+      thinking: { type: "disabled" },
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
     }),
     signal: AbortSignal.timeout(2_000),
   });
   if (!res.ok) return undefined;
-  const json = (await res.json()) as { content?: Array<{ text?: string }> };
-  return json.content?.[0]?.text;
+  const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
+  return json.content?.find((block) => block.type === "text")?.text;
 }
 
 const APPROVAL_SUMMARY_PROMPT = [
