@@ -31,11 +31,7 @@ import type {
   WorkspaceLayer,
 } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import {
-  defaultPublishAudience,
-  type PublishAudience,
-  type PublishAudienceKind,
-} from "../resolution/publish-audience.ts";
+import { type PublishAudienceKind } from "../resolution/publish-audience.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import type { GapPhase, GapWork } from "../sessions/session-store.ts";
@@ -1044,6 +1040,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async publish(input: PublishInput): Promise<PublishResult> {
       if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
+      if (input.share !== undefined || input.public !== undefined)
+        throw new Error("publish is always private to the owner; use apps action share to grant access");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
       const createdInScope: ScopeId = writableScopeId;
       let effectiveEntrypoint = input.entrypoint;
@@ -1076,41 +1074,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           )
         : {};
 
-      const pc = deps.publishContext;
-      const aud: PublishAudience =
-        pc && orgScopeId
-          ? defaultPublishAudience({
-              kind: pc.conversationKind,
-              ...(pc.isPrivate !== undefined ? { isPrivate: pc.isPrivate } : {}),
-              ...(pc.isMpim !== undefined ? { isMpim: pc.isMpim } : {}),
-              ...(pc.publishMembers ? { members: pc.publishMembers } : {}),
-              orgScopeId,
-              ownerId: deps.createdBy,
-            })
-          : { kind: "owner", grantees: [] };
-      const optOut = Array.isArray(input.share) && input.share.length === 0;
-      const desiredDefault = optOut ? [] : aud.grantees;
-      const doReconcile = effectiveEntrypoint !== undefined && (optOut || !aud.incomplete);
-      const snapshotAt = Date.now();
-      const resolvedShare = input.share?.map((s) => {
-        const scope = s.scope === "org" ? orgScopeId : s.scope;
-        if (!scope) throw new Error('cannot resolve "org" — no org scope is mounted in this session');
-        if (parseScopeId(scope).kind === null) {
-          throw new Error(`invalid share target "${s.scope}" — use "org" or a scope id like personal:<id> or org:<id>`);
-        }
-        return { scope, permission: s.permission };
-      });
-      const widensToOrg = orgScopeId !== null && resolvedShare?.some((s) => s.scope === orgScopeId) === true;
-      if (input.public === true || widensToOrg) {
-        const appRef = input.renameFrom ?? input.name;
-        const current = appRef !== undefined ? await deps.deploy.getDeployment(appRef) : null;
-        const label = current?.name ?? appRef ?? "new app";
-        if (input.public === true && current?.public !== true) requireVisibilityApproval(label, "public");
-        if (widensToOrg) {
-          const granted = current ? await deps.deploy.deploymentGrantees(current.id) : [];
-          if (!granted.some((g) => g.scope === orgScopeId)) requireVisibilityApproval(label, "org");
-        }
-      }
       return once(async () => {
         const d = await deps.deploy.deployOrUpdate({
           ownerScopeId: owner,
@@ -1125,29 +1088,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
-          ...(input.public !== undefined ? { public: input.public } : {}),
-          ...(doReconcile
-            ? {
-                defaultAudience: {
-                  contextScopeId: createdInScope,
-                  granteeScopeIds: desiredDefault,
-                  snapshotAt,
-                  ...(optOut ? { force: true } : {}),
-                },
-              }
-            : {}),
-          ...(resolvedShare?.length ? { share: resolvedShare } : {}),
         });
         const ref = d.name ?? d.id;
         const grantees = await deps.deploy.deploymentGrantees(d.id);
-        const base = audienceFromGrantees(
+        const audience = audienceFromGrantees(
           grantees.map((g) => g.scope),
           d.createdInScope,
         );
-        const audience: PublishAudienceDescriptor =
-          aud.incomplete && effectiveEntrypoint !== undefined && input.share === undefined && aud.reason
-            ? { ...base, note: aud.reason }
-            : base;
         const urlBase = deps.publicWebUrl?.replace(/\/$/, "") ?? "";
         const url = publicUrlOf(d.endpoint) ?? `${urlBase}/d/${ref}/`;
         const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;

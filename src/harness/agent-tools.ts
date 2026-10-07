@@ -1154,9 +1154,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
-      "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
-      "publication-time grants. `public: true` makes the app reachable without sign-in; it is never the default and is refused unless an org admin has enabled external app sharing. " +
-      "Use apps action share for subsequent grants. Share the full absolute URL " +
+      "deployment name, not its ID. Publishing is always private to the owner and never changes who can reach an app; " +
+      "grant access separately with apps action share. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
       "Egress is open, " +
@@ -1179,7 +1178,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }),
           {
             description:
-              "Publication-time access grants. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Existing explicit grants survive. Use apps action share for subsequent grants.",
+              "First-publish access grants only. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Refused when republishing an existing app; use apps action share instead.",
           },
         ),
       ),
@@ -1212,12 +1211,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       rollbackTo: Type.Optional(
         Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
       ),
-      public: Type.Optional(
-        Type.Boolean({
-          description:
-            "Explicitly set whether anyone with the link can open the app without signing in. Defaults to private for new apps; omit to preserve the current setting on updates.",
-        }),
-      ),
       alwaysOn: Type.Optional(
         Type.Boolean({
           description:
@@ -1242,7 +1235,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         name: params.name,
       });
       try {
-        const r = await tc.publish({ ...params, share: params.audience } as PublishInput);
+        const legacy = params as { audience?: PublishInput["share"] };
+        const r = await tc.publish({ ...params, share: legacy.audience } as PublishInput);
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
@@ -1267,7 +1261,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ),
         );
       } catch (e) {
-        if (e instanceof NeedsApproval) return blockOnApproval(callId, e, undefined, "apps");
         const msg = errMessage(e);
         return recordResult(
           callId,

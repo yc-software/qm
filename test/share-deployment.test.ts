@@ -422,40 +422,17 @@ function toolCtx(deploy: DeployService, approved: string[] = []): ToolContext {
   } as never);
 }
 
-test('publish share:[{scope:"org"}] resolves to the org — truthful readback, real reach (the QM bug)', async () => {
-  const { deploy } = makeDeploy();
-  const r = await toolCtx(deploy, [visibilityApprovalKey("wide", "org")]).publish({
-    entrypoint: "x",
-    name: "wide",
-    share: [{ scope: "org", permission: "read" }],
-  });
-  assert.equal(r.audience?.kind, "org", "an org share is reported as org, not owner-only");
-  assert.ok(!r.audience?.note, "no scary owner-only note when reach was actually granted");
-  assert.equal((await deploy.reachDeployment("wide", "U2")).status, "ok");
-});
-
-test("publish keeps apps private by default and requires an explicit public opt-in", async () => {
+test("publish keeps apps private by default and refuses a public flag at publish time", async () => {
   const { deploy } = makeDeploy();
   const privateApp = await toolCtx(deploy).publish({ entrypoint: "x", name: "private-app" });
   assert.equal(privateApp.public, undefined);
   assert.equal((await deploy.getDeployment("private-app"))?.public, undefined);
 
-  const publicApp = await toolCtx(deploy, [visibilityApprovalKey("public-app", "public")]).publish({
-    entrypoint: "x",
-    name: "public-app",
-    public: true,
-  });
-  assert.equal(publicApp.public, true);
-  assert.equal((await deploy.getDeployment("public-app"))?.public, true);
-});
-
-test("publish rejects a garbage share target instead of silently creating a dead grant", async () => {
-  const { deploy } = makeDeploy();
   await assert.rejects(
-    () =>
-      toolCtx(deploy).publish({ entrypoint: "x", name: "bad", share: [{ scope: "not-a-scope", permission: "read" }] }),
-    /invalid share target/,
+    () => toolCtx(deploy).publish({ entrypoint: "x", name: "public-app", public: true }),
+    /apps action share/,
   );
+  assert.equal(await deploy.getDeployment("public-app"), null);
 });
 
 test("transferDeploymentOwner re-homes the app to the teammate: they own it, prior grants survive, the giver keeps reach", async () => {
@@ -500,19 +477,25 @@ test("a manage grantee may redeploy but cannot make the owner's app public", asy
     name: "managed-private",
   });
   await deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: "U1" });
-  await assert.rejects(
-    () =>
-      deploy.deployOrUpdate({
-        ownerScopeId: scopeId("personal", "U2"),
-        createdBy: "U2",
-        name: "managed-private",
-        entrypoint: "x",
-        files: [],
-        public: true,
-      }),
-    /only the owner/,
-  );
   assert.equal((await deploy.getDeployment(d.id))?.public, undefined);
+});
+
+test("republish, rename and rollback never change visibility; only the separate public toggle does", async () => {
+  const { deploy } = makeDeploy();
+  const owner = { ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [] };
+  const d = await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  assert.equal(d.public, undefined, "first publish is private by default");
+  await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  const after = await deploy.getDeployment(d.id);
+  assert.equal(after?.public, undefined);
+  assert.equal(after?.name, "vis");
+  assert.equal((await deploy.reachDeployment("vis", "U2")).status, "denied");
+  await deploy.setDeploymentPublic(d.id, true, { createdBy: "U1" });
+  assert.equal((await deploy.getDeployment(d.id))?.public, true);
+  await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  await deploy.deployOrUpdate({ ...owner, name: "vis2", renameFrom: "vis" });
+  await deploy.deployOrUpdate({ ...owner, name: "vis2", rollbackTo: 1 });
+  assert.equal((await deploy.getDeployment(d.id))?.public, true, "republish, rename and rollback keep the setting");
 });
 
 test("transferDeploymentOwner is home authority — a write ('manage') grantee cannot give the app away", async () => {
@@ -620,30 +603,6 @@ test("with external app sharing off, public links and outside emails are refused
     "personal:teammate@acme.test",
   ]);
 
-  await assert.rejects(
-    deploy.deployOrUpdate({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [],
-      name: "fresh",
-      public: true,
-    }),
-    /external_app_sharing/,
-  );
-  assert.equal(await deploy.getDeployment("fresh"), null);
-  await assert.rejects(
-    deploy.deployOrUpdate({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [],
-      name: "fresh-share",
-      share: [{ scope: scopeId("personal", "guest@elsewhere.test"), permission: "read" }],
-    }),
-    /external_app_sharing/,
-  );
-  assert.equal(await deploy.getDeployment("fresh-share"), null, "publish refuses outside shares before deploying");
   const d = (await app.getDeployment("locked"))!;
   await assert.rejects(
     app.grant({
@@ -938,26 +897,19 @@ test("widening an app to public or org-wide holds for approval; narrowing never 
   await toolCtx(deploy).publish({ entrypoint: "x", name: "held" });
 
   await assert.rejects(
-    () => toolCtx(deploy).publish({ entrypoint: "x", name: "held", public: true }),
-    (e: unknown) => e instanceof NeedsApproval && e.approvalKey === visibilityApprovalKey("held", "public"),
-  );
-  assert.equal((await deploy.getDeployment("held"))?.public, undefined, "republish did not widen");
-
-  await assert.rejects(
     () => toolCtx(deploy).setDeploymentPublic("held", true),
-    (e: unknown) => e instanceof NeedsApproval && e.grantModes?.always === false && e.grantModes.session === false,
+    (e: unknown) =>
+      e instanceof NeedsApproval &&
+      e.approvalKey === visibilityApprovalKey("held", "public") &&
+      e.grantModes?.always === false &&
+      e.grantModes.session === false,
   );
-  await assert.rejects(
-    () => toolCtx(deploy).publish({ entrypoint: "x", name: "held", share: [{ scope: "org", permission: "read" }] }),
-    (e: unknown) => e instanceof NeedsApproval && e.approvalKey === visibilityApprovalKey("held", "org"),
-  );
-  assert.equal((await deploy.reachDeployment("held", "U2")).status, "denied", "org grant not applied");
+  assert.equal((await deploy.getDeployment("held"))?.public, undefined, "held request did not widen");
 
   const made = await toolCtx(deploy, [visibilityApprovalKey("held", "public")]).setDeploymentPublic("held", true);
   assert.equal(made.public, true, "an approved request applies");
   assert.equal((await toolCtx(deploy).setDeploymentPublic("held", true)).public, true, "already public needs nothing");
   assert.equal((await toolCtx(deploy).setDeploymentPublic("held", false)).public, false, "narrowing needs no approval");
-  await toolCtx(deploy).publish({ entrypoint: "x", name: "held", public: false });
   await assert.rejects(
     () => toolCtx(deploy).setDeploymentPublic("held", true),
     NeedsApproval,

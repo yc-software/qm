@@ -3698,7 +3698,7 @@ test("a files read approval cannot authorize writes or sharing", async () => {
   }
 });
 
-test("apps preserves publication-time audience opt-out without control-plane tools", async () => {
+test("apps publish forwards a legacy audience so it is refused, not silently dropped", async () => {
   const inputs: unknown[] = [];
   const tc = {
     ...fakeToolContext(),
@@ -3710,8 +3710,6 @@ test("apps preserves publication-time audience opt-out without control-plane too
   const apps = createAgentTools({ current: tc }).find((tool) => tool.name === "apps")!;
   await call(apps, { action: "publish", name: "private", audience: [] });
   assert.deepEqual((inputs[0] as { share: unknown }).share, []);
-  await call(apps, { action: "publish", audience: [{ scope: "personal:bob", permission: "read" }] });
-  assert.deepEqual((inputs[1] as { share: unknown }).share, [{ scope: "personal:bob", permission: "read" }]);
 });
 
 test("files share preserves artifact IDs, recipient resolution and authorization failures", async () => {
@@ -4096,9 +4094,6 @@ test("apps visibility widening pauses the turn on an approval card instead of ap
   const ref: ToolContextRef = {
     current: {
       ...fakeToolContext(),
-      async publish() {
-        throw held("public");
-      },
       async setDeploymentPublic() {
         throw held("public-share");
       },
@@ -4110,7 +4105,6 @@ test("apps visibility widening pauses the turn on an approval card instead of ap
   };
   const apps = createAgentTools(ref, { controlTools: true }).find((t) => t.name === "apps")!;
   for (const args of [
-    { action: "publish", name: "x", entrypoint: "node s.js", public: true },
     { action: "share", id: "x", public: true },
     { action: "share", id: "x", toScope: "org" },
   ]) {
@@ -4120,7 +4114,6 @@ test("apps visibility widening pauses the turn on an approval card instead of ap
   assert.deepEqual(
     ref.pendingApprovals!.map((a) => [a.approvalKey, a.grantModes]),
     [
-      ["public", { session: false, always: false }],
       ["public-share", { session: false, always: false }],
       ["org", { session: false, always: false }],
     ],
