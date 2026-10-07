@@ -58,6 +58,7 @@
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
     "lint:knip": "knip",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "migrate:transcript-tape": "node scripts/migrate-transcript-tape.ts",
     "build:app-annotations": "node scripts/build-app-devbar.mjs"
   },

@@ -299,7 +299,7 @@ test("all quality jobs keep successful names and missing proof runs full checks"
     const name = block.match(/^ {4}name: (.+)$/m)![1]!;
     if (id === "core-tests") names.push(...[1, 2, 3, 4, 5].map((n) => name.replace("${{ matrix.shard }}", String(n))));
     else names.push(name);
-    if (["core", "coauthor-trailers"].includes(id)) continue;
+    if (["core", "coauthor-trailers", "dependency-audit"].includes(id)) continue;
     assert.ok(block.includes("needs: reuse\n    if: always() && !cancelled()"));
     const steps = block.split(/(?=^ {6}- (?:name|uses):)/m).slice(1);
     assert.ok(steps[0]!.includes("if: needs.reuse.outputs.reusable == 'true'"));
@@ -317,7 +317,9 @@ test("deployment notice fires only for a fully green main push and holds no repo
     job.includes("if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'"),
   );
   assert.ok(
-    job.includes("needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]"),
+    job.includes(
+      "needs: [core, cli, lint, dependency-audit, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]",
+    ),
   );
   assert.ok(job.includes("permissions: {}"));
   assert.ok(job.includes("continue-on-error: true"));
