@@ -20,6 +20,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY .husky/install.mjs .husky/install.mjs
 RUN npm ci --omit=dev && npm audit --omit=dev --audit-level=moderate \
+  && rm -r node_modules/opencode-linux-* node_modules/emoji-datasource/img \
+    node_modules/@napi-rs/canvas-linux-*-gnu node_modules/bare-*/prebuilds \
+    node_modules/@earendil-works/pi-coding-agent/node_modules/@mariozechner/clipboard-linux-*-gnu \
+  && node_modules/.bin/opencode --version \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
