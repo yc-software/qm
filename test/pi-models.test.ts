@@ -112,6 +112,7 @@ test("the curated catalog contains only current model families", () => {
       "claude-opus-4-8",
       "claude-sonnet-5-5",
       "claude-sonnet-5",
+      "claude-haiku-5-5",
       "claude-haiku-4-5",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
@@ -244,6 +245,17 @@ test("context token budget is half of each model's real input room", () => {
   assert.equal(sonnet55.contextWindow, 1_000_000);
   assert.equal(sonnet55.maxTokens, 128_000);
   assert.deepEqual(sonnet55.cost, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, tiers: undefined });
+  const haiku55 = getRequiredModel("claude-haiku-5-5");
+  assert.equal(haiku55.contextWindow, 1_000_000);
+  assert.equal(haiku55.maxTokens, 128_000);
+  assert.deepEqual(haiku55.cost, {
+    input: 0.1,
+    output: 0.5,
+    cacheRead: 0.01,
+    cacheWrite: 0.125,
+    tiers: [{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
+  });
+  assert.equal(contextTokenBudgetForModel("claude-haiku-5-5"), 150_000);
   assert.equal(getRequiredModel("claude-fable-5").contextWindow, 1_000_000);
   assert.equal(contextTokenBudgetForModel("claude-fable-5"), 150_000);
   assert.equal(contextTokenBudgetForModel("gpt-5.6-sol"), 150_000);
