@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -1957,7 +1958,9 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   assert.match(background.description, /\$AGENT_CREDENTIAL_TOKEN all work/);
   assert.match(background.description, /expire 48 hours after the turn/);
 
-  const started = textOf(await call(background, { action: "start", command: "npm run build" }));
+  const started = textOf(
+    await call(background, { action: "start", command: "npm run build", purpose: "Run background tests" }),
+  );
   assert.match(started, /started bg-1/);
   assert.match(started, /running/);
 
@@ -2040,7 +2043,7 @@ test("background surfaces a policy denial/approval as a tool_result, not a throw
   const out = textOf(
     await call(
       createAgentTools({ current: denyTC }).find((t) => t.name === "background"),
-      { action: "start", command: "rm -rf /" },
+      { action: "start", command: "rm -rf /", purpose: "Run background tests" },
     ),
   );
   assert.match(out, /\[denied by policy\]/);
@@ -2057,7 +2060,7 @@ test("background surfaces a policy denial/approval as a tool_result, not a throw
   const out2 = textOf(
     await call(
       createAgentTools(ref).find((t) => t.name === "background"),
-      { action: "start", command: "deploy prod" },
+      { action: "start", command: "deploy prod", purpose: "Run background tests" },
     ),
   );
   assert.match(out2, /\[blocked: needs human approval\]/);
@@ -2649,7 +2652,7 @@ test("background job output is external while background bookkeeping stays inter
     },
   };
   const background = createAgentTools(ref).find((t) => t.name === "background")!;
-  await call(background, { action: "start", command: "npm test" });
+  await call(background, { action: "start", command: "npm test", purpose: "Run background tests" });
   await call(background, { action: "poll", process_id: "bg-1" });
   await call(background, { action: "poll", process_id: "bg-net" });
   await call(background, { action: "list" });
@@ -2735,7 +2738,13 @@ test("unified sandbox dispatches every process action and preserves cursors, sig
     { sandboxResources: true },
   ).find((t) => t.name === "sandbox")!;
   const actions = [
-    { action: "start_process", command: "npm test", sandbox_id: "box-a", timeout_seconds: 123 },
+    {
+      action: "start_process",
+      command: "npm test",
+      purpose: "Run background tests",
+      sandbox_id: "box-a",
+      timeout_seconds: 123,
+    },
     { action: "read_process", process_id: "bg-1", since_cursor: 7, wait_seconds: 2, max_bytes: 99 },
     { action: "write_stdin", process_id: "bg-1", data: "yes\n" },
     { action: "signal_process", process_id: "bg-1", signal: "INT" },
@@ -2751,7 +2760,10 @@ test("unified sandbox dispatches every process action and preserves cursors, sig
   ];
   for (const action of actions) assert.doesNotMatch(textOut(await call(tool, action)), /\[error\]/);
   assert.deepEqual(calls, [
-    { method: "backgroundStart", args: ["npm test", { ttlSeconds: 123, sandboxId: "box-a" }] },
+    {
+      method: "backgroundStart",
+      args: ["npm test", { purpose: "Run background tests", ttlSeconds: 123, sandboxId: "box-a" }],
+    },
     { method: "backgroundPoll", args: ["bg-1", { sinceCursor: 7, waitSeconds: 2, maxBytes: 99 }] },
     { method: "backgroundWrite", args: ["bg-1", "yes\n"] },
     { method: "backgroundStop", args: ["bg-1", "INT"] },
@@ -2785,7 +2797,7 @@ test("unified sandbox advertised schemas and handlers accept minimal arguments f
     { action: "set_default", sandbox_id: null, purpose: "Clear the default" },
     { action: "retire", sandbox_id: "box-a", purpose: "Retire a computer" },
     { action: "exec", command: "echo ok", purpose: "Check execution" },
-    { action: "start_process", command: "echo ok" },
+    { action: "start_process", command: "echo ok", purpose: "Run background tests" },
     { action: "read_process", process_id: "bg-1" },
     { action: "write_stdin", process_id: "bg-1", data: "" },
     { action: "signal_process", process_id: "bg-1" },
@@ -2824,14 +2836,14 @@ test("unified sandbox rejects missing, mistyped and unrelated action fields befo
     { action: "__proto__" },
     { action: "constructor" },
     { action: "exec", purpose: "test" },
-    { action: "start_process", command: " " },
+    { action: "start_process", command: " ", purpose: "Run background tests" },
     { action: "read_process", process_id: "job", sandbox_id: "other-box" },
     { action: "write_stdin", process_id: "job" },
     { action: "signal_process", process_id: "job", signal: "NOPE" },
     { action: "watch_process", process_id: "job", since_cursor: -1 },
     { action: "unwatch_process", monitor_id: null },
     { action: "list_processes", command: "ignored" },
-    { action: "start_process", command: "echo ok", scope: "scratch" },
+    { action: "start_process", command: "echo ok", purpose: "Run background tests", scope: "scratch" },
     { action: "retire", sandbox_id: null, purpose: "test" },
     { action: "create", backend: "modal", command: "ignored", purpose: "test" },
   ])
@@ -2925,7 +2937,7 @@ test("unified sandbox keeps strict approval and quarantined output associated wi
     toolApprovalGate: () => false,
   };
   const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
-  await call(tool, { action: "start_process", command: "test" });
+  await call(tool, { action: "start_process", command: "test", purpose: "Run background tests" });
   assert.equal(ref.pendingApprovals?.[0]?.approvalKey, "tool:sandbox:start_process");
   assert.deepEqual(
     entries.map((e) => [e.tool, e.action]),
@@ -3421,7 +3433,9 @@ test("conversation coordinators cannot execute commands through any command tool
         /unsupported sandbox action/,
       );
       assert.match(
-        textOut(await call(sandbox, { action: "start_process", command: "echo forbidden" })),
+        textOut(
+          await call(sandbox, { action: "start_process", command: "echo forbidden", purpose: "Run background tests" }),
+        ),
         /unsupported sandbox action/,
       );
       assert.ok(tools.some((tool) => tool.name === "subagents"));
@@ -3745,7 +3759,7 @@ test("sandbox call traces preserve purpose across execution, management, process
   for (const params of [
     { action: "exec", command: "pwd" },
     { action: "status" },
-    { action: "start_process", command: "echo ready" },
+    { action: "start_process", command: "echo ready", purpose: "Run background tests" },
     { action: "exec", command: "pwd", scope: "scratch" },
     { action: "exec" },
   ]) {
@@ -4074,4 +4088,151 @@ test("background process guidance reflects the configured sandbox token lifetime
   const unlimited = guidance({ sandboxCapabilityTtlMs: 0 });
   assert.match(unlimited, /does not expire those turn tokens/);
   assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
+});
+
+test("every tool schema carries the optional retrySafe flag, which is stripped before the tool runs and recorded on the call", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tools = createAgentTools(ref, {
+    controlTools: true,
+    clientTools: [
+      { name: "page_state", description: "Read page state", inputSchema: { type: "object", properties: {} } },
+    ],
+  });
+  for (const tool of tools) {
+    const schema = tool.parameters as { properties?: Record<string, { type?: string }>; required?: string[] };
+    assert.equal(schema.properties?.retrySafe?.type, "boolean", `${tool.name} exposes retrySafe`);
+    assert.ok(!schema.required?.includes("retrySafe"), `${tool.name} keeps retrySafe optional`);
+  }
+  const history = tools.find((t) => t.name === "history")!;
+  assert.ok(Check(history.parameters, { query: "budget", retrySafe: true }));
+
+  await callWith(history, "safe", { query: "budget", retrySafe: true });
+  await callWith(history, "unsafe", { seq: 3, retrySafe: false });
+  await callWith(history, "unmarked", { seq: 3 });
+
+  const calls = emitted.filter((e) => e.type === "tool_call");
+  assert.deepEqual(
+    calls.map((e) => e.payload),
+    [
+      {
+        tool: "history",
+        query: "budget",
+        callId: "safe",
+        retrySafe: true,
+        rerun: { tool: "history", input: { query: "budget" } },
+      },
+      { tool: "history", seq: 3, callId: "unsafe", retrySafe: false },
+      { tool: "history", seq: 3, callId: "unmarked" },
+    ],
+  );
+  assert.equal(emitted.filter((e) => e.type === "tool_result").length, 3);
+  assert.doesNotMatch(
+    JSON.stringify(emitted.filter((e) => e.type === "tool_result")),
+    /retrySafe/,
+    "the flag never reaches the tool body or its result",
+  );
+});
+
+test("a tool result recorded after shutdown fires is marked interrupted; user Stop and plain completion are not", async () => {
+  const record = async (abort: "shutdown" | "stop" | "none", retrySafe = true) => {
+    const emitted: Emitted[] = [];
+    const shutdown = new AbortController();
+    const cancel = new AbortController();
+    const ref: ToolContextRef = {
+      current: fakeToolContext(),
+      emit: (e) => {
+        emitted.push(e as Emitted);
+      },
+      scopeLabel: "personal:U1",
+      shutdown: shutdown.signal,
+      abortSignal: cancel.signal,
+    };
+    const history = createAgentTools(ref).find((t) => t.name === "history")!;
+    if (abort === "shutdown") shutdown.abort();
+    if (abort !== "none") cancel.abort();
+    await callWith(history, `call-${abort}`, { query: "budget", retrySafe });
+    return emitted;
+  };
+  const strategy = (emitted: Emitted[]) => {
+    const entries = emitted.map((e, i) => ({ ...e, seq: i + 2 }) as unknown as SessionEntry);
+    return resumeStrategy(entries, { userSeq: 1, workEntries: entries.length });
+  };
+
+  const interrupted = await record("shutdown");
+  const result = interrupted.find((e) => e.type === "tool_result")!.payload;
+  assert.equal(result.interrupted, true);
+  assert.equal(typeof result.result, "string", "the recorded text is kept alongside the mark");
+  assert.deepEqual(strategy(interrupted), {
+    kind: "retry",
+    call: { callId: "call-shutdown", tool: "history", input: { query: "budget" } },
+  });
+  assert.deepEqual(
+    strategy(await record("shutdown", false)),
+    { kind: "note" },
+    "a killed call the model marked unsafe gets the unknown-outcome note, never a continue",
+  );
+
+  for (const abort of ["stop", "none"] as const) {
+    const emitted = await record(abort);
+    const payload = emitted.find((e) => e.type === "tool_result")!.payload;
+    assert.ok(!("interrupted" in payload), `${abort}: an ordinary result stays a real answer`);
+    assert.deepEqual(strategy(emitted), { kind: "continue" });
+  }
+});
+
+test("background starts require a nonblank purpose as a repairable tool result", async () => {
+  let started = false;
+  const current = {
+    ...fakeToolContext(),
+    async backgroundStart() {
+      started = true;
+      throw new Error("must not start");
+    },
+  };
+  for (const [name, action, options] of [
+    ["background", "start", {}],
+    ["sandbox", "start_process", { sandboxResources: true }],
+  ] as const) {
+    const events: Array<Record<string, unknown>> = [];
+    const tool = createAgentTools(
+      {
+        current,
+        scopeLabel: "personal:U1",
+        emit: (entry) => {
+          events.push(entry.payload as Record<string, unknown>);
+        },
+      },
+      options,
+    ).find((t) => t.name === name)!;
+    for (const purpose of [undefined, "", " \n "]) {
+      const result = await call(tool, {
+        action,
+        command: "node server.js",
+        ...(purpose === undefined ? {} : { purpose }),
+      });
+      assert.match(textOut(result), /requires.*purpose/);
+      assert.equal(events.at(-1)?.isError, true);
+    }
+  }
+  assert.equal(started, false);
+});
+
+test("background list labels jobs by purpose and retains commands and legacy fallback", async () => {
+  const current = fakeToolContext();
+  const legacy = (await current.backgroundList())[0]!;
+  current.backgroundList = async () => [
+    { ...legacy, purpose: "Run regression tests" },
+    { ...legacy, processId: "old-job" },
+  ];
+  const tool = createAgentTools({ current }, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  const result = textOut(await call(tool, { action: "list_processes" }));
+  assert.match(result, /Run regression tests\n {2}bg: npm test/);
+  assert.match(result, /old-job[^\n]*bg: npm test/);
 });

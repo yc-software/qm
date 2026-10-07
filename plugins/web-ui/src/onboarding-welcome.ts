@@ -30,14 +30,18 @@ import {
   type PickerState,
 } from "./connection-preview";
 
+const continuedAttempts = new Set<string>();
+
 export class OnboardingWelcome extends LitElement {
   static properties = {
     me: { attribute: false },
     onMoreIdeas: { attribute: false },
+    onConnected: { attribute: false },
     ideasDisabled: { type: Boolean },
     animateWelcome: { type: Boolean },
     setupOnly: { type: Boolean },
     widget: {},
+    toolkit: {},
     returnKey: {},
     base: {},
     adminBase: {},
@@ -53,10 +57,12 @@ export class OnboardingWelcome extends LitElement {
   };
   declare me: Me | null;
   declare onMoreIdeas: (() => void) | undefined;
+  declare onConnected: ((name: string) => void) | undefined;
   declare ideasDisabled: boolean;
   declare animateWelcome: boolean;
   declare setupOnly: boolean;
   declare widget: "all" | "apps" | "slack" | "slack-account";
+  declare toolkit: string;
   declare returnKey: string;
   declare base: string;
   declare adminBase: string;
@@ -94,6 +100,7 @@ export class OnboardingWelcome extends LitElement {
     this.animateWelcome = true;
     this.setupOnly = false;
     this.widget = "all";
+    this.toolkit = "";
     this.returnKey = "welcome";
     this.base = "/";
     this.adminBase = "/admin";
@@ -203,12 +210,15 @@ export class OnboardingWelcome extends LitElement {
     const connected = this.preview
       ? previewConnections(this.previewUser())
       : this.connections.map((account) => account.toolkit);
+    const services = this.services.map((service) => ({ ...service, connected: connected.includes(service.id) }));
+    const requested = services.find((service) => service.id === this.requestedToolkit());
     if (target && !this.error && !this.loading)
       mountConnectionPicker(
         target,
-        this.services.map((service) => ({ ...service, connected: connected.includes(service.id) })),
+        requested ? [requested] : services,
         (service) => this.authorize(service),
-        this.pickerState,
+        requested ? { query: "", expanded: false } : this.pickerState,
+        requested,
       );
   }
   disconnectedCallback(): void {
@@ -217,6 +227,9 @@ export class OnboardingWelcome extends LitElement {
     this.connectionsController?.abort();
     window.removeEventListener("focus", this.refreshConnections);
     document.removeEventListener("visibilitychange", this.refreshConnections);
+  }
+  private requestedToolkit(): string {
+    return this.services.some((service) => service.id === this.toolkit) ? this.toolkit : "";
   }
   private async loadConnections(): Promise<void> {
     this.connectionsController?.abort();
@@ -252,6 +265,10 @@ export class OnboardingWelcome extends LitElement {
         if (this.connectionOutcome === "success") {
           completeConnectionReturn(this.previewUser(), attempt.state);
           this.realReturn = null;
+          if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
+            continuedAttempts.add(attempt.state);
+            this.onConnected?.(attempt.service.name);
+          }
         }
       }
       await this.updateComplete;
@@ -384,9 +401,10 @@ export class OnboardingWelcome extends LitElement {
     const connected = this.preview
       ? previewConnections(this.previewUser())
       : this.connections.map((account) => account.toolkit);
-    const connectedServices = [...new Set(connected)].map(
-      (id) => this.services.find((service) => service.id === id) ?? { id, name: id },
-    );
+    const requested = this.requestedToolkit();
+    const connectedServices = [...new Set(connected)]
+      .filter((id) => !requested || id === requested)
+      .map((id) => this.services.find((service) => service.id === id) ?? { id, name: id });
     const outcome = {
       "": { title: "", detail: "" },
       checking: {

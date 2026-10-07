@@ -217,7 +217,7 @@ interface DeploymentGitUrl {
 }
 
 interface SessionBackgroundView {
-  jobs: Array<{ processId: string; command: string; startedAt: number; expiresAt: number }>;
+  jobs: Array<{ processId: string; command: string; purpose?: string; startedAt: number; expiresAt: number }>;
   watches: Array<{
     id: string;
     processId: string;
@@ -618,6 +618,7 @@ export interface App {
 export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
+  shutdown?: () => AbortSignal;
   resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;

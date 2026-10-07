@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2194,7 +2195,20 @@ test("priorTurns are routed to the harness as structured roled turns (PR3)", asy
 });
 
 test("overheard messages are imported ONCE into the durable log, author-labeled, and handed to the harness", async () => {
-  const { app } = freshApp();
+  const { app, sessions } = freshApp();
+  const entryBatches: number[] = [];
+  const tapeBatches: number[] = [];
+  const appendMany = sessions.appendMany.bind(sessions);
+  const appendTapeMany = sessions.appendTapeMany.bind(sessions);
+  sessions.appendMany = async (lease, entries) => {
+    if (entries.some((entry) => (entry.payload as { overheard?: boolean })?.overheard))
+      entryBatches.push(entries.length);
+    return appendMany(lease, entries);
+  };
+  sessions.appendTapeMany = async (lease, records) => {
+    if (records.some((record) => record.meta?.overheard)) tapeBatches.push(records.length);
+    return appendTapeMany(lease, records);
+  };
   const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
     entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
 
@@ -2243,6 +2257,8 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
     ["100.001", "100.002", "100.003", "100.004"],
     "append-only: each message recorded exactly once",
   );
+  assert.deepEqual(entryBatches, [3, 1]);
+  assert.deepEqual(tapeBatches, [3, 1]);
 });
 
 test("a message answered on one turn is not re-imported as overheard on the next (full-stack dedupe)", async () => {
@@ -4082,6 +4098,25 @@ test("repeated terminal failures keep failing loudly — history is never rewrit
     "history:4",
     "the full conversation replays: two user turns + reply + each failed turn's own user entry; the failure records stay out of model context",
   );
+});
+
+test("an exhausted model budget refuses the turn with a plain explanation instead of failing or retrying", async () => {
+  const { app, runs, errors } = freshApp();
+  const t1 = await app.turn(dm("hello"));
+  assert.equal(t1.status, "ok");
+
+  const refused = await app.turn(dm("!over-budget", { idempotencyKey: "over-budget-1" }));
+  assert.equal(refused.status, "refused");
+  assert.equal(refused.refusalKind, "model_budget");
+  assert.equal(refused.reason, MODEL_BUDGET_TEXT);
+  assert.equal(await runs.activeForThread("dm:U1:t1"), null, "nothing is requeued to hit the same limit again");
+
+  const found = await app.getSession(t1.sessionId!);
+  const failures = found!.entries.filter((e) => turnFailure(e));
+  assert.equal(failures.length, 1, "the explanation survives a reload");
+  assert.equal(turnFailure(failures[0]!)!.message, MODEL_BUDGET_TEXT);
+  const logged = (await errors.list()).find((e) => e.category === "turn" && e.code === "model_budget");
+  assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
 });
 
 test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async () => {

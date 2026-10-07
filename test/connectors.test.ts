@@ -283,6 +283,9 @@ test("connector token keys are Postgres-safe (no NUL byte) — round-trip throug
     seenKeys.push(k);
   };
   const creds: DurableMap<KeychainCredential> = {
+    async mutateMany() {
+      throw new Error("unused in connector token test");
+    },
     async all() {
       return [...store.values()];
     },

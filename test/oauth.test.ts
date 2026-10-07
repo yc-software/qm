@@ -30,6 +30,8 @@ const env = {
   GITHUB_OAUTH_CLIENT_SECRET: "ghsecret",
   X_OAUTH_CLIENT_ID: "xid",
   X_OAUTH_CLIENT_SECRET: "xsecret",
+  LINEAR_OAUTH_CLIENT_ID: "lid",
+  LINEAR_OAUTH_CLIENT_SECRET: "lsec",
 } as NodeJS.ProcessEnv;
 
 const resolve = createSecretClientResolver(createEnvSecretSource(env));
@@ -323,6 +325,25 @@ test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async (
     () => makeRefresh({ resolveClient: resolve })("api.notion.com", { accessToken: "x", refreshToken: "rt" }),
     /do not refresh/,
   );
+});
+
+test("Linear refreshes via the standard refresh_token grant", async () => {
+  const fetchImpl: FetchLike = async (u, init) => {
+    assert.equal(u, PROVIDERS.linear!.tokenUrl);
+    assert.match(init.body, /grant_type=refresh_token/);
+    assert.match(init.body, /refresh_token=rt-old/);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "lin-new", refresh_token: "rt-new", expires_in: 86399 }),
+    };
+  };
+  const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl })("api.linear.app", {
+    accessToken: "lin-old",
+    refreshToken: "rt-old",
+  });
+  assert.equal(fresh.accessToken, "lin-new");
+  assert.equal(fresh.refreshToken, "rt-new");
 });
 
 test("scopesFor: BYO client scopes override the provider default", async () => {

@@ -7,10 +7,11 @@ import {
   type HarnessTurnResult,
 } from "./harness.ts";
 import { classifyScopeLabel } from "../classify/scope-classifier.ts";
-import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
+import { recordStoppedReply } from "./harness-shared.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
@@ -84,6 +85,7 @@ export function createMockHarness(): Harness {
   const shedSessions = new Set<string>();
   const boomAlwaysSessions = new Set<string>();
   const resumePostSessions = new Map<string, string>();
+  const shutdownResumeSessions = new Set<string>();
   const flakyScreens = new Set<string>();
   return defineHarness(
     {
@@ -196,6 +198,27 @@ export function createMockHarness(): Harness {
           });
           usedTool = true;
           reply = r.ok ? "(posted after resume)" : `[not sent] ${r.message ?? "failed"}`;
+        } else if (command0.startsWith("(system note:") && shutdownResumeSessions.has(turn.session.id)) {
+          shutdownResumeSessions.delete(turn.session.id);
+          reply = "finished after resume";
+        } else if (command0 === "!work-until-shutdown") {
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "execute", callId: "build", command: "make build" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "execute", callId: "build", ok: true },
+            scopeLabel: turn.scopeLabel,
+          });
+          shutdownResumeSessions.add(turn.session.id);
+          await new Promise<void>((resolve) => {
+            if (!turn.cancel || turn.cancel.aborted) resolve();
+            else turn.cancel.addEventListener("abort", () => resolve(), { once: true });
+          });
+          await recordStoppedReply(turn, "(stopped)");
+          return { reply: "(stopped)", stopped: true, modelCalls: 1 };
         } else if (command0.startsWith("!post-lost-result ")) {
           const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
           await turn.emit({
@@ -206,6 +229,13 @@ export function createMockHarness(): Harness {
           await turn.tools.post(msg);
           resumePostSessions.set(turn.session.id, `${msg} (repost)`);
           throw new Error("boom: simulated fault before the post's tool result landed");
+        } else if (command0 === "!over-budget") {
+          throw new ProviderTurnError("Model provider API error (budget_exceeded): ExceededBudget", {
+            code: "model_budget",
+            retryable: false,
+            status: 429,
+            raw: '429: {"message":"ExceededBudget: Team=team-a over 1d budget.","type":"budget_exceeded"}',
+          });
         } else if (command0.startsWith("!post-then-boom ")) {
           const rest = cmd.slice(cmd.indexOf("!post-then-boom ") + "!post-then-boom ".length);
           const bar = rest.indexOf("|");

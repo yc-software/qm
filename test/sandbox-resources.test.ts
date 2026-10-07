@@ -696,7 +696,7 @@ test("retirement waits for background startup to commit its live registry row", 
     return register(row);
   };
   const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
-  const starting = broker.start(handle, "sleep 60");
+  const starting = broker.start(handle, "sleep 60", "Run background tests");
   await entering.promise;
   let destroyed = false;
   backend.destroyScope = async () => {
@@ -730,7 +730,7 @@ test("failed background registration kills its process and releases the resource
     signals.push(`${id}:${signal}`);
   };
   const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
-  await assert.rejects(broker.start(handle, "sleep 60"), /registry unavailable/);
+  await assert.rejects(broker.start(handle, "sleep 60", "Run background tests"), /registry unavailable/);
   assert.deepEqual(signals, ["unregistered:KILL"]);
   await resources.retire("alice", record.id);
   assert.equal((await resources.get(record.id)).cleanupPending, false);

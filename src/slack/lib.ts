@@ -140,6 +140,7 @@ export {
   postWithVerify,
   findPostedByKey,
   recoveryVerifyOldest,
+  statusPlaceholderKey,
   deliveryMetadata,
   type DeliveryMetadata,
   type PostedPart,

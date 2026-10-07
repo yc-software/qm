@@ -2800,7 +2800,6 @@ qm-markdown .tok-in {
 }
 .session-message {
   flex: 1 1 0;
-  margin-left: 4px;
 }
 .tool-row.tool-approval {
   color: var(--foreground);
@@ -3439,7 +3438,8 @@ qm-markdown .tok-in {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11.5px;
 }
-.bg-row.watch .bg-row-cmd {
+.bg-row.watch .bg-row-cmd,
+.bg-row-cmd.bg-job-purpose {
   font-family: inherit;
   font-size: 12px;
 }

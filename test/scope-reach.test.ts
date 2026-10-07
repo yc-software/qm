@@ -249,6 +249,7 @@ test("reachExec ON (no scratch): scope is a free string; a room routes to reachT
     "timeout_seconds",
     "credentials",
     "scope",
+    "retrySafe",
   ]);
   await call(execute, { command: "cat x", scope: "#project-alpha" });
   assert.deepEqual(seen.at(-1)!.opts, { reachTarget: "#project-alpha" });
@@ -271,6 +272,7 @@ test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room",
     "credentials",
     "scope",
     "durable",
+    "retrySafe",
   ]);
   await call(execute, { command: "x", scope: "scratch" });
   assert.deepEqual(seen.at(-1)!.opts, { scratch: true });
