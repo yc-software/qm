@@ -1,3 +1,4 @@
+import { disclosedMemory } from "./disclosure.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryRevision, MemoryService } from "./memory-service.ts";
 
@@ -40,6 +41,14 @@ export function createRoutedMemoryService(opts: {
   };
 
   return {
+    withDisclosure(access) {
+      return createRoutedMemoryService({
+        ...opts,
+        providers: Object.fromEntries(
+          Object.entries(opts.providers).map(([name, provider]) => [name, disclosedMemory(provider, access)]),
+        ),
+      });
+    },
     async recall(scopeId, context) {
       const routes = routesFor(scopeId).filter((route) => route.recall !== false);
       const recalled = await Promise.all(
@@ -68,7 +77,14 @@ export function createRoutedMemoryService(opts: {
       const counts = await Promise.all(
         routes.map(async (route) => {
           try {
-            return await providerFor(route).capture(scopeId, facts, at, author, context);
+            const provider = providerFor(route);
+            if (
+              context?.conversationScopeId &&
+              context.conversationScopeId !== scopeId &&
+              !(await provider.readHead?.(scopeId))?.records
+            )
+              return 0;
+            return await provider.capture(scopeId, facts, at, author, context);
           } catch (error) {
             if (!route.failOpen) throw error;
             opts.onError?.(error, route.provider, "capture");
@@ -118,6 +134,15 @@ export function createRoutedMemoryService(opts: {
       if (!manager?.replaceIfRevision) return false;
       return manager.replaceIfRevision(scopeId, content, revision, author);
     },
+
+    ...(opts.routes
+      .filter((route) => route.manage !== false)
+      .every((route) => providerFor(route).replaceRecordsIfRevision)
+      ? {
+          replaceRecordsIfRevision: async (scopeId, records, revision, author) =>
+            (await managerFor(scopeId)?.replaceRecordsIfRevision?.(scopeId, records, revision, author)) ?? false,
+        }
+      : {}),
 
     async history(scopeId, limit): Promise<MemoryRevision[]> {
       return (await managerFor(scopeId)?.history?.(scopeId, limit)) ?? [];

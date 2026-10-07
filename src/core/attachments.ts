@@ -16,6 +16,7 @@ import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
+import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
 
 export const INBOX_DIR = "inbox";
 export const SHARED_DIR = "shared";
@@ -202,18 +203,23 @@ function shownToModel(meta: AttachmentMeta): boolean {
   return isVisionAttachment(meta) && meta.sizeBytes > 0 && meta.sizeBytes <= MAX_VISION_IMAGE_BYTES;
 }
 
-export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR): string {
+export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, unstaged?: Set<string>): string {
   if (!metas.length) return "";
   const list = metas
     .map(
       (m) =>
-        `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}`,
+        `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}${
+          unstaged?.has(m.name)
+            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); if you need it on disk, select or create a sandbox with set_default, then download GET $AGENT_API_URL/v1/files/${m.artifactId}/content (header x-agent-capability: $AGENT_API_TOKEN) to a path you choose`
+            : ""
+        }`,
     )
     .join("\n");
   const noun = metas.length === 1 ? "file" : "files";
+  const where = unstaged?.size ? `for ./${inboxDir}/` : `available in ./${inboxDir}/`;
   const lead = metas.some((m) => m.author)
-    ? `${metas.length} ${noun} shared in this conversation, available in ./${inboxDir}/:`
-    : `The user shared ${metas.length} ${noun}, available in ./${inboxDir}/:`;
+    ? `${metas.length} ${noun} shared in this conversation, ${where}:`
+    : `The user shared ${metas.length} ${noun}, ${where}:`;
   return `${lead}\n${list}`;
 }
 
@@ -271,7 +277,7 @@ export function sharedManifest(handles: readonly GrantedHandle[]): string {
   }
   if (!lines.length) return "";
   const total = lines.length;
-  const shown = lines.slice(0, MAX_SHARED_FILES_LISTED);
+  const shown = lines.sort().slice(0, MAX_SHARED_FILES_LISTED);
   const omitted = total - shown.length;
   if (omitted > 0) {
     shown.push(`…and ${omitted} more (read shared/<name> to fetch)`);
@@ -301,7 +307,7 @@ export function senderNote(name: string | undefined): string {
 
 export async function materializeInbound(
   sandbox: Sandbox,
-  handle: SandboxHandle,
+  handle: SandboxHandle | (() => Promise<SandboxHandle>),
   attachments: IncomingAttachment[],
   transfer: BlobTransferStore,
   register?: ArtifactRegistration,
@@ -318,7 +324,15 @@ export async function materializeInbound(
   unavailable: string[];
   blocked: string[];
   unscreened: string[];
+  unstaged?: Set<string>;
 }> {
+  let target: Promise<SandboxHandle | null> | undefined;
+  const computer = () =>
+    (target ??= (typeof handle === "function" ? handle() : Promise.resolve(handle)).catch((e: unknown) => {
+      if (e instanceof NoDefaultSandboxError) return null;
+      throw e;
+    }));
+  const unstaged = new Set<string>();
   const metas: AttachmentMeta[] = [];
   const images: InboundImage[] = [];
   const tooMany: string[] = [];
@@ -349,10 +363,18 @@ export async function materializeInbound(
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);
     }
-    await sandbox.writeFileBytes(handle, `${inboxDir}/${name}`, bytes);
+    const box = await computer();
+    if (box) await sandbox.writeFileBytes(box, `${inboxDir}/${name}`, bytes);
     const registered = register
       ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
       : undefined;
+    if (!box) {
+      if (!registered) {
+        unavailable.push(name);
+        continue;
+      }
+      unstaged.add(name);
+    }
     metas.push({
       name,
       mimetype,
@@ -372,7 +394,7 @@ export async function materializeInbound(
       });
     }
   }
-  return { metas, images, tooMany, unavailable, blocked, unscreened };
+  return { metas, images, tooMany, unavailable, blocked, unscreened, ...(unstaged.size ? { unstaged } : {}) };
 }
 
 const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";

@@ -18,7 +18,7 @@ import type { DenyResponder } from "./allow-from.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Mirror } from "./mirror.ts";
 import type { TurnHandler } from "./turn-handler.ts";
-import { shouldMirrorMessage } from "./message-gating.ts";
+import { shouldMirrorMessage, isOwnStatusCard } from "./message-gating.ts";
 
 interface EventArgs {
   event: unknown;
@@ -48,6 +48,7 @@ export function registerSlackEvents(
     allowActor?: (actor: ActorAssertion) => boolean;
     denyResponder?: DenyResponder;
     webUiPublicUrl?: string;
+    backfillHistory?: (client: unknown, channel: string) => Promise<unknown>;
     ensureHeader?: (
       client: SurfaceHeaderClient,
       channel: string,
@@ -57,7 +58,14 @@ export function registerSlackEvents(
     ) => void;
     inboxMessage?: (
       client: unknown,
-      msg: { channel: string; ts: string; threadTs?: string; text?: string; senderSlackId?: string },
+      msg: {
+        channel: string;
+        ts: string;
+        threadTs?: string;
+        text?: string;
+        senderSlackId?: string;
+        isDirectMessage?: boolean;
+      },
     ) => void;
   },
 ): void {
@@ -168,6 +176,7 @@ export function registerSlackEvents(
   app.message(async ({ message, body, client, context }: MessageArgs) => {
     try {
       const m = parseMessageEvent(message);
+      if (isOwnStatusCard(m.message ?? m.previous_message ?? m, ids.botUserId, ids.ownBotId)) return;
       if (
         m.channel &&
         !m.channel_type &&
@@ -348,6 +357,7 @@ export function registerSlackEvents(
     const e = parseLifecycleEvent(event);
     if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }))) return;
     if (e.user === ids.botUserId) {
+      if (e.channel && deps.backfillHistory) await deps.backfillHistory(client, e.channel).catch(() => {});
       if (allowActor) {
         await forceDirectorySync(client);
         return;

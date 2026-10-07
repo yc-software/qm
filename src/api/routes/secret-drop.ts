@@ -9,7 +9,8 @@ import { KeychainError, type GrantMode } from "../../credentials/keychain.ts";
 import { SECRET_DROP_TTL_MS, type SecretDropField, type SecretDropRecord } from "../../credentials/secret-drop.ts";
 import { isSharedScope, parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
-import { escapeHtml, sendJson } from "../http.ts";
+import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
+import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow } from "../../util/errors.ts";
@@ -248,6 +249,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       exp: Date.now() + SECRET_DROP_TTL_MS,
     },
     capSecret,
+    deps.capabilityTokenCompression,
   );
   const formPath = `/drop/${dropId}/form?t=${encodeURIComponent(linkToken)}`;
   const base = (deps.portalUrl ?? deps.publicUrl)?.replace(/\/$/, "");

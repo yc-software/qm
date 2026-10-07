@@ -1,5 +1,5 @@
 import { createChatSurface } from "./chat";
-import { createComposerSurface } from "./composer";
+import { createComposerSurface, type ComposerOptions } from "./composer";
 import { densityTierFor, type DensityTier } from "./density";
 import { subscribeDeliveries } from "./core-bridge";
 import { applySessionState } from "./session-list";
@@ -10,10 +10,10 @@ import type { Conversation, ConvCtx, ConvHost } from "./conv-types";
 const live = new Set<Conversation>();
 let main: Conversation | null = null;
 
-export function createConversation(host: ConvHost): Conversation {
+export function createConversation(host: ConvHost, composerOptions?: ComposerOptions): Conversation {
   const ctx = { ...host } as ConvCtx;
   ctx.chat = createChatSurface(ctx);
-  ctx.composer = createComposerSurface(ctx);
+  ctx.composer = createComposerSurface(ctx, composerOptions);
   const conv = ctx.chat as Conversation;
   conv.composer = ctx.composer;
   live.add(conv);

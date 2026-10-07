@@ -20,6 +20,7 @@ export async function swarmFixture(
     runs?: RunStore;
     lock?: AdvisoryLock;
     backend?: Sandbox;
+    runtime?: Pick<OrchestratorInput, "model" | "harness" | "thinkingLevel" | "fastMode">;
   } = {},
 ) {
   const sessions = options.sessions ?? createMemorySessionStore();
@@ -61,13 +62,9 @@ export async function swarmFixture(
       disks.delete(id);
     },
   };
-  const routes = createMemoryMap<import("../../src/sandbox/sandbox-routing.ts").SandboxRoute>();
   const sandboxes = createSandboxResources({
-    enabled: true,
-    rollout: createMemoryMap(),
     records,
     defaults: createMemoryMap(),
-    routes,
     backends: { modal: backend },
     defaultBackend: "modal",
     lock,
@@ -76,7 +73,6 @@ export async function swarmFixture(
   const sandbox = createSandboxRouter({
     backends: { modal: backend },
     defaultBackend: "modal",
-    routes,
     resources: sandboxes,
   });
   const actor = { id: "alice", type: "internal" as const };
@@ -95,6 +91,7 @@ export async function swarmFixture(
     text: "Start workers",
     surface: "slack",
     deliveryTarget: "private-dm",
+    ...options.runtime,
   };
   const { run } = await runs.enqueue({ sessionId: root.threadRef, request: template });
   const claim = (await runs.claimById(run.id, "swarm-fixture", 60_000))!;

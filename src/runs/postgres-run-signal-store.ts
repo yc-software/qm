@@ -1,4 +1,6 @@
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
+import { jsonbStringify } from "../persistence/durable-map.ts";
+import { pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
 
@@ -76,7 +78,14 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
            RETURNING id
          )
          SELECT pg_notify('${CHANNEL}', $1) FROM ins`,
-        [runId, signal.kind, signal.text ?? null, JSON.stringify(signal), Date.now(), signal.dedupeKey ?? null],
+        [
+          runId,
+          signal.kind,
+          signal.text === undefined ? null : pgTextSafe(signal.text),
+          jsonbStringify(signal),
+          Date.now(),
+          signal.dedupeKey ?? null,
+        ],
       );
       return rows.length > 0;
     },

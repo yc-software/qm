@@ -87,7 +87,7 @@ test("pinned conversations align with project conversations without a header-to-
   assert.match(header, /min-height:\s*30px;/);
   assert.match(header, /margin:\s*3px 0 0 4px;/);
   assert.match(header, /padding:\s*4px 3px 4px 2px;/);
-  assert.match(header, /font-size:\s*12\.5px;/);
+  assert.match(header, /font-size:\s*var\(--font-12-5\);/);
   assert.match(shellCss, /\.pinned-head-glyph \{[\s\S]*?flex: 0 0 14px;/);
   assert.match(shellCss, /\.pinned-children \{[\s\S]*?margin-left: 13px;/);
   assert.match(shellCss, /\.pinned-children \.session \{\s*padding-left: 6px;/);
@@ -136,8 +136,9 @@ test("chat shadows stay limited to elevated surfaces and subtle activity hover g
         "0 0 12px color-mix(in srgb, var(--foreground) 12%, transparent)",
       ],
       [".composer-wrap", "box", "0 2px 5px rgb(0 0 0 / 0.05), 0 8px 24px rgb(0 0 0 / 0.06)"],
+      [".qm-tooltip", "box", "var(--chat-surface-shadow)"],
     ],
-    "pinned surfaces and the composer retain their shadows; activity glow appears only on hover",
+    "pinned surfaces, the composer, and tooltips retain their shadows; activity glow appears only on hover",
   );
   const inlineShadows = [...tsSource.matchAll(/(?:box|text)-shadow\s*:\s*([^;}]+)/g)]
     .map((m) => m[1].trim())
@@ -170,5 +171,40 @@ test("every modal scrim dims through --scrim, which each theme points away from 
     const value = block.match(/--scrim:\s*oklch\(([\d.]+)/)?.[1];
     assert.ok(value, `${name} must define --scrim`);
     assert.ok(Number(value) < 0.2, `${name} --scrim must be dark enough to dim, got L=${value}`);
+  }
+});
+
+test("desktop density tokens keep original touch sizes and a 12px floor", () => {
+  const root = shellCss.match(/:root \{([^}]+)\}/)?.[1] ?? "";
+  const desktop = shellCss.match(/@media \(min-width: 861px\) and \(hover: hover\) \{\s*:root \{([^}]+)\}/)?.[1] ?? "";
+  const tokens = (block: string) => new Map([...block.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2]]));
+  const before = tokens(root);
+  const after = tokens(desktop);
+  assert.equal(before.get("--text-scale"), "1");
+  assert.equal(after.get("--text-scale"), "0.9");
+  for (const [name, value] of before) {
+    if (!name.startsWith("--font-")) continue;
+    const original = Number.parseFloat(value);
+    assert.equal(after.get(name), `${Math.max(12, Math.round(original * 90) / 100)}px`, name);
+  }
+  for (const [name, original, compact] of [
+    ["--content-w", "820px", "740px"],
+    ["--chat-pad", "16px", "14.4px"],
+    ["--meta-lane", "24px", "21.6px"],
+    ["--session-title-size", "13.5px", "12.5px"],
+  ]) {
+    assert.equal(before.get(name), original);
+    assert.equal(after.get(name), compact);
+  }
+  const scaled = (offset: string) =>
+    `font-size: max(min(12px, calc(var(--chat-font-size) - ${offset})), calc((var(--chat-font-size) - ${offset}) * var(--text-scale)));`;
+  for (const [selector, offset] of [
+    [".thinking", "2px"],
+    [".thinking-summary", "1px"],
+    [".thinking-body", "1px"],
+    [".work-message", "1px"],
+  ]) {
+    const block = shellCss.match(new RegExp(`\\n${selector.replace(".", "\\.")} \\{([^}]*)\\}`))?.[1] ?? "";
+    assert.ok(block.includes(scaled(offset)), selector);
   }
 });

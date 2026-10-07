@@ -8,6 +8,7 @@ import {
   openImpersonation,
   openTmp,
   setCookie,
+  sessionCookieHeaders,
   clearCookie,
   readCookie,
   safeEqual,
@@ -259,4 +260,40 @@ test("login preserves opaque callback query values while rejecting normalized re
   assert.equal(sanitizeReturnTo(callback, "https://qm.example"), callback);
   assert.equal(sanitizeReturnTo("/path/..//evil.example", "https://qm.example"), "/");
   assert.equal(sanitizeReturnTo("/%2f%2fevil.example?session_uri=ok", "https://qm.example"), "/");
+});
+
+for (const domain of [undefined, "example.test"]) {
+  test(`login and renewal always issue the framed session twin (${domain ?? "host-only"})`, () => {
+    const attrs = { path: "/", maxAge: 100, secure: true, domain };
+    const headers = sessionCookieHeaders("signed-session", attrs);
+    assert.ok(headers.some((header) => header.startsWith("portal_session=signed-session;")));
+    const twins = headers.filter((header) => header.startsWith("portal_session_x=signed-session;"));
+    assert.equal(twins.length, 1);
+    assert.match(twins[0]!, /SameSite=None/);
+    assert.match(twins[0]!, /Secure/);
+    if (domain) {
+      assert.match(twins[0]!, new RegExp(`Domain=${domain}`));
+      assert.ok(headers.some((header) => header.startsWith("portal_session_x=;") && !header.includes("Domain=")));
+    } else {
+      assert.ok(!headers.some((header) => header.startsWith("portal_session_x=;")));
+    }
+  });
+}
+
+test("the framed session twin falls back to Lax on a non-https origin", () => {
+  const twin = sessionCookieHeaders("signed-session", { path: "/", maxAge: 100, secure: false }).find((header) =>
+    header.startsWith("portal_session_x="),
+  );
+  assert.match(twin ?? "", /SameSite=Lax/);
+  assert.doesNotMatch(twin ?? "", /Secure/);
+});
+
+test("openSession preserves signed app-only authority and rejects malformed markers", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const claims = { k: "session", sub: "guest@partner.test", org: "acme", iat: now, exp: now + 3600 };
+  assert.equal(openSession(seal({ ...claims, appOnly: true }, sessionKey), sessionKey, Date.now())?.appOnly, true);
+  assert.equal(openSession(seal(claims, sessionKey), sessionKey, Date.now())?.appOnly, undefined);
+  for (const appOnly of ["true", "false", 1, 0, null, {}]) {
+    assert.equal(openSession(seal({ ...claims, appOnly }, sessionKey), sessionKey, Date.now()), null);
+  }
 });

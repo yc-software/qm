@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,6 +20,7 @@ import {
   EGRESS_PROXY_AUD,
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -101,6 +103,56 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
     const updates = (await s.built.auditLog.events()).filter((e) => e.action === "memory.update");
     assert.equal(updates.length, 1);
     assert.equal(updates[0]!.principalId, "admin-alice", "the admin action is attributed to the acting admin");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a large channel's capability passes HTTP parsing and retains admin authorization", async () => {
+  const s = start();
+  try {
+    const members = Array.from({ length: 120 }, (_, i) => ({
+      id: `channel-member-${i}@example.test`,
+      type: "internal" as const,
+      displayName: `Channel Member ${i}`,
+      teamIds: ["engineering"],
+    }));
+    const claims = {
+      actorId: "admin-alice",
+      scopeId: "channel:C1",
+      aud: CONTROL_PLANE_AUD,
+      liveActor: true,
+      liveAuthor: true,
+      members,
+      keychainMembers: members,
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    };
+    const url = `${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`;
+    const legacy = await mintSignedPayload({ orgId: "default-org", ...claims }, SECRET);
+    const rejected = await fetch(url, { headers: { "x-agent-capability": legacy } });
+    assert.equal(rejected.status, 431);
+    await rejected.text();
+    const token = await mintCapabilityToken(claims, SECRET, true);
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: { "x-agent-capability": token, "content-type": "application/json" },
+      body: JSON.stringify({ content: "# Memory\n\n- Large channel standing rule." }),
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+    const read = await fetch(url, { headers: { "x-agent-capability": token } });
+    assert.equal(read.status, 200);
+    assert.match(((await read.json()) as { content: string }).content, /Large channel standing rule/);
+    const denied = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "x-agent-capability": await mintCapabilityToken({ ...claims, actorId: "U1" }, SECRET, true),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ content: "unauthorized overwrite" }),
+    });
+    assert.equal(denied.status, 403);
+    await denied.text();
   } finally {
     await s.close();
   }
@@ -533,6 +585,7 @@ for (const [name, input, expected] of [
   test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
     const s = start();
     try {
+      await selectDefaultSandbox(s.built, "admin-alice", "channel:C1");
       let cap: string | undefined;
       const provision = s.built.sandbox.provision.bind(s.built.sandbox);
       s.built.sandbox.provision = (layers, opts) => {
@@ -708,3 +761,44 @@ for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1")
     }
   });
 }
+
+test("shared-channel admin runtime mutations do not return a private cron prompt", async () => {
+  const s = start();
+  try {
+    await s.built.config.setSharingPosture("channel:C1", "isolated");
+    const cron = await s.built.app.createCron({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      action: "private task details",
+    });
+    const cap = await capFor("admin-alice", { scope: "channel:C1" });
+    const headers = { "x-agent-capability": cap, "content-type": "application/json" };
+    const read = await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, { headers });
+    assert.equal(read.status, 403);
+    const updated = await fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=personal:U1`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ runtime: null }),
+    });
+    assert.equal(updated.status, 200);
+    assert.deepEqual(await updated.json(), { cron: { id: cron.id, runtime: null } });
+    const retargeted = await fetch(`${s.base}/v1/admin/crons/${cron.id}/destination?scope=personal:U1`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ destination: null }),
+    });
+    assert.equal(retargeted.status, 200);
+    assert.deepEqual(await retargeted.json(), { cron: { id: cron.id } });
+    const unattended = await capFor("admin-alice", { live: false, scope: "channel:C1" });
+    const denied = await fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=personal:U1`, {
+      method: "PUT",
+      headers: { ...headers, "x-agent-capability": unattended },
+      body: JSON.stringify({ runtime: null }),
+    });
+    assert.equal(denied.status, 403);
+  } finally {
+    await s.close();
+  }
+});

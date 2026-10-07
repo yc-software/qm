@@ -4,12 +4,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, MEMORY_FILE } from "../src/memory/memory-service.ts";
+import { createMemoryService } from "../src/memory/memory-service.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import {
-  applyConsolidationActions,
-  bulletsBelowMarker,
-  consolidationMarker,
   createConsolidatingMemory,
   createConsolidator,
   MEMORY_CONSOLIDATION_PROMPT,
@@ -51,55 +48,8 @@ test("parseConsolidationActions: UPDATE/DELETE/ADD in, NONE/prose/malformed out"
   assert.deepEqual(parseConsolidationActions(""), []);
 });
 
-test("golden file: consolidation rewrites the notebook — UPDATE keeps the original capture date, DELETE drops, ADD appends, marker lands at the end", async () => {
-  const before = [
-    "# Memory",
-    "",
-    "- (2026-06-01) Working on the Q2 launch",
-    "- (2026-06-02) Prefers terse replies",
-    "- (2026-06-03) Likes short answers",
-    "",
-    consolidationMarker(Date.UTC(2026, 5, 3)),
-    "- (2026-06-09) Q2 launch shipped; now planning Q3",
-  ].join("\n");
-
-  const after = applyConsolidationActions(
-    before,
-    parseConsolidationActions(
-      "UPDATE 1: Planning the Q3 launch (Q2 shipped)\nDELETE 3\nDELETE 4\nADD: Owns the billing service",
-    ),
-    AT,
-  );
-
-  assert.equal(
-    after,
-    [
-      "# Memory",
-      "",
-      "- (2026-06-01) Planning the Q3 launch (Q2 shipped)",
-      "- (2026-06-02) Prefers terse replies",
-      "- (2026-06-10) Owns the billing service",
-      "",
-      "<!-- consolidated: 2026-06-10 -->",
-    ].join("\n"),
-  );
-});
-
-test("applyConsolidationActions with no actions (model said NONE) still refreshes the marker so the trigger resets", () => {
-  const before = "# Memory\n\n- (2026-06-01) a\n- (2026-06-02) b";
-  const after = applyConsolidationActions(before, [], AT);
-  assert.equal(after, `# Memory\n\n- (2026-06-01) a\n- (2026-06-02) b\n\n${consolidationMarker(AT)}`);
-  assert.equal(bulletsBelowMarker(after), 0);
-});
-
-test("bulletsBelowMarker: counts all bullets when never consolidated, only post-marker bullets after", () => {
-  assert.equal(bulletsBelowMarker("# Memory\n\n- a\n- b\n* c"), 3);
-  assert.equal(bulletsBelowMarker(`# Memory\n\n- a\n${consolidationMarker(AT)}\n- b\n- c`), 2);
-  assert.equal(bulletsBelowMarker(""), 0);
-});
-
-test("marker bookkeeping end-to-end: per-turn strategy consolidates once the after-N trigger fires, and not before", async () => {
-  const { workspace, memory } = freshMemory();
+test("capture counter end-to-end: per-turn strategy consolidates once the after-N trigger fires, and not before", async () => {
+  const { memory } = freshMemory();
   let turn = 0;
   const harness: HarnessModelUtilities = {
     oneShot: (system: string) =>
@@ -111,21 +61,16 @@ test("marker bookkeeping end-to-end: per-turn strategy consolidates once the aft
 
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "x", reply: "y" });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "x", reply: "y" });
-  let body = (await workspace.read(SCOPE, MEMORY_FILE)) ?? "";
-  assert.doesNotMatch(body, /consolidated:/, "no consolidation below N");
+  assert.equal((await memory.readHead!(SCOPE)).records!.capturesSinceConsolidation, 2);
 
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "x", reply: "y" });
-  for (let i = 0; i < 200 && !/consolidated:/.test(body); i++) {
+  for (let i = 0; i < 200 && (await memory.readHead!(SCOPE)).records!.capturesSinceConsolidation !== 0; i++) {
     await new Promise((r) => setTimeout(r, 5));
-    body = (await workspace.read(SCOPE, MEMORY_FILE)) ?? "";
   }
-  assert.match(body, /<!-- consolidated: 2026-06-10 -->/);
-  assert.equal(bulletsBelowMarker(body), 0, "trigger reset by the marker");
-
+  assert.equal((await memory.readHead!(SCOPE)).records!.capturesSinceConsolidation, 0);
+  assert.doesNotMatch(await memory.read(SCOPE), /consolidated:/);
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "x", reply: "y" });
-  body = (await workspace.read(SCOPE, MEMORY_FILE)) ?? "";
-  assert.equal(bulletsBelowMarker(body), 1);
-  assert.equal((body.match(/consolidated:/g) ?? []).length, 1, "old markers are superseded, never accumulated");
+  assert.equal((await memory.readHead!(SCOPE)).records!.capturesSinceConsolidation, 1);
 });
 
 test("maintain() sends the numbered bullets with the consolidation prompt", async () => {
@@ -144,17 +89,17 @@ test("MEMORY_CONSOLIDATE_AFTER=0 disables consolidation entirely", () => {
   assert.equal(createConsolidator({ harness: oneShotHarness("NONE"), memory, afterN: 0 }), undefined);
 });
 
-test("a one-shot failure keeps every fact but still refreshes the marker, so the trigger doesn't refire on every capture", async () => {
-  const { workspace, memory } = freshMemory();
+test("a one-shot failure keeps every fact and resets the capture counter", async () => {
+  const { memory } = freshMemory();
   await memory.capture(SCOPE, ["a fact"], AT);
   const harness: HarnessModelUtilities = {
     oneShot: () => Promise.reject(new Error("model down")),
   };
   await createConsolidator({ harness, memory })!.maintain(SCOPE);
-  const after = (await workspace.read(SCOPE, MEMORY_FILE)) ?? "";
+  const after = await memory.read(SCOPE);
   assert.match(after, /a fact/, "facts survive the failure");
-  assert.match(after, /consolidated:/, "the marker lands, resetting the after-N trigger");
-  assert.equal(bulletsBelowMarker(after), 0);
+  assert.doesNotMatch(after, /consolidated:/);
+  assert.equal((await memory.readHead!(SCOPE)).records!.capturesSinceConsolidation, 0);
 });
 
 test("an edit landing during consolidation survives without disabling later consolidation", async () => {
@@ -169,7 +114,6 @@ test("an edit landing during consolidation survives without disabling later cons
   const waiting = new Promise<void>((resolve) => {
     modelStarted = resolve;
   });
-  const logs: string[] = [];
   const consolidator = createConsolidator({
     harness: {
       async oneShot() {
@@ -180,7 +124,6 @@ test("an edit landing during consolidation survives without disabling later cons
       },
     },
     memory,
-    log: (message) => logs.push(message),
   })!;
 
   const first = consolidator.maintain(SCOPE);
@@ -191,7 +134,6 @@ test("an edit landing during consolidation survives without disabling later cons
 
   assert.match(await memory.read(SCOPE), /user edit/);
   assert.doesNotMatch(await memory.read(SCOPE), /consolidated fact/);
-  assert.deepEqual(logs, []);
 
   await consolidator.maintain(SCOPE);
   assert.equal(calls, 2);
@@ -222,51 +164,76 @@ test("a lost consolidation race leaves the after-N trigger armed, so the next ca
   assert.match(await memory.read(SCOPE), /consolidated fact/);
 });
 
-test("degrades to capture-only when the store can't round-trip a rewrite: logs once, stops trying, never crashes", async () => {
-  const body = "# Memory\n\n- (2026-06-01) a fact\n";
+test("opaque providers own consolidation without generic Markdown rewrites", async () => {
   const memory: MemoryService = {
-    recall: () => Promise.resolve(body),
-    capture: () => Promise.resolve(0),
-    query: () => Promise.resolve([]),
-    read: () => Promise.resolve(body),
-    replace: () => Promise.resolve(),
+    read: async () => "- Legacy fact",
+    recall: async () => "- Legacy fact",
+    capture: async () => 0,
+    query: async () => [],
+    replace: async () => assert.fail("must not rewrite opaque provider"),
   };
-  const logs: string[] = [];
-  const calls: Array<{ system: string; prompt: string }> = [];
   const consolidator = createConsolidator({
-    harness: oneShotHarness("NONE", calls),
     memory,
-    afterN: 1,
-    log: (m) => logs.push(m),
+    harness: {
+      oneShot: async () => {
+        assert.fail("must not consolidate opaque provider");
+      },
+    },
   })!;
-
-  await consolidator.maybeMaintain(SCOPE);
-  assert.equal(logs.length, 1);
-  assert.match(logs[0]!, /consolidation disabled/);
-  assert.equal(calls.length, 1);
-
-  await consolidator.maybeMaintain(SCOPE);
   await consolidator.maintain(SCOPE);
-  assert.equal(calls.length, 1);
-  assert.equal(logs.length, 1);
-
-  await consolidator.maybeMaintain("user:U2");
-  assert.equal(calls.length, 2);
-  assert.equal(logs.length, 2);
+  await consolidator.maybeMaintain(SCOPE);
 });
 
-test("a stale marker from an earlier consolidation does not mask a no-op replace(): the scope still degrades", async () => {
-  const body = `# Memory\n\n${consolidationMarker(Date.UTC(2026, 4, 1))}\n- (2026-06-01) a fact\n`;
-  const memory: MemoryService = {
-    recall: () => Promise.resolve(body),
-    capture: () => Promise.resolve(0),
-    query: () => Promise.resolve([]),
-    read: () => Promise.resolve(body),
-    replace: () => Promise.resolve(),
-  };
-  const logs: string[] = [];
-  const consolidator = createConsolidator({ harness: oneShotHarness("NONE"), memory, log: (m) => logs.push(m) })!;
-  await consolidator.maintain(SCOPE);
-  assert.equal(logs.length, 1);
-  assert.match(logs[0]!, /consolidation disabled/);
-});
+for (const answer of ["NONE", "UPDATE 1: Updated harmless preference\nADD: Another harmless preference", "DELETE 1"]) {
+  test(`structured consolidation isolates provenance and retains unaffected records: ${answer}`, async () => {
+    const { memory } = freshMemory();
+    const scope = "personal:alice";
+    await memory.capture(scope, ["ORDINARY_SENTINEL"], AT, "alice", {
+      mode: "explicit",
+      conversationScopeId: scope,
+      sensitivity: "ordinary",
+      inheritedRecords: [],
+    });
+    await memory.capture(scope, ["PRIVATE_SENTINEL"], AT, "alice", {
+      mode: "explicit",
+      conversationScopeId: "group:private",
+      sensitivity: "sensitive",
+      inheritedRecords: [],
+    });
+    const before = (await memory.readHead!(scope)).records!;
+    const privateRecord = before.records.find((record) => record.text.includes("PRIVATE_SENTINEL"))!;
+    const prompts: string[] = [];
+    await createConsolidator({
+      memory,
+      harness: {
+        oneShot: async (_system, prompt) => {
+          prompts.push(prompt);
+          return prompt.includes("ORDINARY_SENTINEL") ? answer : "NONE";
+        },
+      },
+    })!.maintain(scope);
+    const after = (await memory.readHead!(scope)).records!;
+    assert.equal(prompts.length, 2);
+    assert.ok(
+      prompts.every((prompt) => !(prompt.includes("ORDINARY_SENTINEL") && prompt.includes("PRIVATE_SENTINEL"))),
+    );
+    assert.deepEqual(
+      after.records.find((record) => record.id === privateRecord.id),
+      privateRecord,
+    );
+    assert.equal(after.capturesSinceConsolidation, 0);
+    for (const record of after.records.filter((record) => !record.text.includes("PRIVATE_SENTINEL"))) {
+      assert.equal(record.sensitivity, "ordinary");
+      assert.equal(record.sourceUnknown, false);
+      assert.deepEqual(record.sources, [{ scopeId: scope }]);
+    }
+    if (answer === "NONE") assert.deepEqual(after.records, before.records);
+    if (answer.startsWith("UPDATE")) {
+      assert.equal(
+        after.records.find((record) => record.text.includes("Updated harmless"))!.id,
+        before.records.find((record) => record.text.includes("ORDINARY_SENTINEL"))!.id,
+      );
+      assert.ok(after.records.some((record) => record.text.includes("Another harmless")));
+    }
+  });
+}

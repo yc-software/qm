@@ -10,10 +10,12 @@ export interface RuntimeRequest {
   lifetime?: "task" | "scope";
 }
 
-export interface RuntimeHandoff {
+interface RuntimeHandoff {
   choice: RuntimeChoice;
   lifetime: "task" | "scope";
 }
+
+export type HarnessHandoff = RuntimeHandoff | { context: "recent" };
 
 export type RuntimeResult =
   | { ok: false; error: string; message?: string; candidates?: string[] }
@@ -31,4 +33,7 @@ export type RuntimeService = (
   authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
   individualAuth?: boolean,
   signal?: AbortSignal,
+  cronFire?: boolean,
+  purpose?: import("../resolution/config-store.ts").RuntimePurpose,
+  defaults?: Partial<RuntimeChoice>,
 ) => Promise<RuntimeResult>;

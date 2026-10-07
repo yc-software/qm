@@ -15,7 +15,8 @@ const OPEN_STATUSES = new Set(["queued", "in_progress", "ready", "failed"]);
 const LOOP_CACHE_TTL_MS = 60_000;
 const FIRE_DEBOUNCE_MS = 30_000;
 const MAX_REPLY_CHARS = 500;
-const MAX_SNIPPET_CHARS = 200;
+const MAX_SUMMARY_CHARS = 200;
+const MAX_SNIPPET_CHARS = 10_000;
 
 export function createInboxRealtime(deps: InboxRealtimeDeps): {
   onConversationEvent(event: ConversationEvent): Promise<void>;
@@ -62,17 +63,19 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
             if (ownerReplied) {
               await deps.items.recordAction(item.id, {
                 kind: "replied",
+                sourceAt: event.at,
                 outcome: "dismissed",
                 ...(event.text ? { result: event.text.slice(0, MAX_REPLY_CHARS) } : {}),
               });
             } else if (event.at > (item.sourceAt ?? 0)) {
-              const snippet = event.text?.trim().slice(0, MAX_SNIPPET_CHARS);
+              const text = event.text?.trim();
+              const snippet = text?.slice(0, MAX_SNIPPET_CHARS);
               await deps.items.ingest([
                 {
                   loopId: loop.id,
                   dedupeKey: item.sourceKey,
                   ...(item.source !== undefined ? { source: item.source } : {}),
-                  ...(snippet ? { summary: snippet } : {}),
+                  ...(text ? { summary: text.slice(0, MAX_SUMMARY_CHARS) } : {}),
                   sourceAt: event.at,
                   sourcePayload: {
                     ...item.sourcePayload,

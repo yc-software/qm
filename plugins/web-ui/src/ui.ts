@@ -1,5 +1,8 @@
+import { previewFile } from "./file-open.ts";
+import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { tip } from "./tooltip.ts";
 import { Check, ChevronDown, Download, createElement, type IconNode } from "lucide";
 
 export function brandName(): string {
@@ -20,20 +23,34 @@ export function waveLoader(
   o: { width?: number; height?: number; viewBox?: string; label?: string; cls?: string } = {},
 ): TemplateResult {
   const width = o.width ?? 24.5;
-  return html`<svg
+  const height = o.height ?? width * 1.25;
+  const viewBox = o.viewBox ?? SWELL_VIEWBOX;
+  const [, , viewWidth, viewHeight] = viewBox.split(/\s+/).map(Number);
+  const shift = -24 * Math.min(width / viewWidth!, height / viewHeight!);
+  return html`<span
     class="wl wl-swell ${o.cls ?? ""}"
-    width=${width}
-    height=${o.height ?? width * 1.25}
-    viewBox=${o.viewBox ?? SWELL_VIEWBOX}
-    fill="none"
+    style=${`width:${width}px;height:${height}px;--wl-shift:${shift}px`}
     role="img"
     aria-label=${o.label ?? "Loading"}
-    xmlns="http://www.w3.org/2000/svg"
   >
-    <g class="wl-row">
+    <svg
+      class="wl-row"
+      width=${width}
+      height=${height}
+      viewBox=${viewBox}
+      fill="none"
+      aria-hidden="true"
+      xmlns="http://www.w3.org/2000/svg"
+    >
       <path d=${SWELL_PATH} fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2.6" />
-    </g>
-  </svg>`;
+    </svg>
+  </span>`;
+}
+
+export function sheenLabel(label: string, active: boolean): TemplateResult {
+  return html`<span class="sheen-label ${active ? "thinking-sheen" : ""}" data-sheen=${active ? label : ""}
+    >${label}</span
+  >`;
 }
 
 export function workingWave(): TemplateResult {
@@ -196,8 +213,20 @@ export function modelMark(key: string, size = 16): TemplateResult | null {
   </svg>`;
 }
 
-export function icon(node: IconNode, size = 18): SVGElement {
-  const el = createElement(node, {
+const iconTemplates = new WeakMap<IconNode, Map<number, TemplateResult>>();
+
+export function icon(node: IconNode, size = 18): TemplateResult {
+  let sizes = iconTemplates.get(node);
+  if (!sizes) iconTemplates.set(node, (sizes = new Map()));
+  const cached = sizes.get(size);
+  if (cached) return cached;
+  const template = html`${unsafeSVG(iconElement(node, size).outerHTML)}`;
+  sizes.set(size, template);
+  return template;
+}
+
+function iconElement(node: IconNode, size: number): SVGElement {
+  return createElement(node, {
     class: "icon",
     width: size,
     height: size,
@@ -205,7 +234,6 @@ export function icon(node: IconNode, size = 18): SVGElement {
     focusable: "false",
     "stroke-width": 1.9,
   });
-  return el;
 }
 
 export function fieldSelect(props: {
@@ -214,6 +242,7 @@ export function fieldSelect(props: {
   value?: string;
   id?: string;
   ariaLabel?: string;
+  ariaDescription?: string;
   describedBy?: string;
   focusKey?: string;
   disabled?: boolean;
@@ -226,6 +255,7 @@ export function fieldSelect(props: {
     <select
       id=${props.id ?? nothing}
       aria-label=${props.ariaLabel ?? nothing}
+      aria-description=${props.ariaDescription ?? nothing}
       aria-describedby=${props.describedBy ?? nothing}
       data-focus-key=${props.focusKey ?? nothing}
       .value=${props.value === undefined ? nothing : live(props.value)}
@@ -242,6 +272,7 @@ export interface MenuSelectOption {
   value: string | null;
   label: string;
   glyph?: IconNode;
+  disabledHint?: string;
 }
 
 export function menuSelect(props: {
@@ -249,6 +280,9 @@ export function menuSelect(props: {
   options: MenuSelectOption[];
   onSelect: (value: string | null) => void;
   ariaLabel: string;
+  ariaDescription?: string;
+  disabled?: boolean;
+  keyboardNavigation?: boolean;
   prefix?: string;
   className?: string;
 }): TemplateResult {
@@ -261,10 +295,20 @@ export function menuSelect(props: {
         class="menu-option ${active ? "active" : ""}"
         type="button"
         role="menuitemradio"
+        ?disabled=${props.disabled ?? false}
         aria-checked=${active ? "true" : "false"}
+        aria-disabled=${o.disabledHint ? "true" : nothing}
+        aria-description=${o.disabledHint || nothing}
+        ${tip(o.disabledHint ?? "")}
         @click=${(e: Event) => {
           e.stopPropagation();
+          if (props.disabled || o.disabledHint) return;
           closeFormMenus();
+          if (props.keyboardNavigation)
+            (e.currentTarget as HTMLElement)
+              .closest(".form-menu-control")
+              ?.querySelector<HTMLButtonElement>(".menu-button")
+              ?.focus();
           props.onSelect(o.value ?? null);
         }}
       >
@@ -279,6 +323,33 @@ export function menuSelect(props: {
     <div
       class=${`menu-control form-menu-control field-menu${props.className ? ` ${props.className}` : ""}`}
       data-drop="down"
+      @keydown=${(e: KeyboardEvent) => {
+        if (!props.keyboardNavigation || props.disabled) return;
+        const control = e.currentTarget as HTMLElement;
+        const trigger = control.querySelector<HTMLButtonElement>(".menu-button")!;
+        const open = control.classList.contains("open");
+        if (e.key === "Escape" || e.key === "Tab") {
+          if (!open) return;
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            trigger.focus();
+          }
+          closeFormMenus();
+          return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+        e.preventDefault();
+        const options = [...control.querySelectorAll<HTMLButtonElement>(".menu-option:not(:disabled)")];
+        if (!options.length) return;
+        if (!open) toggleFormMenu(e);
+        const index = options.indexOf(document.activeElement as HTMLButtonElement);
+        let next = (index + (e.key === "ArrowUp" ? -1 : 1) + options.length) % options.length;
+        if (index < 0) next = e.key === "ArrowUp" ? options.length - 1 : 0;
+        if (e.key === "Home") next = 0;
+        if (e.key === "End") next = options.length - 1;
+        options[next]?.focus();
+      }}
     >
       <button
         class="menu-button"
@@ -286,7 +357,17 @@ export function menuSelect(props: {
         aria-haspopup="menu"
         aria-expanded="false"
         aria-label=${props.ariaLabel}
-        @click=${toggleFormMenu}
+        aria-description=${props.ariaDescription ?? nothing}
+        ?disabled=${props.disabled ?? false}
+        @click=${(event: MouseEvent) => {
+          toggleFormMenu(event);
+          const control = (event.currentTarget as HTMLElement).closest(".form-menu-control");
+          if (props.keyboardNavigation && event.detail === 0 && control?.classList.contains("open"))
+            (
+              control.querySelector<HTMLButtonElement>(".menu-option.active:not(:disabled)") ??
+              control.querySelector<HTMLButtonElement>(".menu-option:not(:disabled)")
+            )?.focus();
+        }}
       >
         <span class="menu-label">${props.prefix ?? ""}${selected?.label ?? ""}</span>${icon(ChevronDown, 14)}
       </button>
@@ -436,7 +517,7 @@ export function setFormMenuValue(control: HTMLElement | null, value: string, lab
   const activeOption = Array.from(control.querySelectorAll<HTMLButtonElement>(".menu-option")).find((option) =>
     option.classList.contains("active"),
   );
-  if (activeOption) activeOption.append(icon(Check, 15));
+  if (activeOption) activeOption.append(iconElement(Check, 15));
 }
 
 export function chipBadge(
@@ -445,13 +526,20 @@ export function chipBadge(
   size?: number,
   href?: string,
   download = false,
+  mimetype?: string,
 ): TemplateResult {
   const inner = html`${icon(glyph, 14)}<span dir="auto">${name}</span
     >${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}`;
   if (!href) return html`<span class="file-chip">${inner}</span>`;
   if (download) return html`<a class="file-chip" href=${href} download=${name}>${inner}</a>`;
   return html`<span class="file-chip-group"
-    ><a class="file-chip" href=${href} target="_blank" rel="noreferrer">${inner}</a
+    ><a
+      class="file-chip"
+      href=${href}
+      target="_blank"
+      rel="noreferrer"
+      @click=${(event: MouseEvent) => previewFile(event, name, href, mimetype)}
+      >${inner}</a
     ><a class="file-chip-download" href=${href} download=${name} title="Download ${name}" aria-label="Download ${name}"
       >${icon(Download, 14)}</a
     ></span

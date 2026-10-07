@@ -8,6 +8,8 @@ export interface SlackMessage {
   thread_ts?: string;
   files?: Array<{ id?: string; name?: string; title?: string }>;
   subtype?: string;
+  blocks?: Array<Record<string, unknown>>;
+  reactions?: Array<{ name: string; users: string[] }>;
 }
 
 function apiUrlOf(raw: string): string {

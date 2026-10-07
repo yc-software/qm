@@ -1,6 +1,12 @@
 {{- if .Values.ingress.enabled }}
 {{- $svcKey := .Values.ingress.service }}
 {{- $svc := index .Values.services $svcKey }}
+{{- if or (not $svc) (not (has $svcKey (list "portal" "core" "web-ui"))) }}
+{{- fail "ingress.service must name an enabled HTTP service: portal, core, or web-ui (auth and admin are embedded)" }}
+{{- end }}
+{{- if not $svc.enabled }}
+{{- fail (printf "ingress.service %s is disabled" $svcKey) }}
+{{- end }}
 {{- $svcName := printf "%s-%s" (include "qm.fullname" .) $svcKey }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress

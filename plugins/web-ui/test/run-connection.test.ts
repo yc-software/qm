@@ -193,6 +193,22 @@ test("TanStack assembles snapshot hydration and overlapping Unicode deltas exact
   assert.equal(state.polls, 0);
 });
 
+test("tool call events on the run stream leave the streamed reply untouched", async (t) => {
+  const state = streamingFetch(t);
+  const stream = await makeRunResumeStreamFn("r")(model, {} as Context, {});
+  await flush();
+  state.send(
+    { type: "TOOL_CALL_START", toolCallId: "c1", toolCallName: "execute", args: { command: "ls" } },
+    "tool:c1:start",
+  );
+  state.send({ type: "CUSTOM", name: "run", value: { status: "running", result: null, partial: "hello" } });
+  state.send({ type: "TOOL_CALL_RESULT", toolCallId: "c1", content: "a.txt", isError: false }, "tool:c1:result");
+  state.send({ type: "CUSTOM", name: "delta", value: { offset: 5, delta: " world" } }, "text:11");
+  state.send({ type: "CUSTOM", name: "run", value: { status: "done", result: { status: "ok" } } });
+  assert.deepEqual((await stream.result()).content, [{ type: "text", text: "hello world" }]);
+  assert.equal(state.polls, 0);
+});
+
 test("TanStack reconnects after a transport drop and deduplicates replayed offsets", async (t) => {
   const state = streamingFetch(t);
   const stream = await makeRunResumeStreamFn("r")(model, {} as Context, {});

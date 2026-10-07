@@ -7,6 +7,7 @@ import { callerEnvSnapshot, gitHead, repoRoot } from "../lib/envctx.ts";
 import { portHolders } from "../lib/proc.ts";
 import { resolveSocketPath, supervisorReachable, supervisorRequest } from "../lib/client.ts";
 import { EXIT, CHILD_ORDER } from "../lib/types.ts";
+import { errMessage } from "../lib/util.ts";
 import type { StatusReport } from "../lib/types.ts";
 
 interface Check {
@@ -29,9 +30,22 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
   })();
 
   const mine = worktree ? myLease(worktree, opts.store) : null;
-  // A browser-only instance (--no-slack, or a live lease booted that way) needs no pool app.
   const needsPool = opts.slack && mine?.meta.slack !== "0";
   const slots = listSlots(opts.store);
+  const validSlots = new Map<string, ReturnType<typeof slotPorts>>();
+  for (const slot of slots) {
+    try {
+      validSlots.set(slot, slotPorts(slot));
+    } catch (error) {
+      checks.push({
+        id: `slot-config:${slot}`,
+        ok: false,
+        severity: "warn",
+        detail: errMessage(error),
+        remedy: `rename or remove ${slot}.env so its slot number fits the configured port range`,
+      });
+    }
+  }
   let poolDetail = "Slack off -- no pool slot needed";
   if (needsPool) {
     poolDetail = slots.length ? `${slots.length} pool slot(s) configured` : "no poolN.env files in the pool store";
@@ -178,10 +192,10 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
   }
 
   if (worktree) {
-    for (const slot of slots) {
+    for (const [slot, ports] of validSlots) {
       const lease = listLeases(opts.store).find((l) => l.slot === slot);
       if (lease) continue;
-      for (const [name, port] of Object.entries(slotPorts(slot))) {
+      for (const [name, port] of Object.entries(ports)) {
         if (name === "supervisor" || name === "prodProxy" || name === "slackHealth") continue;
         const holders = portHolders(port);
         if (holders.length) {
@@ -190,7 +204,7 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
             ok: false,
             severity: "warn",
             detail: `free slot ${slot}'s ${name} port ${port} is held by pid(s) ${holders.join(",")}`,
-            remedy: `kill ${holders.join(" ")}`,
+            remedy: "leave unrelated listeners running; dev up skips occupied port blocks",
           });
         }
       }

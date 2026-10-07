@@ -5,7 +5,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import pg from "pg";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -65,7 +64,6 @@ for (const duringClaim of [false, true]) {
     };
     const worker = createWorker({
       runs,
-      sessions: createMemorySessionStore(),
       orchestrator: {
         handleTurn: async () => {
           finished = true;
@@ -108,7 +106,6 @@ test("missed notifications recover and reconnect checks immediately", async () =
   };
   const worker = createWorker({
     runs,
-    sessions: createMemorySessionStore(),
     orchestrator: {} as Orchestrator,
     leaseTtlMs: 5_000,
     pollMs: 10,
@@ -217,7 +214,6 @@ test(
     const workers = Array.from({ length: 2 }, () =>
       createWorker({
         runs: reader.runs,
-        sessions: createMemorySessionStore(),
         orchestrator: {
           handleTurn: async (input: OrchestratorInput) => {
             const id = input.conversation.threadRef;
@@ -275,7 +271,6 @@ test(
     const workers = Array.from({ length: 16 }, () =>
       createWorker({
         runs: reader.runs,
-        sessions: createMemorySessionStore(),
         orchestrator: {
           handleTurn: async (input: OrchestratorInput) => {
             observed.push({ id: input.text, at: Date.now() });

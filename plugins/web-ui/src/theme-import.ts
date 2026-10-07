@@ -339,6 +339,7 @@ export function themeTokens(palette: Palette): ThemeTokens {
     "--popover": step(0.1, 0),
     "--popover-foreground": fg,
     "--markdown-link": link,
+    "--ultrafast-accent": readable(ansiOrBright(ANSI.magenta) ?? action),
     "--primary": action,
     "--primary-foreground": textOn(action),
     "--secondary": step(0.09, 0.04),

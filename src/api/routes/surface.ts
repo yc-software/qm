@@ -1,8 +1,17 @@
+import { memoryForRequest } from "./memory-access.ts";
 import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeFallback, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
-import type { AttachmentMeta, Grant, IncomingAttachment, ScopeId, Session, TurnRequest } from "../../types.ts";
+import type {
+  AttachmentMeta,
+  Grant,
+  IncomingAttachment,
+  PendingApproval,
+  ScopeId,
+  Session,
+  TurnRequest,
+} from "../../types.ts";
 import { isTerminal } from "../../runs/run-store.ts";
 import { samePerson } from "../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
@@ -13,7 +22,7 @@ import {
   isHarnessId,
   modelSupportedByHarness,
   modelOfferedInWebui,
-  THINKING_LEVELS,
+  thinkingLevelsForHarness,
   fastModeModelIds,
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
@@ -60,19 +69,6 @@ function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null
 
 function isConversationColor(value: unknown): value is string | null {
   return value === null || (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value));
-}
-
-function conversationWebUrl(publicWebUrl: string | undefined, sessionId: string): string | undefined {
-  const raw = publicWebUrl?.trim();
-  if (!raw || !/^https?:\/\//i.test(raw) || /[?#]/.test(raw)) return undefined;
-  try {
-    const base = new URL(raw);
-    if ((base.protocol !== "http:" && base.protocol !== "https:") || base.username || base.password) return undefined;
-    base.pathname = `${base.pathname.replace(/\/+$/, "")}/s/${encodeURIComponent(sessionId)}`;
-    return base.toString();
-  } catch {
-    return undefined;
-  }
 }
 
 async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
@@ -230,77 +226,21 @@ async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 202, { ...fork, turn });
 }
 
-async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability, deps } = ctx;
-  if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
-  if (!livePersonCapability(capability)) {
-    return sendJson(res, 403, {
-      error: "human_attended_only",
-      message:
-        "starting a fresh conversation requires a turn a person is attending — not a cron, trigger, or other automation",
-    });
-  }
-  const b = isObj(body) ? body : {};
-  if (typeof b.text !== "string" || !b.text.trim()) {
-    return sendJson(res, 400, { error: "bad_request", message: "text required — the new session's first message" });
-  }
-  if (b.title !== undefined && typeof b.title !== "string") {
-    return sendJson(res, 400, { error: "bad_request", message: "title must be a string" });
-  }
-  const out = await app.spawnSession(capability.actorId, {
-    scopeId: capability.scopeId,
-    ...(typeof b.title === "string" ? { title: b.title } : {}),
-  });
-  if (!out) return sendJson(res, 404, { error: "not_found", message: "cannot start a session in this scope" });
-  const session = out.session;
-  const sessionScope = parseScopeId(session.scopeId);
-  const turn = await app.turn({
-    surface: session.surface ?? "web",
-    actor: { externalId: capability.actorId },
-    conversation: {
-      kind: session.type,
-      threadRef: session.threadRef,
-      ...(sessionScope.kind === "channel" || sessionScope.kind === "group" ? { channelRef: sessionScope.ref } : {}),
-      ...(session.channelName ? { channelName: session.channelName } : {}),
-    },
-    text: b.text,
-    spawned: true,
-    async: true,
-  });
-  if (turn.status === "refused") {
-    await app.discardSession(session.id, capability.actorId);
-    return sendJson(res, 409, {
-      error: "seed_turn_refused",
-      message: (turn as { reason?: string }).reason ?? "the first message was refused",
-    });
-  }
-  const runId = (turn as { runId?: string }).runId;
-  const webUrl = conversationWebUrl(deps.portalUrl, session.id);
-  return sendJson(res, 202, {
-    session,
-    turn: { status: turn.status, ...(runId ? { runId } : {}) },
-    ...(webUrl ? { webUrl } : {}),
-  });
-}
-
-async function forkAgentConversation(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
-  const b = isObj(body) ? body : {};
-  if (b.upToSeq !== undefined && (typeof b.upToSeq !== "number" || !Number.isInteger(b.upToSeq) || b.upToSeq < 0)) {
-    return sendJson(res, 400, { error: "bad_request", message: "upToSeq must be a non-negative integer" });
-  }
-  const out = await app.forkSession(
-    ctx.params.id!,
-    capability.actorId,
-    b.upToSeq !== undefined ? { upToSeq: b.upToSeq } : undefined,
-  );
-  if (!out) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  return sendJson(res, 200, out);
+function agentConversation(session: Session) {
+  return {
+    id: session.id,
+    title: session.title,
+    status: session.status,
+    type: session.type,
+    scopeId: session.scopeId,
+    threadRef: session.threadRef,
+    surface: session.surface,
+    createdAt: session.createdAt,
+    archived: session.archived === true,
+    pinned: session.pinned === true,
+    color: session.color ?? null,
+    lastActivityAt: session.lastActivityAt ?? session.createdAt,
+  };
 }
 
 function transcriptWindow(
@@ -377,7 +317,11 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   }
   const found = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  return sendJson(res, 200, found);
+  return sendJson(res, 200, {
+    session: agentConversation(found.session),
+    entries: found.entries.filter((entry) => entry.type !== "system"),
+    ...(found.earlierEntries ? { earlierEntries: found.earlierEntries } : {}),
+  });
 }
 
 async function getSessionEntry(ctx: ApiCtx): Promise<void> {
@@ -399,7 +343,30 @@ async function listSessionApprovals(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
-  return sendJson(res, 200, { approvals: await app.listSessionApprovals(id, viewer) });
+  const approvals = await app.listSessionApprovals(id, viewer);
+  return sendJson(res, 200, { approvals: [...approvals, ...(await credentialApprovals(ctx, id, viewer))] });
+}
+
+// Pending credential requests from this session or any of its sub-agents, shown inline to their owner.
+async function credentialApprovals(ctx: ApiCtx, sessionId: string, viewer: string): Promise<PendingApproval[]> {
+  const kc = ctx.deps.keychain;
+  const approvals = ctx.deps.keychainApprovals;
+  if (!kc || !approvals) return [];
+  const out: PendingApproval[] = [];
+  for (const ask of await kc.listAsks({ ownerId: viewer })) {
+    if (ask.status !== "pending") continue;
+    const view = await approvals.get(ask.id, viewer);
+    if (!view || (view.sessionId !== sessionId && view.requesterSessionId !== sessionId)) continue;
+    out.push({
+      requestId: `keychain:${ask.id}`,
+      command: view.accountLabel ? `${view.service} (${view.accountLabel})` : view.service,
+      summary: `Use your ${view.service} credential in ${view.conversation}`,
+      reason: "Credential approval",
+      grantModes: { session: false, always: true },
+      blocksInput: false,
+    });
+  }
+  return out;
 }
 
 async function getSessionBackground(ctx: ApiCtx): Promise<void> {
@@ -568,17 +535,7 @@ async function listAgentConversations(ctx: ApiCtx): Promise<void> {
   }
   const sessions = await app.listSessions(capability.actorId);
   return sendJson(res, 200, {
-    conversations: sessions.map((s) => ({
-      id: s.id,
-      scopeId: s.scopeId,
-      surface: s.surface ?? "unknown",
-      title: s.title ?? null,
-      status: s.status ?? null,
-      archived: s.archived === true,
-      pinned: s.pinned === true,
-      createdAt: s.createdAt,
-      lastActivityAt: s.lastActivityAt ?? s.createdAt,
-    })),
+    conversations: sessions.map(agentConversation),
   });
 }
 
@@ -621,6 +578,12 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
   }
   if ("status" in b) {
+    if (capability.surface === "slack") {
+      return sendJson(res, 403, {
+        error: "forbidden",
+        message: "conversation status is a web UI feature and is not available on Slack turns",
+      });
+    }
     if (!isSessionStatus(b.status)) {
       return sendJson(res, 400, {
         error: "bad_request",
@@ -649,12 +612,9 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
   });
   return sendJson(res, 200, {
     conversation: {
-      id: session.id,
-      title: session.title ?? null,
-      archived: session.archived === true,
-      pinned: session.pinned === true,
-      color: session.color ?? null,
-      status: session.status ?? null,
+      ...agentConversation(session),
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
     },
   });
 }
@@ -740,11 +700,12 @@ async function getSelfMemory(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+  const memory = memoryForRequest(ctx, principalId);
+  if (!memory) return sendJson(res, 404, { error: "not_found" });
   const scope = makeScopeId("personal", principalId);
   audit(deps, { principalId, action: "memory.self.read", resource: "memory", scopeLabel: scope });
-  const head = await deps.memory.readHead?.(scope);
-  return sendJson(res, 200, head ?? { content: await deps.memory.read(scope), revision: "" });
+  const head = await memory.readHead?.(scope);
+  return sendJson(res, 200, head ?? { content: await memory.read(scope), revision: "" });
 }
 
 async function putSelfMemory(ctx: ApiCtx): Promise<void> {
@@ -752,24 +713,26 @@ async function putSelfMemory(ctx: ApiCtx): Promise<void> {
   const b = body as { principalId?: unknown; content?: unknown; revision?: unknown };
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const memory = memoryForRequest(ctx, principalId);
   if (typeof b.content !== "string") return sendJson(res, 400, { error: "bad_request", message: "content required" });
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+  if (!memory) return sendJson(res, 404, { error: "not_found" });
   const scope = makeScopeId("personal", principalId);
   const saved =
-    typeof b.revision === "string" && b.revision !== "" && deps.memory.replaceIfRevision
-      ? await deps.memory.replaceIfRevision(scope, b.content, b.revision, principalId)
-      : (await deps.memory.replace(scope, b.content, principalId), true);
+    typeof b.revision === "string" && b.revision !== "" && memory.replaceIfRevision
+      ? await memory.replaceIfRevision(scope, b.content, b.revision, principalId)
+      : (await memory.replace(scope, b.content, principalId), true);
   if (!saved) {
-    const head = await deps.memory.readHead?.(scope);
+    const head = await memory.readHead?.(scope);
     return sendJson(res, 409, { error: "conflict", message: "Memory changed while you were editing.", ...head });
   }
   audit(deps, { principalId, action: "memory.self.update", resource: "memory", scopeLabel: scope });
-  const head = await deps.memory.readHead?.(scope);
+  const head = await memory.readHead?.(scope);
   return sendJson(res, 200, { ok: true, ...head });
 }
 
 async function getSelfMemoryHistory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url, capability, actor } = ctx;
+  const memory = memoryForRequest(ctx);
+  const { res, url, capability, actor } = ctx;
   const viewer = capability?.actorId ?? actor?.p;
   if (!viewer) return sendJson(res, 401, { error: "capability_required" });
   const principalId = capability ? viewer : url.searchParams.get("principalId");
@@ -788,11 +751,12 @@ async function getSelfMemoryHistory(ctx: ApiCtx): Promise<void> {
         ? capability.memory?.read.find((candidate) => parseScopeId(candidate).kind === "org")
         : capability.memory?.read[0];
   if (!scope) return sendJson(res, 404, { error: "not_found" });
-  if (!deps.memory?.history) return sendJson(res, 200, { revisions: [] });
-  return sendJson(res, 200, { revisions: await deps.memory.history(scope, 30) });
+  if (!memory?.history) return sendJson(res, 200, { revisions: [] });
+  return sendJson(res, 200, { revisions: await memory.history(scope, 30) });
 }
 
 async function restoreSelfMemory(ctx: ApiCtx): Promise<void> {
+  const memory = memoryForRequest(ctx);
   const { res, deps, body, capability, actor } = ctx;
   const viewer = capability?.actorId ?? actor?.p;
   if (!viewer) return sendJson(res, 401, { error: "capability_required" });
@@ -809,7 +773,7 @@ async function restoreSelfMemory(ctx: ApiCtx): Promise<void> {
   let scope: ScopeId | undefined = makeScopeId("personal", principalId);
   if (capability) scope = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
   if (!scope) return sendJson(res, 404, { error: "not_found" });
-  const restored = await deps.memory?.restore?.(scope, b.revision, b.expectedRevision, viewer);
+  const restored = await memory?.restore?.(scope, b.revision, b.expectedRevision, viewer);
   if (!restored)
     return sendJson(res, 409, { error: "conflict", message: "Memory changed, or that revision no longer exists." });
   audit(deps, {
@@ -818,7 +782,7 @@ async function restoreSelfMemory(ctx: ApiCtx): Promise<void> {
     resource: `memory:${b.revision}`,
     scopeLabel: scope,
   });
-  return sendJson(res, 200, { ok: true, ...(await deps.memory?.readHead?.(scope)) });
+  return sendJson(res, 200, { ok: true, ...(await memory?.readHead?.(scope)) });
 }
 
 async function sessionCapability(ctx: ApiCtx): Promise<void> {
@@ -829,6 +793,7 @@ async function sessionCapability(ctx: ApiCtx): Promise<void> {
   const token = await mintCapabilityToken(
     { actorId: actor.p, scopeId: makeScopeId("personal", actor.p), exp: Date.now() + CAPABILITY_TTL_MS },
     secret,
+    deps.capabilityTokenCompression,
   );
   return sendJson(res, 200, { token });
 }
@@ -851,7 +816,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
     renderAgentApis(
       capability,
       { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) },
-      { swarmsEnabled: Boolean(ctx.app.swarms) },
+      { swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)) },
     ),
   );
 }
@@ -867,9 +832,10 @@ function parseFacts(body: unknown): string[] | string {
 }
 
 async function agentMemory(ctx: ApiCtx): Promise<void> {
+  const memory = memoryForRequest(ctx);
   const { res, deps, pathname, method, body, capability } = ctx;
   if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+  if (!memory) return sendJson(res, 404, { error: "not_found" });
 
   if (isObj(body) && ["recipient", "channel", "participants"].some((key) => key in body)) {
     return sendJson(res, 400, {
@@ -891,7 +857,7 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
     const results: Array<{ scopeId: string; fact: string }> = [];
     for (const scope of scopes) {
       if (results.length >= limit) break;
-      for (const fact of await deps.memory.query(scope, b.query, limit - results.length, {
+      for (const fact of await memory.query(scope, b.query, limit - results.length, {
         actorId: capability.actorId,
       })) {
         results.push({ scopeId: scope, fact });
@@ -935,9 +901,11 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
   if (method === "POST" && pathname === "/v1/memory/facts") {
     const facts = parseFacts(body);
     if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-    const added = await deps.memory.capture(target, facts, Date.now(), capability.actorId, {
+    const added = await memory.capture(target, facts, Date.now(), capability.actorId, {
       mode: "explicit",
       actorId: capability.actorId,
+      conversationScopeId: capability.scopeId,
+      ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     });
     audit(deps, {
       principalId: capability.actorId,
@@ -954,13 +922,13 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       resource: "memory",
       scopeLabel: target,
     });
-    return sendJson(res, 200, { scopeId: target, content: await deps.memory.read(target) });
+    return sendJson(res, 200, { scopeId: target, content: await memory.read(target) });
   }
   if (method === "PUT" && pathname === "/v1/memory/self") {
     const b = body as { content?: unknown };
     if (typeof b.content !== "string")
       return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    await deps.memory.replace(target, b.content, capability.actorId);
+    await memory.replace(target, b.content, capability.actorId);
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.curate",
@@ -1238,6 +1206,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
     type?: unknown;
     id?: unknown;
     toScope?: unknown;
+    email?: unknown;
     permission?: unknown;
     move?: unknown;
   };
@@ -1246,7 +1215,15 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   }
   if (typeof b.id !== "string" || !b.id.trim())
     return sendJson(res, 400, { error: "bad_request", message: "id required" });
-  if (typeof b.toScope !== "string" || !b.toScope.trim()) {
+  if (
+    b.email !== undefined &&
+    (typeof b.email !== "string" || b.toScope !== undefined || b.type !== "deploy" || b.move === true)
+  )
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "email is only supported for app sharing, instead of toScope",
+    });
+  if (b.email === undefined && (typeof b.toScope !== "string" || !b.toScope.trim())) {
     return sendJson(res, 400, {
       error: "bad_request",
       message: 'toScope required ("org", a scope id, or a teammate\'s name)',
@@ -1259,7 +1236,8 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
     {
       type: b.type,
       id: b.id,
-      ...splitToScope(b.toScope),
+      ...(typeof b.toScope === "string" ? splitToScope(b.toScope) : {}),
+      ...(typeof b.email === "string" ? { email: b.email } : {}),
       ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
       ...(b.move === true ? { move: true } : {}),
     },
@@ -1279,6 +1257,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
     id: result.id,
     target: result.target,
     permission: result.permission,
+    ...(result.invitation ? { invitation: result.invitation } : {}),
   });
 }
 
@@ -1350,11 +1329,19 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
 }
 
 async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
+  const account = ctx.url.searchParams.get("account");
+  if (account !== null && account !== "company") return sendJson(ctx.res, 400, { error: "invalid_account" });
   if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
-  return sendJson(ctx.res, 200, await userRuntimeConfigBody(ctx, target.scope, target.actorId));
+  return sendJson(
+    ctx.res,
+    200,
+    ctx.url.searchParams.get("account") === "company"
+      ? await runtimeConfigBody(ctx, target.scope)
+      : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
+  );
 }
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
@@ -1393,7 +1380,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
     if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     const effortLevel = ctx.body.effortLevel ?? "auto";
-    if (typeof effortLevel !== "string" || !(THINKING_LEVELS as readonly string[]).includes(effortLevel))
+    if (typeof effortLevel !== "string" || !thinkingLevelsForHarness(harnessId, modelId).includes(effortLevel))
       return sendJson(ctx.res, 400, { error: "effort_not_supported" });
     const fastMode = ctx.body.fastMode ?? false;
     if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
@@ -1531,8 +1518,6 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },
   { method: "GET", path: "/v1/conversations/:id", auth: "either", handle: getAgentConversation },
   { method: "POST", path: "/v1/conversations/:id", auth: "either", handle: patchAgentConversation },
-  { method: "POST", path: "/v1/conversations", auth: "either", handle: spawnAgentConversation },
-  { method: "POST", path: "/v1/conversations/:id/fork", auth: "either", handle: forkAgentConversation },
   { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
   { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
   { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },

@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, MEMORY_FILE } from "../src/memory/memory-service.ts";
+import { createMemoryService, readMemory } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy, parseMemoryStrategyKind } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts } from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
@@ -32,7 +32,7 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.system, MEMORY_EXTRACTION_PROMPT);
   assert.equal(calls[0]!.prompt, "User said:\nhi\n\nAssistant replied:\nhello");
-  const body = (await workspace.read(SCOPE, MEMORY_FILE)) ?? "";
+  const body = (await readMemory(workspace, SCOPE)) ?? "";
   assert.match(body, /Prefers terse replies/);
   assert.match(body, /Working on the Q3 launch/);
   assert.doesNotMatch(body, /not a bullet/);
@@ -70,7 +70,7 @@ test("per-turn swallows extraction failures and captures nothing", async () => {
   const { workspace, memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness, memory });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
-  assert.equal(await workspace.read(SCOPE, MEMORY_FILE), null, "nothing captured");
+  assert.equal(await readMemory(workspace, SCOPE), null, "nothing captured");
 });
 
 test("per-turn does not capture when the model says NONE", async () => {
@@ -80,7 +80,7 @@ test("per-turn does not capture when the model says NONE", async () => {
   const { workspace, memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness, memory });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
-  assert.equal(await workspace.read(SCOPE, MEMORY_FILE), null);
+  assert.equal(await readMemory(workspace, SCOPE), null);
 });
 
 test("MEMORY_STRATEGY parsing: per-turn is the default, agent-only disables post-turn extraction", () => {
@@ -158,6 +158,7 @@ test("automatic capture carries the full turn and delivery context", async () =>
   });
   assert.deepEqual(captures[0]?.[4], {
     mode: "automatic",
+    sensitivity: "unknown",
     actorId: "U1",
     conversationScopeId: "channel:C1",
     input: "question",

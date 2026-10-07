@@ -161,3 +161,86 @@ test("credential save acknowledges its submitted snapshot and retains newer edit
     dom.window.close();
   }
 });
+
+test("runtime reasoning choices follow the selected model and offer the current default", () => {
+  const dom = setup();
+  try {
+    const data = {
+      ...models,
+      modelsByHarness: {
+        pi: [
+          { id: "a", effortLevels: ["auto", "adaptive", "default", "high"] },
+          { id: "b", effortLevels: ["auto", "high"] },
+        ],
+      },
+      thinkingLevelsByHarness: { pi: ["auto", "adaptive", "default", "high"] },
+      runtime: { harnessId: "pi", modelId: "a", effortLevel: "auto" },
+    };
+    dom.window.eval("settingsUI.load(" + JSON.stringify(data) + ',"org:test","runtime")');
+    const select = () => dom.window.document.getElementById("base-effort") as HTMLSelectElement;
+    const choices = () => [...select().options].map((option) => [option.value, option.textContent]);
+    assert.deepEqual(choices(), [
+      ["auto", "Default"],
+      ["adaptive", "Auto"],
+      ["default", "Provider default"],
+      ["high", "High"],
+    ]);
+    select().value = "adaptive";
+    select().dispatchEvent(new dom.window.Event("change"));
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "adaptive");
+    assert.equal(
+      choices().some(([value]) => value === "auto"),
+      false,
+    );
+    dom.window.eval('settingsUI.states.get("runtime").change("modelId", "b")');
+    assert.deepEqual(choices(), [["high", "High"]]);
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "high");
+    dom.window.eval(
+      'settingsUI.states.get("runtime").context.modelsByHarness.pi = [{id:"b"}]; settingsUI.states.get("runtime").changed()',
+    );
+    assert.deepEqual(choices(), [["high", "High"]]);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("purpose runtime cards independently set and clear overrides using the runtime editor", () => {
+  const dom = setup();
+  try {
+    dom.window.eval(
+      "settingsUI.load(" +
+        JSON.stringify({ ...models, cronRuntime: null, subagentRuntime: null, fallbackRuntime: null }) +
+        ',"org:test")',
+    );
+    const doc = dom.window.document;
+    for (const key of ["cron-runtime", "subagent-runtime", "fallback-runtime"]) {
+      const collect = () => JSON.parse(String(dom.window.eval(`JSON.stringify(settingsUI.collect("${key}"))`)));
+      assert.deepEqual(collect(), { inherit: true });
+      assert.equal(doc.querySelectorAll(`#card-${key}`).length, 1);
+      assert.equal((doc.getElementById(`${key}-harness`) as HTMLSelectElement).disabled, true);
+      (doc.getElementById(`${key}-inherit`) as HTMLInputElement).click();
+      const harness = doc.getElementById(`${key}-harness`) as HTMLSelectElement;
+      harness.value = "codex";
+      harness.dispatchEvent(new dom.window.Event("change"));
+      assert.deepEqual(collect(), { harnessId: "codex", modelId: "b", effortLevel: "auto", fastMode: false });
+      (doc.getElementById(`${key}-inherit`) as HTMLInputElement).click();
+      assert.deepEqual(collect(), { inherit: true });
+      assert.equal(dom.window.eval(`settingsUI.states.get("${key}").dirty`), false);
+    }
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").fastMode'), true);
+    dom.window.eval(
+      "settingsUI.load(" +
+        JSON.stringify({
+          ...models,
+          cronRuntime: { harnessId: "codex", modelId: "b", effortLevel: "low", fastMode: false },
+          subagentRuntime: null,
+          fallbackRuntime: null,
+        }) +
+        ',"org:test")',
+    );
+    assert.equal((doc.getElementById("cron-runtime-inherit") as HTMLInputElement).checked, false);
+    assert.equal((doc.getElementById("cron-runtime-model") as HTMLSelectElement).value, "b");
+  } finally {
+    dom.window.close();
+  }
+});

@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { type ScopeId, parseScopeId, scopeId as makeScopeId } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { RECALL_MAX_CHARS, bullets, capTail, dateStr, isBullet, normalize } from "./notebook.ts";
+
+import type { MemoryDisclosure } from "./disclosure.ts";
+import {
+  parseMemoryRecords,
+  renderMemoryRecords,
+  updateMemoryRecords,
+  type MemoryCaptureMetadata,
+  type MemoryRecords,
+} from "./records.ts";
 
 export const MEMORY_FILE = "memory/MEMORY.md";
 const MEMORY_HEADER = "# Memory";
@@ -15,6 +25,7 @@ export interface MemoryRevision {
   revision: string;
   content: string;
   operation: string;
+  records?: MemoryRecords;
   author?: string;
   at: number;
 }
@@ -23,6 +34,7 @@ interface MemoryHead {
   content: string;
   revision: string;
   updatedAt?: number;
+  records?: MemoryRecords;
 }
 
 export interface MemoryRecallContext {
@@ -34,11 +46,9 @@ export interface MemoryRecallContext {
   autonomous?: boolean;
 }
 
-export interface MemoryCaptureContext {
+export interface MemoryCaptureContext extends MemoryCaptureMetadata {
   mode: "explicit" | "automatic";
   actorId?: string;
-  sessionId?: string;
-  conversationScopeId?: ScopeId;
   input?: string;
   reply?: string;
   autonomous?: boolean;
@@ -46,6 +56,7 @@ export interface MemoryCaptureContext {
 }
 
 export interface MemoryService {
+  withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<string>;
   capture(
     scopeId: ScopeId,
@@ -59,6 +70,12 @@ export interface MemoryService {
   replace(scopeId: ScopeId, content: string, author?: string): Promise<void>;
   readHead?(scopeId: ScopeId): Promise<MemoryHead>;
   replaceIfRevision?(scopeId: ScopeId, content: string, revision: string, author?: string): Promise<boolean>;
+  replaceRecordsIfRevision?(
+    scopeId: ScopeId,
+    records: MemoryRecords,
+    revision: string,
+    author?: string,
+  ): Promise<boolean>;
   history?(scopeId: ScopeId, limit?: number): Promise<MemoryRevision[]>;
   restore?(scopeId: ScopeId, revision: string, expectedRevision: string, author?: string): Promise<boolean>;
   updatedAt?(scopeId: ScopeId): Promise<number | undefined>;
@@ -117,61 +134,121 @@ export function queryBullets(body: string, q: string, limit: number): string[] {
     .slice(0, limit);
 }
 
-export function normalizeReplace(content: string): string {
+function normalizeReplace(content: string): string {
   const trimmed = content.replace(/\s+$/, "");
   return trimmed ? `${trimmed}\n` : "";
 }
 
+export function captureRecords(
+  scopeId: ScopeId,
+  current: MemoryRecords,
+  facts: string[],
+  at: number,
+  author: string | undefined,
+  context: MemoryCaptureMetadata | undefined,
+): { records: MemoryRecords; added: number } {
+  const trusted = author?.startsWith("cc:") === true;
+  const body = renderMemoryRecords(current);
+  const folded = foldCapture(body, facts, at, trusted);
+  if (!facts.length) return { records: current, added: 0 };
+  return {
+    records: updateMemoryRecords(
+      scopeId,
+      current,
+      folded.added ? `${folded.body}\n` : body,
+      context ?? {},
+      foldCapture("", facts, at, trusted).body,
+    ),
+    added: folded.added,
+  };
+}
+
+export function replaceRecords(scopeId: ScopeId, current: MemoryRecords, content: string): MemoryRecords {
+  return updateMemoryRecords(scopeId, current, normalizeReplace(content));
+}
+
+function parseMemoryFile(scopeId: ScopeId, raw: string): MemoryRecords {
+  if (!raw.trimStart().startsWith("{")) return parseMemoryRecords(scopeId, raw);
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("Malformed memory records file");
+  }
+  return parseMemoryRecords(scopeId, "", value);
+}
+
+export async function readMemory(workspace: WorkspaceStore, scopeId: ScopeId): Promise<string | null> {
+  const raw = await workspace.read(scopeId, MEMORY_FILE);
+  return raw === null ? null : renderMemoryRecords(parseMemoryFile(scopeId, raw));
+}
+
 export function createMemoryService(workspace: WorkspaceStore): MemoryService {
   const perScope = createKeyedQueue<ScopeId>();
+  async function load(scopeId: ScopeId) {
+    const raw = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
+    const records = parseMemoryFile(scopeId, raw);
+    return { raw, records, body: renderMemoryRecords(records), revision: revisionToken(raw) };
+  }
+  async function save(scopeId: ScopeId, raw: string, records: MemoryRecords) {
+    const next =
+      records.records.length || records.capturesSinceConsolidation || records.pendingScratchCaptures
+        ? `${JSON.stringify(records)}\n`
+        : "";
+    if (next === raw) return;
+    if (next) await workspace.write(scopeId, MEMORY_FILE, next);
+    else await workspace.remove(scopeId, MEMORY_FILE);
+  }
   return {
     async recall(scopeId) {
-      return recallBody((await workspace.read(scopeId, MEMORY_FILE)) ?? "");
+      return recallBody((await load(scopeId)).body);
     },
 
-    async capture(scopeId, facts, at, author) {
+    async capture(scopeId, facts, at, author, context) {
       return perScope(scopeId, async () => {
-        const existing = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
-        const { body, added } = foldCapture(existing, facts, at, author?.startsWith("cc:") === true);
-        if (!added) return 0;
-        await workspace.write(scopeId, MEMORY_FILE, `${body}\n`);
-        return added;
+        const head = await load(scopeId);
+        const next = captureRecords(scopeId, head.records, facts, at, author, context);
+        if (!isDeepStrictEqual(next.records, head.records)) await save(scopeId, head.raw, next.records);
+        return next.added;
       });
     },
 
     async query(scopeId, q, limit = 20) {
-      return queryBullets((await workspace.read(scopeId, MEMORY_FILE)) ?? "", q, limit);
+      return queryBullets((await load(scopeId)).body, q, limit);
     },
 
     async read(scopeId) {
-      return (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
+      return (await load(scopeId)).body;
     },
 
     async replace(scopeId, content) {
       await perScope(scopeId, async () => {
-        const next = normalizeReplace(content);
-        if (!next) {
-          await workspace.remove(scopeId, MEMORY_FILE);
-          return;
-        }
-        await workspace.write(scopeId, MEMORY_FILE, next);
+        const head = await load(scopeId);
+        await save(scopeId, head.raw, replaceRecords(scopeId, head.records, content));
       });
     },
 
     async readHead(scopeId) {
       return perScope(scopeId, async () => {
-        const content = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
-        return { content, revision: revisionToken(content) };
+        const head = await load(scopeId);
+        return { content: head.body, revision: head.revision, records: head.records };
       });
     },
 
     async replaceIfRevision(scopeId, content, revision) {
       return perScope(scopeId, async () => {
-        const current = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
-        if (revisionToken(current) !== revision) return false;
-        const next = normalizeReplace(content);
-        if (!next) await workspace.remove(scopeId, MEMORY_FILE);
-        else await workspace.write(scopeId, MEMORY_FILE, next);
+        const head = await load(scopeId);
+        if (head.revision !== revision) return false;
+        await save(scopeId, head.raw, replaceRecords(scopeId, head.records, content));
+        return true;
+      });
+    },
+
+    async replaceRecordsIfRevision(scopeId, records, revision) {
+      return perScope(scopeId, async () => {
+        const head = await load(scopeId);
+        if (head.revision !== revision) return false;
+        await save(scopeId, head.raw, parseMemoryRecords(scopeId, "", records));
         return true;
       });
     },
@@ -201,6 +278,7 @@ export async function ccCaptureToPersonal(
 ): Promise<number> {
   const target = ccTargetFor(origin, actorId);
   if (!target || !facts.length) return 0;
+  if (!(await memory.readHead?.(target))?.records) return 0;
   const { kind } = parseScopeId(origin);
   const clean = sourceLabel
     ?.replace(/[()\r\n]+/g, " ")
@@ -209,5 +287,9 @@ export async function ccCaptureToPersonal(
     .slice(0, 60);
   const source = clean || (kind === "channel" ? "a channel" : "a group conversation");
   const tagged = facts.map((f) => `${f} (said in ${source})`);
-  return memory.capture(target, tagged, at, `cc:${origin}`, context);
+  return memory.capture(target, tagged, at, `cc:${origin}`, {
+    ...context,
+    mode: context?.mode ?? "automatic",
+    conversationScopeId: origin,
+  });
 }

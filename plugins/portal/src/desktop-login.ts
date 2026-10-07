@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { deriveKey, open, randomToken, safeEqual, seal, type SessionClaims } from "./session.ts";
 
+export const DESKTOP_LAUNCH_SCRIPT = `window.location.href = document.getElementById("desktop-launch").href;`;
+export const DESKTOP_LAUNCH_SCRIPT_HASH = `sha256-${createHash("sha256").update(DESKTOP_LAUNCH_SCRIPT).digest("base64")}`;
+
 export function desktopChallenge(value: string): boolean {
   return /^[A-Za-z0-9_-]{43}$/.test(value);
 }
@@ -12,6 +15,7 @@ export function mintDesktopLogin(
   challenge: string,
   state: string,
 ) {
+  if (session.appOnly) throw new Error("app-only sessions cannot sign in to the desktop");
   const now = Math.floor(Date.now() / 1000);
   return seal(
     {
@@ -48,6 +52,7 @@ export function openDesktopLogin(
   if (
     !p ||
     p.k !== "desktop-login" ||
+    p.appOnly !== undefined ||
     p.aud !== origin ||
     p.org !== org ||
     typeof p.sub !== "string" ||

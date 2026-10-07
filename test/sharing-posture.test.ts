@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { composeSharingPosture, parseSharingPosture, type SharingPosture } from "../src/resolution/sharing-posture.ts";
-import { carriedFileHandles, MAX_OPEN_SHARED_SCOPES, sharingSourcesForTurn } from "../src/resolution/sharing-access.ts";
+import {
+  carriedFileHandles,
+  isOpenScopeMember,
+  MAX_OPEN_SHARED_SCOPES,
+  sharingSourcesForTurn,
+} from "../src/resolution/sharing-access.ts";
 import { createMemoryConfigStore, type PersistedSharingPosture } from "../src/resolution/config-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
@@ -53,6 +58,35 @@ test("durable sharing policy composes organization, personal, and room vetoes an
   await restarted.hydrate?.();
   assert.equal(await restarted.getSharingPostureOwnDurable(personal), "open");
   assert.equal(await restarted.getSharingPostureOwnDurable(room), "open");
+});
+
+test("Open membership re-checks durable organization, person, room, and membership restrictions", async () => {
+  const store = createMemoryMap<PersistedSharingPosture>();
+  const writer = createMemoryConfigStore("acme", { sharingPostures: store });
+  const reader = createMemoryConfigStore("acme", { sharingPostures: store });
+  const org = scopeId("org", "acme");
+  const personal = scopeId("personal", "U1");
+  const room = scopeId("channel", "C1");
+  let member = true;
+  const input = {
+    actorId: "U1",
+    scope: room,
+    config: reader,
+    isCurrentSharedScopeMember: async () => member,
+  };
+  assert.equal(await isOpenScopeMember(input), false);
+  await writer.setSharingPosture(org, "open");
+  assert.equal(await isOpenScopeMember(input), true);
+  for (const scope of [personal, room, org]) {
+    await writer.setSharingPosture(scope, "isolated");
+    assert.equal(await isOpenScopeMember(input), false);
+    await writer.setSharingPosture(scope, "open");
+    assert.equal(await isOpenScopeMember(input), true);
+  }
+  member = false;
+  assert.equal(await isOpenScopeMember(input), false);
+  member = true;
+  assert.equal(await isOpenScopeMember({ ...input, scope: personal }), false);
 });
 
 test("open sources accept live human-authored ambient turns and bind carry to the authenticated actor", async () => {

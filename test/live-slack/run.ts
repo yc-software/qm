@@ -200,6 +200,16 @@ function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioRes
       });
       continue;
     }
+    if (tags.includes("apps-gateway") && !(process.env.DEPLOY_APPS_DOMAIN && process.env.DEPLOY_APPS_SESSION_SECRET)) {
+      skipped.push({
+        name: s.name,
+        status: "skip",
+        attempts: 0,
+        durationMs: 0,
+        skipReason: "instance has no apps gateway (needs DEPLOY_APPS_DOMAIN + DEPLOY_APPS_SESSION_SECRET)",
+      });
+      continue;
+    }
     if (tags.includes("no-twin") && env.twin) {
       skipped.push({
         name: s.name,

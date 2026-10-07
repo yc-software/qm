@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
@@ -622,10 +623,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             ? provisionQueue(`scratch:${scratch.key}`, provisionAndPrepare)
             : provisionQueue(scope, () => advisoryLock.withLock(lockKey(scope), provisionAndPrepare)));
         } catch (err) {
-          if (pendingHandle)
-            await sandbox
-              .teardown(pendingHandle)
-              .catch(swallowAs("superserve-sandbox: teardown after failed provision", undefined));
+          if (pendingHandle) await cleanupFailedProvision(sandbox, pendingHandle, err);
           throw err;
         }
       });
@@ -732,7 +730,10 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           }
           activeScratch.delete(handle.id);
           const live = liveByName.get(handle.id);
-          if (!live) return;
+          if (!live) {
+            scratchKeyByName.delete(handle.id);
+            return;
+          }
           try {
             await live.session.kill();
           } catch (err) {
@@ -740,6 +741,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             swallowAs("superserve-sandbox: scratch kill", undefined)(err);
           }
           dropLive(handle.id, live.session.id);
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;

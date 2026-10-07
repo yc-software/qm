@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -1051,6 +1052,7 @@ test("orchestrator vends a capability for only the requested org credential", as
     permission: "read",
     grantedBy: "admin",
   });
+  await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
   await built.app.turn(dm("!run echo hi"));
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
   const res = await built.app.turn(
@@ -1101,6 +1103,7 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
     permission: "read",
     grantedBy: "admin",
   });
+  await selectDefaultSandbox(built, "U1", "personal:U1");
 
   await assert.rejects(
     built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`)),
@@ -1140,6 +1143,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
     text: "!run echo hi",
   });
 
+  await selectDefaultSandbox(built, "U1", "channel:C1", "channel:C2", "personal:U1");
   await built.app.turn(channelTurn("C1"));
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
   let res = await built.app.turn({
@@ -1175,6 +1179,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
 
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {
   const { built, env } = buildWithCapture();
+  await selectDefaultSandbox(built, "U1", "personal:U1");
   const res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
@@ -1344,4 +1349,66 @@ test("usage summaries authorize before reads and include only the requested scop
   assert.deepEqual(body.summaries[0]!.recentUsagePrincipals, ["U1"]);
   assert.deepEqual(summarize.mock.calls[0]!.arguments, [["summary"]]);
   assert.doesNotMatch(JSON.stringify(body), /private|unlisted|U2/);
+});
+
+test("credential prompt blocks are byte-identical across inventory and policy ordering", async () => {
+  const { built } = buildWithCapture();
+  for (const slug of ["z-service", "a-service"]) {
+    await built.serviceCreds.setServiceCredential("org:default-org", {
+      slug,
+      name: slug,
+      secret: "s",
+      host: "api.example.com",
+      allowedMethods: ["POST", "GET"],
+      allowedPathPrefixes: ["/z", "/a"],
+    });
+    await built.acl.grant({
+      ownerScopeId: "org:default-org",
+      ref: `service-cred:${slug}`,
+      granteeScopeId: "org:default-org",
+      permission: "read",
+      grantedBy: "admin",
+    });
+  }
+  const first = await built.app.turn(dm("!sysprompt"));
+  assert.equal(first.status, "ok");
+  assert.match(first.reply ?? "", /service_z-service/);
+  assert.match(first.reply ?? "", /service_a-service/);
+  assert.match(first.reply ?? "", /Shared org credentials available to you/);
+  const list = built.serviceCreds.listServiceCredentials.bind(built.serviceCreds);
+  built.serviceCreds.listServiceCredentials = async (...args) =>
+    (await list(...args)).reverse().map((record) => ({
+      ...record,
+      allowedMethods: record.allowedMethods?.toReversed(),
+      allowedPathPrefixes: record.allowedPathPrefixes?.toReversed(),
+    }));
+  const second = await built.app.turn(dm("!sysprompt"));
+  assert.equal(second.status, "ok");
+  assert.equal(second.reply, first.reply);
+});
+
+test("broker accepts no-expiry sandbox tokens but still enforces credential disablement", async () => {
+  let calls = 0;
+  const srv = startBroker(async () => {
+    calls++;
+    return { status: 200, contentType: "text/plain", text: async () => "ok" };
+  });
+  try {
+    const credential = { slug: "probe", name: "Probe", secret: "synthetic", host: "api.example.com" };
+    await srv.built.serviceCreds.setServiceCredential("org:default-org", credential);
+    const token = (exp: number) =>
+      mintCapabilityToken(
+        { actorId: "U1", scopeId: "personal:U1", aud: CREDENTIAL_BROKER_AUD, credentials: ["probe"], exp },
+        SECRET,
+      );
+    const request = { credential: "probe", method: "GET", url: "https://api.example.com/probe" };
+    assert.equal((await broker(srv.base, await token(Date.now() - 1), request)).status, 401);
+    const unlimited = await token(0);
+    assert.equal((await broker(srv.base, unlimited, request)).status, 200);
+    await srv.built.serviceCreds.setServiceCredential("org:default-org", { ...credential, enabled: false });
+    assert.equal((await broker(srv.base, unlimited, request)).status, 404);
+    assert.equal(calls, 1);
+  } finally {
+    await srv.close();
+  }
 });

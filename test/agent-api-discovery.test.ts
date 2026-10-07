@@ -183,7 +183,7 @@ test("discovery advertises the deployment share endpoint, with guidance", async 
     assert.ok(p.includes("/v1/deployments/:id"), "deployment detail is discoverable");
     assert.ok(p.includes("/v1/deployments/:id/restore"), "restore is discoverable");
     assert.ok(
-      body.guidance.some((g: string) => /share it with everyone/i.test(g)),
+      body.guidance.some((g: string) => g.includes("POST /v1/deployments/:id/share") && g.includes('scope:"org"')),
       "share guidance is present",
     );
   } finally {
@@ -270,5 +270,26 @@ test("disabled swarms are absent from discovery and reject direct API calls", as
     }
   } finally {
     await close();
+  }
+});
+
+test("conversation status is advertised on web turns and omitted on Slack turns", async () => {
+  const s = await start();
+  try {
+    const update = (body: any) =>
+      body.endpoints.filter((e: any) => e.path === "/v1/conversations/:id" && e.method === "POST");
+    const cap = (surface: string) =>
+      mintCapabilityToken(
+        { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS, surface },
+        SECRET,
+      );
+    const web = update((await listApis(s.base, await cap("web"))).body);
+    assert.equal(web.length, 1);
+    assert.match(web[0].summary, /sidebar status/);
+    const slack = update((await listApis(s.base, await cap("slack"))).body);
+    assert.equal(slack.length, 1);
+    assert.doesNotMatch(JSON.stringify(slack), /status/i);
+  } finally {
+    await s.close();
   }
 });

@@ -22,6 +22,7 @@ export type CustomProviderProtocol = (typeof CUSTOM_PROVIDER_PROTOCOLS)[number];
 interface CustomModelSpec {
   id: string;
   name?: string;
+  reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
   /** USD per million input tokens. Defaults to 0 (unknown / not metered). */
@@ -62,6 +63,8 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
     if (!m.id?.trim() || m.id.length > 200) throw new Error("every model needs an id (<=200 chars)");
     if (m.name !== undefined && (typeof m.name !== "string" || m.name.length > 200))
       throw new Error(`model "${m.id}": name must be a string of 200 chars or fewer`);
+    if (m.reasoning !== undefined && typeof m.reasoning !== "boolean")
+      throw new Error(`model "${m.id}": reasoning must be a boolean`);
     if (modelIdReserved(m.id) || (registry.has(m.id) && registry.get(m.id)?.provider !== spec.id))
       throw new Error(`model id "${m.id}" is already registered`);
     if (seen.has(m.id)) throw new Error(`duplicate model id "${m.id}"`);
@@ -119,7 +122,7 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
     provider: provider.id,
     api: customProviderApi(provider.protocol),
     baseUrl: provider.baseUrl,
-    reasoning: false,
+    reasoning: m.reasoning ?? false,
     input: ["text"],
     cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: m.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
@@ -188,6 +191,7 @@ export function customModelsJson(): { providers: Record<string, unknown> } | und
           models: spec.models.map((m) => ({
             id: m.id,
             name: m.name ?? m.id,
+            reasoning: m.reasoning ?? false,
             contextWindow: m.contextWindow ?? 128_000,
             maxTokens: m.maxTokens ?? 8_192,
             cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },

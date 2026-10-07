@@ -14,8 +14,9 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 
-function world(enabled = true) {
+function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
     store: createLoopStore(),
     items: createLoopItemLedger(),
@@ -36,13 +37,19 @@ function world(enabled = true) {
         url: new URL(`http://local/v1/inbox?${query}`),
         actor: { p: actor },
         capability: null,
-        deps: { loops: deps, uiState, featureFlags: { enabled: async () => enabled } },
+        deps: {
+          loops: deps,
+          uiState,
+          inboxSourceRefresh: sourceRefresh,
+          featureFlags: { enabled: async () => enabled },
+        },
         app: {
           samePerson: async (a: string, b: string) => a === b,
           membershipControlsScope: async () => false,
           managesScope: async () => false,
         },
         res: {
+          getHeader: () => undefined,
           writeHead: (value: number) => {
             status = value;
           },
@@ -377,4 +384,277 @@ test("completed repair keeps conflicting drafts visible while moving unrelated i
     assert.equal(result.data.selected.find((loop: any) => loop.id === defaults[0]!.id).count, 2);
     assert.equal((await w.deps.items.byLoop(legacy.id))[0]!.proposal!.data.body, "Human draft");
   }
+});
+
+test("the inbox feed reconciles selected owner Gmail loops before counting summaries", async () => {
+  const refreshed: string[] = [];
+  const w = world(true, async (owner, items) => {
+    assert.equal(owner, "alice");
+    for (const item of items) {
+      refreshed.push(item.id);
+      await w.deps.items.recordAction(item.id, { kind: "replied", outcome: "dismissed", sourceAt: 2000 });
+    }
+  });
+  const loops = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  const mail = loops.find((loop) => loop.sources?.includes("gmail"))!;
+  await w.deps.items.ingest([
+    {
+      loopId: mail.id,
+      dedupeKey: "waiting",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { gmail: { threadId: "t1" } },
+      proposal: { by: "agent", data: { body: "Draft" } },
+    },
+  ]);
+  const item = (await w.deps.items.byLoop(mail.id))[0]!;
+  const feed = await w.call();
+  assert.deepEqual(refreshed, [item.id]);
+  assert.equal(feed.data.total, 0);
+  assert.deepEqual(feed.data.items, []);
+  refreshed.length = 0;
+  await w.call("PUT", { loopIds: [] });
+  await w.call();
+  assert.deepEqual(refreshed, []);
+});
+
+test("email filters leave Slack unchanged while source counts include all open conversations", async () => {
+  const w = world();
+  const [email, slack] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  for (const [key, payload, draft] of [
+    ["question", {}, true],
+    ["thanks", { probablyResolved: true }, true],
+    ["receipt", { automated: true }, false],
+    ["pending", {}, false],
+    ["handled", {}, true],
+  ] as const) {
+    await w.deps.items.ingest([
+      {
+        loopId: email!.id,
+        dedupeKey: key,
+        source: "gmail",
+        sourcePayload: { title: key, ...payload },
+        ...(draft ? { proposal: { by: "agent" as const, data: { body: "Draft" } } } : {}),
+      },
+    ]);
+  }
+  const receiptItem = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "receipt")!;
+  const claimed = await w.deps.items.claim(receiptItem.id);
+  await w.deps.items.markReady(receiptItem.id, [], claimed!.claimToken!);
+  const handled = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "handled")!;
+  await w.deps.items.recordAction(handled.id, { kind: "dismiss", outcome: "dismissed" });
+  await w.deps.items.ingest([
+    { loopId: slack!.id, dedupeKey: "slack-pending", source: "slack", sourcePayload: {} },
+    ...(
+      [
+        ["slack-question", {}],
+        ["slack-resolved", { probablyResolved: true }],
+        ["slack-bot", { automated: true }],
+      ] as const
+    ).map(([key, payload]) => ({
+      loopId: slack!.id,
+      dedupeKey: String(key),
+      source: "slack",
+      sourcePayload: payload,
+      proposal: { by: "agent" as const, data: { body: "Draft" } },
+    })),
+  ]);
+  const keys = (feed: any) => feed.items.map((item: any) => item.dedupeKey).sort();
+  const initial = (await w.call()).data;
+  assert.equal(initial.filter, "human");
+  assert.deepEqual(keys(initial), ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]);
+  const triaged = (await w.call("GET", null, "filter=triaged")).data;
+  assert.equal(triaged.filter, "triaged");
+  assert.deepEqual(keys(triaged), ["question", "slack-bot", "slack-question", "slack-resolved"]);
+  assert.equal(triaged.total, 8);
+  const sourceCounts = (feed: any) => feed.selected.map((loop: any) => [loop.id, loop.count]);
+  assert.deepEqual(sourceCounts(triaged), [
+    [email!.id, 4],
+    [slack!.id, 4],
+  ]);
+  for (const [filter, expected] of [
+    ["triaged", ["question", "slack-bot", "slack-question", "slack-resolved"]],
+    ["human", ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
+    ["all", ["pending", "question", "receipt", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
+  ] as const) {
+    await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: filter, updatedAt: Date.now() });
+    const feed = (await w.call()).data;
+    assert.equal(feed.filter, filter);
+    assert.deepEqual(keys(feed), expected);
+    assert.equal(feed.total, 8);
+    assert.deepEqual(sourceCounts(feed), sourceCounts(triaged));
+    assert.equal(
+      feed.selected.reduce((sum: number, loop: any) => sum + loop.count, 0),
+      8,
+    );
+    assert.deepEqual(keys((await w.call("GET", null, `loopId=${slack!.id}`)).data), [
+      "slack-bot",
+      "slack-question",
+      "slack-resolved",
+    ]);
+    assert.deepEqual(keys((await w.call("GET", null, "view=handled")).data), ["handled"]);
+    assert.deepEqual(
+      keys((await w.call("GET", null, `loopId=${email!.id}`)).data),
+      expected.filter((key) => !key.startsWith("slack-")),
+    );
+    assert.equal((await w.call("GET", null, "", "mallory")).data.filter, "human");
+  }
+  const receipt = (await w.call()).data.items.find((item: any) => item.dedupeKey === "receipt");
+  assert.equal(receipt.sourcePayload.automated, true);
+  assert.equal(receipt.state, "held");
+  assert.equal(receipt.proposal, undefined);
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "invalid", updatedAt: Date.now() });
+  assert.equal((await w.call()).data.filter, "human");
+  const question = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "question")!;
+  await w.deps.items.recordAction(question.id, { kind: "dismiss", outcome: "dismissed" });
+  const afterDismiss = (await w.call()).data;
+  assert.equal(afterDismiss.total, 7);
+  assert.deepEqual(sourceCounts(afterDismiss), [
+    [email!.id, 3],
+    [slack!.id, 4],
+  ]);
+});
+
+test("inbox filters apply before pagination even when automated messages fill multiple pages", async () => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  for (let n = 0; n < 85; n++) {
+    await w.deps.items.ingest([
+      {
+        loopId: loop!.id,
+        dedupeKey: String(n),
+        source: "gmail",
+        sourcePayload: { automated: n >= 5 },
+        proposal: { by: "agent", data: { body: "Draft" } },
+      },
+    ]);
+  }
+  const triaged = (await w.call("GET", null, "filter=triaged")).data;
+  assert.equal(triaged.total, 85);
+  assert.equal(triaged.items.length, 5);
+  assert.equal(triaged.nextCursor, null);
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
+  const first = (await w.call()).data;
+  const second = (await w.call("GET", null, `cursor=${first.nextCursor}`)).data;
+  const third = (await w.call("GET", null, `cursor=${second.nextCursor}`)).data;
+  assert.equal(first.total, 85);
+  assert.deepEqual([first.items.length, second.items.length, third.items.length], [40, 40, 5]);
+  assert.equal(new Set([...first.items, ...second.items, ...third.items].map((item: any) => item.id)).size, 85);
+});
+
+test("explicit refresh filters stay consistent across saved preference changes without overwriting them", async () => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  await w.deps.items.ingest([
+    { loopId: loop!.id, dedupeKey: "receipt", source: "gmail", sourcePayload: { automated: true } },
+    { loopId: loop!.id, dedupeKey: "question", source: "gmail", sourcePayload: { automated: false } },
+  ]);
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
+  const first = (await w.call()).data;
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "human", updatedAt: Date.now() + 1 });
+  const pinned = (await w.call("GET", null, `filter=${first.filter}`)).data;
+  assert.equal(pinned.filter, "all");
+  assert.equal(pinned.total, 2);
+  assert.equal(pinned.items.length, 2);
+  const latest = (await w.call()).data;
+  assert.equal(latest.filter, "human");
+  assert.equal(latest.total, 2);
+  assert.equal(latest.items.length, 1);
+  assert.equal((await w.call("GET", null, "filter=invalid")).status, 400);
+});
+
+test("legacy source metadata survives an empty filtered email view", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.deps.store, "alice");
+  await w.deps.items.ingest([
+    { loopId: loop.id, dedupeKey: "receipt", source: "gmail", sourcePayload: { automated: true } },
+  ]);
+  await w.call("PUT", { loopIds: [loop.id] });
+  const feed = (await w.call()).data;
+  assert.equal(feed.items.length, 0);
+  assert.deepEqual(feed.selected[0].sources, ["gmail"]);
+});
+
+test("email classification is projected only by the flagged inbox endpoint", async (t) => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  await w.deps.items.ingest([
+    {
+      loopId: loop!.id,
+      dedupeKey: "receipt",
+      source: "gmail",
+      sourcePayload: { automated: true, privateDetail: "hidden" },
+    },
+  ]);
+  const [before] = await w.deps.items.summaries([loop!.id]);
+  assert.equal(before!.inboxPreview!.automated, undefined);
+  const feed = (await w.call("GET", null, "filter=all")).data;
+  assert.equal(feed.items[0].sourcePayload.automated, true);
+  assert.equal(feed.items[0].sourcePayload.privateDetail, undefined);
+  assert.deepEqual((await w.deps.items.summaries([loop!.id]))[0], before);
+  const disabled = world(false);
+  t.mock.method(disabled.deps.items, "byLoop", async () => {
+    assert.fail("flag-disabled inbox read payloads");
+  });
+  t.mock.method(disabled.deps.items, "summaries", async () => {
+    assert.fail("flag-disabled inbox read summaries");
+  });
+  for (const filter of ["all", "human", "triaged"]) {
+    assert.equal((await disabled.call("GET", null, `filter=${filter}`)).status, 403);
+  }
+});
+
+test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and aliases", async (t) => {
+  const store = createLoopStore();
+  const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
+  const { loop: personal } = await store.create({
+    ...base,
+    owner: "alice",
+    ownerScopeId: "personal:alice",
+    name: "Mine",
+  });
+  const { loop: group } = await store.create({ ...base, owner: "alice", ownerScopeId: "group:core", name: "Team" });
+  const members = new Set(["alice", "bob", "carol"]);
+  const route = inboxRoutes.find((r) => "path" in r && r.path === "/v1/inbox/viewers")!;
+  const ask = async (body: unknown, capability: unknown = null) => {
+    let status = 0;
+    let data: any;
+    await route.handle({
+      method: "POST",
+      body,
+      url: new URL("http://local/v1/inbox/viewers"),
+      capability,
+      deps: {
+        loops: { store },
+        identity: {
+          refresh: async () => {},
+          classify: (id: string) => ({ id, type: id === "carol" ? "deactivated" : "internal" }),
+        },
+      },
+      app: {
+        samePerson: async (a: string, b: string) => a === b,
+        membershipControlsScope: async (scope: string) => scope.startsWith("group:"),
+        managesScope: async (who: string, scope: string) => scope === "group:core" && members.has(who),
+      },
+      res: {
+        getHeader: () => undefined,
+        writeHead: (value: number) => {
+          status = value;
+        },
+        end: (value: string) => {
+          data = JSON.parse(value);
+        },
+      },
+    } as unknown as ApiCtx);
+    return { status, data };
+  };
+  const candidates = ["alice", "bob-slack", "carol", "mallory"];
+  installPrincipalLinks({ canonical: (key) => (key === "bob-slack" ? "bob" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
+  assert.deepEqual((await ask({ loopId: personal.id, candidates })).data.viewers, ["alice"]);
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob-slack"]);
+  members.delete("alice");
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["bob-slack"]);
+  assert.equal((await ask({ loopId: "missing", candidates })).status, 404);
+  assert.equal((await ask({ loopId: group.id, candidates }, { actorId: "mallory" })).status, 403);
 });

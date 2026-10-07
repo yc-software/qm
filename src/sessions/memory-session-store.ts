@@ -22,6 +22,7 @@ import type {
   SessionStore,
   SessionSummary,
   SessionPin,
+  SpendRow,
   StoreOptions,
   TapeRecord,
 } from "./session-store.ts";
@@ -255,6 +256,10 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async append(lease, entry: NewEntry): Promise<SessionEntry> {
+      return (await this.appendMany(lease, [entry]))[0]!;
+    },
+
+    async appendMany(lease, batch: readonly NewEntry[]): Promise<SessionEntry[]> {
       const held = leases.get(lease.sessionId);
       if (!held || held.token !== lease.token || now() >= held.expiresAt) {
         throw new Error("append without a valid session lease");
@@ -262,36 +267,54 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       held.expiresAt = now() + leaseTtlMs;
       const log = entries.get(lease.sessionId);
       if (!log) throw new Error(`unknown session: ${lease.sessionId}`);
-      const seq = log.length;
-      const full: SessionEntry = {
-        sessionId: lease.sessionId,
-        seq,
-        parentSeq: seq === 0 ? null : seq - 1,
-        type: entry.type,
-        payload: entry.payload,
-        scopeLabel: entry.scopeLabel as ScopeId,
-        createdAt: now(),
-      };
-      const mirrored = structuredClone(tapeTranscriptEntryRecord(full));
-      log.push(full);
-      const tapeLog = tape.get(lease.sessionId) ?? [];
-      tapeLog.push({
-        ...mirrored,
-        sessionId: lease.sessionId,
-        seq: tapeLog.length,
-        createdAt: now(),
+      const copied = structuredClone(batch);
+      return copied.map((entry) => {
+        const seq = log.length;
+        const full: SessionEntry = {
+          sessionId: lease.sessionId,
+          seq,
+          parentSeq: seq === 0 ? null : seq - 1,
+          type: entry.type,
+          payload: entry.payload,
+          scopeLabel: entry.scopeLabel as ScopeId,
+          createdAt: now(),
+        };
+        const mirrored = structuredClone(tapeTranscriptEntryRecord(full));
+        log.push(full);
+        const tapeLog = tape.get(lease.sessionId) ?? [];
+        tapeLog.push({
+          ...mirrored,
+          sessionId: lease.sessionId,
+          seq: tapeLog.length,
+          createdAt: now(),
+        });
+        tape.set(lease.sessionId, tapeLog);
+        const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
+        if (text?.trim()) {
+          const index = searchIndex.get(full.sessionId) ?? [];
+          const author = entrySearchAuthor(full);
+          index.push({
+            seq: full.seq,
+            type: full.type,
+            text,
+            createdAt: full.createdAt,
+            ...(author ? { author } : {}),
+          });
+          searchIndex.set(full.sessionId, index);
+        }
+        return full;
       });
-      tape.set(lease.sessionId, tapeLog);
-      const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
-      if (text?.trim()) {
-        const index = searchIndex.get(full.sessionId) ?? [];
-        const author = entrySearchAuthor(full);
-        index.push({ seq: full.seq, type: full.type, text, createdAt: full.createdAt, ...(author ? { author } : {}) });
-        searchIndex.set(full.sessionId, index);
-      }
-      return full;
     },
 
+    async getRecentEntries(sessionIds, lookback) {
+      return new Map(
+        sessionIds.map((id) => {
+          const log = entries.get(id) ?? [];
+          const since = Math.max(0, (log.at(-1)?.seq ?? -1) - lookback);
+          return [id, log.filter((entry) => entry.seq >= since)];
+        }),
+      );
+    },
     async getEntries(sessionId, opts?: GetEntriesOptions) {
       const log = entries.get(sessionId) ?? [];
       const since = opts?.sinceSeq ?? 0;
@@ -313,6 +336,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         .sort((a, b) => a.seq - b.seq);
       if (opts?.limit === 0) return [];
       return opts?.limit === undefined ? filtered : filtered.slice(-opts.limit);
+    },
+
+    async canReadTranscriptSuffix(sessionId, beforeSeq) {
+      const prefix = new Map<number, string>();
+      for (const row of tape.get(sessionId) ?? []) {
+        const entry = transcriptEntryFromTape(row);
+        if (entry && entry.seq >= 0 && entry.seq < beforeSeq) prefix.set(entry.seq, entry.type);
+      }
+      return prefix.size === beforeSeq && [...prefix.values()].every((type) => type !== "soul");
     },
 
     async getContextWindow(sessionId) {
@@ -349,14 +381,22 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
+      return (await this.appendTapeMany(lease, [rec]))[0]!;
+    },
+    async appendTapeMany(lease, records): Promise<TapeRecord[]> {
       const held = leases.get(lease.sessionId);
       if (!held || held.token !== lease.token || now() >= held.expiresAt)
         throw new Error("tape append without a valid session lease");
       held.expiresAt = now() + leaseTtlMs;
       const log = tape.get(lease.sessionId) ?? [];
       tape.set(lease.sessionId, log);
-      const full: TapeRecord = { ...rec, sessionId: lease.sessionId, seq: log.length, createdAt: now() };
-      log.push(full);
+      const full = records.map((rec, index) => ({
+        ...rec,
+        sessionId: lease.sessionId,
+        seq: log.length + index,
+        createdAt: now(),
+      }));
+      log.push(...full);
       return full;
     },
 
@@ -702,21 +742,19 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return [...byScope].map(([scopeId, channelName]) => ({ scopeId, ...(channelName ? { channelName } : {}) }));
     },
 
-    async scopeSessionSummaries(scope, orgWide, page?: SessionPage, sessionIds?: string[]): Promise<SessionSummary[]> {
-      const idSet = sessionIds ? new Set(sessionIds) : null;
+    async scopeSessionSummaries(scope, orgWide, page: SessionPage): Promise<SessionSummary[]> {
       const out: SessionSummary[] = [];
       for (const s of sessions.values()) {
         if (!orgWide && s.scopeId !== scope) continue;
-        if (idSet && !idSet.has(s.id)) continue;
         const origin = sessionOrigin(s.threadRef);
-        if (page?.category && sessionCategory(origin) !== page.category) continue;
+        if (page.category && sessionCategory(origin) !== page.category) continue;
         if (
-          page?.origin === "other_background"
+          page.origin === "other_background"
             ? origin === "conversation" || origin === "cron"
-            : page?.origin && origin !== page.origin
+            : page.origin && origin !== page.origin
         )
           continue;
-        if (page?.cronId && cronIdOf(s.threadRef) !== page.cronId) continue;
+        if (page.cronId && cronIdOf(s.threadRef) !== page.cronId) continue;
         const log = entries.get(s.id) ?? [];
         const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
         out.push({
@@ -734,16 +772,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         });
       }
       out.sort((a, b) => b.lastActivity - a.lastActivity || idDesc(a.id, b.id));
-      if (!page) return out;
       const before = page.before;
-      if (before) {
-        return out
-          .filter(
-            (r) => r.lastActivity < before.lastActivity || (r.lastActivity === before.lastActivity && r.id < before.id),
-          )
-          .slice(0, page.limit);
-      }
-      return out.slice(page.offset, page.offset + page.limit);
+      return (
+        before
+          ? out.filter(
+              (r) =>
+                r.lastActivity < before.lastActivity || (r.lastActivity === before.lastActivity && r.id < before.id),
+            )
+          : out
+      ).slice(0, page.limit);
     },
 
     async lastUserMessages(sessionIds): Promise<Map<string, string>> {
@@ -879,6 +916,55 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         }
       }
       return out;
+    },
+
+    async spendRollup(range): Promise<SpendRow[]> {
+      const DAY = 86_400_000;
+      const buckets = new Map<string, SpendRow>();
+      for (const [sessionId, records] of llmRequests) {
+        const session = sessions.get(sessionId);
+        if (!session) continue;
+        let origin = sessionOrigin(session.threadRef);
+        let ancestor = session;
+        const visited = new Set([sessionId]);
+        while (origin === "conversation" && ancestor.parentSessionId && visited.size < 64) {
+          const parent = sessions.get(ancestor.parentSessionId);
+          if (!parent || visited.has(parent.id)) break;
+          visited.add(parent.id);
+          ancestor = parent;
+          origin = sessionOrigin(parent.threadRef);
+        }
+        for (const r of records) {
+          if (!r.usage) continue;
+          if (r.createdAt < range.from || r.createdAt >= range.to) continue;
+          const day = Math.floor(r.createdAt / DAY);
+          const model = r.model ?? null;
+          const key = JSON.stringify([day, session.scopeId, origin, model]);
+          let row = buckets.get(key);
+          if (!row) {
+            row = {
+              day,
+              model,
+              scopeId: session.scopeId,
+              origin,
+              calls: 0,
+              costUsd: 0,
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            };
+            buckets.set(key, row);
+          }
+          row.calls += 1;
+          row.costUsd += r.usage.costUsd;
+          row.input += r.usage.input;
+          row.output += r.usage.output;
+          row.cacheRead += r.usage.cacheRead;
+          row.cacheWrite += r.usage.cacheWrite;
+        }
+      }
+      return [...buckets.values()];
     },
 
     async listParticipants() {

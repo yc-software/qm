@@ -4,6 +4,8 @@ import type { SwarmCaller } from "../../swarms/swarm-service.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
+const ACTION_FIELDS: Record<string, string[]> = { context: ["context"], control: ["memberId", "state"] };
+
 async function swarmRequest(ctx: ApiCtx): Promise<void> {
   const { app, res, body, capability, actor, params, method, url } = ctx;
   if (!app.swarms) return sendJson(res, 503, { error: "swarm service unavailable" });
@@ -35,7 +37,7 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
     const allowed = new Set([
       "action",
       ...(caller.kind === "human" ? ["runId"] : []),
-      ...(body.action === "context" ? ["context"] : ["requestId", "text"]),
+      ...(ACTION_FIELDS[String(body.action)] ?? ["requestId", "text"]),
       ...(body.action === "spawn" ? ["count", "context", "contexts", "forumSandboxId"] : []),
       ...(body.action === "send" ? ["audience", "replyTo", "notify"] : []),
       ...(body.action === "spawn" ? ["settings", "backend"] : []),
@@ -44,6 +46,12 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
     if (body.action === "context") {
       if (!("context" in body)) throw new Error("context required");
       return sendJson(res, 200, await app.swarms.context(caller, body.context));
+    }
+    if (body.action === "control") {
+      if (typeof body.memberId !== "string" || !["active", "paused", "stopped"].includes(body.state as string))
+        throw new Error("memberId and state (active, paused or stopped) required");
+      const state = body.state as "active" | "paused" | "stopped";
+      return sendJson(res, 200, { member: await app.swarms.control(caller, { memberId: body.memberId, state }) });
     }
     if (typeof body.requestId !== "string" || typeof body.text !== "string")
       throw new Error("requestId and text required");

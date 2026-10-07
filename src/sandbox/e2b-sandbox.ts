@@ -1,10 +1,10 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { collectBlob } from "../persistence/blob-transfer.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
@@ -57,7 +57,6 @@ const WORKSPACE_BASENAME = "workspace";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
-const IN_MEMORY_ADOPT_MAX_BYTES = 256 * 1024 * 1024;
 
 const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 const DEFAULT_KEEP_WARM_SEC = 3600;
@@ -264,6 +263,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   async function withSession<T>(name: string, action: (session: E2bSession) => Promise<T>): Promise<T> {
     const scratchKey = scratchKeyByName.get(name);
+    if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
 
     const reviveScratch = async (): Promise<E2bSession> => {
       const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
@@ -301,6 +301,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     backend: "e2b",
     writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
+    parksOnTeardown: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
@@ -463,7 +464,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("e2b-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },
@@ -505,38 +506,6 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     },
 
     exportFiles: execExport.exportFiles,
-
-    async adoptHomeSnapshot(scopeId: string, blobId: string): Promise<void> {
-      const blobTransfer = opts.blobTransfer;
-      if (!blobTransfer) throw new Error("e2b adoptHomeSnapshot: no blob transfer store wired");
-      const ref = blobTransfer.s3Ref?.(blobId);
-      if (ref && snapshots.adoptFromS3) {
-        await snapshots.adoptFromS3(scopeId, ref);
-      } else {
-        const blob = await blobTransfer.open(blobId);
-        if (!blob) throw new Error(`e2b adoptHomeSnapshot: blob ${blobId} not found`);
-        if (blob.sizeBytes > IN_MEMORY_ADOPT_MAX_BYTES) {
-          blob.stream.destroy();
-          throw new Error(
-            `e2b adoptHomeSnapshot: blob is ${blob.sizeBytes} bytes; adopting over ${IN_MEMORY_ADOPT_MAX_BYTES} needs S3-backed blob and snapshot stores`,
-          );
-        }
-        await snapshots.put(scopeId, await collectBlob(blob.stream));
-      }
-      const name = sandboxScopeName(prefix, scopeId);
-      return provisionQueue(scopeId, async () => {
-        const session = sessionByName.get(name);
-        sessionByName.delete(name);
-        const stored = await store.get(scopeId);
-        const killGone = (e: unknown): void => {
-          if (!(e instanceof E2bSandboxGoneError)) throw e;
-        };
-        if (session) await session.kill().catch(killGone);
-        else if (stored) await client.kill(stored.sandboxId).catch(killGone);
-        await store.delete(scopeId);
-        await forgetSnapshot(stored?.recoverySnapshotId);
-      });
-    },
 
     async persistHomeSnapshot(scopeId: string): Promise<void> {
       const name = sandboxScopeName(prefix, scopeId);
@@ -622,8 +591,12 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           }
           activeScratch.delete(handle.id);
           const session = sessionByName.get(handle.id);
+          if (session) {
+            if (tdOpts?.destroy) await session.kill();
+            else await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
+          }
           sessionByName.delete(handle.id);
-          if (session) await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;

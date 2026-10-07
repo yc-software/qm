@@ -1,4 +1,9 @@
-import { keychainApprovalMessage, keychainApprovalOrigin } from "./keychain-approvals.ts";
+import { extractPrivateContinuation } from "./external-access.ts";
+import { deployAccessMessage } from "./deploy-access.ts";
+import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval-store.ts";
+import { samePerson } from "../directory/person.ts";
+import { approvalMessage } from "./approval-cards.ts";
+import { deliverKeychainCard } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
@@ -6,10 +11,12 @@ import {
   createDeliveryTracker,
   createThreadTracker,
   deliverWithRetry,
+  deliveryMetadata,
   dmThreadRef,
   openConversationFor,
   findPostedByKey,
   parseDeliveryTarget,
+  statusPlaceholderKey,
   postWithVerify,
   recoveryVerifyOldest,
   renderTaskList,
@@ -39,9 +46,12 @@ const PERMANENT_POST_ERRORS = new Set([
   "message_not_found",
 ]);
 
+const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
+
 const DELIVERY_CLAIM_MARGIN_MS = 2_000;
 
 const RUN_RECOVERY_GRACE_MS = 15_000;
+const STATUS_PLACEHOLDER_LOOKBACK_MS = 6 * 3_600_000;
 
 function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown {
   if (slackApiMs === undefined) return body;
@@ -51,6 +61,9 @@ function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown
 }
 
 export function createDeliveryPoller(deps: {
+  clientForAccount?: (accountId: string, teamId?: string) => any;
+  externalNamespace?: (accountId: string) => string | undefined;
+  continuePrivate?: (runId: string, task: string) => Promise<void>;
   core: SlackCoreClient;
   webUiPublicUrl?: string;
   flow: TurnFlow;
@@ -179,11 +192,30 @@ export function createDeliveryPoller(deps: {
       );
     };
 
-  async function deliverToConversations(client: any, leaseLost?: () => boolean): Promise<number> {
+  function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
+    if (deps.clientForAccount)
+      return deps.clientForAccount(destination.slackAccountId ?? "default", destination.slackTeamId);
+    return destination.slackAccountId ? undefined : defaultClient;
+  }
+
+  async function deliverToConversations(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
     return drainClaimed(
       ["slack", "group"],
       async (d) => {
+        const destinationClient = deliveryClient(defaultClient, d.destination);
+        if (!destinationClient) return;
+        const client = destinationClient;
         const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
+        const namespace = deps.externalNamespace?.(d.destination.slackAccountId ?? "default");
+        if (
+          namespace &&
+          (parseDeliveryTarget(d.destination.target).channel.startsWith("D")
+            ? runId && d.destination.slackPolicyNamespace !== namespace
+            : !d.provenance?.sourceThreadRef.startsWith(`${namespace}:`))
+        ) {
+          await ackDelivery(d.id);
+          return;
+        }
         if (runId && inFlightRuns.has(runId)) return;
         if (runId && typeof d.createdAt === "number" && Date.now() - d.createdAt < RUN_RECOVERY_GRACE_MS) return;
         let slackApiMs: number | undefined;
@@ -193,12 +225,25 @@ export function createDeliveryPoller(deps: {
           post: async () => {
             const tPost = performance.now();
             try {
+              const continuation = extractPrivateContinuation(d.text);
+              if (
+                runId &&
+                continuation.task &&
+                d.provenance?.sourceThreadRef.startsWith("external-slack:") &&
+                deps.continuePrivate
+              ) {
+                await deps.continuePrivate(runId, continuation.task);
+                return undefined;
+              }
               const postClient = d.destination.identity ? clientForIdentity(d.destination.identity) : client;
               const { channel, threadTs } = parseDeliveryTarget(d.destination.target);
+              if (d.destination.keychainAskId) {
+                await deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
+                return undefined;
+              }
               if (d.destination.react) {
-                const { failed } = await applyReactions(client, channel, d.destination.react.messageTs, [
-                  d.destination.react.emoji,
-                ]);
+                const { messageTs, emoji } = d.destination.react;
+                const { failed } = await applyReactions(client, channel, messageTs, [emoji]);
                 if (failed.length)
                   console.error(
                     `[slack-plugin] delivery ${d.id} reaction(s) failed: ${failed.join(", ")} (check reactions:write / message ts)`,
@@ -211,8 +256,8 @@ export function createDeliveryPoller(deps: {
                   if (remove) await client.pins.remove({ channel, timestamp: messageTs });
                   else await client.pins.add({ channel, timestamp: messageTs });
                 } catch (err) {
-                  const code = (err as { data?: { error?: string } })?.data?.error;
-                  if (code !== "already_pinned" && code !== "no_pin" && code !== "not_pinned")
+                  const code = slackErrorCode(err);
+                  if (!code || !SETTLED_PIN_ERRORS.has(code))
                     console.error(
                       `[slack-plugin] delivery ${d.id} native ${remove ? "unpin" : "pin"} failed: ${code ?? (err as Error).message}`,
                     );
@@ -220,16 +265,32 @@ export function createDeliveryPoller(deps: {
                 return undefined;
               }
               if (d.destination.delete) {
+                const { messageTs } = d.destination.delete;
                 try {
-                  await client.chat.delete({ channel, ts: d.destination.delete.messageTs });
+                  await client.chat.delete({ channel, ts: messageTs });
                 } catch (err) {
-                  console.error(
-                    `[slack-plugin] delivery ${d.id} delete failed: ${slackErrorCode(err) ?? (err as Error).message} (own messages only)`,
-                  );
+                  const code = slackErrorCode(err);
+                  if (code !== "message_not_found")
+                    console.error(
+                      `[slack-plugin] delivery ${d.id} delete failed: ${code ?? (err as Error).message} (own messages only)`,
+                    );
                 }
                 return undefined;
               }
-              const text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
+              let editRef = d.destination.editRef;
+              if (!editRef && runId) {
+                const placeholder = await findPostedByKey(
+                  client,
+                  { channel, ...(threadTs ? { thread_ts: threadTs } : {}) },
+                  statusPlaceholderKey(runId),
+                  String((d.createdAt - STATUS_PLACEHOLDER_LOOKBACK_MS) / 1000),
+                ).catch(swallowAs("slack: status-placeholder probe", undefined));
+                if (placeholder) {
+                  await core.reportRunEditRef(runId, placeholder.ts);
+                  editRef = placeholder.ts;
+                }
+              }
+              let text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
               const replayAttachments = async (root?: string): Promise<void> => {
                 if (!d.attachments?.length) return;
                 try {
@@ -246,6 +307,7 @@ export function createDeliveryPoller(deps: {
                 }
               };
               const messageFooter = deliveryFooter(d);
+              if (!text.trim() && !messageFooter.length && d.attachments?.length) text = "Files attached.";
               const footer = [
                 ...messageFooter,
                 ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
@@ -262,11 +324,11 @@ export function createDeliveryPoller(deps: {
               if (!text.trim() && !(messageFooter.length && d.attachments?.length)) {
                 if (taskList) {
                   let preserved = false;
-                  if (d.destination.editRef) {
+                  if (editRef) {
                     try {
                       await client.chat.update({
                         channel,
-                        ts: d.destination.editRef,
+                        ts: editRef,
                         text: taskList,
                         blocks: [{ type: "section", text: { type: "mrkdwn", text: taskList } }],
                         ...botIdentityArgs(),
@@ -282,9 +344,9 @@ export function createDeliveryPoller(deps: {
                       blocks: [{ type: "section", text: { type: "mrkdwn", text: taskList } }],
                     });
                   }
-                } else if (d.destination.editRef) {
+                } else if (editRef) {
                   await client.chat
-                    .delete({ channel, ts: d.destination.editRef })
+                    .delete({ channel, ts: editRef })
                     .catch(swallowAs("slack: delete status placeholder", undefined));
                 }
                 await replayAttachments(threadTs);
@@ -293,7 +355,7 @@ export function createDeliveryPoller(deps: {
               }
               const verifyOldest = recoveryVerifyOldest(
                 typeof d.createdAt === "number" ? d.createdAt : undefined,
-                d.destination.editRef,
+                editRef,
               );
               const deliveredMarker = (): Promise<{ ts: string; channel: string } | undefined> =>
                 findPostedByKey(
@@ -302,16 +364,17 @@ export function createDeliveryPoller(deps: {
                   d.idempotencyKey ?? d.id,
                   verifyOldest ?? String(Date.now() / 1000 - 60),
                 ).catch(swallowAs("slack: delivered-marker probe", undefined));
-              if (d.destination.editRef) {
+              if (editRef) {
                 const unfurlLinks = runId ? false : d.destination.unfurlLinks;
                 try {
                   const alreadyDelivered = d.attachments?.length ? await deliveredMarker() : undefined;
                   await client.chat.update({
                     channel,
-                    ts: d.destination.editRef,
+                    ts: editRef,
                     text,
                     ...(footerBlocks ? { blocks: footerBlocks } : {}),
                     ...botIdentityArgs(),
+                    metadata: deliveryMetadata(d.idempotencyKey ?? d.id),
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   });
                   if (threadTs) threads.mark(channel, threadTs, true);
@@ -351,10 +414,12 @@ export function createDeliveryPoller(deps: {
     );
   }
 
-  async function deliverToPrincipals(client: any, leaseLost?: () => boolean): Promise<number> {
+  async function deliverToPrincipals(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
     return drainClaimed(
       ["principal"],
       async (d) => {
+        const client = deliveryClient(defaultClient, d.destination);
+        if (!client) return;
         let slackApiMs: number | undefined;
         await deliverWithRetry({
           tracker: deliveryTracker,
@@ -362,18 +427,35 @@ export function createDeliveryPoller(deps: {
           post: async () => {
             const tPost = performance.now();
             try {
-              const approval =
-                d.destination.keychainAskId && core.keychainApprovals
-                  ? await core.keychainApprovals.get(d.destination.keychainAskId, d.destination.target)
-                  : null;
-              const card = approval
-                ? keychainApprovalMessage(approval, await keychainApprovalOrigin(approval, client, deps.webUiPublicUrl))
+              if (d.destination.keychainAskId) {
+                const dm = await openConversationFor(client, [d.destination.target]);
+                await deliverKeychainCard(core, client, d, dm, d.destination.threadTs, deps.webUiPublicUrl);
+                return undefined;
+              }
+              const commandApproval = d.destination.commandApprovalId
+                ? await core.getApproval(d.destination.commandApprovalId)
                 : null;
-              const text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
+              const requester = approvalDeliveryRecipient(
+                commandApproval?.request?.actor as { externalId?: string } | undefined,
+              );
+              if (
+                d.destination.commandApprovalId &&
+                (!commandApproval ||
+                  !requester ||
+                  !samePerson(requester, d.destination.target) ||
+                  d.idempotencyKey !== approvalDeliveryKey(d.destination.commandApprovalId, commandApproval))
+              )
+                return undefined;
+              let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
+              if (d.destination.deploymentAccess) card = deployAccessMessage(d.destination.deploymentAccess, d.text);
+              if (commandApproval)
+                card = approvalMessage([{ ...commandApproval, reason: commandApproval.reason ?? "Approval required" }]);
+              let text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);
               const threadTs = d.destination.threadTs;
               const footer = deliveryFooter(d);
+              if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
               const blocks =
                 card?.blocks ??
                 (footer.length

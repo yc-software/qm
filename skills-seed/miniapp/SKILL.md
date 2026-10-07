@@ -12,4 +12,4 @@ In a web conversation, use the `miniapp` tool for a focused, one-screen interact
 - Make controls keyboard-accessible and label them clearly.
 - Let the document choose its own presentation; the host will not rewrite it.
 - Do not put a marker or artifact URL in the reply. The client attaches the playground from the typed tool result.
-- Use `publish` instead when the app needs persistence, a server, or multiple routes.
+- Use `apps` action `publish` instead when the app needs persistence, a server, or multiple routes.

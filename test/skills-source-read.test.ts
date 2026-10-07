@@ -8,6 +8,10 @@ import type { TurnRequest } from "../src/types.ts";
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
   await built.deploymentLayerReady;
+  for (const actor of ["U1", "U2"]) {
+    const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
+    await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
+  }
   t.after(async () => {
     built.scheduler.stop();
     built.deploymentLayerRefresh.stop();
@@ -136,7 +140,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const turn = createTurnSandboxes({
     deps: {
       skills: { recordUse: async () => {} },
-      sandboxResources: { get: async () => ({ ownerScopeId: "personal:U1" }) },
+      sandboxResources: { access: async () => ({ id: "resource-1", ownerScopeId: "personal:U1" }) },
       sandbox: {
         provision: async (_layers: unknown, options?: { sandboxId?: string }) => {
           sandboxIds.push(options?.sandboxId);

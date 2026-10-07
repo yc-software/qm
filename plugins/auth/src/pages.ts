@@ -60,9 +60,9 @@ const STYLE = `<style>
   .reason strong{ display:block; color:var(--warn); font-size:11px; margin-bottom:3px; }
   form{ display:grid; gap:10px; text-align:left; }
   label{ font-size:12.5px; font-weight:600; color:var(--muted); }
-  input[type=email]{ width:100%; min-height:44px; padding:0 14px; font:inherit; color:var(--text);
+  input[type=email],input[type=password]{ width:100%; min-height:44px; padding:0 14px; font:inherit; color:var(--text);
     background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-md); }
-  input[type=email]:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:1px; }
+  input[type=email]:focus-visible,input[type=password]:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:1px; }
   .btn{ display:flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px; width:100%;
     text-decoration:none; font:inherit; font-weight:600; border-radius:var(--radius-md); cursor:pointer;
     background:var(--text); color:var(--bg); border:1px solid var(--text); }
@@ -71,6 +71,7 @@ const STYLE = `<style>
   .divider{ display:flex; align-items:center; gap:16px; margin:24px 0; color:var(--muted); font-size:11px; font-weight:600; letter-spacing:.08em; }
   .divider::before,.divider::after{ content:""; flex:1; height:1px; background:var(--border); }
   .help{ color:var(--muted); font-size:12.5px; margin:20px 0 0; }
+  .note{ color:var(--muted); font-size:12px; margin:8px 0 0; text-align:left; }
   .who{ display:block; margin:0 auto 22px; font-size:13px; color:var(--text); background:var(--secondary);
     border:1px solid var(--border); border-radius:var(--radius-md); padding:11px 14px; word-break:break-word; }
 </style>`;
@@ -115,30 +116,59 @@ ${STYLE}
 </html>`;
 }
 
-export function emailFormPage(o: {
+export function signInPage(o: {
   brandName: string;
   trustedSignInLabel?: string;
   action: string;
   requestToken: string;
+  emailLink: boolean;
+  password: boolean;
   email?: string;
   problem?: string;
+  passwordProblem?: string;
 }): string {
+  const hidden = `<input type="hidden" name="request" value="${escapeHtml(o.requestToken)}">`;
+  const trusted = o.trustedSignInLabel
+    ? `<a class="btn" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a><div class="divider">OR</div>`
+    : "";
+  const secondary = Boolean(o.trustedSignInLabel) || (o.emailLink && o.password);
+  const emailForm = o.emailLink
+    ? `${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
+        ${hidden}
+        <input type="hidden" name="method" value="email">
+        <label for="email">Email address</label>
+        <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required${secondary ? "" : " autofocus"}
+          spellcheck="false" maxlength="254" placeholder="you@example.com" value="${escapeHtml(o.email ?? "")}">
+        <button class="btn${secondary ? " alternative" : ""}" type="submit">Email me a sign-in link</button>
+      </form>`
+    : "";
+  const passwordForm = o.password
+    ? `${o.passwordProblem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.passwordProblem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
+        ${hidden}
+        <input type="hidden" name="method" value="password">
+        <label for="password-email">Email address</label>
+        <input id="password-email" name="email" type="email" autocomplete="username" inputmode="email" required${o.trustedSignInLabel ? "" : " autofocus"}
+          spellcheck="false" maxlength="254" placeholder="you@example.com" value="${escapeHtml(o.email ?? "")}">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+        <button class="btn${o.trustedSignInLabel ? " alternative" : ""}" type="submit">Sign in with password</button>
+        <p class="note">Password sign-in is meant for getting started. Once ${escapeHtml(o.brandName)} is set up, your administrator should switch to email links or an identity provider.</p>
+      </form>`
+    : "";
+  let msg = "Enter your work email and we'll send you a one-time sign-in link.";
+  if (o.trustedSignInLabel) msg = `Use your ${o.trustedSignInLabel} account to continue.`;
+  else if (o.password && o.emailLink) msg = "Sign in with your password, or have a one-time link emailed to you.";
+  else if (o.password) msg = "Enter the email address and password your administrator gave you.";
   return page({
     title: "Sign in",
     brandName: o.brandName,
-    icon: o.trustedSignInLabel ? LOCK_ICON : MAIL_ICON,
+    icon: o.trustedSignInLabel || o.password ? LOCK_ICON : MAIL_ICON,
     heading: `Sign in to ${o.brandName}`,
-    msg: o.trustedSignInLabel
-      ? `Use your ${o.trustedSignInLabel} account to continue.`
-      : "Enter your work email and we'll send you a one-time sign-in link.",
-    body: `${o.trustedSignInLabel ? `<a class="btn" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a><div class="divider">OR</div>` : ""}${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
-        <input type="hidden" name="request" value="${escapeHtml(o.requestToken)}">
-        <label for="email">Email address</label>
-        <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required${o.trustedSignInLabel ? "" : " autofocus"}
-          spellcheck="false" maxlength="254" placeholder="you@example.com" value="${escapeHtml(o.email ?? "")}">
-        <button class="btn${o.trustedSignInLabel ? " alternative" : ""}" type="submit">Email me a sign-in link</button>
-      </form>`,
-    help: "For email sign-in, use an address your administrator has allowed.",
+    msg,
+    body: `${trusted}${passwordForm}${o.password && o.emailLink ? `<div class="divider">OR</div>` : ""}${emailForm}`,
+    help: o.emailLink
+      ? "For email sign-in, use an address your administrator has allowed."
+      : "Use the account your administrator has allowed.",
   });
 }
 

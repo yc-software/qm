@@ -4,11 +4,10 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import { isNonRetryable, NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
-import { errMessage, errorAlreadyReported, swallow } from "../util/errors.ts";
+import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
@@ -23,13 +22,20 @@ export interface ProcessDeps {
 
 export const LEASE_LOST_CONSECUTIVE = 3;
 
-const CLAIM_FAIL_CRASH_CONSECUTIVE = 20;
+const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
-export async function processRun(deps: ProcessDeps, run: Run, opts?: { background?: boolean }): Promise<TurnResult> {
+export async function processRun(
+  deps: ProcessDeps,
+  run: Run,
+  opts?: { background?: boolean; shutdown?: AbortSignal },
+): Promise<TurnResult> {
   const token = run.leaseToken;
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
   const cancel = new AbortController();
+  const onShutdown = (): void => cancel.abort();
+  if (opts?.shutdown?.aborted) onShutdown();
+  else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let workDeadline: ReturnType<typeof setTimeout> | undefined;
   let consecutiveLost = 0;
   let leaseLost = false;
@@ -63,6 +69,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
     clearInterval(beat);
   };
   try {
+    if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
     if (run.request.swarm) {
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
       workDeadline = setTimeout(() => cancel.abort(), turnMs);
@@ -78,16 +85,19 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
       cancel: cancel.signal,
+      ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
       ...(queueMs !== undefined ? { queueMs } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
     stopBeat();
+    if (opts?.shutdown?.aborted) return result;
     if (!(await deps.runs.complete(run.id, token, result))) {
       throw new Error(`run ${run.id} lost its lease before completion`);
     }
     return result;
   } catch (err) {
     stopBeat();
+    if (opts?.shutdown?.aborted) throw err;
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
     if (!errorAlreadyReported(err))
       deps.errors?.record(
@@ -100,13 +110,18 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
         err,
       );
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
-      retry: !(err instanceof NonRetryableTurnError),
+      retry: !isNonRetryable(err),
       retryAfterMs: retryDelay(run.errorAttempts),
     });
     throw err;
   } finally {
     clearTimeout(workDeadline);
     stopBeat();
+    opts?.shutdown?.removeEventListener("abort", onShutdown);
+    if (opts?.shutdown?.aborted)
+      await deps.runs
+        .releaseLease(run.id, token)
+        .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
   }
 }
 
@@ -114,9 +129,7 @@ export interface WorkerDeps extends ProcessDeps {
   pollMs?: number;
   recoveryPollMs?: number;
   workerId?: string;
-  sessions: SessionStore;
   canClaim?: () => boolean;
-  onClaimed?: () => void;
   admittedWork?: AdmittedWork;
 }
 
@@ -126,7 +139,6 @@ export interface Worker {
   drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
   releaseInFlight(): Promise<void>;
-  busy(): boolean;
 }
 
 const STOP_DRAIN_MS = 2_000;
@@ -158,9 +170,7 @@ export function createWorker(deps: WorkerDeps): Worker {
   let stopped = false;
   let loopDone: Promise<void> | null = null;
   let claimDone: Promise<void> | null = null;
-  let inFlight: { runId: string; leaseToken: string; threadRef: string } | null = null;
-  let releasedLeaseToken: string | null = null;
-  let releasing: Promise<void> | null = null;
+  let inFlight: { shutdown: AbortController; done: Promise<void> } | null = null;
 
   async function loop(): Promise<void> {
     let claimFailures = 0;
@@ -182,7 +192,7 @@ export function createWorker(deps: WorkerDeps): Worker {
         claimed();
         claimDone = null;
         claimFailures += 1;
-        if (claimFailures >= CLAIM_FAIL_CRASH_CONSECUTIVE) throw e;
+        if (claimFailures === CLAIM_FAIL_REPORT_CONSECUTIVE) reportFailure("worker: persistent claim failure", e);
         swallow("worker: claim failed (transient, retrying)", e);
         await sleep(Math.min(pollMs * 2 ** Math.min(claimFailures, 5), 5_000));
         continue;
@@ -202,19 +212,28 @@ export function createWorker(deps: WorkerDeps): Worker {
         claimDone = null;
         break;
       }
-      inFlight =
-        run.leaseToken !== null ? { runId: run.id, leaseToken: run.leaseToken, threadRef: run.sessionId } : null;
+      const shutdown = new AbortController();
+      let settled!: () => void;
+      inFlight = {
+        shutdown,
+        done: new Promise<void>((resolve) => {
+          settled = resolve;
+        }),
+      };
+      console.log(`[worker] claimed worker=${workerId} run=${run.id} thread=${run.sessionId}`);
       claimed();
       claimDone = null;
-      deps.onClaimed?.();
       try {
-        const work = () => processRun(deps, run, { background: true });
+        const work = () => processRun(deps, run, { background: true, shutdown: shutdown.signal });
         if (deps.admittedWork) await deps.admittedWork.run(work);
         else await work();
       } catch (e) {
-        swallow("worker: background run crashed", e);
+        if (!shutdown.signal.aborted) swallow("worker: background run crashed", e);
       } finally {
+        if (shutdown.signal.aborted)
+          console.log(`[worker] shutdown settled worker=${workerId} run=${run.id} thread=${run.sessionId}`);
         inFlight = null;
+        settled();
       }
     }
   }
@@ -239,28 +258,12 @@ export function createWorker(deps: WorkerDeps): Worker {
         loopDone = null;
       });
     },
-    busy() {
-      return inFlight !== null;
-    },
-    releaseInFlight() {
+    async releaseInFlight() {
+      await stopClaims();
       const held = inFlight;
-      if (!held || held.leaseToken === releasedLeaseToken) return Promise.resolve();
-      if (releasing) return releasing;
-      releasing = (async () => {
-        try {
-          if (await deps.runs.heartbeat(held.runId, held.leaseToken, deps.leaseTtlMs)) {
-            const session = await deps.sessions.getByThread(held.threadRef);
-            if (session) await deps.sessions.forceReleaseLease(session.id);
-            await deps.runs.releaseLease(held.runId, held.leaseToken);
-          }
-          releasedLeaseToken = held.leaseToken;
-        } catch (e) {
-          swallow("worker: releaseInFlight failed", e);
-        } finally {
-          releasing = null;
-        }
-      })();
-      return releasing;
+      if (!held) return;
+      held.shutdown.abort();
+      await held.done;
     },
     stopClaims,
     drained: () => loopDone ?? Promise.resolve(),

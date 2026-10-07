@@ -6,6 +6,14 @@ const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_MODELS = 1_000;
 const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
+const STALE_MS = 15 * 60_000;
+
+function transientFailure(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status === "number") return status === 429 || status >= 500;
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === "TimeoutError" || name === "AbortError" || error instanceof TypeError;
+}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -94,7 +102,8 @@ async function readCatalog(
     signal: AbortSignal.timeout(5_000),
     redirect: "error",
   });
-  if (!response.ok) throw new Error(`Gateway catalog returned HTTP ${response.status}`);
+  if (!response.ok)
+    throw Object.assign(new Error(`Gateway catalog returned HTTP ${response.status}`), { status: response.status });
   if (!response.body || Number(response.headers.get("content-length")) > MAX_BYTES)
     throw new Error("Gateway catalog exceeds size limit");
   const reader = response.body.getReader();
@@ -130,6 +139,7 @@ export function createGatewayCatalog(
   let discovered = false;
   let expiresAt = 0;
   let retryAt = 0;
+  let lastSuccessAt = 0;
   let inFlight: Promise<void> | undefined;
   const transport: ModelGatewayTransportConfig = {
     ...config,
@@ -169,6 +179,7 @@ export function createGatewayCatalog(
         discovered = true;
         expiresAt = now() + TTL_MS;
         retryAt = expiresAt;
+        lastSuccessAt = now();
         const offeredAliases = new Set(
           selectableBaseModels()
             .filter(({ id }) => modelOfferedInWebui(id))
@@ -182,8 +193,12 @@ export function createGatewayCatalog(
               : [],
           ),
         );
-      } catch {
+      } catch (error) {
         retryAt = now() + RETRY_MS;
+        if (discovered && transientFailure(error) && now() - lastSuccessAt < STALE_MS) {
+          console.warn("[model] Gateway model discovery failed; keeping last known models and retrying in 30 seconds");
+          return;
+        }
         if (discovered || Object.keys(config.models).length === 0) {
           routes = {};
           expiresAt = 0;

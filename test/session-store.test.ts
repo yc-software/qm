@@ -7,6 +7,7 @@ import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "..
 import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
 import { scopeId } from "../src/types.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
 test("sessionOrigin classifies trigger threads by prefix", () => {
@@ -219,7 +220,7 @@ for (const [name, make] of backends) {
     const scope = scopeId("personal", "U1");
     await store.getOrCreateByThread("dm:D1", "dm", scope);
     await store.getOrCreateByThread("agent:main:cron:c1", "dm", scope);
-    const rows = await store.scopeSessionSummaries(scope, false);
+    const rows = await store.scopeSessionSummaries(scope, false, { limit: 500 });
     const byThreadOrigin = new Map(rows.map((r) => [r.id, r.origin]));
     const conv = await store.getByThread("dm:D1");
     const cron = await store.getByThread("agent:main:cron:c1");
@@ -277,7 +278,7 @@ for (const [name, make] of backends) {
     const stats = await store.scopeSessionStats(scope, false);
     assert.equal(stats.turns, 1, "only the real user turn counts; the two overheard rows do not");
 
-    const rows = await store.scopeSessionSummaries(scope, false);
+    const rows = await store.scopeSessionSummaries(scope, false, { limit: 500 });
     const row = rows.find((r) => r.id === s.id)!;
     assert.equal(row.turns, 1, "summary turns excludes overheard");
     assert.equal(row.firstMessage, "the real question", "the overheard row is not the first message");
@@ -314,13 +315,20 @@ for (const [name, make] of backends) {
     await store.append(lb!, { type: "user", payload: { text: "b" }, scopeLabel: scope });
     await store.releaseLease(lb!);
 
-    const page1 = await store.scopeSessionSummaries(scope, false, { limit: 2, offset: 0 });
+    const page1 = await store.scopeSessionSummaries(scope, false, { limit: 2 });
     assert.equal(page1.length, 2);
     assert.equal(page1[0]!.id, b.id, "most recent activity first");
     assert.equal(page1[1]!.id, a.id);
-    const page2 = await store.scopeSessionSummaries(scope, false, { limit: 2, offset: 2 });
+    const page2 = await store.scopeSessionSummaries(scope, false, {
+      limit: 2,
+      before: { lastActivity: page1[1]!.lastActivity, id: page1[1]!.id },
+    });
     assert.equal(page2.length, 1, "third session on the next page");
-    assert.equal((await store.scopeSessionSummaries(scope, false)).length, 3, "unpaginated still returns all");
+    assert.equal(
+      (await store.scopeSessionSummaries(scope, false, { limit: 500 })).length,
+      3,
+      "a wide page returns all",
+    );
   });
 
   test(`${name}: scopeSessionSummaries filters category before paginating`, async () => {
@@ -332,7 +340,6 @@ for (const [name, make] of backends) {
 
     const conversations = await store.scopeSessionSummaries(scope, false, {
       limit: 10,
-      offset: 0,
       category: "conversation",
     });
     assert.deepEqual(
@@ -340,7 +347,7 @@ for (const [name, make] of backends) {
       [convo.id],
     );
 
-    const background = await store.scopeSessionSummaries(scope, false, { limit: 1, offset: 0, category: "background" });
+    const background = await store.scopeSessionSummaries(scope, false, { limit: 1, category: "background" });
     assert.equal(background.length, 1);
     assert.notEqual(background[0]!.id, convo.id);
     assert.equal(background[0]!.origin === "cron" || background[0]!.origin === "webhook", true);
@@ -354,7 +361,6 @@ for (const [name, make] of backends) {
 
     const cronRows = await store.scopeSessionSummaries(scope, false, {
       limit: 1,
-      offset: 0,
       category: "background",
       origin: "cron",
     });
@@ -365,7 +371,6 @@ for (const [name, make] of backends) {
 
     const otherRows = await store.scopeSessionSummaries(scope, false, {
       limit: 1,
-      offset: 0,
       category: "background",
       origin: "other_background",
     });
@@ -422,13 +427,17 @@ for (const [name, make] of backends) {
     const cronStats = await store.scopeSessionStats(scope, false, "background", "cron", "c1");
     assert.equal(cronStats.total, 3, "stats cronId filter counts one cron's fires");
 
-    const fires = await store.scopeSessionSummaries(scope, false, { limit: 10, offset: 0, cronId: "c1" });
+    const fires = await store.scopeSessionSummaries(scope, false, { limit: 10, cronId: "c1" });
     assert.deepEqual(
       fires.map((r) => r.id).sort(),
       [c1a.id, c1b.id, fresh.id].sort(),
       "cronId page returns only that cron's fires",
     );
-    const page = await store.scopeSessionSummaries(scope, false, { limit: 1, offset: 1, cronId: "c1" });
+    const page = await store.scopeSessionSummaries(scope, false, {
+      limit: 1,
+      cronId: "c1",
+      before: { lastActivity: fires[0]!.lastActivity, id: fires[0]!.id },
+    });
     assert.equal(page.length, 1, "cronId filter applies before pagination");
     assert.deepEqual(await store.scopeCronGroups(scopeId("channel", "other"), false), [], "scope filter applies");
   });
@@ -489,7 +498,7 @@ for (const [name, make] of backends) {
     ]);
     assert.deepEqual(
       rollups,
-      rollupsFromSummaries(await store.scopeSessionSummaries(a, true)),
+      rollupsFromSummaries(await store.scopeSessionSummaries(a, true, { limit: 500 })),
       "the aggregate matches a row-by-row pass over the summaries",
     );
     assert.deepEqual(
@@ -731,6 +740,10 @@ for (const [name, make] of backends) {
     const store = make();
     await assertParticipantSessionParity(store, `parity-${name}-a`);
     await assertParticipantSessionParity(store, `parity-${name}-b`);
+  });
+
+  test(`${name}: spendRollup groups model-call cost by UTC day, scope, origin and model`, async () => {
+    await assertSpendRollupParity((now) => createMemorySessionStore({ now }), `spend-${name}`);
   });
 
   test(`${name}: countSessions and distinctParticipants aggregate without loading rows`, async () => {
@@ -975,7 +988,7 @@ for (const [name, make] of backends) {
     );
   });
 
-  test(`${name}: keyset cursor pages match offset pages and skip nothing`, async () => {
+  test(`${name}: keyset cursor pages stitch into the full listing and skip nothing`, async () => {
     let clock = Date.now() + 1_000_000;
     const store = createMemorySessionStore({ now: () => ++clock });
     const scope = scopeId("personal", "U1");
@@ -985,18 +998,16 @@ for (const [name, make] of backends) {
       await store.append(lease!, { type: "user", payload: { text: `m${i}` }, scopeLabel: scope });
       await store.releaseLease(lease!);
     }
-    const all = await store.scopeSessionSummaries(scope, false, { limit: 10, offset: 0 });
-    const page1 = await store.scopeSessionSummaries(scope, false, { limit: 2, offset: 0 });
+    const all = await store.scopeSessionSummaries(scope, false, { limit: 10 });
+    const page1 = await store.scopeSessionSummaries(scope, false, { limit: 2 });
     const cursor1 = page1[page1.length - 1]!;
     const page2 = await store.scopeSessionSummaries(scope, false, {
       limit: 2,
-      offset: 0,
       before: { lastActivity: cursor1.lastActivity, id: cursor1.id },
     });
     const cursor2 = page2[page2.length - 1]!;
     const page3 = await store.scopeSessionSummaries(scope, false, {
       limit: 2,
-      offset: 0,
       before: { lastActivity: cursor2.lastActivity, id: cursor2.id },
     });
     assert.deepEqual(

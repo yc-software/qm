@@ -6,6 +6,8 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateRawSync } from "node:zlib";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 test("publisher resumes an existing transfer after new uploads are disabled", async () => {
   const directory = await mkdtemp(join(tmpdir(), "qm-publisher-"));
@@ -49,6 +51,8 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
   origin = `http://127.0.0.1:${address.port}`;
   const source = join(directory, "empty.txt");
   await writeFile(source, "");
+  let token =
+    Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
   const run = () =>
     new Promise<string>((resolve, reject) => {
       const child = spawn(
@@ -58,9 +62,7 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
           env: {
             ...process.env,
             AGENT_API_URL: origin,
-            AGENT_API_TOKEN:
-              Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") +
-              ".signature",
+            AGENT_API_TOKEN: token,
           },
         },
       );
@@ -77,11 +79,34 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
     });
   try {
     assert.equal(JSON.parse(await run()).file.id, "published");
+    token = await mintSignedPayload(
+      {
+        encoding: "deflate-raw",
+        claims: deflateRawSync(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url"),
+      },
+      "upload-test-secret",
+    );
     enabled = false;
     complete = false;
     assert.equal(JSON.parse(await run()).file.id, "published");
     assert.equal(begins, 1);
     assert.equal(puts, 1);
+    token = await mintSignedPayload(
+      {
+        encoding: "deflate-raw",
+        claims: deflateRawSync(JSON.stringify({ actorId: "other", scopeId: "personal:other" })).toString("base64url"),
+      },
+      "upload-test-secret",
+    );
+    await assert.rejects(run(), /destination changed/);
+    token = await mintSignedPayload(
+      {
+        encoding: "deflate-raw",
+        claims: deflateRawSync("x".repeat(1024 * 1024 + 1)).toString("base64url"),
+      },
+      "upload-test-secret",
+    );
+    await assert.rejects(run(), /oversized capability/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });

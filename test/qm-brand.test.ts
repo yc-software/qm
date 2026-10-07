@@ -41,7 +41,7 @@ function isAccessibilityToken(token: string): boolean {
 
 function findLegacyNames(
   text: string,
-  options: { binary?: boolean; compressed?: boolean; path?: boolean } = {},
+  options: { binary?: boolean; compressed?: boolean; path?: boolean; generatedJavaScript?: boolean } = {},
 ): string[] {
   const matches: string[] = [];
   const fullNameMatch = fullNamePattern.exec(text);
@@ -49,6 +49,8 @@ function findLegacyNames(
     const lineNumber = text.slice(0, fullNameMatch.index).split(/\r?\n/).length;
     matches.push(`${lineNumber}:${fullNameMatch[0].replace(/\r?\n/g, "\\n")}`);
   }
+
+  if (options.generatedJavaScript) return matches;
 
   for (const [index, line] of text.split(/\r?\n/).entries()) {
     const searchableLine = line.replace(/(["']integrity["']\s*:\s*["'])[^"'\r\n]*(["'])/gi, "$1$2");
@@ -123,6 +125,7 @@ function isCompressedMedia(content: Buffer): boolean {
     content.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) ||
     content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ||
     content.subarray(0, 4).toString("ascii") === "GIF8" ||
+    content.subarray(0, 4).toString("ascii") === "icns" ||
     (content.subarray(0, 4).toString("ascii") === "RIFF" && content.subarray(8, 12).toString("ascii") === "WEBP")
   );
 }
@@ -155,6 +158,7 @@ test("tracked files use only QM branding", () => {
         content.subarray(0, 5).toString("ascii") === "%PDF-");
     if (encodedDocumentFixture) return [];
     return findLegacyNames(content.toString("latin1"), {
+      generatedJavaScript: path === "src/deploy/vendor/devbar.js",
       binary: isBinary(content),
       compressed: isCompressedMedia(content),
     }).map((match) => `${path}:${match}`);
@@ -248,4 +252,9 @@ test("brand guard recognizes legacy variants", () => {
   assert.deepEqual(findLegacyNames("WCAG2Config"), []);
   assert.deepEqual(findLegacyNames("wcagConfig"), []);
   assert.deepEqual(findLegacyNames("myWCAGConfig"), []);
+});
+
+test("generated JavaScript identifiers are not product branding", () => {
+  assert.deepEqual(findLegacyNames(`var ${shortName}=1;`, { generatedJavaScript: true }), []);
+  assert.ok(findLegacyNames(["Work", "Claw"].join(""), { generatedJavaScript: true }).length > 0);
 });

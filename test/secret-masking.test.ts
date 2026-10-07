@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   createSecretValueMasker,
   createExactSecretValueMasker,
+  MaskedExecutionError,
   executionSecretEnv,
 } from "../src/security/secret-masking.ts";
 
@@ -98,4 +99,15 @@ test("conflicting public metadata cannot exempt an explicitly secret value", () 
     ]),
     { TOKEN: "protected" },
   );
+});
+
+test("MaskedExecutionError keeps the original error class, code and masked stack", () => {
+  const mask = createExactSecretValueMasker(["s3cr3t-value"]);
+  const original = Object.assign(new TypeError("connect failed for s3cr3t-value"), { code: "ECONNRESET" });
+  const masked = new MaskedExecutionError(original, mask, mask(original.message));
+  assert.equal(masked.message, "connect failed for <redacted:credential>");
+  assert.equal(masked.name, "TypeError");
+  assert.equal(masked.code, "ECONNRESET");
+  assert.match(masked.stack ?? "", /^TypeError: connect failed for <redacted:credential>\n\s+at /);
+  assert.doesNotMatch(masked.stack ?? "", /s3cr3t-value/);
 });

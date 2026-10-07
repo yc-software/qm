@@ -142,6 +142,8 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
       reaperIntervalMs: 60_000,
     }),
   );
+  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
+  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
   built.runtime.start();
   try {
     const ack = await built.app.turn({
@@ -326,6 +328,7 @@ test("a harvested first block is stripped from the final reply (never shown twic
     });
     const finished = await built.runs.waitFor(ack.runId!, 5_000);
     assert.equal(finished.status, "done");
+    assert.equal(finished.deliveryState?.replying, true, "Slack engagement survives outside the worker stream");
     assert.equal(finished.result?.reply, "All clear — nothing broke.", "the acked preamble is stripped from the reply");
   } finally {
     await built.runtime.stop();
@@ -451,4 +454,23 @@ test("goalViewFromEntry extracts goal snapshots from tool results and system ent
     goalViewFromEntry("tool_result", { tool: "update_goal", goal: { objective: "", status: "active" } }),
     null,
   );
+});
+
+test("monitor wakes persist engagement after the reply gate", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ts-monitor-")), workers: 1 }));
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      surface: "monitor",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t-monitor" },
+      text: "!preamble Checking background results.",
+      async: true,
+    });
+    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+    assert.equal(finished.deliveryState?.replying, true);
+  } finally {
+    await built.runtime.stop();
+  }
 });

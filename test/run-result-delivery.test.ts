@@ -69,6 +69,25 @@ test("runResultDelivery carries the reply's attachments so recovery can replay t
   assert.equal(d?.text, "here's the file");
 });
 
+test("runResultDelivery retains the Slack policy used for private admission", () => {
+  const request = {
+    ...turn("hi", "DPRIVATE"),
+    slackSource: {
+      accountId: "partner",
+      teamId: "TPARTNER",
+      userId: "U1",
+      externalPolicyNamespace: "external-slack:TPARTNER:policy",
+    },
+  };
+  assert.deepEqual(runResultDelivery(run({ request }))?.destination, {
+    type: "slack",
+    target: "DPRIVATE",
+    slackAccountId: "partner",
+    slackTeamId: "TPARTNER",
+    slackPolicyNamespace: request.slackSource.externalPolicyNamespace,
+  });
+});
+
 test("runResultDelivery recovers an attachments-only reply (empty text, files still land)", () => {
   const atts = [{ name: "report.csv", mimetype: "text/csv", sizeBytes: 42, blobId: "blob-1" }];
   const d = runResultDelivery(run({ result: { status: "ok", attachments: atts } }));
@@ -104,6 +123,15 @@ test("runResultDelivery still posts a surface-spine turn's FAILURE note", () => 
   const spine = run({ status: "failed", result: { status: "failed", reason: "boom" } });
   spine.request = { ...spine.request, surfaceTools: true };
   assert.equal(runResultDelivery(spine)?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
+});
+
+test("runResultDelivery recovers an addressed model-budget refusal with its explanation", () => {
+  const reason = "This workspace has used up its model budget, so I can't run until it resets.";
+  const spine = run({ result: { status: "refused", refusalKind: "model_budget", reason } });
+  spine.request = { ...spine.request, surfaceTools: true, addressed: true };
+  assert.equal(runResultDelivery(spine)?.text, reason);
+  spine.request = { ...spine.request, addressed: false, origin: { kind: "ambient" } };
+  assert.equal(runResultDelivery(spine), null);
 });
 
 test("runResultDelivery recovers a security quarantine without exposing its internal reason", () => {
@@ -234,6 +262,80 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
     [`run:${crashed.id}`],
     "live-acked copy stays suppressed",
   );
+});
+
+test("sweep enqueues the recovery delivery for a terminal run whose outbox row never landed", async () => {
+  const { runs } = createMemoryRunStore();
+  const deliveries = createDeliveryStore();
+  const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
+  const claimed = await runs.claim("w1", 5_000);
+  await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
+  const recovery = wireRunResultDeliveries(runs, deliveries);
+  assert.deepEqual(await deliveries.pending("slack"), [], "wired after the fact: nothing enqueued");
+
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 1);
+  const pending = await deliveries.pending("slack");
+  assert.deepEqual(
+    pending.map((d) => [d.idempotencyKey, d.text]),
+    [[`run:${bypassed.id}`, "lost on the way out"]],
+  );
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 0, "a second sweep finds the row and leaves it alone");
+});
+
+test("sweep leaves runs alone when their delivery already exists, was acked live, or is still inside the grace window", async () => {
+  const { runs } = createMemoryRunStore();
+  const deliveries = createDeliveryStore();
+  const recovery = wireRunResultDeliveries(runs, deliveries);
+  const finish = async (threadRef: string, reply: string): Promise<Run> => {
+    const run = (await runs.enqueue({ sessionId: threadRef, request: turn(reply, "C9:171.001") })).run;
+    const claimed = await runs.claimForSession(threadRef, "w1", 5_000);
+    await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply });
+    return run;
+  };
+  const enqueued = await finish("sA", "already enqueued");
+  const live = await finish("sB", "delivered live");
+  await deliveries.ackByKey(`run:${live.id}`, Date.now());
+  const silent = (await runs.enqueue({ sessionId: "sC", request: turn("c", "C9:171.001") })).run;
+  await runs.complete(silent.id, (await runs.claimForSession("sC", "w1", 5_000))?.leaseToken ?? "", {
+    status: "silent",
+  });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.idempotencyKey),
+    [`run:${enqueued.id}`],
+  );
+
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.idempotencyKey),
+    [`run:${enqueued.id}`],
+  );
+
+  const fresh = await finish("sD", "just finished");
+  await deliveries.ackByKey(`run:${fresh.id}`, Date.now());
+  const bare = createDeliveryStore();
+  const bareRecovery = wireRunResultDeliveries(runs, bare);
+  assert.equal(await bareRecovery.sweep(Date.now()), 0, "runs finished inside the grace window are not swept yet");
+  assert.equal(await bareRecovery.sweep(Date.now() + 120_000), 3, "the same runs sweep once the grace window passes");
+});
+
+test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", async () => {
+  const { runs } = createMemoryRunStore();
+  const deliveries = createDeliveryStore();
+  const recovery = wireRunResultDeliveries(runs, deliveries);
+  const finished = new Set<string>();
+  for (let i = 0; i < 205; i++) {
+    const run = (await runs.enqueue({ sessionId: `s${i}`, request: turn(`r${i}`, "C9:171.001") })).run;
+    const claimed = await runs.claimForSession(`s${i}`, "w1", 5_000);
+    await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: `r${i}` });
+    finished.add(`run:${run.id}`);
+  }
+  await new Promise((r) => setTimeout(r, 0));
+  const swept = createDeliveryStore();
+  const sweptRecovery = wireRunResultDeliveries(runs, swept);
+  assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 205);
+  assert.deepEqual(new Set((await swept.pending("slack")).map((d) => d.idempotencyKey)), finished);
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
 });
 
 test("wired stores: a parked run lands a durable, non-ackable failure note", async () => {
@@ -387,3 +489,32 @@ test("failed internal swarm notifications never append user-facing failure entri
   } as unknown as TurnFailureSessions;
   assert.equal(await recordRunFailureEntry(sessions, failed), false);
 });
+
+for (const surface of ["slack", "web"] as const) {
+  for (const result of [
+    { status: "ok", reply: "INTERNAL_CHILD_REPORT" },
+    { status: "failed", reason: "internal child failure" },
+    { status: "refused", refusalKind: "security_quarantine", reason: "internal screening" },
+    { status: "pending_approval", pendingApprovals: [{ requestId: "a", command: "cmd", reason: "approval" }] },
+  ] satisfies TurnResult[]) {
+    test(`${surface}: child ${result.status} never becomes an automatic public delivery`, () => {
+      const threadRef = "agent:main:subagent:child";
+      assert.equal(
+        runResultDelivery(
+          run({
+            sessionId: threadRef,
+            status: result.status === "failed" ? "failed" : "done",
+            request: {
+              ...turn("child", "D1"),
+              surface,
+              addressed: true,
+              conversation: { kind: "dm", threadRef, audience: [actor] },
+            },
+            result,
+          }),
+        ),
+        null,
+      );
+    });
+  }
+}

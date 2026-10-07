@@ -1,7 +1,26 @@
 import { spawn, spawnSync } from "node:child_process";
-import { openSync } from "node:fs";
-import { connect } from "node:net";
+import { openSync, statSync } from "node:fs";
+import { connect, createServer } from "node:net";
+import { join } from "node:path";
 import { bestEffort, sleep } from "./util.ts";
+
+export function spawnCommand(
+  cmd: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): { cmd: string; args: string[]; windowsVerbatimArguments: boolean } {
+  if (platform !== "win32") return { cmd, args, windowsVerbatimArguments: false };
+  const dirs = /[\\/]/.test(cmd) ? [""] : (env.PATH ?? env.Path ?? "").split(";").filter(Boolean);
+  const exts = [...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean), ""];
+  const resolved =
+    dirs
+      .flatMap((dir) => exts.map((ext) => (dir ? join(dir, cmd + ext) : cmd + ext)))
+      .find((candidate) => statSync(candidate, { throwIfNoEntry: false })?.isFile()) ?? cmd;
+  if (!/\.(cmd|bat)$/i.test(resolved)) return { cmd: resolved, args, windowsVerbatimArguments: false };
+  const line = [resolved, ...args].map((part) => `"${part.replaceAll('"', '""')}"`).join(" ");
+  return { cmd: env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true };
+}
 
 export function run(
   cmd: string,
@@ -9,9 +28,11 @@ export function run(
   opts: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
+    const command = spawnCommand(cmd, args, opts.env);
+    const child = spawn(command.cmd, command.args, {
       cwd: opts.cwd,
       env: opts.env,
+      windowsVerbatimArguments: command.windowsVerbatimArguments,
       timeout: opts.timeoutMs ?? 120_000,
       killSignal: "SIGKILL",
       stdio: [opts.input !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
@@ -58,8 +79,10 @@ export function spawnDetached(opts: {
   const [cmd, ...rest] = opts.argv;
   if (!cmd) throw new Error("spawnDetached: empty argv");
   const fd = openSync(opts.logFile, "a");
-  const child = spawn(cmd, rest, {
+  const command = spawnCommand(cmd, rest, opts.env);
+  const child = spawn(command.cmd, command.args, {
     cwd: opts.cwd,
+    windowsVerbatimArguments: command.windowsVerbatimArguments,
     detached: true,
     stdio: ["ignore", fd, fd],
     env: opts.env,
@@ -118,10 +141,18 @@ export async function waitPortFree(port: number, timeoutMs = 10_000): Promise<bo
   return false;
 }
 
-export async function freePort(port: number, label: string, log: (msg: string) => void): Promise<void> {
-  const holders = portHolders(port);
-  if (holders.length === 0) return;
-  log(`freeing stale process(es) ${holders.join(",")} on :${port} (${label})`);
-  for (const pid of holders) await killTree(pid, 3000);
-  await waitPortFree(port, 5000);
+export async function portAvailable(port: number): Promise<boolean> {
+  for (const host of ["127.0.0.1", "0.0.0.0", "::1", "::"]) {
+    const available = await new Promise<boolean>((resolve) => {
+      const server = createServer();
+      server.once("error", (error: NodeJS.ErrnoException) => {
+        resolve(host.includes(":") && ["EAFNOSUPPORT", "EADDRNOTAVAIL"].includes(error.code ?? ""));
+      });
+      server.listen({ port, host, ipv6Only: host.includes(":"), exclusive: true }, () =>
+        server.close(() => resolve(true)),
+      );
+    });
+    if (!available) return false;
+  }
+  return true;
 }

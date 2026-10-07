@@ -15,7 +15,15 @@ metadata:
     {{- include "qm.labels" $root | nindent 4 }}
     app.kubernetes.io/component: {{ $name }}
 spec:
-  replicas: {{ $svc.replicas | default 1 }}
+  replicas: {{ $svc.replicas }}
+  {{- if and (eq $name "core") $svc.persistence.enabled }}
+  {{- if gt (int $svc.replicas) 1 }}
+  {{- fail "core persistence supports at most one replica; shared-storage multi-replica operation is not supported" }}
+  {{- end }}
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  {{- end }}
   selector:
     matchLabels:
       {{- include "qm.selectorLabels" $root | nindent 6 }}
@@ -33,9 +41,23 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "qm.serviceAccountName" $root }}
+      {{- if and (eq $name "core") $svc.persistence.enabled }}
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $svc.persistence.existingClaim | default (printf "%s-core-data" (include "qm.fullname" $root)) | quote }}
+      {{- end }}
       containers:
         - name: {{ $name }}
-          image: "{{ $root.Values.image.repository }}{{ $root.Values.image.separator | default "/" }}{{ $svc.image }}:{{ $svc.tag | default $root.Values.image.tag | default $root.Chart.AppVersion }}"
+          image: {{ include "qm.image" (dict "root" $root "name" $name "service" $svc) | quote }}
+          {{- if and (eq $name "core") $svc.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           {{- with $svc.command }}
           command:
@@ -77,9 +99,6 @@ spec:
           {{- $_ := set $wired "OIDC_JWKS_URI" (printf "%s/.well-known/jwks.json" $authUpstream) }}
           {{- $_ := set $wired "OIDC_SCOPES" "openid email" }}
           {{- $_ := set $wired "OIDC_PRINCIPAL_CLAIM" "email" }}
-          {{- with $root.Values.env.AUTH_ALLOWED_EMAIL_DOMAIN }}
-          {{- $_ := set $wired "OIDC_ALLOWED_EMAIL_DOMAIN" . }}
-          {{- end }}
           {{- end }}
           {{- end }}
           {{- if and (eq $name "portal") $authEnabled }}
@@ -109,6 +128,31 @@ spec:
           {{- end }}
           {{- end }}
           {{- $env := mergeOverwrite (deepCopy $wired) (deepCopy ($root.Values.env | default dict)) $componentEnv }}
+          {{- if eq $name "egress-proxy" }}
+          {{- if ne (int $svc.port) 48080 }}
+          {{- fail "services.egress-proxy.port must be 48080: the Envoy listener is fixed in the image" }}
+          {{- end }}
+          {{- else }}
+          {{- if and (hasKey $env "PORT") (ne (toString (index $env "PORT")) (toString $svc.port)) }}
+          {{- fail (printf "%s PORT conflicts with services.%s.port; configure the port there" $name $name) }}
+          {{- end }}
+          {{- $_ := set $env "PORT" (toString $svc.port) }}
+          {{- end }}
+          {{- if and (eq $name "core") $svc.persistence.enabled }}
+          {{- if and (hasKey $env "DATA_DIR") (ne (index $env "DATA_DIR") "/data") }}
+          {{- fail "core persistence requires DATA_DIR=/data" }}
+          {{- end }}
+          {{- $_ := set $env "DATA_DIR" "/data" }}
+          {{- end }}
+          {{- if and (eq $name "portal") $authEnabled (not $root.Values.envFrom) }}
+          {{- range $authKey, $oidcKey := dict "AUTH_ALLOWED_EMAILS" "OIDC_ALLOWED_EMAILS" "AUTH_ALLOWED_EMAIL_DOMAIN" "OIDC_ALLOWED_EMAIL_DOMAIN" }}
+          {{- if and (not (hasKey $env $oidcKey)) (not (index $root.Values.secretEnv $oidcKey)) }}
+          {{- if hasKey $env $authKey }}
+          {{- $_ := set $env $oidcKey (index $env $authKey) }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
           {{- if $env }}
           env:
             {{- range $k, $v := $env }}
@@ -126,10 +170,15 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
+          {{- if $svc.startupProbe }}
+          startupProbe:
+            {{- toYaml $svc.startupProbe | nindent 12 }}
+          {{- end }}
           {{- if $svc.healthPath }}
           readinessProbe:
+            timeoutSeconds: 2
             httpGet:
-              path: {{ $svc.healthPath }}
+              path: {{ $svc.readinessPath | default $svc.healthPath }}
               port: {{ $svc.port }}
           livenessProbe:
             httpGet:

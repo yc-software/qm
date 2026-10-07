@@ -18,6 +18,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     ownerScopeId: "personal:U_ALICE",
     schedule: { everyMs: 60_000 },
     action: "read a private dummy account",
+    runtime: { harnessId: "pi", modelId: "gpt-6-luna", effortLevel: "low" },
     destination: {
       type: "principal",
       target: "U_BOB",
@@ -66,6 +67,8 @@ test("busy cron credential resolution leaves its fire retryable and resumes exac
 
   await assert.rejects(fireAskResolution(f.deps, f.ask));
 
+  assert.equal(requests[0]?.model, "gpt-6-luna");
+  assert.equal(requests[0]?.thinkingLevel, "low");
   assert.equal(await f.idempotency.committed(fireKey), false);
   assert.equal((await f.deliveries.pending("principal")).length, 0);
   const resumed = await fireAskResolution(f.deps, f.ask);
@@ -98,8 +101,7 @@ test("failed cron credential resolution notifies only the owner even when its re
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_ALICE");
   assert.equal(pending[0]!.destination.audienceScopeId, "personal:U_ALICE");
-  assert.match(pending[0]!.text, /couldn't resume the task automatically/);
-  assert.match(pending[0]!.text, /retry-ask/);
+  assert.match(pending[0]!.text, /^Access approved, but the task could not restart on its own\./);
   assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
 });
 

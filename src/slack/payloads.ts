@@ -19,6 +19,7 @@ export function parseEventId(body: unknown): string | undefined {
 }
 
 export interface SlackMessageEvent {
+  blocks?: unknown[];
   channel: string;
   channel_type?: string;
   subtype?: string;
@@ -35,7 +36,7 @@ export interface SlackMessageEvent {
   deleted_ts?: string;
   files: SlackFile[];
   message?: SlackMessageEvent;
-  previous_message?: { user?: string; bot_id?: string; thread_ts?: string; text?: string };
+  previous_message?: { user?: string; bot_id?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
 }
 
 function fileList(v: unknown): SlackFile[] {
@@ -71,6 +72,7 @@ export function parseMessageEvent(event: unknown): SlackMessageEvent {
     message: nested ? parseMessageEvent(nested) : undefined,
     previous_message: prev
       ? {
+          ...(Array.isArray(prev.blocks) ? { blocks: prev.blocks } : {}),
           user: str(prev.user),
           bot_id: str(prev.bot_id),
           thread_ts: coerced(prev.thread_ts),
@@ -144,6 +146,7 @@ export function parseBlockAction<T extends string>(
 }
 
 export interface SlackHistoryMessage {
+  blocks?: unknown[];
   edited?: { ts?: string };
   mentionsSelf?: boolean;
   ts?: string;

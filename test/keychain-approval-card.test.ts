@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
-import { createKeychainApprovals } from "../src/credentials/keychain-approval.ts";
+import { approvalCardDestination, createKeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import {
   keychainApprovalMessage,
+  deliverKeychainCard,
   keychainApprovalOrigin,
   registerKeychainApprovalActions,
 } from "../src/slack/keychain-approvals.ts";
@@ -46,7 +47,14 @@ async function fixture() {
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
   const identity = createIdentityService();
+  const enqueued: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
   const approvals = createKeychainApprovals({
+    deliveries: {
+      enqueue: async (d: any) => {
+        enqueued.push(d);
+        return d;
+      },
+    },
     keychain,
     app,
     sessions,
@@ -64,6 +72,7 @@ async function fixture() {
     sessions,
     approvals,
     resumed,
+    enqueued,
     revokeMembership: () => {
       member = false;
     },
@@ -140,9 +149,17 @@ test("the card links the conversation inline and omits command-policy fields", a
   }
   const once = keychainApprovalMessage({ ...view, ask: { ...view.ask, requestedMode: "once" } }, origin);
   assert.match(JSON.stringify(once), /one-time access/);
-  assert.match(wire, /Allow once/);
-  assert.match(wire, /Allow always/);
-  assert.match(wire, /Deny/);
+  const buttons = (card.blocks.find((block) => block.type === "actions") as any).elements;
+  assert.deepEqual(
+    buttons.map((b: any) => [b.text.text, b.action_id, b.style]),
+    [
+      ["Allow", "keychain_allow_always", "primary"],
+      ["Allow once", "keychain_allow_once", undefined],
+      ["Deny", "keychain_deny", "danger"],
+    ],
+  );
+  assert.doesNotMatch(wire, /Why:/);
+  assert.ok(!wire.includes(view.ask.purpose), "the card never echoes the requester's purpose text");
   assert.ok(card.blocks.every((block) => block.type !== "context"));
   const settled = keychainApprovalMessage(
     { ...view, ask: { ...view.ask, status: "approved" }, mode: "standing" },
@@ -311,4 +328,70 @@ test("approval labels use the owner's session title without exposing inaccessibl
   const hidden = (await f.approvals.get(f.ask.id, "alice@example.com"))!;
   assert.equal(hidden.conversation, "the Reports conversation");
   assert.equal(hidden.sessionId, undefined);
+});
+
+test("the card goes where the request came from, never to someone else's DM", () => {
+  const ask = { id: "a1", ownerId: "alice", requesterId: "bob", requesterScopeId: "channel:C1" } as KeychainAsk;
+  const slack = { type: "slack", target: "C1:1.2", audienceScopeId: "channel:C1" } as const;
+  assert.deepEqual(approvalCardDestination({ ...ask, requesterDestination: slack }), { ...slack, keychainAskId: "a1" });
+  const web = { type: "web", target: "web:x" };
+  assert.equal(approvalCardDestination({ ...ask, requesterId: "alice", requesterDestination: web }), null);
+  assert.equal(
+    approvalCardDestination({ ...ask, requesterDestination: web })!.target,
+    "alice",
+    "a teammate's web ask reaches the owner",
+  );
+  const elsewhere = { type: "slack", target: "C9", audienceScopeId: "channel:C9" };
+  assert.equal(
+    approvalCardDestination({ ...ask, requesterDestination: elsewhere })!.target,
+    "alice",
+    "never outside the asking conversation",
+  );
+  const cronToCarol = { ...ask, requesterDestination: { type: "principal", target: "carol" } };
+  assert.equal(approvalCardDestination(cronToCarol)!.target, "alice");
+  assert.equal(approvalCardDestination(ask)!.target, "alice");
+});
+
+test("a sub-agent request shows in both sessions, and deciding anywhere syncs the posted card", async () => {
+  const f = await fixture();
+  const child = await f.sessions.getOrCreateByThread("agent:main:subagent:c1", "dm", "personal:alice@example.com");
+  await f.sessions.addParticipant(child.id, "alice@example.com");
+  await f.sessions.setParentSession(child.id, f.session.id);
+  const { ask } = await f.keychain.createAsk({
+    credentialId: f.ask.credentialId,
+    requesterId: "alice@example.com",
+    requesterScopeId: "personal:alice@example.com",
+    requesterThreadRef: child.threadRef,
+    requesterDestination: { type: "slack", target: "D1:9.9" },
+    purpose: "Read the report",
+  });
+  const view = (await f.approvals.card(ask.id))!;
+  assert.equal(view.requesterSessionId, child.id);
+  assert.equal(view.sessionId, f.session.id, "the parent sees it too");
+  await f.approvals.decide(ask.id, { externalId: "alice@example.com" }, "standing");
+  const sync = f.enqueued.find((d) => d.idempotencyKey === `ask:${ask.id}:resolved`);
+  assert.equal(sync?.destination.keychainAskId, ask.id);
+
+  const calls: Array<{ method: string; ts?: string }> = [];
+  const client = {
+    conversations: {
+      replies: async () => ({
+        messages: [
+          {
+            ts: "5.5",
+            metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: `ask:${ask.id}:notice` } },
+          },
+        ],
+      }),
+      history: async () => ({ messages: [] }),
+    },
+    chat: {
+      update: async (a: { ts: string }) => calls.push({ method: "update", ts: a.ts }),
+      postMessage: async () => calls.push({ method: "post" }),
+      getPermalink: async () => ({}),
+    },
+  };
+  const core = { keychainApprovals: f.approvals } as unknown as SlackCoreClient;
+  await deliverKeychainCard(core, client, { ...sync!, destination: sync!.destination }, "D1", "9.9");
+  assert.deepEqual(calls, [{ method: "update", ts: "5.5" }], "the original card is updated in place, not reposted");
 });

@@ -6624,7 +6624,7 @@
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
         {
-          views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users"],
+          views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users", "spend"],
         },
         {
           label: "Logs",
@@ -6663,6 +6663,9 @@
 
         [
           $("card-base-model"),
+          $("card-cron-runtime"),
+          $("card-subagent-runtime"),
+          $("card-fallback-runtime"),
           providers,
           $("card-webui-models"),
           $("card-soul"),
@@ -6781,6 +6784,7 @@
         keychain: "Keychain",
         user: "User",
         metrics: "Metrics",
+        spend: "Spend",
         egress: "Egress",
         history: "Sessions",
         files: "Files",
@@ -6815,6 +6819,7 @@
       const ORG_WIDE = new Set([
         "retention",
         "users",
+        "spend",
         "keychain",
         "connectors",
         "judgments",
@@ -6840,6 +6845,7 @@
       for (const el of document.querySelectorAll("[data-brand-product]")) el.textContent = brandSelfLabel();
       document.title = `${brandSelfLabel()} Admin`;
       let page = 1;
+      let historyCursor = null;
 
       const FOCUS_STALE_MS = 60000;
       const viewLoadedAt = {};
@@ -7023,27 +7029,11 @@
         )
           setStatus(statusId, "", "");
       }
-      function tableWrap(t) {
-        const wrap = document.createElement("div");
-        wrap.className = "tablewrap";
-        wrap.appendChild(t);
-        return wrap;
-      }
       function badge(text, kind) {
         const s = document.createElement("span");
         s.className = "badge" + (kind ? " " + kind : "");
         s.textContent = text;
         return s;
-      }
-      function badgeList(items) {
-        const wrap = document.createElement("div");
-        wrap.className = "badges";
-        items.filter(Boolean).forEach((item) => {
-          if (item.node) wrap.appendChild(item.node);
-          else if (Array.isArray(item)) wrap.appendChild(badge(item[0], item[1]));
-          else wrap.appendChild(badge(item.text, item.kind));
-        });
-        return wrap;
       }
       function deliveryFileBadges(filesPayload) {
         const filesWithNames = (filesPayload || []).filter((f) => f && f.name);
@@ -7089,45 +7079,8 @@
         if (background) parts.push(Number(background).toLocaleString() + " background");
         return parts.join(" · ") || "no conversations";
       }
-      function linkedStacked(href, primary, secondary) {
-        const d = stacked(primary, secondary);
-        const a = document.createElement("a");
-        a.href = href;
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = primary;
-        d.querySelector(".primaryline").replaceChildren(a);
-        return d;
-      }
       function deploymentHref(dep) {
         return dep.publicUrl || "";
-      }
-      function renderCell(td, cell) {
-        if (cell && cell.cls) td.className = cell.cls;
-        if (cell && cell.node) {
-          td.appendChild(cell.node);
-        } else if (cell && cell.badges) {
-          td.appendChild(badgeList(cell.badges));
-        } else if (cell && cell.badge !== undefined) {
-          if (cell.badge) td.appendChild(badge(cell.badge, cell.kind || "admin"));
-          else {
-            td.textContent = "-";
-            td.className = "num";
-          }
-        } else if (cell && cell.action) {
-          const b = document.createElement("button");
-          b.type = "button";
-          b.className = "rowbtn" + (cell.action.danger ? " danger" : "");
-          b.textContent = cell.action.label;
-          b.disabled = !!cell.action.disabled;
-          if (cell.action.title) b.title = cell.action.title;
-          b.onclick = cell.action.run;
-          td.appendChild(b);
-        } else {
-          const val = cell && typeof cell === "object" ? cell : { text: cell == null ? "" : String(cell) };
-          td.textContent = val.text;
-          if (val.cls) td.className = val.cls;
-        }
       }
       const shortId = (id, len = 8) => String(id || "").slice(0, len) || "-";
       const titleCase = (s) =>
@@ -7195,12 +7148,6 @@
       function table(headers, rows, emptyMsg) {
         return governanceUI.shared.node(governanceUI.shared.table(headers, rows, emptyMsg));
       }
-      function dataCard(title, desc, node) {
-        return governanceUI.shared.node(governanceUI.shared.card(title, desc, node));
-      }
-      function bareDataCard(node) {
-        return governanceUI.shared.node(governanceUI.shared.bareCard(node));
-      }
 
       function showView(which, label) {
         for (const id of ["loading-view", "signin-view", "unavailable-view", "notadmin-view", "app-view"]) {
@@ -7243,9 +7190,13 @@
 
         if (API_BASE) {
           try {
-            await fetch("/auth/logout", { method: "POST" });
-          } catch {}
-          location.href = "/";
+            const response = await fetch("/auth/logout", { method: "POST", headers: { accept: "application/json" } });
+            if (!response.ok) return alert(`Couldn't sign out (${response.status}). You are still signed in.`);
+            const result = await response.json();
+            location.href = result.redirectTo || "/";
+          } catch (e) {
+            alert("Couldn't sign out: " + (e && e.message ? e.message : e));
+          }
           return;
         }
         refresh();
@@ -7315,7 +7266,7 @@
           if (st.own) p.set("own", st.own);
           if (st.cron) p.set("cron", st.cron);
           if (st.historyKind && st.historyKind !== "conversation") p.set("kind", st.historyKind);
-          if (st.page > 1) p.set("page", st.page);
+          if (st.cursor) p.set("cursor", st.cursor);
           const q = p.toString();
           const path = scopeInPath ? API_BASE + "/history/scopes/" + scopeSegment : API_BASE + "/history";
           return q ? path + "?" + q : path;
@@ -7330,6 +7281,7 @@
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
         if (st.view === "metrics" && st.phase) p.set("phase", st.phase);
+        if (st.view === "spend" && st.range) p.set("range", st.range);
         if (st.view === "slack" && st.container) p.set("container", st.container);
         if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
         if (st.view === "judgments" && st.container) p.set("container", st.container);
@@ -7394,8 +7346,10 @@
           own: p.get("own") || null,
           mem: p.get("mem") || null,
           phase: p.get("phase") || null,
+          range: p.get("range") || null,
           historyKind: normalizedHistoryKind,
           page: Math.max(1, parseInt(p.get("page"), 10) || 1),
+          cursor: p.get("cursor") || null,
           container: p.get("container") || null,
           ts: p.get("ts") || null,
           decision: p.get("decision") || null,
@@ -7414,6 +7368,7 @@
         view = st.view;
         scope = st.scope;
         page = st.page || 1;
+        historyCursor = st.cursor || null;
         historyKind = st.historyKind || "conversation";
         $("app-view").classList.toggle("history-view", view === "history");
         $("app-view").classList.toggle("slack-view", view === "slack");
@@ -7444,6 +7399,7 @@
           "customize",
           "slack-settings",
           "users",
+          "spend",
           "design-system",
         ].includes(view)
           ? "true"
@@ -7862,69 +7818,13 @@
         selectScope(scopeId);
       }
 
-      function scopeIndexList(items, { latestOf, noun, open, empty, extra }) {
-        const groups = new Map();
-        items.forEach((it) => {
-          const sid = it.ownerScopeId || it.scopeId;
-          const g = groups.get(sid) || { scopeId: sid, count: 0, latest: 0 };
-          g.count += 1;
-          g.latest = Math.max(g.latest, latestOf(it));
-          groups.set(sid, g);
-        });
-        const rows = [...groups.values()].sort((a, b) => b.latest - a.latest);
-        const hrefOf = (sid) => stateToUrl({ view, scope: sid, ...(scopeKind(sid) === "org" ? { own: "1" } : {}) });
-        return denseList(
-          rows,
-          (g) => ({
-            name: shortName(g.scopeId),
-            preview: plural(g.count, noun),
-            time: relTime(g.latest),
-            href: hrefOf(g.scopeId),
-          }),
-          (g) => (open ? open(g.scopeId) : openScopeRow(g.scopeId, extra)),
-          empty,
-        );
-      }
-
-      const scopeSearchState = {};
-      function wireScopeSearch({ key, indexWrap, listWrap, rows, names, noMatch, total, shell, placeholder, onQuery }) {
-        const own = orgOwnView();
-        const prev = scopeSearchState[key];
-        const st =
-          prev && prev.scope === scope && prev.own === own ? prev : (scopeSearchState[key] = { scope, own, q: "" });
-        const applyFilter = (v) => {
-          st.q = v;
-          const q = v.trim().toLowerCase();
-          if (indexWrap) {
-            indexWrap.classList.toggle("hidden", !!q);
-            listWrap.classList.toggle("hidden", !q);
-          }
-          let hits = 0;
-          rows.forEach((row, i) => {
-            const hit = !q || names[i].includes(q);
-            row.classList.toggle("hidden", !hit);
-            if (hit) hits += 1;
-          });
-          noMatch.classList.toggle("hidden", !total || hits > 0 || !!(onQuery && q));
-          if (onQuery) onQuery(q);
-        };
-        const active = document.activeElement;
-        const hadFocus = !!(active && active.closest(".shell-search"));
-        const caret = hadFocus && active.selectionStart != null ? active.selectionStart : null;
-        pageShell({ ...shell, search: { placeholder, onInput: applyFilter } });
-        applyFilter(st.q);
-        const input = $("shellbar").querySelector(".shell-search input");
-        if (input && st.q) input.value = st.q;
-        if (input && hadFocus) {
-          input.focus();
-          const pos = caret == null ? input.value.length : Math.min(caret, input.value.length);
-          input.setSelectionRange(pos, pos);
-        }
-      }
-
       const FOCUS_REFRESH_EXEMPT = new Set(["governance", "connectors", "slack-settings", "user"]);
       window.addEventListener("focus", () => {
         if ($("app-view").classList.contains("hidden")) return;
+        if (view === "slack-settings") {
+          void loadSlackInstallation();
+          return;
+        }
         if (isGovLike(view) || FOCUS_REFRESH_EXEMPT.has(view)) return;
         if (Date.now() - (viewLoadedAt[view] || 0) < FOCUS_STALE_MS) return;
         if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
@@ -8150,6 +8050,9 @@
         const modelsByHarness = r.data.modelsByHarness || {};
         if (requestedView === "models") {
           governanceUI.settings.load(r.data, scope, "runtime");
+          governanceUI.settings.load(r.data, scope, "cron-runtime");
+          governanceUI.settings.load(r.data, scope, "subagent-runtime");
+          governanceUI.settings.load(r.data, scope, "fallback-runtime");
           governanceUI.settings.load(r.data, scope, "webui-models");
         }
         refreshModelChoices.push(() => governanceUI.settings.updateCatalog(r.data));
@@ -8653,6 +8556,9 @@
         "org-ambient": "st-governance-org-ambient",
         "channel-header-pin-default": "st-channel-header-pin-default",
         runtime: "st-runtime",
+        "cron-runtime": "st-cron-runtime",
+        "subagent-runtime": "st-subagent-runtime",
+        "fallback-runtime": "st-fallback-runtime",
         "webui-models": "st-webui-models",
         "ack-emoji": "st-ack-emoji",
         branding: "st-branding",
@@ -8663,6 +8569,9 @@
         "soul",
         "external-slack-participants",
         "runtime",
+        "cron-runtime",
+        "subagent-runtime",
+        "fallback-runtime",
         "webui-models",
         "ack-emoji",
         "branding",
@@ -8746,7 +8655,7 @@
               ["Proposed", titleCase(body.posture)],
             ],
             warning: dangerous
-              ? "Dangerous removes content screening; nothing pauses between tool calls. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
+              ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
               : "This changes the effective tools and approval behavior for future turns in this scope.",
             confirmLabel: dangerous ? "Enable Dangerous" : "Apply posture",
             danger: dangerous,
@@ -9280,6 +9189,7 @@
         root.textContent = "";
         ({
           metrics: renderMetrics,
+          spend: renderSpend,
           egress: renderEgress,
           history: renderHistory,
           files: renderFiles,
@@ -9304,7 +9214,8 @@
 
         if (view === "memory" && orgWideView() && urlToState().mem !== "edit") path = "/api/memory/scopes";
         if (view === "history") {
-          path += `&limit=${HISTORY_PAGE_SIZE}&offset=${(page - 1) * HISTORY_PAGE_SIZE}&category=${encodeURIComponent(historyCategory(historyKind))}`;
+          path += `&limit=${HISTORY_PAGE_SIZE}&category=${encodeURIComponent(historyCategory(historyKind))}`;
+          if (historyCursor) path += `&cursor=${encodeURIComponent(historyCursor)}`;
           if (historyKind === "cron") {
             path += `&origin=${encodeURIComponent(historyKind)}`;
             const cronSel = urlToState().cron;
@@ -9313,6 +9224,7 @@
           if (historyKind === "background") path += "&origin=other_background";
         }
         if (view === "errors") path += `&limit=${ERRORS_PAGE_SIZE}&offset=${(page - 1) * ERRORS_PAGE_SIZE}`;
+        if (view === "spend") path += `?${spendQuery(urlToState())}`;
         const cacheable = view !== "memory";
         const cached = cacheable ? dataCache.get(path) : undefined;
         if (cached !== undefined) {
@@ -9394,10 +9306,10 @@
         if (s.provisioned === false) return "no machine";
         return "";
       }
-      function sparkline(daily) {
+      function sparkline(daily, valueOf = (r) => r.p50) {
         const vals = (daily || [])
           .slice(-14)
-          .map((r) => r.p50)
+          .map(valueOf)
           .filter((v) => v != null);
         if (vals.length < 2) {
           const s = document.createElement("span");
@@ -9443,6 +9355,44 @@
           sparkline,
         });
       }
+      const SPEND_RANGES = { "7d": 7, "30d": 30, "90d": 90 };
+      function spendQuery(st) {
+        const DAY = 86400000;
+        const range = SPEND_RANGES[st.range] ? st.range : "30d";
+        const to = Math.floor(Date.now() / DAY) * DAY + DAY;
+        const iso = (t) => new Date(t).toISOString().slice(0, 10);
+        const params = new URLSearchParams({
+          from: iso(to - SPEND_RANGES[range] * DAY),
+          to: iso(to),
+          bucket: range === "90d" ? "week" : "day",
+        });
+        return params.toString();
+      }
+      function renderSpend(root, d) {
+        governanceUI.spend.spend(root, d, {
+          defaultShell,
+          fmtPct,
+          fmtTokens,
+          shortName,
+          plural,
+          range: urlToState().range || "30d",
+          openUser: (principal) => go({ view: "user", scope, session: null, principal }),
+          setRange: (range) => go({ ...urlToState(), view: "spend", range }),
+          downloadCsv: (breakdown = "entity") => {
+            const a = document.createElement("a");
+            a.href =
+              API_BASE +
+              "/api/spend?format=csv&breakdown=" +
+              encodeURIComponent(breakdown) +
+              "&" +
+              spendQuery(urlToState());
+            a.rel = "noreferrer";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          },
+        });
+      }
       function renderErrors(root, d) {
         governanceUI.activity.errors(root, d, {
           all: orgWideView(),
@@ -9483,12 +9433,6 @@
         s.className = className;
         s.textContent = text;
         return s;
-      }
-      function timeCell(ts) {
-        const s = document.createElement("span");
-        s.textContent = relTime(ts);
-        s.title = fmtTime(ts);
-        return nodeCell(s, "num");
       }
       async function adminErrors(query) {
         const r = await api("GET", "/api/errors?" + query);
@@ -9820,47 +9764,6 @@
       document.addEventListener("click", closeOvMenus);
       document.addEventListener("scroll", closeOvMenus, true);
       window.addEventListener("resize", closeOvMenus);
-      function overflowMenu(items) {
-        const wrap = document.createElement("div");
-        wrap.className = "ovwrap";
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "rowbtn";
-        btn.textContent = "⋯";
-        btn.setAttribute("aria-label", "Actions");
-        btn.setAttribute("aria-haspopup", "menu");
-        btn.setAttribute("aria-expanded", "false");
-        const menu = document.createElement("div");
-        menu.className = "ovmenu hidden";
-        menu.setAttribute("role", "menu");
-        for (const it of items) {
-          const b = document.createElement("button");
-          b.type = "button";
-          b.textContent = it.label;
-          if (it.danger) b.className = "danger";
-          if (it.title) b.title = it.title;
-          b.onclick = (e) => {
-            e.stopPropagation();
-            closeOvMenus();
-            it.onClick();
-          };
-          menu.appendChild(b);
-        }
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          const wasOpen = openOvMenu && openOvMenu.menu === menu;
-          closeOvMenus();
-          if (wasOpen) return;
-          menu.classList.remove("hidden");
-          btn.setAttribute("aria-expanded", "true");
-          openOvMenu = { menu, btn };
-          const r = btn.getBoundingClientRect();
-          menu.style.top = r.bottom + 4 + "px";
-          menu.style.left = Math.max(8, r.right - menu.offsetWidth) + "px";
-        };
-        wrap.append(btn, menu);
-        return wrap;
-      }
       function buildScopeMultiSelect(choices, selected, onChange) {
         const pick = document.createElement("div");
         pick.className = "scopepick";
@@ -10038,97 +9941,6 @@
       }
       function renderRetention(root, d) {
         governanceUI.artifacts.retention(root, d);
-      }
-      function actionTable(headers, items, cellsOf, emptyMsg) {
-        if (!items.length) {
-          const p = document.createElement("p");
-          p.className = "empty";
-          p.textContent = emptyMsg;
-          return p;
-        }
-        const t = document.createElement("table");
-        const thead = document.createElement("thead");
-        const htr = document.createElement("tr");
-        headers.forEach((h) => {
-          const th = document.createElement("th");
-          if (h && h.nodeType) th.appendChild(h);
-          else th.textContent = h;
-          htr.appendChild(th);
-        });
-        thead.appendChild(htr);
-        t.appendChild(thead);
-        const tb = document.createElement("tbody");
-        items.forEach((it) => {
-          const tr = document.createElement("tr");
-          cellsOf(it).forEach((cell) => {
-            const td = document.createElement("td");
-            renderCell(td, cell);
-            tr.appendChild(td);
-          });
-          tb.appendChild(tr);
-        });
-        t.appendChild(tb);
-        return tableWrap(t);
-      }
-      async function changeUserAdmin(user, event) {
-        event?.stopPropagation?.();
-        const revoke = user.admin?.isAdmin;
-        const principalId = user.principalId;
-        if (!confirm((revoke ? "Revoke admin access for " : "Make admin: ") + principalId + "?")) return;
-        const button = event?.currentTarget;
-        if (button) button.disabled = true;
-        setStatus("st-users", "");
-        try {
-          const r = revoke
-            ? await api(
-                "DELETE",
-                "/api/grants/" +
-                  encodeURIComponent(principalId) +
-                  "?scope=" +
-                  encodeURIComponent(user.admin.scopeId) +
-                  "&role=" +
-                  encodeURIComponent(user.admin.role),
-              )
-            : await api("POST", "/api/grants", { principalId, role: "org_admin", scopeId: "org:" + orgId });
-          if (r.ok) await renderData();
-          else setStatus("st-users", r.data?.message || "Could not update admin access.", "err");
-        } catch {
-          setStatus("st-users", "Network error. Try again.", "err");
-        } finally {
-          if (button) button.disabled = false;
-        }
-      }
-      async function revokeExternalUser(m) {
-        const question =
-          m.status === "active"
-            ? 'Revoke access for "' + m.email + '"? They will no longer be able to sign in.'
-            : 'Remove "' + m.email + '" from the list?';
-        if (!confirm(question)) return;
-        const r = await api("DELETE", "/api/external-users/" + encodeURIComponent(m.email));
-        if (r.ok) renderData();
-        else
-          setStatus(
-            "st-external",
-            r.status === 403 ? "Only an admin may revoke." : r.data?.message || "Revoke failed.",
-            "err",
-          );
-      }
-      function keychainGrantStatus(g) {
-        const expired = g.expiresAt && g.expiresAt <= Date.now();
-        if (expired && g.status === "active") return ["expired", "warn"];
-        let kind = "muted";
-        if (g.status === "active") kind = "ok";
-        else if (g.status === "revoked") kind = "err";
-        else if (g.status === "used") kind = "info";
-        return [g.status || "unknown", kind];
-      }
-      function keychainExpiry(ts) {
-        if (!ts) return "No expiry";
-        const prefix = ts <= Date.now() ? "Expired " : "Expires ";
-        return prefix + fmtTime(ts);
-      }
-      function keychainPersonLabel(p) {
-        return p.displayName ? `${p.displayName} (${p.principalId})` : p.principalId;
       }
       function renderKeychain(root, d) {
         governanceUI.keychain.keychain(root, d, {
@@ -10577,58 +10389,6 @@
         return { block, sync: () => {} };
       }
 
-      function openableTable(headers, items, cellsOf, onOpen, emptyMsg, opts = {}) {
-        if (!items.length) {
-          const p = document.createElement("p");
-          p.className = "empty";
-          p.textContent = emptyMsg;
-          return p;
-        }
-        const t = document.createElement("table");
-        if (opts.className) t.className = opts.className;
-        if (opts.cols?.length) {
-          const cg = document.createElement("colgroup");
-          opts.cols.forEach((width) => {
-            const col = document.createElement("col");
-            col.style.width = width;
-            cg.appendChild(col);
-          });
-          t.appendChild(cg);
-        }
-        const thead = document.createElement("thead");
-        const htr = document.createElement("tr");
-        headers.forEach((h) => {
-          const th = document.createElement("th");
-          if (h && h.nodeType) th.appendChild(h);
-          else th.textContent = h;
-          htr.appendChild(th);
-        });
-        thead.appendChild(htr);
-        t.appendChild(thead);
-        const tb = document.createElement("tbody");
-        items.forEach((it) => {
-          const tr = document.createElement("tr");
-          tr.className = "openable";
-          tr.onclick = () => onOpen(it);
-          cellsOf(it).forEach((cell, i) => {
-            const td = document.createElement("td");
-            const val = cell && typeof cell === "object" ? cell : { text: cell == null ? "" : String(cell) };
-            if (i === 0) {
-              const open = document.createElement("div");
-              open.className = "open";
-              if (val.node) open.appendChild(val.node);
-              else open.textContent = val.text;
-              td.appendChild(open);
-            } else renderCell(td, cell);
-            if (val.cls) td.className = val.cls;
-            tr.appendChild(td);
-          });
-          tb.appendChild(tr);
-        });
-        t.appendChild(tb);
-        return tableWrap(t);
-      }
-
       function renderScopeIndex() {
         ++dataReq;
         const root = $("view-data");
@@ -10670,7 +10430,7 @@
           historyKind,
           historyKindMatches,
           cron: urlToState().cron,
-          pageSize: HISTORY_PAGE_SIZE,
+          cursor: historyCursor,
           scope,
           orgScope: "org:" + orgId,
           environments: environmentDir,
@@ -10691,34 +10451,7 @@
           errorStripBox,
           adminErrorCount,
           adminErrors,
-          correctPage: (next, cron) => {
-            if (next === page) return;
-            page = next;
-            const st = { view: "history", scope, session: null, page, historyKind, cron };
-            history.replaceState(st, "", stateToUrl(st));
-          },
         });
-      }
-      function pager(total, limit, offset, onGo) {
-        if (total <= limit) return document.createDocumentFragment();
-        const wrap = document.createElement("div");
-        wrap.className = "pager";
-        const pages = Math.ceil(total / limit),
-          cur = Math.floor(offset / limit) + 1;
-        const btn = (label, target, disabled) => {
-          const b = document.createElement("button");
-          b.type = "button";
-          b.className = "page";
-          b.textContent = label;
-          b.disabled = disabled;
-          if (!disabled) b.onclick = () => onGo(target);
-          return b;
-        };
-        const info = document.createElement("span");
-        info.className = "pageinfo";
-        info.textContent = `${offset + 1}–${Math.min(offset + limit, total)} of ${total}`;
-        wrap.append(btn("← Prev", cur - 1, cur <= 1), info, btn("Next →", cur + 1, cur >= pages));
-        return wrap;
       }
 
       let userDetailRequest = 0;
@@ -10748,12 +10481,6 @@
         return governanceUI.transcript.contextPage(sessionId, turnSeq, transcriptServices());
       }
 
-      function emptyPara(text) {
-        const p = document.createElement("p");
-        p.className = "empty";
-        p.textContent = text;
-        return p;
-      }
       let slackContainers = null;
       let slackContainersTruncated = false;
       async function loadSlackContainers() {
@@ -11403,9 +11130,6 @@
           a.href = url;
         });
         return a;
-      }
-      function renderLlmRequests(requests, opts = {}) {
-        return governanceUI.transcript.requestsPanel(requests, transcriptServices(), opts);
       }
 
       function renderFiles(root, d) {

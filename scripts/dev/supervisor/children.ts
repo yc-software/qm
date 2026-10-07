@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { openSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { writePidFile } from "../lib/lease.ts";
-import { freePort, tcpPortOpen, waitPortFree } from "../lib/proc.ts";
+import { spawnCommand, tcpPortOpen, waitPortFree } from "../lib/proc.ts";
 import { bestEffort, bestEffortValue, sleep } from "../lib/util.ts";
 import type { ChildSpec, ChildState, ChildStatus } from "../lib/types.ts";
 
@@ -47,15 +47,16 @@ export class Child {
 
   async start(): Promise<{ ok: boolean; detail?: string }> {
     this.stopRequested = false;
-    if (this.spec.port) await freePort(this.spec.port, this.spec.name, this.log);
     this.state = "starting";
     this.lastSpawnAt = Date.now();
     const [cmd, ...rest] = this.spec.argv;
     if (!cmd) return { ok: false, detail: "empty argv" };
     this.logOffset = bestEffortValue(() => statSync(this.logFile()).size) ?? 0;
     const fd = openSync(this.logFile(), "a");
-    const proc = spawn(cmd, rest, {
+    const command = spawnCommand(cmd, rest, this.spec.env);
+    const proc = spawn(command.cmd, command.args, {
       cwd: this.spec.cwd,
+      windowsVerbatimArguments: command.windowsVerbatimArguments,
       detached: true,
       stdio: ["ignore", fd, fd],
       env: this.spec.env,

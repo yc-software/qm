@@ -1,3 +1,4 @@
+import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
 import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check, Link2, UserRound } from "lucide";
 import { icon, slackMark } from "./ui";
@@ -36,6 +37,22 @@ export class SlackAccount extends LitElement {
   protected createRenderRoot(): HTMLElement {
     return this;
   }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener("focus", this.refreshStatus);
+    document.addEventListener("visibilitychange", this.refreshStatus);
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener("focus", this.refreshStatus);
+    document.removeEventListener("visibilitychange", this.refreshStatus);
+  }
+
+  private refreshStatus = (): void => {
+    if (!document.hidden) void this.status();
+  };
 
   protected firstUpdated(): void {
     const url = returnUrl ?? new URL(location.href);
@@ -90,6 +107,7 @@ export class SlackAccount extends LitElement {
     this.busy = true;
     this.error = "";
     try {
+      if (await openDesktopBrowser(withBase("/settings"))) return;
       const state = crypto.randomUUID();
       const response = await fetch(withBase("/api/composio/slack/authorize"), {
         method: "POST",

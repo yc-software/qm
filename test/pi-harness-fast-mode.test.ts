@@ -12,6 +12,7 @@ import {
   wantsFastMode,
   createPiHarness,
 } from "../src/harness/pi-harness.ts";
+import type { PiHarnessOptions } from "../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
@@ -103,7 +104,9 @@ test("auto resets a reused Anthropic session to its interactive default", () => 
 });
 
 const ASTRA = getRequiredModel("gpt-6-astra", false) as Model<Api>;
+const SOL_61 = getRequiredModel("gpt-6.1-sol", false) as Model<Api>;
 const OPUS_55 = getRequiredModel("claude-opus-5-5", false);
+const SONNET_55 = getRequiredModel("claude-sonnet-5-5", false);
 const OPUS = getRequiredModel("claude-opus-5", false) as Model<Api>;
 const ASTRA_TOKENS = { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000, totalTokens: 66_000 };
 
@@ -117,6 +120,9 @@ const pricingCases: Array<[string, Model<Api>, Partial<Usage>, number]> = [
   ["cache writes", ASTRA, { cacheWrite: 8_000 }, 0.1],
   ["high-input boundary", ASTRA, { input: 272_000 }, 2.72],
   ["high-input tier", ASTRA, { input: 300_000 }, 6],
+  ["GPT-6.1 Sol mixed tokens", SOL_61, ASTRA_TOKENS, 0.055],
+  ["GPT-6.1 Sol cache reads at 5% of input", SOL_61, { cacheRead: 100_000 }, 0.01],
+  ["GPT-6.1 Sol high-input tier", SOL_61, { input: 300_000 }, 1.2],
   [
     "mixed 1h writes",
     OPUS,
@@ -131,6 +137,7 @@ const pricingCases: Array<[string, Model<Api>, Partial<Usage>, number]> = [
   ],
   ["Opus 5.5 cache reads", OPUS_55, { cacheRead: 100_000 }, 0.02],
   ["Opus 5.5 1h writes", OPUS_55, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.032],
+  ["Sonnet 5.5 1h writes", SONNET_55, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.016],
   ["all 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.04],
   ["clamped 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 40_000 }, 0.04],
 ];
@@ -276,7 +283,7 @@ function responsesReply(text: string, usage: Record<string, unknown>, serviceTie
   ]);
 }
 
-function anthropicReply(text: string, usage: Record<string, unknown>): Response {
+function anthropicReply(text: string, usage: Record<string, unknown>, stopReason = "end_turn"): Response {
   return sse([
     {
       type: "message_start",
@@ -287,7 +294,7 @@ function anthropicReply(text: string, usage: Record<string, unknown>): Response 
     { type: "content_block_stop", index: 0 },
     {
       type: "message_delta",
-      delta: { stop_reason: "end_turn" },
+      delta: { stop_reason: stopReason },
       usage: { output_tokens: usage.output_tokens as number },
     },
     { type: "message_stop" },
@@ -313,6 +320,7 @@ async function runTurn(
   fastMode: boolean,
   respond: (payload: Record<string, unknown>, index: number) => Response,
   gateway = false,
+  extra: Partial<PiHarnessOptions> = {},
 ): Promise<{ rows: HarnessLlmRequestRecord[]; payloads: Array<Record<string, unknown>>; betas: Array<string | null> }> {
   const rows: HarnessLlmRequestRecord[] = [];
   const payloads: Array<Record<string, unknown>> = [];
@@ -326,10 +334,15 @@ async function runTurn(
             url: "https://gateway.example/v1",
             apiKey: "sk-gateway-test",
             apiKeyHeader: "x-gateway-key",
-            models: { "gpt-6-astra": "openai/gpt-6-astra", "claude-sonnet-5": "anthropic/claude-sonnet-5" },
+            models: {
+              "gpt-6-astra": "openai/gpt-6-astra",
+              "gpt-6-astra-ultrafast": "openai/gpt-6-astra",
+              "claude-sonnet-5": "anthropic/claude-sonnet-5",
+            },
           },
         }
       : {}),
+    ...extra,
   });
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -422,16 +435,7 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
 test("a refusal fallback prices each step on its actual model and tier", async () => {
   const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
     index === 0
-      ? new Response(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "api_error",
-              message: "Output blocked by content filtering policy: this would violate Anthropic's usage policy.",
-            },
-          }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        )
+      ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
       : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
   );
   assert.equal(payloads.length, 2);
@@ -446,6 +450,94 @@ test("a refusal fallback prices each step on its actual model and tier", async (
       [1, "claude-opus-5"],
     ],
   );
-  assertUsd(rows[0]!.usage!.costUsd, 0);
+  assertUsd(rows[0]!.usage!.costUsd, 0.03); // a stop_reason refusal is a billed 200 response
   assertUsd(rows[1]!.usage!.costUsd, 0.15);
+});
+
+for (const gateway of [true, false]) {
+  test(`Ultrafast prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`, async () => {
+    const { rows, payloads } = await runTurn(
+      `astra-ultrafast-${gateway}`,
+      "gpt-6-astra-ultrafast",
+      false,
+      () => responsesReply("done", ASTRA_WIRE_USAGE, "ultrafast"),
+      gateway,
+    );
+    assert.equal(payloads[0]?.model, gateway ? "openai/gpt-6-astra" : "gpt-6-astra");
+    assert.equal(payloads[0]?.service_tier, "ultrafast");
+    assert.equal(rows.length, 1);
+    assertUsd(rows[0]!.usage!.costUsd, 1.8);
+    assert.equal(rows[0]!.model, "gpt-6-astra-ultrafast");
+  });
+}
+
+test("a stop_reason refusal retries on the admin-configured fallback runtime", async () => {
+  const { payloads } = await runTurn(
+    "refusal-configured-fallback",
+    "claude-sonnet-5",
+    false,
+    (_payload, index) =>
+      index === 0 ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal") : responsesReply("recovered", ASTRA_WIRE_USAGE),
+    false,
+    { resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol", effortLevel: "low" }) },
+  );
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[1]?.model, "gpt-6-sol");
+  assert.equal((payloads[1]?.reasoning as { effort?: string } | undefined)?.effort, "low");
+});
+
+test("an unavailable gateway model fails the turn without fallback (no structured signal)", async () => {
+  const outcome = await runTurn(
+    "unavailable-configured-fallback",
+    "claude-sonnet-5",
+    false,
+    () => responsesReply("recovered", ASTRA_WIRE_USAGE),
+    false,
+    {
+      modelGateway: {
+        url: "https://gateway.example/v1",
+        apiKey: "k",
+        apiKeyHeader: "x-k",
+        models: {},
+        reservedModelIds: new Set(["claude-sonnet-5"]),
+      },
+      resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol", effortLevel: "low" }),
+    },
+  ).then(
+    ({ payloads }) => payloads,
+    () => [],
+  );
+  assert.deepEqual(outcome, []);
+});
+
+test("compaction retries a refused summary on the configured fallback model", async () => {
+  const harness = createPiHarness({
+    apiKey: "sk-anthropic-test",
+    openaiApiKey: "sk-openai-test",
+    modelId: "claude-sonnet-5",
+    resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol" }),
+  });
+  const models: unknown[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const payload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    models.push(payload.model);
+    return models.length === 1
+      ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
+      : responsesReply("summary of the work", ASTRA_WIRE_USAGE);
+  }) as typeof globalThis.fetch;
+  try {
+    const text = await harness.models.compactHistory!({
+      session: { id: "compact-fallback" } as HarnessTurnInput["session"],
+      history: [
+        { seq: 1, kind: "user", payload: { text: "hello" }, createdAt: 1 },
+        { seq: 2, kind: "assistant", payload: { text: "hi" }, createdAt: 2 },
+      ] as unknown as SessionEntry[],
+      recordModelCall: () => {},
+    });
+    assert.match(text, /summary of the work/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(models, ["claude-sonnet-5", "gpt-6-sol"]);
 });

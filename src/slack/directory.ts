@@ -1,3 +1,4 @@
+import { companySlackActor, type ExternalSlackAccess } from "./external-access.ts";
 import {
   type ActorAssertion,
   type CachedUser,
@@ -96,6 +97,7 @@ export interface Directory {
     actor: ActorAssertion,
     actorSlackId: string | undefined,
     info: ChannelMeta | undefined,
+    observedAt?: number,
   ): Promise<{
     audience: ActorAssertion[];
     publishMembers?: ActorAssertion[];
@@ -111,6 +113,7 @@ export interface Directory {
 }
 
 export function createDirectory(deps: {
+  externalAccess?: ExternalSlackAccess;
   core: SlackCoreClient;
   ids: BotIdentity;
   userSnapshotTtlMs?: number;
@@ -124,7 +127,7 @@ export function createDirectory(deps: {
   const { core, ids } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
   const internalOverrides = async (): Promise<ReadonlySet<string>> =>
-    deps.internalOverrides ? await deps.internalOverrides() : NO_INTERNAL_OVERRIDES;
+    !deps.externalAccess && deps.internalOverrides ? await deps.internalOverrides() : NO_INTERNAL_OVERRIDES;
   const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
   const CHANNEL_MEMBERS_TTL_MS = deps.channelMembersTtlMs ?? 30 * 60_000;
   const SYNC_RETRY_MS = deps.syncRetryMs ?? 30_000;
@@ -156,7 +159,9 @@ export function createDirectory(deps: {
       for (const u of (res.members ?? []) as SlackUser[]) {
         if (!u?.id || u.id === ids.botUserId) continue;
         const actor = withInternalOverride(
-          classifyUser(u, ids.ownTeamId, ids.identityMode),
+          deps.externalAccess
+            ? companySlackActor(u, deps.externalAccess)
+            : classifyUser(u, ids.ownTeamId, ids.identityMode),
           u.profile?.email,
           overrides,
           ids.identityMode,
@@ -310,18 +315,11 @@ export function createDirectory(deps: {
     privateChannels: ChannelRef[],
     invalidations: ChannelInvalidations,
   ): Promise<{
-    channels: ChannelRow[];
     channelMembers: ChannelMembershipRow[];
     channelRosterIds: string[];
     channelRevocations: ChannelMembershipRow[];
   }> {
     const refs = [...publicChannels, ...privateChannels];
-    const channels = refs.map((channel) => ({
-      channelId: channel.id,
-      name: channel.name,
-      ...(channel.info.is_private ? { isPrivate: true } : {}),
-      ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
-    }));
     const channelMembers: ChannelMembershipRow[] = [];
     const channelRosterIds: string[] = [];
     const channelRevocations = [...invalidations].flatMap(([channelId, principalIds]) =>
@@ -343,7 +341,7 @@ export function createDirectory(deps: {
         if (!revoked?.has(principalId)) channelMembers.push({ channelId: channel.id, principalId });
       }
     }
-    return { channels, channelMembers, channelRosterIds, channelRevocations };
+    return { channelMembers, channelRosterIds, channelRevocations };
   }
 
   async function listBotGroupDms(client: any): Promise<string[]> {
@@ -378,19 +376,7 @@ export function createDirectory(deps: {
     return { groupMembers, groupRosterIds: [...rosters.keys()] };
   }
 
-  let privateChannelsCache:
-    | {
-        channels: ChannelRow[];
-        channelMembers: ChannelMembershipRow[];
-        channelRosterIds: string[];
-        channelRevocations: ChannelMembershipRow[];
-        groupMembers?: GroupMembershipRow[];
-        groupIds?: string[];
-        groupRosterIds?: string[];
-        fetchedAt: number;
-        groupsFetchedAt?: number;
-      }
-    | undefined;
+  let lastFullRosterFetchAt: number | undefined;
   const seenGroupIds = new Set<string>();
 
   async function fetchChannels(
@@ -407,6 +393,7 @@ export function createDirectory(deps: {
     groupRosterIds?: string[];
     fetchedAt: number;
     groupsFetchedAt?: number;
+    fullRosterFetchedAt?: number;
   } | null> {
     const fetchedAt = Date.now();
     let listed: { publicChannels: ChannelRef[]; privateChannels: ChannelRef[] };
@@ -416,95 +403,40 @@ export function createDirectory(deps: {
       console.error("[slack-plugin] channel list failed:", (err as Error).message);
       return null;
     }
-    const listedChannels = [...listed.publicChannels, ...listed.privateChannels];
-    if (targetChannelIds?.size) {
-      const computed = await computeChannelMembership(
-        client,
-        listed.publicChannels.filter((channel) => targetChannelIds.has(channel.id)),
-        listed.privateChannels.filter((channel) => targetChannelIds.has(channel.id)),
-        invalidations,
-      );
-      const channels = listedChannels.map((channel) => ({
-        channelId: channel.id,
-        name: channel.name,
-        ...(channel.info.is_private ? { isPrivate: true } : {}),
-        ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
-      }));
-      if (privateChannelsCache) {
-        const refreshed = new Set(computed.channelRosterIds);
-        privateChannelsCache.channels = channels;
-        privateChannelsCache.channelMembers = [
-          ...privateChannelsCache.channelMembers.filter(
-            (member) =>
-              !refreshed.has(member.channelId) && !invalidations.get(member.channelId)?.has(member.principalId),
-          ),
-          ...computed.channelMembers,
-        ];
-        privateChannelsCache.channelRosterIds = [
-          ...new Set([...privateChannelsCache.channelRosterIds, ...computed.channelRosterIds]),
-        ];
-      }
-      return { ...computed, channels, fetchedAt };
-    }
-    const fresh = privateChannelsCache && Date.now() - privateChannelsCache.fetchedAt < CHANNEL_MEMBERS_TTL_MS;
-    let includeGroups = true;
-    if (!fresh) {
-      const computed = await computeChannelMembership(
-        client,
-        listed.publicChannels,
-        listed.privateChannels,
-        invalidations,
-      );
-      let groupMembers: GroupMembershipRow[] | undefined;
-      let groupIds: string[] | undefined;
-      let groupRosterIds: string[] | undefined;
-      let groupsFetchedAt: number | undefined;
+    const channels = [...listed.publicChannels, ...listed.privateChannels].map((channel) => ({
+      channelId: channel.id,
+      name: channel.name,
+      ...(channel.info.is_private ? { isPrivate: true } : {}),
+      ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
+    }));
+    const fullRefresh =
+      !targetChannelIds?.size &&
+      (lastFullRosterFetchAt === undefined || fetchedAt - lastFullRosterFetchAt >= CHANNEL_MEMBERS_TTL_MS);
+    const computed = await computeChannelMembership(
+      client,
+      listed.publicChannels.filter((channel) => fullRefresh || targetChannelIds?.has(channel.id)),
+      listed.privateChannels.filter((channel) => fullRefresh || targetChannelIds?.has(channel.id)),
+      invalidations,
+    );
+    let groups:
+      | {
+          groupMembers: GroupMembershipRow[];
+          groupIds: string[];
+          groupRosterIds: string[];
+          groupsFetchedAt: number;
+        }
+      | undefined;
+    if (fullRefresh) {
       try {
-        groupsFetchedAt = Date.now();
-        groupIds = await listBotGroupDms(client);
+        const groupsFetchedAt = Date.now();
+        const groupIds = await listBotGroupDms(client);
         for (const id of groupIds) seenGroupIds.add(id);
-        const computedGroups = await computeGroupMembership(client, groupIds);
-        groupMembers = computedGroups.groupMembers;
-        groupRosterIds = computedGroups.groupRosterIds;
+        groups = { ...(await computeGroupMembership(client, groupIds)), groupIds, groupsFetchedAt };
       } catch (err) {
         console.error("[slack-plugin] group-DM list failed:", (err as Error).message);
-        includeGroups = false;
-        groupMembers = privateChannelsCache?.groupMembers;
-        groupIds = privateChannelsCache?.groupIds;
-        groupRosterIds = privateChannelsCache?.groupRosterIds;
-        groupsFetchedAt = privateChannelsCache?.groupsFetchedAt;
       }
-      privateChannelsCache = {
-        ...computed,
-        groupMembers,
-        groupIds,
-        groupRosterIds,
-        groupsFetchedAt,
-        fetchedAt,
-      };
     }
-    const priv = privateChannelsCache ?? {
-      channels: [],
-      channelMembers: [],
-      channelRosterIds: [],
-      channelRevocations: [],
-      fetchedAt: 0,
-    };
-    return {
-      channels: priv.channels,
-      channelMembers: priv.channelMembers,
-      channelRosterIds: priv.channelRosterIds,
-      channelRevocations: priv.channelRevocations,
-      fetchedAt: priv.fetchedAt,
-      ...(includeGroups && priv.groupMembers
-        ? {
-            groupMembers: priv.groupMembers,
-            groupIds: priv.groupIds,
-            groupRosterIds: priv.groupRosterIds,
-            groupsFetchedAt: priv.groupsFetchedAt,
-          }
-        : {}),
-    };
+    return { channels, ...computed, fetchedAt, ...groups, fullRosterFetchedAt: fullRefresh ? fetchedAt : undefined };
   }
 
   async function pushDirectory(
@@ -581,6 +513,7 @@ export function createDirectory(deps: {
           : {}),
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
       });
+      if (applied && fetched?.fullRosterFetchedAt !== undefined) lastFullRosterFetchAt = fetched.fullRosterFetchedAt;
       if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");
       return fetched !== null && applied;
     } catch (err) {
@@ -631,13 +564,12 @@ export function createDirectory(deps: {
     fullDirectorySyncRequested = false;
     const scheduledTargets = new Set(targetedChannelIds);
     const targets = fullSync || !scheduledTargets.size ? undefined : scheduledTargets;
-    if (!targets && privateChannelsCache) privateChannelsCache.fetchedAt = 0;
+    if (!targets) lastFullRosterFetchAt = undefined;
     const snap = userSnapshot ?? (await getUserSnapshot(directorySyncClient));
     const pendingInvalidations = new Map(
       [...invalidatedChannelMembers].map(([channelId, principalIds]) => [channelId, new Set(principalIds)]),
     );
     if (snap && (await pushDirectory(snap, directorySyncClient, pendingInvalidations, targets))) {
-      if (privateChannelsCache) privateChannelsCache.channelRevocations = [];
       for (const channelId of scheduledTargets) targetedChannelIds.delete(channelId);
       for (const [channelId, principalIds] of pendingInvalidations) {
         const current = invalidatedChannelMembers.get(channelId);
@@ -681,7 +613,9 @@ export function createDirectory(deps: {
     try {
       const user = (await client.users.info({ user: userId })).user as SlackUser | undefined;
       const actor = withInternalOverride(
-        classifyUser(user, ids.ownTeamId, ids.identityMode),
+        deps.externalAccess
+          ? companySlackActor(user, deps.externalAccess)
+          : classifyUser(user, ids.ownTeamId, ids.identityMode),
         user?.profile?.email,
         await internalOverrides(),
         ids.identityMode,
@@ -716,14 +650,16 @@ export function createDirectory(deps: {
     actor: ActorAssertion,
     actorSlackId: string | undefined,
     info: ChannelMeta | undefined,
+    observedAt?: number,
   ): Promise<{
     audience: ActorAssertion[];
     publishMembers?: ActorAssertion[];
     slackIdsByPrincipal?: Map<string, string>;
   }> {
+    let membership: Awaited<ReturnType<typeof resolveChannelMembership>>;
     try {
       const memberIds = await fetchChannelMemberIds(client, channel);
-      return await resolveChannelMembership({
+      membership = await resolveChannelMembership({
         memberIds,
         actor,
         actorSlackId,
@@ -733,6 +669,24 @@ export function createDirectory(deps: {
     } catch {
       return { audience: [actor, externalMarker()] };
     }
+    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && !info?.is_mpim) {
+      if (!info?.name || typeof info.is_private !== "boolean" || info.is_member === false || observedAt === undefined)
+        return { audience: [actor, externalMarker()] };
+      if (membership.publishMembers) {
+        const applied = await core.pushDirectory({
+          channels: [{ channelId: channel, name: info.name, isPrivate: info.is_private }],
+          channelMembers: membership.publishMembers.map((member) => ({
+            channelId: channel,
+            principalId: member.externalId,
+          })),
+          channelRosterIds: [channel],
+          channelsSyncedAt: observedAt,
+          partialChannels: true,
+        });
+        if (!applied) throw new Error("Slack channel membership was not persisted before admission");
+      }
+    }
+    return membership;
   }
 
   async function resolveAutoIdentityMode(client: any): Promise<SlackIdentityMode> {

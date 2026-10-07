@@ -1,11 +1,10 @@
 import { orgId as configOrgId } from "../config.ts";
 import { Readable } from "node:stream";
-import { CREDENTIAL_BROKER_AUD, verifyCapabilityToken, type CapabilityClaims } from "../auth/capability-token.ts";
+import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { scopeId as makeScopeId } from "../types.ts";
 import { type DecryptedServiceCredential, isValidCredentialSlug, isComposioHost } from "../credentials/keychain.ts";
-import { brokerCredentialAuthHeader, brokerPathAllowed } from "./credential-broker.ts";
-import { CAPABILITY_HEADER } from "./contract.ts";
-import { headerValue, pipeToResponse, sendJson } from "./http.ts";
+import { brokerCredentialAuthHeader, brokerPathAllowed, grantedCredential } from "./credential-broker.ts";
+import { pipeToResponse, sendJson } from "./http.ts";
 import type { BaseCtx } from "./routes/route.ts";
 import { proxyHeaders } from "../util/http-proxy.ts";
 
@@ -73,14 +72,7 @@ function responseHeaders(headers: Record<string, string> | undefined): Record<st
   return proxyHeaders(headers ?? {}, ["content-encoding", "content-length"]);
 }
 
-function capabilityFrom(ctx: BaseCtx): Promise<CapabilityClaims | null> {
-  const token = headerValue(ctx.req, CAPABILITY_HEADER);
-  const capSecret = ctx.deps.capabilitySecret ?? ctx.secret;
-  return token && capSecret ? verifyCapabilityToken(token, capSecret) : Promise.resolve(null);
-}
-
-function recordDenied(ctx: BaseCtx, claims: CapabilityClaims | null, slug: string, host: string, code: string): void {
-  if (!claims) return;
+function recordDenied(ctx: BaseCtx, claims: CapabilityClaims, slug: string, host: string, code: string): void {
   ctx.deps.credentialUsage?.record({
     slug,
     host,
@@ -101,7 +93,7 @@ function recordDenied(ctx: BaseCtx, claims: CapabilityClaims | null, slug: strin
 
 function sendDenied(
   ctx: BaseCtx,
-  claims: CapabilityClaims | null,
+  claims: CapabilityClaims,
   status: number,
   code: string,
   message: string,
@@ -128,50 +120,11 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
   }
   if (!ctx.deps.serviceCreds) return sendJson(ctx.res, 404, { error: "not_found" });
 
-  const claims = await capabilityFrom(ctx);
-  if (!claims)
-    return sendJson(ctx.res, 401, { error: "unauthorized", message: "credential-broker capability token required" });
-  if (ctx.deps.identity) {
-    await ctx.deps.identity.refresh();
-    if (ctx.deps.identity.classify(claims.actorId).type !== "internal") {
-      return sendJson(ctx.res, 401, { error: "unauthorized", message: "principal is no longer active" });
-    }
-  }
-  if (claims.aud !== CREDENTIAL_BROKER_AUD) {
-    return sendJson(ctx.res, 403, {
-      error: "forbidden",
-      message: "git credential broker requires a credential-broker capability token",
-    });
-  }
-  if (
-    !(await ctx.app.authorizesCapabilityScope({
-      actorId: claims.actorId,
-      scopeId: claims.scopeId,
-      ...(claims.scopeVersion ? { scopeVersion: claims.scopeVersion } : {}),
-      ...(claims.botActor ? { botActor: true } : {}),
-      ...(claims.liveActor ? { liveActor: true } : {}),
-      ...(claims.members ? { members: claims.members } : {}),
-    }))
-  ) {
-    return sendJson(ctx.res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
-  }
-  if (!Array.isArray(claims.credentials) || !claims.credentials.includes(slug)) {
-    return sendDenied(ctx, claims, 403, "not_entitled", "this session is not entitled to that credential", slug, "");
-  }
-
-  const orgScope = makeScopeId("org", configOrgId());
-  const rec = await ctx.deps.serviceCreds.getServiceCredentialSecret(orgScope, slug);
-  if (!rec || !rec.enabled || rec.delivery === "env") {
-    return sendDenied(
-      ctx,
-      claims,
-      404,
-      "credential_unavailable",
-      "credential not found or disabled",
-      slug,
-      rec?.host ?? "",
-    );
-  }
+  const claims = ctx.capability;
+  if (!claims) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  const grant = await grantedCredential(claims, slug, ctx.deps.serviceCreds, makeScopeId("org", configOrgId()));
+  if (!grant.rec) return sendDenied(ctx, claims, grant.status, grant.code, grant.message, slug, grant.host);
+  const { rec } = grant;
   const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>
     m.toUpperCase(),
   );

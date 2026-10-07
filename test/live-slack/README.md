@@ -6,7 +6,7 @@ runner — core (`SESSION_STORE=memory`) + Slack plugin in Socket Mode on a **CI
 pool app** (`qm dev --ci`) — then `run.ts` drives the catalog in
 `scenarios.ts` posting as a real example **user** (the "QA Human" account), so every
 message takes the exact path a teammate's would: classification, lazy directory push,
-threads, streaming `chat.update` edits.
+threading, acknowledgments, tool execution, and file delivery.
 
 ## Layout
 
@@ -20,9 +20,13 @@ threads, streaming `chat.update` edits.
 - `slack.ts` / `core.ts` — fetch-based Slack Web API + source-auth-signed core admin
   clients (transcripts via `/v1/admin/sessions`, crons via `/v1/admin/crons`).
 
-A bot reply is **final** when its text is not a live-status frame (`⚙ Working… 12s`,
-`⏳ Waiting…`, `💭 …`, trailing `▌` streaming cursor — see `src/slack/status.ts`)
-and has stopped changing for 5s.
+A bot reply is accepted after it has stopped changing for 5s and satisfies the
+scenario's content or attachment assertion. Legacy status text is ignored.
+The long-task scenario requires a bot reaction or an acknowledgment before the
+substantive answer. The audience scenario accepts an answer at the channel top
+level or in the original thread; the threading scenario still requires a thread reply.
+The performance scenario runs alone and requires successful command execution
+before evaluating its timing budgets.
 
 ## Run locally
 
@@ -74,6 +78,24 @@ Twin-only scenarios (`scenarios-twin.ts`, tag `@twin`) exercise what a live work
 can't: event redelivery (dedupe/idempotency), mid-session scope revocation, and per-method
 rate limiting. Scenarios that mutate workspace-global twin config use the `exclusive` lane
 (run alone, after the other lanes) and restore what they touched.
+
+### App access requests (`@deploy-access`)
+
+`scenarios-deploy-access.ts` drives the published-app access flow end to end on a twin:
+a stranger hits an app's subdomain, clicks _Request access_, the owner gets a DM card with
+Approve/Decline, a click (a signed `block_actions` POST to the receiver, as Slack would
+send) grants view access and DMs the requester, and the requester then reaches the app
+through the gateway. They carry the `apps-gateway` capability tag and skip unless the
+instance has the gateway configured:
+
+```sh
+export DEPLOY_APPS_DOMAIN=apps.e2e.test AWS_DEPLOY_GATE_SECRET=$(openssl rand -hex 16) \
+  DEPLOY_APPS_SESSION_SECRET=$(openssl rand -hex 16) DEPLOY_APPS_LOGIN_URL=http://localhost:8181
+```
+
+The default `docker` deploy provider needs a `docker` on PATH; a shim that runs each
+published entrypoint as a host process is enough (the scenarios publish a one-file
+`node server.mjs`).
 
 ## Tiers, triggers, quarantine
 

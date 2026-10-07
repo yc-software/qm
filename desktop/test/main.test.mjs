@@ -44,6 +44,7 @@ test(
         this.options = options;
         this.webContents = Object.assign(new EventEmitter(), {
           session,
+          getURL: () => this.url,
           send() {},
           setWindowOpenHandler: (handler) => {
             this.popup = handler;
@@ -93,6 +94,24 @@ test(
       await import("../main.mjs");
       await initialLoad.promise;
       assert.equal(windows[0].url, "https://old.example/");
+      for (const destination of ["about:blank", "https://old.example/file.pdf", "blob:https://old.example/id"]) {
+        const popup = windows[0].popup({ url: destination });
+        assert.equal(popup.action, "allow");
+        assert.equal(popup.overrideBrowserWindowOptions.webPreferences.sandbox, true);
+        assert.equal(popup.overrideBrowserWindowOptions.webPreferences.nodeIntegration, false);
+        assert.equal(popup.overrideBrowserWindowOptions.webPreferences.preload.endsWith("workspace-preload.cjs"), true);
+      }
+      assert.equal(windows[0].url, "https://old.example/");
+      assert.deepEqual(windows[0].popup({ url: "file:///tmp/private" }), { action: "deny" });
+      assert.equal(opened.length, 0);
+      const frame = { url: "https://old.example/" };
+      windows[0].webContents.mainFrame = frame;
+      const browserEvent = { sender: windows[0].webContents, senderFrame: frame };
+      await assert.rejects(handlers.get("qm:open-browser")(browserEvent, "https://evil.example/"));
+      await assert.rejects(
+        handlers.get("qm:open-browser")({ ...browserEvent, senderFrame: { url: frame.url } }, "/settings"),
+      );
+      await assert.rejects(handlers.get("qm:open-browser")(browserEvent, "https://user:pass@old.example/"));
       let prevented = false;
       windows[0].webContents.emit(
         "will-redirect",
@@ -105,8 +124,16 @@ test(
       );
       assert.equal(prevented, true);
       assert.equal(opened.length, 1);
-      const callback = (index) =>
-        `qm-desktop://auth/callback?code=test-code&state=${new URL(opened[index]).searchParams.get("state")}`;
+      assert.equal(windows[0].isDestroyed(), true);
+      windows[0].webContents.emit("will-redirect", { preventDefault() {} }, "https://old.example/auth/login");
+      assert.equal(opened.length, 1);
+      const callback = (index) => {
+        const browser = new URL(opened[index]);
+        const request = browser.searchParams.has("returnTo")
+          ? new URL(browser.searchParams.get("returnTo"), browser)
+          : browser;
+        return `qm-desktop://auth/callback?code=test-code&state=${request.searchParams.get("state")}`;
+      };
       const event = { preventDefault() {} };
       app.emit("open-url", event, callback(0));
       app.emit("open-url", event, callback(0));
@@ -127,7 +154,12 @@ test(
       assert.equal(windows[2].url, "https://new.example/");
       assert.equal(windows[2].isDestroyed(), false);
       assert.equal(flushes, 0);
-      assert.deepEqual(windows[2].popup({ url: "https://new.example/auth/trusted/login" }), { action: "deny" });
+      assert.deepEqual(
+        windows[2].popup({
+          url: "https://new.example/auth/trusted/login?returnTo=%2Fdrop%2Ftest%2Fform%3Ft%3Dtest-token",
+        }),
+        { action: "deny" },
+      );
       assert.equal(opened.length, 2);
       app.emit("open-url", event, callback(1));
       assert.equal(requests.length, 2);
@@ -135,8 +167,33 @@ test(
       requests[1].resolve({ ok: true });
       await tick();
       assert.equal(flushes, 1);
-      assert.equal(windows.at(-1).url, "https://new.example/");
+      assert.equal(windows.at(-1).url, "https://new.example/drop/test/form?t=test-token");
+      assert.equal(new URL(opened[1]).pathname, "/auth/trusted/login");
+      assert.equal(opened[1].includes("test-token"), false);
       assert.equal(windows[3].isDestroyed(), true);
+      const active = windows.at(-1);
+      const child = new BrowserWindow({});
+      child.url = "https://new.example/file.pdf";
+      active.webContents.emit("did-create-window", child);
+      let blockedChild = false;
+      child.webContents.emit(
+        "will-navigate",
+        {
+          preventDefault() {
+            blockedChild = true;
+          },
+        },
+        "file:///tmp/private",
+      );
+      assert.equal(blockedChild, true);
+      assert.equal(active.isDestroyed(), false);
+      active.webContents.emit("will-redirect", { preventDefault() {} }, "https://new.example/auth/login");
+      assert.equal(child.isDestroyed(), true);
+      const cancelled = windows.at(-1);
+      cancelled.close();
+      app.emit("open-url", event, callback(2));
+      await tick();
+      assert.equal(requests.length, 2);
       assert.deepEqual(errors, []);
     } finally {
       if (original === undefined) delete process.env.QM_DESKTOP_URL;

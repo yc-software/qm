@@ -27,6 +27,7 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
 }
 
 const CONDENSED_LINES = 2;
+const NEAR_TOP = 400;
 
 export function createTranscriptViewport() {
   let scroller: HTMLElement | null = null;
@@ -49,6 +50,7 @@ export function createTranscriptViewport() {
   let contentMax = "";
   let collapseDistance = 0;
   let geometryDistance: number | null = null;
+  let filledAtSize: number | null = null;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
@@ -64,7 +66,7 @@ export function createTranscriptViewport() {
 
   function clearPrompt(): void {
     if (content) content.scrollTop = 0;
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-condensed");
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-condensed", "latest-prompt");
     prompt?.style.removeProperty("--pin-expanded-max");
     prompt?.style.removeProperty("--pin-rest-height");
     prompt?.style.removeProperty("--pin-content-max");
@@ -132,6 +134,7 @@ export function createTranscriptViewport() {
     const edge = anchorEdge();
     if (!stuck) gap = prompt.getBoundingClientRect().top - edge;
     condense(stuck && !expanded, line - edge - (gap ?? restingGap(promptStyle)));
+    syncPrompt();
   }
 
   function anchorEdge(): number {
@@ -159,8 +162,9 @@ export function createTranscriptViewport() {
     contentHeight = content.scrollHeight;
     const inner =
       prompt.getBoundingClientRect().height -
-      (parseFloat(promptStyle.paddingTop) || 0) -
-      (parseFloat(promptStyle.paddingBottom) || 0);
+      (promptStyle.boxSizing === "border-box"
+        ? 0
+        : (parseFloat(promptStyle.paddingTop) || 0) + (parseFloat(promptStyle.paddingBottom) || 0));
     prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
     const contentStyle = getComputedStyle(content);
     const lineHeight = parseFloat(contentStyle.lineHeight) || (parseFloat(contentStyle.fontSize) || 0) * 1.5;
@@ -210,11 +214,25 @@ export function createTranscriptViewport() {
     if (movingUp) loadEarlier();
   }
 
+  function earlierButton(): HTMLButtonElement | null {
+    return scroller?.querySelector<HTMLButtonElement>(".earlier-messages-btn:not(:disabled)") ?? null;
+  }
+
   function loadEarlier(): void {
-    if (!scroller || scroller.scrollTop > 400) return;
-    const button = scroller.querySelector<HTMLButtonElement>(".earlier-messages-btn:not(:disabled)");
+    if (!scroller || scroller.scrollTop > NEAR_TOP) return;
+    const button = earlierButton();
     if (!button) return;
     cancelFollow();
+    button.click();
+  }
+
+  function fillViewport(): void {
+    const button = earlierButton();
+    if (!button || !scroller || scroller.clientHeight === 0) return;
+    if (scroller.scrollHeight - scroller.clientHeight > NEAR_TOP) return;
+    const size = (stack ?? scroller).getElementsByTagName("*").length;
+    if (size === filledAtSize) return;
+    filledAtSize = size;
     button.click();
   }
 
@@ -269,6 +287,7 @@ export function createTranscriptViewport() {
     scroller = pins = prompt = stack = content = null;
     lastTop = 0;
     following = false;
+    filledAtSize = null;
     contentUpdates.clear();
   }
 
@@ -291,6 +310,7 @@ export function createTranscriptViewport() {
           beforeRender();
           syncSticky();
           follow();
+          fillViewport();
         });
         if (scroller) observer.observe(scroller);
       }
@@ -298,12 +318,14 @@ export function createTranscriptViewport() {
     const nextStack = scroller?.querySelector<HTMLElement>(".message-stack") ?? null;
     if (stack !== nextStack) {
       changed = true;
+      filledAtSize = null;
       if (stack) observer?.unobserve(stack);
       stack = nextStack;
       if (stack) observer?.observe(stack);
     }
     const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
-    const nextPrompt = scroller?.querySelector<HTMLElement>(".message-stack .user-row:not(:has(~ .user-row))") ?? null;
+    const prompts = stack?.querySelectorAll<HTMLElement>(":scope > .user-row");
+    const nextPrompt = prompts?.item(prompts.length - 1) ?? null;
     if (pins !== nextPins) {
       changed = true;
       if (pins) observer?.unobserve(pins);
@@ -318,6 +340,7 @@ export function createTranscriptViewport() {
       promptKey = prompt?.dataset.index;
       if (prompt) observer?.observe(prompt);
     }
+    prompt?.classList.add("latest-prompt");
     const nextContent = prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
     if (content !== nextContent) {
       changed = true;
@@ -327,6 +350,7 @@ export function createTranscriptViewport() {
       if (content) observer?.observe(content);
     }
     if (changed) syncSticky();
+    fillViewport();
   }
 
   function follow(force = false): void {

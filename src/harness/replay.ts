@@ -4,6 +4,7 @@ import { messageRevision, renderMessageRevision } from "../core/message-revision
 import { CONTEXT_SUMMARY_HEADER, forModelContext, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
+import { isObj } from "../util/objects.ts";
 import { TAPE_IMPORT_MAX_ENTRIES } from "../sessions/session-store.ts";
 import type { Lease, SessionStore, TapeRecord } from "../sessions/session-store.ts";
 
@@ -187,8 +188,10 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       if (!cid) continue;
       const re = resultByCallId.get(cid);
       const name = typeof p.tool === "string" ? p.tool : "tool";
-      const { tool: _t, callId: _c, ...recorded } = p;
+      const { tool: _t, callId: _c, rerun, ...recorded } = p;
       const args = (() => {
+        const input = (rerun as { input?: unknown } | undefined)?.input;
+        if (isObj(input)) return { ...input, retrySafe: true };
         if (typeof recorded.bytes !== "number" || typeof recorded.text === "string") return recorded;
         if (recorded.action !== "post" && recorded.action !== "reach" && recorded.action !== "edit") return recorded;
         const { bytes: _b, files: recordedFiles, ...rest } = recorded;
@@ -211,8 +214,10 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
           role: "toolResult",
           toolCallId: cid,
           toolName: name,
-          content: [{ type: "text", text: String(rp.result ?? "") }],
-          isError: rp.isError === true,
+          content: [
+            { type: "text", text: rp.interrupted === true ? INTERRUPTED_TOOL_RESULT : String(rp.result ?? "") },
+          ],
+          isError: rp.isError === true || rp.interrupted === true,
           timestamp: re.createdAt,
         });
       } else {
@@ -267,7 +272,7 @@ export async function appendCoverageImport(
   });
 }
 
-function coverageImportEvent(entries: readonly SessionEntry[]): {
+export function coverageImportEvent(entries: readonly SessionEntry[]): {
   event: "legacy_import";
   messages: PiReplayMessage[];
   scopes: ScopeId[];

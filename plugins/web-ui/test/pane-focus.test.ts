@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { readFileSync } from "node:fs";
-import { focusComposerOnPaneClick, preservingFocus, replaceChildrenPreservingFocus } from "../src/pane-focus.ts";
+import {
+  focusComposerOnPaneClick,
+  focusPaneComposer,
+  preservingFocus,
+  replaceChildrenPreservingFocus,
+} from "../src/pane-focus.ts";
 
 test("re-rendered pane inputs keep focus and caret across multi-character typing", () => {
   const dom = new JSDOM('<main><div><input data-focus-key="search" value="a"></div></main>');
@@ -158,4 +163,31 @@ test("keyboard-generated clicks do not reuse the last pointer activation", () =>
   first.querySelector("textarea")!.focus();
   second.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   assert.equal(doc.activeElement, first.querySelector("textarea"));
+});
+
+test("switching the focused pane moves the caret into that pane's composer", async () => {
+  const dom = new JSDOM(
+    '<div class="a"><textarea class="composer-input"></textarea></div><div class="b"><textarea class="composer-input"></textarea></div>',
+    { pretendToBeVisual: true },
+  );
+  const doc = dom.window.document;
+  const a = doc.querySelector(".a") as HTMLElement;
+  const b = doc.querySelector(".b") as HTMLElement;
+  a.querySelector("textarea")!.focus();
+  focusPaneComposer(b);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(doc.activeElement, b.querySelector("textarea"));
+});
+
+test("pane switch leaves focus alone when it already landed inside the pane", async () => {
+  const dom = new JSDOM('<div class="b"><input class="search"><textarea class="composer-input"></textarea></div>', {
+    pretendToBeVisual: true,
+  });
+  const doc = dom.window.document;
+  const b = doc.querySelector(".b") as HTMLElement;
+  const search = doc.querySelector(".search") as HTMLInputElement;
+  search.focus();
+  focusPaneComposer(b);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(doc.activeElement, search);
 });

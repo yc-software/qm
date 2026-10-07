@@ -27,6 +27,7 @@ export interface SwarmMember {
   sandboxId?: string;
   forumSandboxId?: string;
   state: "reserved" | "ready" | "failed";
+  control?: "paused" | "stopped";
   attempts: number;
   cleanupPending?: boolean;
   error?: string;
@@ -56,6 +57,7 @@ export interface Swarm {
   template: OrchestratorInput;
   settings: SwarmSettings;
   backend: SandboxBackendName;
+  board?: { sandboxId: string };
   members: SwarmMember[];
   messages: SwarmMessage[];
   spawnRequests: Record<string, { memberIds: string[]; signature: string }>;

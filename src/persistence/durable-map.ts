@@ -3,6 +3,7 @@ import { pgTextSafe } from "../util/text.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
+  pickNested?: Partial<Record<Extract<keyof T, string>, readonly string[]>>;
   where?: { field: Extract<keyof T, string>; anyOfFold: readonly string[] };
   limit?: number;
   afterId?: string;
@@ -18,6 +19,7 @@ export interface DurableMap<T> {
   insertIfAbsent?(id: string, value: T): Promise<boolean>;
   merge(id: string, patch: Partial<T>): Promise<T | null>;
   update?(id: string, fn: (value: T) => T): Promise<T | null>;
+  mutateMany(updates: readonly { id: string; apply: (value: T | null) => T }[]): Promise<T[]>;
   deleteIf?(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
@@ -36,7 +38,7 @@ function jsonbSafe(value: unknown): unknown {
   if (typeof value === "string") return pgTextSafe(value);
   if (Array.isArray(value)) return value.map(jsonbSafe);
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = Object.create(null);
     for (const [k, v] of Object.entries(value)) out[pgTextSafe(k)] = jsonbSafe(v);
     return out;
   }
@@ -70,6 +72,11 @@ export function selectValues<T, K extends Extract<keyof T, string>>(
       if (text === null || !(folded.has(text.toLowerCase()) || !isAscii(text))) continue;
     }
     const projected = structuredClone(value) as Record<string, unknown>;
+    for (const [field, keys] of Object.entries(query.pickNested ?? {}) as Array<[string, readonly string[]]>) {
+      const nested = projected[field];
+      if (nested && typeof nested === "object" && !Array.isArray(nested))
+        projected[field] = Object.fromEntries(Object.entries(nested).filter(([key]) => keys.includes(key)));
+    }
     for (const key of query.omit ?? []) delete projected[key];
     out.push(projected as Omit<T, K>);
   }
@@ -139,6 +146,16 @@ export function createMemoryMap<T>(): DurableMap<T> {
       m.set(id, next);
       return next;
     },
+    async mutateMany(updates) {
+      const pending = new Map<string, T>();
+      const results = updates.map(({ id, apply }) => {
+        const next = apply(structuredClone(pending.get(id) ?? m.get(id) ?? null));
+        pending.set(id, next);
+        return next;
+      });
+      for (const [id, value] of pending) m.set(id, value);
+      return results;
+    },
     async deleteIf(id, predicate) {
       const value = m.get(id);
       if (value === undefined || !predicate(value)) return false;
@@ -158,7 +175,11 @@ export function createMemoryMap<T>(): DurableMap<T> {
 
 const VERSIONS_TABLE = "durable_map_versions";
 
-export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
+export function createPostgresMap<T>(
+  pg: PgPool,
+  table: string,
+  indexedFields: readonly Extract<keyof T, string>[] = [],
+): DurableMap<T> {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
     id: `durable-map/${table}/0001`,
@@ -167,11 +188,41 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
       `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
     ],
   };
-  pg.registerMigration(migration);
+  const migrations = [
+    migration,
+    ...indexedFields.flatMap((field) => {
+      if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
+      return [
+        {
+          id: `durable-map/${table}/lookup-${field.toLowerCase()}-drop`,
+          statements: [`SET LOCAL lock_timeout = '3s'`, `DROP INDEX IF EXISTS ${table}_${field.toLowerCase()}_fold`],
+        },
+        {
+          id: `durable-map/${table}/lookup-${field.toLowerCase()}-hash`,
+          statements: [
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_fold
+           ON ${table} USING hash (lower(json->>'${field}'))`,
+          ],
+        },
+        {
+          id: `durable-map/${table}/select-${field.toLowerCase()}`,
+          statements: [
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_fold
+           ON ${table} (lower(json->>'${field}'))`,
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_unicode
+           ON ${table} (id) WHERE json->>'${field}' ~ '[^\\x01-\\x7f]'`,
+          ],
+        },
+      ];
+    }),
+  ];
+  for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = pg.migrate(migration).catch((e) => {
+      readyP = (async () => {
+        for (const definition of migrations) await pg.migrate(definition);
+      })().catch((e) => {
         readyP = null;
         throw e;
       });
@@ -218,13 +269,27 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
     async select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>) {
       await ready();
       const params: unknown[] = [[...(query.omit ?? [])]];
-      let sql = `SELECT json - $1::text[] AS json FROM ${table}`;
+      let projection = "json";
+      for (const [field, keys] of Object.entries(query.pickNested ?? {})) {
+        params.push(field, keys);
+        const fieldParam = `$${params.length - 1}`;
+        const keysParam = `$${params.length}`;
+        const nested = `CASE WHEN jsonb_typeof(json->${fieldParam}) = 'object' THEN
+          COALESCE((SELECT jsonb_object_agg(key, value) FROM jsonb_each(json->${fieldParam})
+            WHERE key = ANY(${keysParam}::text[])), '{}'::jsonb) ELSE json->${fieldParam} END`;
+        projection = `(${projection} || CASE WHEN json ? ${fieldParam} THEN
+          jsonb_build_object(${fieldParam}::text, ${nested}) ELSE '{}'::jsonb END)`;
+      }
+      let sql = `SELECT ${projection} - $1::text[] AS json FROM ${table}`;
       if (query.where) {
         params.push(
           query.where.field,
           query.where.anyOfFold.map((v) => v.toLowerCase()),
         );
-        sql += ` WHERE (lower(json->>$2) = ANY($3::text[]) OR json->>$2 ~ '[^\\x01-\\x7f]')`;
+        sql += ` WHERE id IN (
+          SELECT id FROM ${table} WHERE lower(json->>$${params.length - 1}) = ANY($${params.length}::text[])
+          UNION
+          SELECT id FROM ${table} WHERE json->>$${params.length - 1} ~ '[^\\x01-\\x7f]')`;
       }
       if (query.afterId !== undefined) {
         params.push(query.afterId);
@@ -295,6 +360,28 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
         return next;
       });
     },
+    async mutateMany(updates) {
+      if (!updates.length) return [];
+      return withBump(async (client) => {
+        const rows = await client.query(
+          `SELECT id, json FROM ${table} WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`,
+          [updates.map(({ id }) => id)],
+        );
+        const current = new Map(rows.rows.map((row) => [row.id as string, row.json as T]));
+        const pending = new Map<string, T>();
+        const results = updates.map(({ id, apply }) => {
+          const next = apply(structuredClone(pending.get(id) ?? current.get(id) ?? null));
+          pending.set(id, next);
+          return next;
+        });
+        await client.query(
+          `INSERT INTO ${table} (id, json) SELECT id, json FROM jsonb_to_recordset($1::jsonb) AS batch(id text, json jsonb)
+           ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
+          [jsonbStringify([...pending].map(([id, json]) => ({ id, json })))],
+        );
+        return results;
+      });
+    },
     async deleteIf(id, predicate) {
       return withBump(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
@@ -314,11 +401,15 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
 }
 
 export interface PostgresArtifactMaps {
-  map<T>(table: string): DurableMap<T>;
+  map<T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T>;
   pool: PgPool;
 }
 
 export function createPostgresMapFactory(connectionString: string): PostgresArtifactMaps {
   const pg = createPgPool(connectionString);
-  return { map: <T>(table: string): DurableMap<T> => createPostgresMap<T>(pg, table), pool: pg };
+  return {
+    map: <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
+      createPostgresMap<T>(pg, table, indexedFields),
+    pool: pg,
+  };
 }

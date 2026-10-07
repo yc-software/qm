@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { mintSignedPayload } from "../auth/signed-token.ts";
-import { signedRequestHeaders } from "../auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";

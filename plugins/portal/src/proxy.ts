@@ -1,5 +1,6 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
+import { withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const IDENTITY_TTL_MS = 60_000;
@@ -75,6 +76,7 @@ function relay(
           continue;
         out[k] = v;
       }
+      if (out.vary !== undefined) out.vary = withVary(res, String(out.vary));
       if (target.honorFramePolicy && declaresFrameAncestors(out)) res.removeHeader("x-frame-options");
       res.writeHead(upRes.statusCode ?? 502, out);
       upRes.on("error", () => res.destroy());

@@ -57,7 +57,7 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
       const tar = await makeTar(
         list.map((e) => ({ path: e.path, data: e.data, ...(e.mode !== undefined ? { mode: e.mode } : {}) })),
       );
-      const tmp = ".extract.tar";
+      const tmp = `.extract-${randomBytes(16).toString("hex")}.tar`;
       await writeInline(handle.id, posixJoin(handle.rootDir, tmp), tar, tmp);
       const r = await exec(
         handle.id,

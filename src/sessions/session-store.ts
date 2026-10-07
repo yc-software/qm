@@ -1,3 +1,4 @@
+import { memoryContextPayload } from "../memory/context-boundary.ts";
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
 import { sleep } from "../util/async.ts";
@@ -53,8 +54,12 @@ export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow
   let latest: ContextSummaryPayload | null = null;
   for (const entry of entries) latest = contextSummaryPayload(entry) ?? latest;
   const throughSeq = latest?.throughSeq;
+  const memoryContext = entries.findLast((entry) => memoryContextPayload(entry));
   return {
-    entries: throughSeq === undefined ? [...entries] : entries.filter((entry) => entry.seq > throughSeq),
+    entries:
+      throughSeq === undefined
+        ? [...entries]
+        : entries.filter((entry) => entry.seq > throughSeq || entry === memoryContext),
     totalEntries: entries.length,
     hasSecurityTaint: entries.some(entrySecurityTainted),
   };
@@ -249,7 +254,7 @@ export async function appendEntryOutsideTurn(
 
 export const TAPE_IMPORT_MAX_ENTRIES = 500;
 
-export interface TapeMeta {
+interface TapeMeta {
   bareText?: string;
   ts?: string;
   changeTime?: string;
@@ -301,11 +306,11 @@ interface ListLlmRequestsOptions {
 
 export interface SessionPage {
   limit: number;
-  offset: number;
   before?: { lastActivity: number; id: string };
   category?: SessionCategory;
   origin?: SessionOriginFilter;
   cronId?: string;
+  signal?: AbortSignal;
 }
 
 export interface CronGroupSummary {
@@ -334,6 +339,19 @@ export interface ScopeSessionStats {
   byTypeAll: Record<string, number>;
   totalByCategory: Record<SessionCategory | "all", number>;
   crons: number;
+}
+
+export interface SpendRow {
+  day: number;
+  model: string | null;
+  scopeId: ScopeId;
+  origin: SessionOrigin;
+  calls: number;
+  costUsd: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 export interface LlmCallUsage {
@@ -564,12 +582,15 @@ export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntr
   return entries.filter((e) => e.type !== "soul");
 }
 
-export const TRANSCRIPT_BYTE_BUDGET = 400_000;
 export const ENTRY_STRING_BUDGET = 2_000;
 
 export type TranscriptEntry = SessionEntry & { truncated?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
+const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
+  user: new Set(["environment", "memoryRecall"]),
+  thinking: new Set(["thinkingSignature"]),
+};
 const WALK_DEPTH = 8;
 
 function shortenStrings(value: unknown, depth: number): { value: unknown; truncated: boolean } {
@@ -607,7 +628,16 @@ function postsToTheConversation(entry: SessionEntry): boolean {
   return entry.type === "tool_call" && p?.action === "post";
 }
 
+function withoutModelContext(entry: SessionEntry, fields: ReadonlySet<string>): TranscriptEntry {
+  const payload = entry.payload;
+  if (!payload || typeof payload !== "object" || !Object.keys(payload).some((k) => fields.has(k))) return entry;
+  const visible = Object.fromEntries(Object.entries(payload).filter(([k]) => !fields.has(k)));
+  return { ...entry, payload: visible, truncated: true };
+}
+
 function projectEntry(entry: SessionEntry): TranscriptEntry {
+  const modelOnly = MODEL_ONLY_FIELDS[entry.type];
+  if (modelOnly) return withoutModelContext(entry, modelOnly);
   if (!PROJECTED_TYPES.has(entry.type) || postsToTheConversation(entry)) return entry;
   const walked = shortenStrings(entry.payload, 0);
   return walked.truncated ? { ...entry, payload: walked.value, truncated: true } : entry;
@@ -654,21 +684,7 @@ export function windowedTranscript(
       }
     }
   }
-  const windowed = (cut > 0 ? entries.slice(cut) : entries).map(projectEntry);
-  if (window === undefined || window.sinceSeq !== undefined) return { entries: windowed, earlier: cut };
-  let spend = 0;
-  let from = windowed.length;
-  while (from > 0) {
-    const bytes = payloadBytes(windowed[from - 1]!.payload, 0);
-    if (spend + bytes > TRANSCRIPT_BYTE_BUDGET && from < windowed.length) break;
-    spend += bytes;
-    from--;
-  }
-  if (from > 0) {
-    const boundary = windowed.findIndex((e, i) => i >= from && e.type === "user");
-    if (boundary > 0) from = boundary;
-  }
-  return { entries: from > 0 ? windowed.slice(from) : windowed, earlier: cut + from };
+  return { entries: (cut > 0 ? entries.slice(cut) : entries).map(projectEntry), earlier: cut };
 }
 
 export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {
@@ -713,13 +729,17 @@ export interface SessionStore {
   forceReleaseLease(sessionId: string): Promise<void>;
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
+  appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
+  getRecentEntries(sessionIds: readonly string[], lookback: number): Promise<Map<string, SessionEntry[]>>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  canReadTranscriptSuffix(sessionId: string, beforeSeq: number): Promise<boolean>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
   clearSecurityTaint(sessionId: string): Promise<boolean>;
 
+  appendTapeMany(lease: Lease, records: readonly NewTapeRecord[]): Promise<TapeRecord[]>;
   appendTape(lease: Lease, rec: NewTapeRecord): Promise<TapeRecord>;
   getTape(sessionId: string, opts?: GetTapeOptions): Promise<TapeRecord[]>;
   tapeCoverage(sessionId: string): Promise<number>;
@@ -766,12 +786,7 @@ export interface SessionStore {
 
   distinctScopes(): Promise<DistinctScope[]>;
 
-  scopeSessionSummaries(
-    scope: ScopeId,
-    orgWide: boolean,
-    page?: SessionPage,
-    sessionIds?: string[],
-  ): Promise<SessionSummary[]>;
+  scopeSessionSummaries(scope: ScopeId, orgWide: boolean, page: SessionPage): Promise<SessionSummary[]>;
 
   lastUserMessages(sessionIds: string[]): Promise<Map<string, string>>;
 
@@ -788,6 +803,12 @@ export interface SessionStore {
   ): Promise<ScopeSessionStats>;
 
   attributedTurns(): Promise<AttributedTurn[]>;
+
+  spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
+
+  spendReport?(range: { from: number; to: number }): Promise<{ rows: SpendRow[]; asOf?: number }>;
+
+  refreshSpendRollup?(): Promise<void>;
 
   listParticipants(): Promise<ParticipantWindow[]>;
 

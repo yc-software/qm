@@ -10,6 +10,7 @@ import { scopeId } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -110,10 +111,12 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   const bob = { externalId: "BOB" };
   const alice = { externalId: "ALICE" };
   const room = scopeId("channel", "C-owner-auth");
+  await selectDefaultSandbox(built, "BOB", room);
   const conversation = {
     kind: "channel" as const,
     threadRef: "ch:C-owner-auth:cron",
     channelRef: "C-owner-auth",
+    isPrivate: true,
     audience: [bob, alice],
   };
   const npm = await built.keychain!.save({ ownerId: "BOB", service: "npm", secret: "npm_BOB", envKey: "NPM_TOKEN" });
@@ -347,7 +350,15 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
       triggered: true,
       ownerKeychainUnion: true,
     }),
-    /persistent control-plane deletion failure/,
+    (error: Error) => {
+      assert.equal(error.message, "Disposable sandbox destruction failed");
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(
+        error.errors.map((attempt: Error) => attempt.message),
+        Array(3).fill("persistent control-plane deletion failure"),
+      );
+      return true;
+    },
   );
   built.sandbox.teardown = realTeardown;
   assert.ok(stranded);
@@ -408,6 +419,7 @@ test("cutover policy retains legacy files only in prefer-ephemeral mode", async 
     },
   );
   const room = scopeId("channel", "C-acmecli-fallback");
+  await selectDefaultSandbox(built, actor.externalId, room);
   await built.keychain!.save({
     ownerId: room,
     service: "acmecli",
@@ -423,6 +435,7 @@ test("cutover policy retains legacy files only in prefer-ephemeral mode", async 
   const conversation = {
     kind: "channel" as const,
     channelRef: "C-acmecli-fallback",
+    isPrivate: true,
     audience: [actor],
   };
 
@@ -506,6 +519,7 @@ test("a nonlegacy policy never places brokered STS on a shared room", async () =
     },
   );
   const room = scopeId("channel", "C-acmecli-flag-off");
+  await selectDefaultSandbox(built, actor.externalId, room);
   await built.keychain!.save({
     ownerId: room,
     service: "acmecli",

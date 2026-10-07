@@ -1,4 +1,26 @@
+import { isObj } from "../util/objects.ts";
 import { LRUCache } from "lru-cache";
+
+export const SLACK_STATUS_TASK_PREFIX = "qm_status:";
+
+export function isOwnStatusCard(
+  message: { user?: string; bot_id?: string; blocks?: unknown[] },
+  botUserId: string,
+  ownBotId = "",
+): boolean {
+  const own = (botUserId && message.user === botUserId) || (ownBotId && message.bot_id === ownBotId);
+  return Boolean(
+    own &&
+    Array.isArray(message.blocks) &&
+    message.blocks.some(
+      (block) =>
+        isObj(block) &&
+        block.type === "task_card" &&
+        typeof block.task_id === "string" &&
+        block.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
+    ),
+  );
+}
 
 export function mentionsBot(text: string, botUserId: string): boolean {
   return botUserId ? text.includes(`<@${botUserId}>`) : false;
@@ -201,8 +223,10 @@ export async function maybeInterceptStop(opts: {
   threadRef: string;
   getInFlightRun: (threadRef: string) => string | undefined | Promise<string | undefined>;
   signalAbort: (runId: string) => Promise<void>;
+  stopConversation?: (threadRef: string) => Promise<boolean>;
 }): Promise<boolean> {
   if (!isBareStop(opts.text)) return false;
+  if (opts.stopConversation) return opts.stopConversation(opts.threadRef);
   const runId = await opts.getInFlightRun(opts.threadRef);
   if (!runId) return false;
   await opts.signalAbort(runId);

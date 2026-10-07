@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { createServer } from "vite";
+import { inboxRuntime } from "./inbox-composer-fixture.ts";
 import type { LedgerItem } from "../src/inbox.ts";
 
 test("Sent opens from a split pane and retains drafts and queued sends after navigation", async () => {
@@ -25,6 +26,9 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
     "HTMLElement",
     "Node",
     "DOMParser",
+    "CustomEvent",
+    "Event",
+    "customElements",
   ])
     Object.defineProperty(globalThis, key, {
       configurable: true,
@@ -34,6 +38,11 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
     configurable: true,
     value: dom.window.getComputedStyle.bind(dom.window),
   });
+  Object.defineProperty(globalThis, "requestAnimationFrame", {
+    configurable: true,
+    value: (fn: FrameRequestCallback) => setTimeout(() => fn(Date.now()), 0),
+  });
+  Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: clearTimeout });
   const originalFetch = globalThis.fetch;
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   const waitFor = async (condition: () => boolean): Promise<void> => {
@@ -76,6 +85,14 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
     let releaseEdit: (() => void) | undefined;
     globalThis.fetch = async (input, options) => {
       const url = String(input);
+      if (url.includes("runtime-config")) return Response.json({ ...inboxRuntime, scopeId: "personal:sam" });
+      if (url.endsWith("/followup")) {
+        const followup = JSON.parse(String(options?.body));
+        assert.equal(followup.message, "Send it");
+        assert.equal(followup.expectedProposalAt, ledger.proposal!.at);
+        ledger.state = "actioned";
+        return Response.json({ item: ledger });
+      }
       if (url === "/api/inbox") return Response.json({ loop: { id: "loop-1" }, syncCron: null });
       if (url === "/api/loops/loop-1/items") return Response.json({ items: [] });
       if (url.startsWith("/api/inbox/sent?"))
@@ -159,7 +176,7 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
       header.dispatchEvent(new dom.window.Event("input"));
     }
     [...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent!.trim() === "Send reply")!
+      .find((button) => button.textContent!.trim() === "Send it")!
       .click();
     inbox.selectInboxView("all");
     inbox.drawAll();
@@ -168,13 +185,13 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
     await waitFor(() => ledger.state === "actioned");
     assert.deepEqual(
       actions.map((action) => action.kind),
-      ["edit", "edit", "edit", "send"],
+      ["edit", "edit", "edit", "edit"],
     );
     assert.equal(actions.at(-1)!.args.proposal.body, "Send the latest version");
-    assert.equal(actions.at(-1)!.args.expectedProposalAt, ledger.proposal!.at);
+    assert.equal(actions.at(-1)!.args.expectedProposalAt, ledger.proposal!.at - 1);
     assert.deepEqual(actions.at(-1)!.args.proposal.to, [recipients]);
     assert.deepEqual(actions.at(-1)!.args.proposal.cc, [recipients]);
-    await waitFor(() => inbox.inboxState.notice === "Reply sent by email.");
+    assert.equal(ledger.state, "actioned");
     inbox.resetInboxState();
     assert.deepEqual(domErrors, []);
   } finally {

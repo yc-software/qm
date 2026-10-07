@@ -38,6 +38,19 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     await settle();
     assert.match(element.textContent ?? "", /Add to Slack/);
     assert.doesNotMatch(element.textContent ?? "", /QM added to Slack/);
+    const browserUrls: string[] = [];
+    Object.assign(window, {
+      qmDesktop: {
+        openBrowser: async (url: string) => {
+          browserUrls.push(url);
+        },
+      },
+    });
+    element.querySelector<HTMLButtonElement>("button")!.click();
+    await settle();
+    assert.deepEqual(browserUrls, ["/admin/slack-settings?slack=install"]);
+    assert.equal(launches.length, 0);
+    Reflect.deleteProperty(window, "qmDesktop");
     let submitted: HTMLFormElement | undefined;
     const popupDocument = document.implementation.createHTMLDocument();
     const createElement = popupDocument.createElement.bind(popupDocument);

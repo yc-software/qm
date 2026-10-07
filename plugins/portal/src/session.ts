@@ -33,6 +33,7 @@ export interface SessionClaims {
   name?: string;
   auth?: number;
   anon?: boolean;
+  appOnly?: boolean;
   iat: number;
   exp: number;
 }
@@ -74,6 +75,7 @@ export function openSession(
     typeof p.exp !== "number"
   )
     return null;
+  if (p.appOnly !== undefined && typeof p.appOnly !== "boolean") return null;
   if (expectedOrg !== undefined && p.org !== expectedOrg) return null;
   if (now >= p.exp * 1000) return null;
   const authenticatedAt = typeof p.auth === "number" ? p.auth : p.iat;
@@ -132,6 +134,19 @@ export function clearCookie(name: string, path: string, secure: boolean, domain?
   if (domain) parts.push(`Domain=${domain}`);
   if (secure) parts.push("Secure");
   return parts.join("; ");
+}
+
+export function sessionCookieHeaders(value: string, attrs: CookieOpts): string[] {
+  return [
+    setCookie("portal_session", value, attrs),
+    setCookie("portal_session_x", value, { ...attrs, sameSite: "None" }),
+    ...(attrs.domain
+      ? [
+          clearCookie("portal_session", attrs.path ?? "/", attrs.secure),
+          clearCookie("portal_session_x", attrs.path ?? "/", attrs.secure),
+        ]
+      : []),
+  ];
 }
 
 export function readCookie(header: string | undefined, name: string): string | null {

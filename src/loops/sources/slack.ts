@@ -31,6 +31,7 @@ interface SlackMeta {
   channelLabel?: string;
   ts: string;
   threadTs?: string;
+  isDirectMessage?: boolean;
 }
 
 function parseSlackMeta(v: unknown): SlackMeta | undefined {
@@ -40,23 +41,33 @@ function parseSlackMeta(v: unknown): SlackMeta | undefined {
   if (!channelId || !ts) return undefined;
   const channelLabel = clipOpt(v.channelLabel, 120);
   const threadTs = clipOpt(v.threadTs, 40);
-  return { channelId, ts, ...(channelLabel ? { channelLabel } : {}), ...(threadTs ? { threadTs } : {}) };
+  return {
+    channelId,
+    ts,
+    ...(channelLabel ? { channelLabel } : {}),
+    ...(threadTs ? { threadTs } : {}),
+    ...(typeof v.isDirectMessage === "boolean" ? { isDirectMessage: v.isDirectMessage } : {}),
+  };
 }
 
 function metaOf(item: LoopItem): SlackMeta | undefined {
   return parseSlackMeta(item.sourcePayload?.slack);
 }
 
-export function slackConversationRef(channelId: string, ts: string, threadTs?: string): string {
-  const dm = channelId.startsWith("D") || channelId.startsWith("G");
-  return dm ? channelId : `${channelId}:${threadTs ?? ts}`;
+export function slackConversationRef(
+  channelId: string,
+  ts: string,
+  threadTs?: string,
+  isDirectMessage = channelId.startsWith("D"),
+): string {
+  return isDirectMessage && !threadTs ? channelId : `${channelId}:${threadTs ?? ts}`;
 }
 
 export function slackReplyThreadTs(item: LoopItem): string | undefined {
   const slack = metaOf(item);
   if (!slack) return undefined;
   if (slack.threadTs) return slack.threadTs;
-  const dm = slack.channelId.startsWith("D") || slack.channelId.startsWith("G");
+  const dm = slack.isDirectMessage ?? slack.channelId.startsWith("D");
   return dm ? undefined : slack.ts;
 }
 
@@ -166,7 +177,7 @@ export const slackAdapter: LoopSourceAdapter = {
     if (!rawKey) return { error: "sourceKey required" };
     const slack = parseSlackMeta(raw.slack);
     if (!slack) return { error: "slack items need slack.channelId and slack.ts" };
-    const dedupeKey = slackConversationRef(slack.channelId, slack.ts, slack.threadTs);
+    const dedupeKey = slackConversationRef(slack.channelId, slack.ts, slack.threadTs, slack.isDirectMessage);
     const draft = raw.draft === undefined ? undefined : parseReplyDraft(raw.draft);
     if (draft === null) return { error: "draft needs a string body" };
     const entry: ParsedEntry = {
@@ -181,7 +192,12 @@ export const slackAdapter: LoopSourceAdapter = {
   matchesEvent(item, conversationRef) {
     const slack = metaOf(item);
     if (!slack) return false;
-    return slackConversationRef(slack.channelId, slack.ts, slack.threadTs) === conversationRef;
+    return (
+      slackConversationRef(slack.channelId, slack.ts, slack.threadTs, slack.isDirectMessage) === conversationRef ||
+      (!slack.threadTs &&
+        (slack.isDirectMessage ?? slack.channelId.startsWith("D")) &&
+        conversationRef === `${slack.channelId}:${slack.ts}`)
+    );
   },
   parseProposal(raw) {
     const draft = parseReplyDraft(raw);

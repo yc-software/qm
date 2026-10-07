@@ -1,8 +1,9 @@
+import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
-import { api } from "./core-bridge";
+import { api, fetchUiState, putUiState, withBase } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { BookOpen, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
+import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./ui";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
@@ -16,7 +17,7 @@ const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
 
-const QM_ABOUT_URL = "https://github.com/yc-software/qm";
+const QM_MAC_DOWNLOAD_URL = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
 
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode }> = [
   { value: "light", label: "Light", glyph: Sun },
@@ -229,6 +230,70 @@ function themeRow(): TemplateResult {
   `;
 }
 
+const OPEN_NEW_CHAT_KEY = "open-new-chat";
+let openNewChat = false;
+let openNewChatTouched = false;
+
+export async function loadOpenNewChat(timeoutMs = 2000): Promise<boolean> {
+  const fetched = fetchUiState(OPEN_NEW_CHAT_KEY).then(
+    (rec) => {
+      if (!openNewChatTouched) {
+        openNewChat = rec.value === true;
+        drawSettings();
+      }
+      return openNewChat;
+    },
+    () => null,
+  );
+  let timer = 0;
+  const value = await Promise.race([
+    fetched,
+    new Promise<null>((resolve) => {
+      timer = window.setTimeout(() => resolve(null), timeoutMs);
+    }),
+  ]);
+  window.clearTimeout(timer);
+  return value ?? false;
+}
+
+function setOpenNewChat(value: boolean): void {
+  openNewChatTouched = true;
+  openNewChat = value;
+  drawSettings();
+  void putUiState(OPEN_NEW_CHAT_KEY, value, Date.now()).catch(() => void 0);
+}
+
+const OPEN_OPTIONS: Array<{ newChat: boolean; label: string }> = [
+  { newChat: false, label: "Last session" },
+  { newChat: true, label: "New chat" },
+];
+
+function openBehaviorRow(): TemplateResult {
+  return html`
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <div class="settings-row-title">When QM opens</div>
+        <div class="settings-row-note">Reopen the conversations you had open last time, or start on a new chat.</div>
+      </div>
+      <div class="settings-choice" role="radiogroup" aria-label="When QM opens">
+        ${OPEN_OPTIONS.map(
+          (option) => html`
+            <button
+              class="settings-choice-option ${openNewChat === option.newChat ? "selected" : ""}"
+              type="button"
+              role="radio"
+              aria-checked=${openNewChat === option.newChat ? "true" : "false"}
+              @click=${() => setOpenNewChat(option.newChat)}
+            >
+              <span>${option.label}</span>
+            </button>
+          `,
+        )}
+      </div>
+    </div>
+  `;
+}
+
 const SURFACE_OPTIONS: Array<{ webOnly: boolean; label: string }> = [
   { webOnly: false, label: "All conversations" },
   { webOnly: true, label: "Web only" },
@@ -387,17 +452,15 @@ function adminRow(): TemplateResult {
   `;
 }
 
-function aboutRow(): TemplateResult {
+function desktopRow(): TemplateResult {
   return html`
     <div class="settings-row">
       <div class="settings-row-copy">
-        <div class="settings-row-title">Learn more about QM</div>
-        <div class="settings-row-note">
-          Why Y Combinator built this open-source agent harness, and how to run your own.
-        </div>
+        <div class="settings-row-title">Desktop app</div>
+        <div class="settings-row-note">QM for Mac. Requires Apple Silicon and macOS 13 or later.</div>
       </div>
-      <a class="btn settings-row-action" href=${QM_ABOUT_URL} target="_blank" rel="noreferrer noopener">
-        ${icon(BookOpen, 15)}<span>Read the announcement</span>${icon(ExternalLink, 14)}
+      <a class="btn settings-row-action" href=${QM_MAC_DOWNLOAD_URL} target="_blank" rel="noreferrer noopener">
+        ${icon(Download, 15)}<span>Download for Mac</span>
       </a>
     </div>
   `;
@@ -426,10 +489,19 @@ function settingsPane(): TemplateResult {
       <h1 class="pane-title">Settings</h1>
     </div>
     <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${aboutRow()}
-      ${accountRow()}
+      ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${sidebarSurfaceRow()}
+      ${can("admin") ? adminRow() : nothing} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+      </div>
+      <div class="settings-row">
+        <qm-onboarding-welcome
+          .me=${appState.me}
+          .setupOnly=${true}
+          .widget=${"apps"}
+          .returnKey=${"settings"}
+          .base=${withBase("")}
+        ></qm-onboarding-welcome>
       </div>
     </div>
   `;

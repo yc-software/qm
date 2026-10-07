@@ -22,22 +22,27 @@ import {
   setTriggerRecipientConsent,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
+import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
+  runtime?: Cron["runtime"];
   enabled?: boolean;
   schedule: Cron["schedule"];
   title?: string;
   action?: string;
   message?: string;
   runAs?: Cron["runAs"];
+  ownerResourcesRequireOpen?: boolean;
   members?: Principal[];
   unattendedGrants?: string[];
   loopId?: string;
+  sessionRef?: string;
 }
 
 export interface CronPatch {
+  runtime?: Cron["runtime"];
   title?: string;
   action?: string;
   message?: string;
@@ -47,7 +52,9 @@ export interface CronPatch {
   destination?: Destination;
   members?: Principal[];
   runAs?: Cron["runAs"];
+  ownerResourcesRequireOpen?: boolean;
   unattendedGrants?: string[];
+  sessionRef?: string | null;
 }
 
 export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
@@ -84,6 +91,16 @@ export interface CronStore {
   due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
 }
 
+export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
+  if (!cron.enabled || cron.archived) return false;
+  const oneShot = cron.schedule.cron === undefined && cron.schedule.everyMs === undefined;
+  return !(oneShot && cron.lastFiredAt !== undefined);
+}
+
+export function cronTiedTo(cron: Pick<Cron, "destination" | "sessionRef">, threadRef: string): boolean {
+  return cron.destination?.target === threadRef || cron.sessionRef === threadRef;
+}
+
 export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean {
   return cron.deferUntil !== undefined && now < cron.deferUntil;
 }
@@ -103,6 +120,7 @@ export function createCronStore(
   return {
     async create(input) {
       assertNoEscalation(input);
+      assertCronRuntime(input);
       const now = Date.now();
       const title = normalizeTitle(input.title);
       const { schedule, nextFireAt } = normalizeSchedule(input.schedule, now);
@@ -118,6 +136,8 @@ export function createCronStore(
         contentPart(input.unattendedGrants),
         contentPart(title),
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
+        ...(input.ownerResourcesRequireOpen ? [contentPart("owner-resources-require-open")] : []),
+        ...(input.runtime ? [contentPart(input.runtime)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -128,15 +148,22 @@ export function createCronStore(
         ...(input.action !== undefined ? { action: input.action } : {}),
         ...(input.message !== undefined ? { message: input.message } : {}),
         ...(input.runAs ? { runAs: input.runAs } : {}),
+        ...(input.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
         ...(input.members ? { members: input.members } : {}),
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
         ...(input.loopId ? { loopId: input.loopId } : {}),
+        ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
+        ...(input.runtime ? { runtime: input.runtime } : {}),
       }));
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
     async update(id, patch) {
+      const before = await backing.get(id);
+      if (!before) return null;
+      assertCronRuntime({ ...before, ...patch });
       const fields: Partial<Cron> = {};
+      if (patch.runtime !== undefined) fields.runtime = patch.runtime;
       if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
       if (patch.action !== undefined) fields.action = patch.action;
       if (patch.message !== undefined) fields.message = patch.message;
@@ -151,7 +178,9 @@ export function createCronStore(
       if (patch.archived === true) fields.enabled = false;
       if (patch.members !== undefined) fields.members = patch.members;
       if (patch.runAs !== undefined) fields.runAs = patch.runAs;
+      if (patch.ownerResourcesRequireOpen === true) fields.ownerResourcesRequireOpen = true;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
+      if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
       return backing.merge(id, fields);
     },
     delete: (id) => backing.delete(id),

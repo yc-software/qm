@@ -149,7 +149,7 @@ test("shared harness security screens use auxiliary coordinates", async () => {
 
 test("harness adapters rehydrate the open goal from history into the tool context", async () => {
   const { createGoalRecord } = await import("../src/harness/goal.ts");
-  const goal = createGoalRecord({ objective: "carry the goal across turns", source: "tool" });
+  const goal = createGoalRecord({ objective: "carry the goal across turns" });
   const history = [
     { type: "system", payload: { kind: "goal", goal }, seq: 0 },
   ] as unknown as HarnessTurnInput["history"];

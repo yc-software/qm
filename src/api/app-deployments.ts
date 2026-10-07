@@ -1,3 +1,8 @@
+import { validEmail } from "../identity/external-members.ts";
+import { createMemoryAdvisoryLock } from "../persistence/advisory-lock.ts";
+import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../admin/invite-email.ts";
+import { deploymentShareScope } from "../deploy/email-access.ts";
+import { errMessage } from "../util/errors.ts";
 import type { Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
 
@@ -15,6 +20,7 @@ export function createDeploymentMethods(
   | "listDeployments"
   | "getDeployment"
   | "shareDeployment"
+  | "inviteToDeployment"
   | "deploymentGrantees"
   | "listDeploymentsForViewer"
   | "effectiveDeploymentPermission"
@@ -27,6 +33,7 @@ export function createDeploymentMethods(
   | "setDeploymentDisplayName"
   | "setDeploymentAlwaysOn"
   | "setDeploymentEmbedAncestors"
+  | "setDeploymentPublic"
   | "keepAlwaysOnWarm"
   | "reachDeployment"
   | "deploymentLogsFor"
@@ -41,6 +48,7 @@ export function createDeploymentMethods(
   | "attachScope"
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
+  const invitationLock = deps.advisoryLock ?? createMemoryAdvisoryLock();
   return {
     deploy(input) {
       return deps.deploy.deploy(input);
@@ -56,6 +64,54 @@ export function createDeploymentMethods(
     },
     shareDeployment(idOrName, grantee, permission, actor) {
       return deps.deploy.shareDeployment(idOrName, grantee, permission, actor);
+    },
+    async inviteToDeployment(idOrName, rawEmail, actorId) {
+      const email = rawEmail.trim().toLowerCase();
+      if (!validEmail(email)) throw new Error("a valid email address is required");
+      const grantee = await deploymentShareScope(`personal:${email}`, "read");
+      const deployment = await deps.deploy.getDeployment(idOrName);
+      if (!deployment) throw new Error(`no such app: ${idOrName}`);
+      if (deployment.ownerScopeId !== `personal:${actorId}`)
+        throw new Error(`only the owner can change who can reach "${deployment.name ?? deployment.id}"`);
+      return invitationLock.withLock(`deployment-invite:${deployment.id}:${email}`, async () => {
+        const previous = await deps.deploy.deploymentGrantees(deployment.id);
+        const alreadyShared = previous.some((g) => g.scope === grantee);
+        const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
+          ? previous
+          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId });
+        const appUrl = deps.deployAppsDomain
+          ? `https://${deployment.name ?? deployment.id}.${deps.deployAppsDomain}/`
+          : undefined;
+        if (alreadyShared)
+          return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
+        let emailSent = false;
+        let emailProblem: string | undefined;
+        if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
+        else if (!appUrl)
+          emailProblem = "app URLs are not configured (set DEPLOY_APPS_DOMAIN); share the app link manually";
+        else {
+          try {
+            await deps.inviteMailer.send({
+              to: email,
+              ...renderInviteEmail({
+                to: email,
+                brandName: deployment.displayName ?? deployment.name ?? "a shared app",
+                invitedBy: actorId,
+                signInUrl: appUrl,
+                expiresAt: null,
+                magicLink: false,
+              }),
+            });
+            emailSent = true;
+          } catch (e) {
+            emailProblem = errMessage(e);
+          }
+        }
+        return {
+          grantees,
+          invitation: { emailSent, ...(emailProblem ? { emailProblem } : {}), ...(appUrl ? { appUrl } : {}) },
+        };
+      });
     },
     deploymentGrantees(idOrName) {
       return deps.deploy.deploymentGrantees(idOrName);
@@ -100,6 +156,9 @@ export function createDeploymentMethods(
     },
     setDeploymentEmbedAncestors(id, embedAncestors) {
       return deps.deploy.setDeploymentEmbedAncestors(id, embedAncestors);
+    },
+    setDeploymentPublic(idOrName, isPublic, actor) {
+      return deps.deploy.setDeploymentPublic(idOrName, isPublic, actor);
     },
     keepAlwaysOnWarm() {
       return deps.deploy.keepAlwaysOnWarm();

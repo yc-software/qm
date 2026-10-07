@@ -43,7 +43,7 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     composer.indexOf("function normalizeLoadoutEntry"),
     composer.indexOf("function seededLoadout"),
   );
-  assert.ok(normalize.includes("effortLevelsForHarness(option.harnessId)"));
+  assert.ok(normalize.includes("effortLevelsForHarness(option.harnessId, option.model)"));
   assert.ok(/levels.some\([\s\S]*?\? entry.effort/.test(normalize));
   assert.ok(apply.includes("normalizeLoadoutEntry(entry, option)"));
   assert.ok(
@@ -52,7 +52,7 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     ),
     "a stored Fast preference cannot enable an unsupported model",
   );
-  assert.ok(apply.includes("saveLoadout(loadout)"));
+  assert.ok(apply.includes("saveLoadout(loadout, loadoutKey)"));
 });
 
 test("attaching files is allowed while a turn is streaming", () => {

@@ -1,7 +1,15 @@
 import { migrateInbox } from "../../loops/inbox-migration.ts";
+import { canonicalPerson } from "../../directory/person.ts";
 import { scopeId, type Loop } from "../../types.ts";
 import { ensureDefaultInboxLoops, findInboxLoop } from "../../loops/inbox-loop.ts";
-import { ledgerItemView } from "../../loops/ledger-view.ts";
+import {
+  compareKeys,
+  consolidates,
+  isResolved,
+  ledgerItemView,
+  prioritizes,
+  triageKeys,
+} from "../../loops/ledger-view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
 import { sendJson } from "../http.ts";
 import { actingPrincipal, canAdministerLoop, loopDeps } from "./loops.ts";
@@ -49,7 +57,19 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   }
   const selected = ids.flatMap((value) => available.filter((loop) => loop.id === value));
   const selectedIds = selected.map((loop) => loop.id);
-  const summaries = (await deps.items.summaries(selectedIds)).filter(
+  if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh) {
+    const mailLoops = selected.filter(
+      (loop) =>
+        loop.owner === acting.actorId &&
+        (loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) &&
+        (!loop.sources?.length || loop.sources.includes("gmail")),
+    );
+    const mail = (await Promise.all(mailLoops.map((loop) => deps.items.byLoop(loop.id))))
+      .flat()
+      .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
+    await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
+  }
+  const summaries = (await deps.items.summaries(selectedIds, { includeEmailClassification: true })).filter(
     (item) => selectedIds.includes(item.loopId) && item.inboxPreview?.sentChat !== true,
   );
   const itemId = ctx.url.searchParams.get("itemId");
@@ -57,33 +77,55 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     const item = await deps.items.get(itemId);
     if (!item || !selectedIds.includes(item.loopId)) return sendJson(ctx.res, 404, { error: "not_found" });
     return sendJson(ctx.res, 200, {
-      item: ledgerItemView(item),
+      item: ledgerItemView(
+        item,
+        selected.find((loop) => loop.id === item.loopId)!,
+      ),
       outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === item.loopId),
     });
   }
+  const requestedFilter = ctx.url.searchParams.get("filter");
+  if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
+    return sendJson(ctx.res, 400, { error: "invalid_filter" });
+  const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(acting.actorId, "inbox-filter")))?.value;
+  const inboxFilter = savedFilter === "all" || savedFilter === "triaged" ? savedFilter : "human";
   const handled = ctx.url.searchParams.get("view") === "handled";
   const sent = ctx.url.searchParams.get("view") === "sent";
   const filter = ctx.url.searchParams.get("loopId");
-  const attention = summaries.filter(
-    (item) => item.status === "ready" || (item.status === "failed" && item.parkedReason),
-  );
+  const open = summaries.filter((item) => item.status !== "shipped" && item.status !== "skipped");
+  const attention = open.filter((item) => {
+    if (item.source === "gmail") {
+      if (inboxFilter === "all") return true;
+      if (item.inboxPreview?.automated === true) return false;
+      if (inboxFilter === "human") return true;
+      if (item.inboxPreview?.probablyResolved === true) return false;
+    }
+    return item.status === "ready" || (item.status === "failed" && Boolean(item.parkedReason));
+  });
+  const loopsById = new Map(selected.map((loop) => [loop.id, loop]));
+  const attentionIds = new Set(attention.map((item) => item.id));
+  const members = open.filter((item) => {
+    const groupId = item.triage?.groupId;
+    const loop = loopsById.get(item.loopId);
+    return !attentionIds.has(item.id) && groupId && attentionIds.has(groupId) && loop && consolidates(loop);
+  });
   const counts = new Map<string, number>();
-  for (const item of attention.filter((entry) => entry.inboxPreview?.probablyResolved !== true))
-    counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
-  let candidates = attention;
+  for (const item of open) counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
+  let candidates = [...attention, ...members];
   if (sent)
     candidates = summaries.filter(
       (item) =>
         item.actionKind === "send" && item.status === "shipped" && (item.source === "gmail" || item.source === "slack"),
     );
   else if (handled) candidates = summaries.filter((item) => item.status === "shipped" || item.status === "skipped");
+  const keys = triageKeys(
+    candidates,
+    (item) => loopsById.get(item.loopId),
+    (item) => item.createdAt,
+  );
   let feed = candidates
     .filter((item) => !filter || item.loopId === filter)
-    .sort((a, b) => {
-      if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-      if (a.id === b.id) return 0;
-      return a.id < b.id ? 1 : -1;
-    });
+    .sort((a, b) => compareKeys(keys.get(a.id)!, keys.get(b.id)!));
   const cursor = ctx.url.searchParams.get("cursor");
   if (cursor) {
     let value: unknown;
@@ -92,11 +134,10 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     } catch {
       return sendJson(ctx.res, 400, { error: "invalid_cursor" });
     }
-    if (!isObj(value) || typeof value.at !== "number" || typeof value.id !== "string")
+    if (!Array.isArray(value) || value.some((part) => typeof part !== "number" && typeof part !== "string"))
       return sendJson(ctx.res, 400, { error: "invalid_cursor" });
-    const at = value.at;
-    const key = value.id;
-    feed = feed.filter((item) => item.createdAt < at || (item.createdAt === at && item.id < key));
+    const after = value as Array<number | string>;
+    feed = feed.filter((item) => compareKeys(keys.get(item.id)!, after) > 0);
   }
   const page = feed.slice(0, 40);
   const last = page.at(-1);
@@ -106,13 +147,22 @@ async function inbox(ctx: ApiCtx): Promise<void> {
         id: loop.id,
         name: loop.name,
         icon: loop.icon,
-        sources: loop.sources,
+        sources: [
+          ...new Set([
+            ...(loop.sources ?? []),
+            ...summaries
+              .filter((item) => item.loopId === loop.id)
+              .flatMap((item) => (item.source ? [item.source] : [])),
+          ]),
+        ],
         count: counts.get(loop.id) ?? 0,
         state: loop.state,
         cronId: loop.cronId,
         syncCron: loop.cronId ? cronSummary((await deps.crons?.get(loop.cronId)) ?? null) : null,
         ingestionActive: (await ctx.deps.loopIngress?.list(loop.id))?.some((source) => source.enabled) ?? false,
         source: loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined,
+        prioritize: prioritizes(loop),
+        consolidate: consolidates(loop),
       })),
     ),
     available: available.map((loop) => ({
@@ -124,20 +174,22 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       selected: selectedIds.includes(loop.id),
     })),
     migrationPending: !migrated,
+    filter: inboxFilter,
     total: [...counts.values()].reduce((sum, count) => sum + count, 0),
     items: page.map((item) =>
-      ledgerItemView({
-        ...item,
-        sourcePayload: item.inboxPreview ?? {
-          title: item.sourceSummary ?? "Review item",
-          snippet: item.parkedReason ?? item.sourceSummary ?? "",
+      ledgerItemView(
+        {
+          ...item,
+          sourcePayload: item.inboxPreview ?? {
+            title: item.sourceSummary ?? "Review item",
+            snippet: item.parkedReason ?? item.sourceSummary ?? "",
+          },
         },
-      }),
+        loopsById.get(item.loopId)!,
+      ),
     ),
     nextCursor:
-      feed.length > page.length && last
-        ? Buffer.from(JSON.stringify({ at: last.createdAt, id: last.id })).toString("base64url")
-        : null,
+      feed.length > page.length && last ? Buffer.from(JSON.stringify(keys.get(last.id))).toString("base64url") : null,
   });
 }
 
@@ -149,8 +201,29 @@ async function access(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function viewers(ctx: ApiCtx): Promise<void> {
+  if (ctx.capability || ctx.actor) return sendJson(ctx.res, 403, { error: "forbidden" });
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const loop = typeof body.loopId === "string" ? await loopDeps(ctx)?.store.get(body.loopId) : undefined;
+  if (!loop) return sendJson(ctx.res, 404, { error: "not_found" });
+  const candidates = Array.isArray(body.candidates)
+    ? [...new Set(body.candidates.filter((value): value is string => typeof value === "string"))]
+    : [];
+  const identity = ctx.deps.identity;
+  await identity?.refresh();
+  const allowed = await Promise.all(
+    candidates.map(
+      async (id) =>
+        (!identity || identity.classify(id).type === "internal") &&
+        canAdministerLoop(ctx, loop, { actorId: canonicalPerson(id), liveHuman: false }),
+    ),
+  );
+  sendJson(ctx.res, 200, { viewers: candidates.filter((_, i) => allowed[i]) });
+}
+
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/inbox", auth: "source", handle: inbox },
+  { method: "POST", path: "/v1/inbox/viewers", auth: "source", handle: viewers },
   { method: "GET", path: "/v1/inbox/access", auth: "source", handle: access },
   { method: "PUT", path: "/v1/inbox", auth: "source", handle: inbox },
 ];

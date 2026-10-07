@@ -2,24 +2,33 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export const FRAME_SESSION_COOKIE = "portal_session_x";
 
-export function portalSessionSub(cookieHeader: string | undefined, secret: string, now = Date.now()): string | null {
-  return portalSessionSubFrom(cookieHeader, "portal_session", secret, now);
+export interface PortalViewerSession {
+  sub: string;
+  appOnly: boolean;
 }
 
-export function portalSessionSubFrom(
+export function portalSession(
+  cookieHeader: string | undefined,
+  secret: string,
+  now = Date.now(),
+): PortalViewerSession | null {
+  return portalSessionFrom(cookieHeader, "portal_session", secret, now);
+}
+
+export function portalSessionFrom(
   cookieHeader: string | undefined,
   name: string,
   secret: string,
   now = Date.now(),
-): string | null {
+): PortalViewerSession | null {
   for (const token of readCookies(cookieHeader, name)) {
-    const sub = verifySessionToken(token, secret, now);
-    if (sub) return sub;
+    const session = verifySessionToken(token, secret, now);
+    if (session) return session;
   }
   return null;
 }
 
-function verifySessionToken(token: string, secret: string, now: number): string | null {
+function verifySessionToken(token: string, secret: string, now: number): PortalViewerSession | null {
   const key = createHmac("sha256", secret).update("portal.session.v1").digest();
   const dot = token.indexOf(".");
   if (dot <= 0 || dot === token.length - 1) return null;
@@ -38,7 +47,8 @@ function verifySessionToken(token: string, secret: string, now: number): string 
   if (claims.k !== "session") return null;
   if (typeof claims.sub !== "string" || !claims.sub) return null;
   if (typeof claims.exp !== "number" || now >= claims.exp * 1000) return null;
-  return claims.sub;
+  if (claims.appOnly !== undefined && typeof claims.appOnly !== "boolean") return null;
+  return { sub: claims.sub, appOnly: claims.appOnly === true };
 }
 
 function readCookies(header: string | undefined, name: string): string[] {

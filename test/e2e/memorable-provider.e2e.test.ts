@@ -105,7 +105,7 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
 
   it("a tool-using turn is recorded as a procedure in the qm backend", { timeout: 240_000 }, async () => {
     const r = await turn(
-      "Use the write tool to create osprey/config.txt containing exactly: anchor=7. " +
+      "Use files action write to create osprey/config.txt containing exactly: anchor=7. " +
         "Then use the execute tool to run `cat osprey/config.txt` and report what it printed. " +
         "Also remember for later: my project is called Osprey.",
       "t-record",
@@ -121,12 +121,13 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
     assert.ok(rows.length >= 1, "expected memorable record to store a procedure");
     assert.ok(rows[0]!.id.startsWith(`${scope}/`), `procedure keyed by scope: ${rows[0]!.id}`);
     const sent = stub.requests[0] as {
-      tool_calls: Array<{ name: string }>;
+      tool_calls: Array<{ name: string; input: Record<string, unknown> }>;
       task_description?: string;
       harness?: string;
     };
     assert.equal(sent.harness, "qm");
-    assert.ok(sent.tool_calls.some((c) => c.name === "write") && sent.tool_calls.some((c) => c.name === "execute"));
+    assert.ok(sent.tool_calls.some((c) => c.name === "write" && c.input.path === "osprey/config.txt"));
+    assert.ok(sent.tool_calls.some((c) => c.name === "execute"));
     assert.ok(
       !JSON.stringify(sent).includes(process.env.ANTHROPIC_API_KEY!),
       "secrets never reach the extraction call",

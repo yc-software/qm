@@ -44,6 +44,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
       "slack",
       "judgments",
       "user",
+      "spend",
     ],
     "history",
     (scopeId: string) => String(scopeId || "").split(":")[0] || "scope",
@@ -60,7 +61,9 @@ function routerAt(pathname: string, search = "", base = "/admin") {
       historyKind: string;
       cron: string | null;
       turn: string | null;
+      range: string | null;
       page: number;
+      cursor: string | null;
     };
   };
 }
@@ -85,10 +88,27 @@ test("scoped history addresses the scope as a path segment; kind stays a query p
     `/admin/history/scopes/${SCOPE_ENC}?kind=cron`,
   );
   assert.equal(
-    stateToUrl({ view: "history", scope: SCOPE, session: null, historyKind: "cron", cron: "c1", page: 2 }),
-    `/admin/history/scopes/${SCOPE_ENC}?cron=c1&kind=cron&page=2`,
+    stateToUrl({ view: "history", scope: SCOPE, session: null, historyKind: "cron", cron: "c1", cursor: "17~s9" }),
+    `/admin/history/scopes/${SCOPE_ENC}?cron=c1&kind=cron&cursor=17%7Es9`,
+  );
+  assert.equal(
+    routerAt(`/admin/history/scopes/${SCOPE_ENC}`, "?kind=cron&cursor=17%7Es9").urlToState().cursor,
+    "17~s9",
+    "the keyset cursor round-trips through the URL",
   );
   assert.equal(stateToUrl({ view: "history", scope: "org:acme", session: null }), "/admin/history");
+});
+
+test("the spend window round-trips through the URL so Back restores the prior range", () => {
+  const { stateToUrl } = routerAt("/admin/spend");
+  assert.equal(stateToUrl({ view: "spend", scope: "org:acme", range: "7d" }), "/admin/spend?range=7d");
+  assert.equal(stateToUrl({ view: "spend", scope: "org:acme", range: null }), "/admin/spend");
+  const router = routerAt("/admin/spend", "?range=90d");
+  const st = router.urlToState();
+  assert.equal(st.view, "spend");
+  assert.equal(st.range, "90d");
+  assert.equal(router.stateToUrl(st), "/admin/spend?range=90d");
+  assert.equal(routerAt("/admin/spend").urlToState().range, null);
 });
 
 test("non-history views keep their query-param scope", () => {
@@ -169,8 +189,6 @@ test("cron fire rows surface the result digest and retain silent styling", () =>
       orgScope: "org:acme",
       environments: [],
       historyKindMatches: () => true,
-      pageSize: 50,
-      correctPage() {},
       historyModeLabel: () => "Crons",
       kindLabels: { conversation: "Conversations", cron: "Crons" },
       pageShell() {},
@@ -184,6 +202,50 @@ test("cron fire rows surface the result digest and retain silent styling", () =>
   assert.equal(f.root.querySelector(".dense-name")!.textContent, "Digest result");
   assert.equal(f.root.querySelector(".dense-preview")!.textContent, "Tool chatter");
   assert.ok(f.root.querySelector(".history-silent"));
+  f.dom.window.close();
+});
+
+test("history pages older rows by keyset cursor, never by offset", () => {
+  const f = litFixture();
+  const went: Record<string, unknown>[] = [];
+  const render = (cursor: string | null, nextCursor?: string) => {
+    f.root.textContent = "";
+    f.ui.history.history(
+      f.root,
+      {
+        sessions: [{ id: "s1", category: "conversation", firstMessage: "hello" }],
+        total: 120,
+        ...(nextCursor ? { nextCursor } : {}),
+      },
+      {
+        historyKind: "conversation",
+        cron: null,
+        cursor,
+        scope: "org:acme",
+        orgScope: "org:acme",
+        environments: [],
+        historyKindMatches: () => true,
+        historyModeLabel: () => "Conversations",
+        kindLabels: { conversation: "Conversations", cron: "Crons" },
+        pageShell() {},
+        cronName: () => "Job",
+        scopeKind: () => "org",
+        plural: (n: number, w: string) => `${n} ${w}s`,
+        stateToUrl: () => "/x",
+        go: (st: Record<string, unknown>) => went.push(st),
+      },
+    );
+    return [...f.root.querySelectorAll<HTMLButtonElement>(".pager .page")];
+  };
+  const [newest, older] = render(null, "50~s50");
+  assert.equal(newest!.disabled, true, "the first page has nothing newer");
+  older!.click();
+  assert.equal(went.at(-1)!.cursor, "50~s50", "Older follows the server's nextCursor");
+  const [newestLater, olderLast] = render("50~s50");
+  assert.equal(olderLast!.disabled, true, "the last page has no nextCursor");
+  newestLater!.click();
+  assert.equal(went.at(-1)!.cursor, null, "Newest drops the cursor");
+  assert.equal(render(null).length, 0, "a single page renders no pager");
   f.dom.window.close();
 });
 

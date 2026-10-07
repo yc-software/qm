@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -19,6 +19,7 @@ async function localIo(t: TestContext) {
   await mkdir(bin);
   if (process.platform === "darwin") {
     await symlink((await exec("which", ["gsha256sum"])).stdout.trim(), join(bin, "sha256sum"));
+    await symlink((await exec("which", ["gmv"])).stdout.trim(), join(bin, "mv"));
   }
   let writes = 0;
   const io: LayerToolInstallIo = {
@@ -39,13 +40,41 @@ async function localIo(t: TestContext) {
       await writeFile(path, data);
     },
   };
-  return { home, io, writes: () => writes };
+  return { home, bin, io, writes: () => writes };
 }
 
 const fixture = () => {
   const sdk = Buffer.from("exports.Composio = class Composio {};");
   return { sdk, sha: createHash("sha256").update(sdk).digest("hex"), licenses: Buffer.from("license") };
 };
+
+test("SDK installation verifies and activates bytes without starting Node", async (t) => {
+  const { home, bin, io } = await localIo(t);
+  await writeFile(join(bin, "node"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
+  const bundle = fixture();
+  await installConnectorSdk(io, home, bundle);
+  assert.deepEqual(await readFile(`${home}/.qm/composio/current/sdk.cjs`), bundle.sdk);
+});
+
+test("SDK installation cleans staging after a lost preparation response", async (t) => {
+  const { home, io } = await localIo(t);
+  await assert.rejects(
+    installConnectorSdk(
+      {
+        ...io,
+        async exec(script, timeoutSec) {
+          const result = await io.exec(script, timeoutSec);
+          if (result.code === 44) throw new Error("connection lost after preparation");
+          return result;
+        },
+      },
+      home,
+      fixture(),
+    ),
+    /connection lost/,
+  );
+  assert.ok((await readdir(`${home}/.qm/composio`)).every((name) => !name.startsWith(".")));
+});
 
 test("concurrent installation activates complete bytes and subsequent provision does not upload", async (t) => {
   const { home, io, writes } = await localIo(t);

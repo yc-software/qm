@@ -31,3 +31,20 @@ test("only a callback for the current unexpired attempt is accepted", () => {
   ])
     assert.equal(loginCallback(invalid, pending, 2000), null);
 });
+
+test("explicit provider choice wraps the proof request without leaking the destination", () => {
+  for (const route of ["/auth/trusted/login", "/auth/login?provider=primary"]) {
+    const attempt = createLogin("https://qm.example.com/drop/test?t=private", 1000, `https://qm.example.com${route}`);
+    const url = new URL(attempt.url);
+    const request = new URL(url.searchParams.get("returnTo"), url);
+    assert.equal(url.pathname, route.split("?")[0]);
+    assert.equal(request.pathname, "/auth/desktop");
+    assert.equal(request.searchParams.get("state"), attempt.state);
+    assert.equal(attempt.url.includes("private"), false);
+    assert.equal(attempt.url.includes(attempt.verifier), false);
+  }
+  assert.equal(
+    new URL(createLogin("https://qm.example.com", 1000, "https://evil.example/auth/trusted/login").url).pathname,
+    "/auth/desktop",
+  );
+});

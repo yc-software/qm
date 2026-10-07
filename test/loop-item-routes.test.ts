@@ -21,6 +21,7 @@ function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
   return {
     res: {
+      getHeader() {},
       writeHead(status: number) {
         out.status = status;
         return this;
@@ -34,6 +35,7 @@ function fakeRes() {
 }
 
 interface World {
+  sourceRefresh?: import("../src/loops/inbox-source-refresh.ts").InboxSourceRefresh;
   loops: LoopServiceDeps;
   crons: Map<string, Cron>;
   sent: Array<{ host: string; body: unknown }>;
@@ -68,6 +70,7 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       shipOutput: async () => null,
       returnOutput: async () => null,
       sweepStale: async () => {},
+      previewTriage: async () => [],
       followUp: async (loop: Loop, item: LoopItem, message: string, actorId: string) => {
         w.followUps.push({ itemId: item.id, message, actorId });
         await w.loops.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
@@ -104,6 +107,7 @@ async function call(
     capability?: Record<string, unknown> | null;
     actor?: string;
     sessionForThread?: string;
+    flagEnabled?: (flag: string, scope: string) => Promise<boolean>;
   },
 ): Promise<{ status: number; body: unknown }> {
   const url = new URL(`http://x${over.path}`);
@@ -141,8 +145,9 @@ async function call(
     params: found.params,
     capability: over.capability === undefined ? CAP : over.capability,
     deps: {
-      featureFlags: { enabled: async () => true },
+      featureFlags: { enabled: over.flagEnabled ?? (async () => true) },
       loops: w.loops,
+      ...(w.sourceRefresh ? { inboxSourceRefresh: w.sourceRefresh } : {}),
       sessions: {
         getByThread: async (threadRef: string) =>
           over.sessionForThread && threadRef === "thread-9" ? { id: over.sessionForThread } : null,
@@ -826,4 +831,335 @@ test("legacy and canonical item URLs serialize a concurrent send", async () => {
   );
   assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
   assert.equal(w.sent.length, 1);
+});
+
+test("a conversational send refuses a stale draft before starting an agent turn", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const out = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
+    body: { message: "Send it", expectedProposalAt: item.proposal!.at - 1 },
+  });
+  assert.equal(out.status, 409);
+  assert.deepEqual(w.followUps, []);
+  assert.deepEqual(w.sent, []);
+  const accepted = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
+    body: { message: "Send it", expectedProposalAt: item.proposal!.at },
+  });
+  assert.equal(accepted.status, 200);
+  assert.equal(w.followUps.length, 1);
+});
+
+test("inbox list refreshes open Gmail items before returning counts, but not another owner's loop", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  const refreshes: string[] = [];
+  // Exercise the route with the real refresher via the same dependency used by wiring.
+  const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
+  w.sourceRefresh = createInboxSourceRefresh({
+    items: w.loops.items,
+    tokens: { connectorAccessToken: async () => "synthetic" },
+    fetchImpl: async (url) => {
+      refreshes.push(String(url));
+      return Response.json({ messages: [{ internalDate: "2000", labelIds: ["SENT"], snippet: "Already replied" }] });
+    },
+  });
+  await w.loops.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "gmail",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { gmail: { threadId: "thread" } },
+      proposal: { by: "agent", data: { body: "Draft" } },
+    },
+  ]);
+  const denied = await call(w, {
+    method: "GET",
+    path: `/v1/loops/${loop.id}/items`,
+    actor: "outsider",
+    capability: null,
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(refreshes.length, 0);
+  const result = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items` });
+  assert.equal(result.status, 200);
+  assert.equal((result.body as { counts: Record<string, number> }).counts.dismissed, 1);
+  assert.equal(refreshes.length, 1);
+});
+
+test("Slack thread keys reuse a legacy item's identity, edits, and replied watermark", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  await w.loops.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "D1",
+      source: "slack",
+      sourceAt: 2000,
+      sourcePayload: { slack: { channelId: "D1", ts: "1.0", threadTs: "1.0" } },
+      proposal: { by: "human", data: { body: "Keep this edit" } },
+    },
+  ]);
+  const [original] = await w.loops.items.byLoop(loop.id);
+  const ingest = () =>
+    call(w, {
+      method: "POST",
+      path: `/v1/loops/${loop.id}/items`,
+      body: {
+        items: [
+          {
+            ...ITEM,
+            sourceKey: "D1:1.0",
+            receivedAt: 2000,
+            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0" },
+            draft: { body: "Agent replacement" },
+          },
+        ],
+      },
+    });
+  assert.equal((await ingest()).status, 200);
+  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
+  assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
+  await w.loops.items.recordAction(original!.id, { kind: "replied", outcome: "dismissed", sourceAt: 3000 });
+  await ingest();
+  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
+  assert.equal((await w.loops.items.get(original!.id))!.status, "skipped");
+});
+
+for (const migrated of [false, true])
+  test(`ordinary item reads only hydrate Slack with the refresh flag (migrated=${migrated})`, async () => {
+    const w = world();
+    const loop = migrated
+      ? (await ensureDefaultInboxLoops(w.loops.store, "josh")).find((loop) => loop.sources?.includes("slack"))!
+      : await ensureInboxLoop(w.loops.store, "josh");
+    await w.loops.items.ingest([{ loopId: loop.id, dedupeKey: "slack", source: "slack", sourcePayload: {} }]);
+    const [item] = await w.loops.items.byLoop(loop.id);
+    let refreshes = 0;
+    w.sourceRefresh = async () => {
+      refreshes++;
+    };
+    await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}` });
+    assert.equal(refreshes, 0);
+    await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1` });
+    assert.equal(refreshes, 1);
+  });
+
+test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  await w.loops.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "D1",
+      source: "slack",
+      sourceAt: 2000,
+      sourcePayload: { slack: { channelId: "D1", ts: "2.0", isDirectMessage: true } },
+      proposal: { by: "human", data: { body: "Keep this edit" } },
+    },
+  ]);
+  const [original] = await w.loops.items.byLoop(loop.id);
+  const result = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    body: {
+      items: [
+        {
+          ...ITEM,
+          sourceKey: "D1:1.0",
+          receivedAt: 3000,
+          slack: { channelId: "D1", ts: "3.0", threadTs: "1.0", isDirectMessage: true },
+          draft: { body: "Other ask" },
+        },
+      ],
+    },
+  });
+  assert.equal(result.status, 200);
+  assert.equal((await w.loops.items.byLoop(loop.id)).length, 2);
+  assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
+});
+
+test("followup accepts only typed runtime and staged attachment fields", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const path = `/v1/loops/${loop.id}/items/${item.id}/followup`;
+  let received: unknown;
+  w.loops.fire!.followUp = async (_loop, held, _message, _actor, options) => {
+    received = options;
+    return held;
+  };
+  const options = {
+    model: "gpt-5.6-terra",
+    harness: "pi",
+    thinkingLevel: "high",
+    fastMode: true,
+    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 20, blobId: "opaque-upload" }],
+  };
+  const out = await call(w, {
+    method: "POST",
+    path,
+    body: {
+      message: "",
+      ...options,
+      model: ` ${options.model} `,
+      harness: " pi ",
+      thinkingLevel: " high ",
+      attachments: [{ ...options.attachments[0], path: "/ignored" }],
+      scopeId: "personal:other",
+    },
+  });
+  assert.equal(out.status, 200);
+  assert.deepEqual(received, options);
+  for (const invalid of [
+    { model: 5 },
+    { model: " " },
+    { harness: " " },
+    { thinkingLevel: " " },
+    { fastMode: null },
+    { attachments: null },
+    { attachments: [null] },
+    { attachments: [{ ...options.attachments[0], name: "" }] },
+    { attachments: [{ ...options.attachments[0], blobId: "" }] },
+    { attachments: [{ ...options.attachments[0], sizeBytes: 1.5 }] },
+    { attachments: [{ ...options.attachments[0], sizeBytes: 1_000_000_001 }] },
+    { harness: "unknown" },
+    { thinkingLevel: "unsupported" },
+    { fastMode: "true" },
+    { attachments: [{ path: "/etc/passwd" }] },
+    { attachments: [{ ...options.attachments[0], sizeBytes: -1 }] },
+    { attachments: Array(11).fill(options.attachments[0]) },
+  ]) {
+    received = undefined;
+    const bad = await call(w, { method: "POST", path, body: { message: "hello", ...invalid } });
+    assert.equal(bad.status, 400, JSON.stringify(invalid));
+    assert.equal(received, undefined);
+  }
+});
+
+test("email classification is scoped to the owner's flagged personal inbox", async () => {
+  for (const surface of [undefined, "inbox", "inbox:gmail", "inbox:slack"]) {
+    for (const enabled of [false, true]) {
+      for (const source of ["gmail", "slack"]) {
+        const w = world();
+        const { loop } = await w.loops.store.create({
+          owner: "josh",
+          createdBy: "josh",
+          ownerScopeId: "personal:josh",
+          name: "Classification test",
+          playbook: "Read messages",
+          successCondition: "Messages reviewed",
+          surface,
+        });
+        const classified = enabled && source === "gmail" && (surface === "inbox" || surface === "inbox:gmail");
+        const flagEnabled = async (flag: string, scope: string) => {
+          assert.equal(flag, "inbox_loops");
+          assert.equal(scope, "personal:josh");
+          return enabled;
+        };
+        for (const automated of [true, false]) {
+          const receivedAt = automated ? 1234 : 2345;
+          const item =
+            source === "slack"
+              ? ITEM
+              : {
+                  ...ITEM,
+                  source: "gmail",
+                  sourceKey: "thread-1",
+                  gmail: { threadId: "thread-1" },
+                };
+          const response = await call(w, {
+            method: "POST",
+            path: `/v1/loops/${loop.id}/items`,
+            flagEnabled,
+            body: { items: [{ ...item, receivedAt, automated, probablyResolved: false }] },
+          });
+          assert.equal(response.status, 200);
+          const [stored] = await w.loops.items.byLoop(loop.id);
+          assert.equal(stored!.sourcePayload!.automated, classified ? automated : undefined);
+          assert.equal(stored!.sourcePayload!.probablyResolved, classified ? false : undefined);
+          assert.equal(stored!.status, "ready");
+          assert.equal(stored!.proposal!.data.body, ITEM.draft.body);
+          const [summary] = await w.loops.items.summaries([loop.id]);
+          assert.equal(summary!.inboxPreview!.automated, undefined);
+        }
+      }
+    }
+  }
+});
+
+test("a company loop cannot opt into personal inbox classification", async () => {
+  const w = world();
+  const { loop } = await w.loops.store.create({
+    owner: "josh",
+    createdBy: "josh",
+    ownerScopeId: "company:org",
+    name: "Company mail",
+    surface: "inbox:gmail",
+    playbook: "Read messages",
+    successCondition: "Messages reviewed",
+  });
+  const response = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    flagEnabled: async () => {
+      assert.fail("company loop must not read a personal flag");
+    },
+    body: {
+      items: [
+        {
+          ...ITEM,
+          source: "gmail",
+          sourceKey: "mail",
+          gmail: { threadId: "mail" },
+          automated: true,
+          probablyResolved: false,
+        },
+      ],
+    },
+  });
+  assert.equal(response.status, 200);
+  const [item] = await w.loops.items.byLoop(loop.id);
+  assert.equal(item!.sourcePayload!.automated, undefined);
+  assert.equal(item!.sourcePayload!.probablyResolved, undefined);
+});
+
+test("only a person overrides triage, and archiving a whole group resolves its members", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    body: { items: [{ ...ITEM, sourceKey: "C2:1.3", slack: { channelId: "C2", ts: "1.3" } }] },
+  });
+  await w.loops.store.update(loop.id, {
+    triage: { prioritize: { enabled: true }, consolidate: { enabled: true } },
+  });
+  const member = (await w.loops.items.byLoop(loop.id)).find((other) => other.id !== item.id)!;
+  await w.loops.items.setTriage(item.id, { groupId: item.id }, "agent");
+  await w.loops.items.setTriage(member.id, { groupId: item.id }, "agent");
+  const path = `/v1/loops/${loop.id}/items/${item.id}/action`;
+  const byAgent = await call(w, { method: "POST", path, body: { kind: "prioritize", args: { priority: "urgent" } } });
+  assert.equal(byAgent.status, 403);
+  const byPerson = await call(w, {
+    method: "POST",
+    path: `${path}?principalId=josh`,
+    body: { kind: "prioritize", args: { priority: "urgent" } },
+    capability: PORTAL,
+  });
+  assert.deepEqual((byPerson.body as { item: LedgerItemView }).item.triage?.pinned, ["priority"]);
+  await call(w, { method: "POST", path, body: { kind: "dismiss", args: { group: true } } });
+  assert.equal((await w.loops.items.get(member.id))?.status, "ready");
+  await call(w, { method: "POST", path, body: { kind: "reopen" } });
+  await call(w, {
+    method: "POST",
+    path: `${path}?principalId=josh`,
+    body: { kind: "dismiss", args: { group: true } },
+    capability: PORTAL,
+  });
+  const settled = (await w.loops.items.get(member.id))!;
+  assert.equal(settled.actionKind, "consolidated");
+  assert.deepEqual(settled.sourcePayload, member.sourcePayload);
 });

@@ -1,3 +1,4 @@
+import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
@@ -24,7 +25,6 @@ import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts"
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
 import type { Sandbox } from "../../sandbox/sandbox.ts";
-import type { SandboxMigrationRunner } from "../../sandbox/sandbox-migration-runner.ts";
 import type { ProcessRegistry } from "../../processes/process-registry.ts";
 import type { MonitorStore } from "../../monitors/monitor-store.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
@@ -46,6 +46,7 @@ import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { MetricsSink } from "../../admin/metrics-sink.ts";
 import type { ToolLedger } from "../../runs/tool-ledger.ts";
+import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
 import type { RunActivityStore } from "../../runs/run-activity-store.ts";
 import type { RunStore } from "../../runs/run-store.ts";
@@ -82,6 +83,7 @@ export interface OrchestratorInput extends Omit<
   | "securityScreenData"
   | "triggerDestination"
   | "ownerKeychainUnion"
+  | "ownerResourcesRequireOpen"
   | "unprompted"
   | "liveActor"
 > {
@@ -101,6 +103,7 @@ export interface OrchestratorInput extends Omit<
   finalAttempt?: boolean;
   background?: boolean;
   cancel?: AbortSignal;
+  shutdown?: AbortSignal;
   queueMs?: number;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
@@ -108,6 +111,7 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
@@ -125,7 +129,6 @@ export interface OrchestratorDeps {
   workspace: WorkspaceStore;
   files: FileArtifactStore;
   sandbox: Sandbox;
-  sandboxMigration?: SandboxMigrationRunner;
   sandboxResources?: SandboxResources;
   modelGateway: ModelGateway;
   auditLog: AuditLog;
@@ -139,10 +142,12 @@ export interface OrchestratorDeps {
   securityScreenTimeoutMs?: number;
   securityScreener?: SecurityScreener;
   backgroundJobTtlMs?: number;
+  sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   harness: Harness;
   signingSecret?: string;
   capabilitySecret?: string;
+  capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
   publicWebUrl?: string;
   /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
@@ -164,6 +169,7 @@ export interface OrchestratorDeps {
   errors?: ErrorLog;
   metrics?: MetricsSink;
   ledger?: ToolLedger;
+  signals?: RunSignalStore;
   turnStream?: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
@@ -175,6 +181,11 @@ export interface OrchestratorDeps {
   webhooks?: WebhookStore;
   control?: ControlService;
   runtime?: RuntimeService;
+  validateScheduledRuntime?: (
+    scope: import("../../types.ts").ScopeId,
+    choice: import("../../harness/harness.ts").RuntimeChoice,
+    purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
+  ) => Promise<string | null>;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
@@ -188,6 +199,7 @@ export interface OrchestratorDeps {
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
+  currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   reachExec?: boolean;
   eagerProvision?: boolean;

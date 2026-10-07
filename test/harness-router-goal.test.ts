@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createGoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord, latestGoalRecord, rehydrateOpenGoal } from "../src/harness/goal.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+
+import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
@@ -54,7 +56,7 @@ function router(harness: Harness): Harness {
 }
 
 async function emitGoalCreate(turn: HarnessTurnInput, objective: string) {
-  const goal = createGoalRecord({ objective, source: "tool" });
+  const goal = createGoalRecord({ objective });
   await turn.emit({ type: "tool_call", payload: { tool: "goal", action: "create", callId: "c1" }, scopeLabel: scope });
   await turn.emit({
     type: "tool_result",
@@ -142,7 +144,7 @@ test("turns without a goal pass through untouched", async () => {
 
 test("an open goal from an earlier turn is picked up from history", async () => {
   const emitted: SessionEntry[] = [];
-  const prior = createGoalRecord({ objective: "carried over", source: "tool" });
+  const prior = createGoalRecord({ objective: "carried over" });
   const history = [
     { type: "system", payload: { kind: "goal", goal: prior }, sessionId: "s1", seq: 0, parentSeq: null, createdAt: 1 },
   ] as SessionEntry[];
@@ -157,15 +159,75 @@ test("an open goal from an earlier turn is picked up from history", async () => 
   assert.equal(result.reply, "now done");
 });
 
-test("rounds without progress are waived after the stall limit and the waiver reaches the reply", async () => {
+test("rounds without progress never waive the goal; only a user stop ends it", async () => {
   const emitted: SessionEntry[] = [];
   const { harness, calls } = fakeAdapter(async (turn, round) => {
     if (round === 0) await emitGoalCreate(turn, "spin forever");
-    return { reply: `round ${round}` };
+    return round === 20 ? { reply: "stopped", stopped: true, stoppedByUser: true } : { reply: `round ${round}` };
   });
   const result = await router(harness).turns.runTurn(stubTurn(emitted));
-  assert.equal(calls.length, 5);
-  assert.match(result.reply, /\[goal waived: no progress after 5 continuation rounds — still active\]/);
-  const kinds = emitted.slice(-2).map((entry) => entry.type);
-  assert.deepEqual(kinds, ["system", "assistant"]);
+  assert.equal(calls.length, 21);
+  assert.doesNotMatch(result.reply, /waived/);
+  assert.equal(latestGoalRecord(emitted)?.status, "paused");
 });
+
+for (const harnessId of ["codex", "claude", "opencode"] as const) {
+  test(`${harnessId} preserves an active goal on infrastructure cancellation and resumes after reload`, async () => {
+    const emitted: SessionEntry[] = [];
+    const cancel = new AbortController();
+    const stopped = fakeAdapter(async (turn) => {
+      await emitGoalCreate(turn, "survive shutdown");
+      cancel.abort();
+      return { reply: "", stopped: true };
+    });
+    const routed = (harness: Harness) =>
+      createHarnessRouter(new Map([[harnessId, harness]]), createMockHarness(), async () => ({
+        harnessId,
+        modelId: "unused",
+      }));
+    await routed(stopped.harness).turns.runTurn(stubTurn(emitted, { cancel: cancel.signal }));
+    assert.equal((emitted.at(-1)!.payload as { goal: { status: string } }).goal.status, "active");
+    const resumed = fakeAdapter(async (turn, round) => {
+      if (round === 0) return { reply: "continue" };
+      assert.match(turn.input, /survive shutdown/);
+      turn.goal!.status = "complete";
+      return { reply: "verified" };
+    });
+    const result = await routed(resumed.harness).turns.runTurn(stubTurn([], { history: emitted }));
+    assert.equal(resumed.calls.length, 2);
+    assert.equal(result.reply, "verified");
+  });
+}
+
+for (const harnessId of ["codex", "claude", "opencode"] as const) {
+  test(`${harnessId} persists user Stop when shutdown races with the real run signal`, async () => {
+    const signals = createMemoryRunSignalStore();
+    const cancel = new AbortController();
+    const emitted: SessionEntry[] = [];
+    const { harness, calls } = fakeAdapter(async (turn) => {
+      await emitGoalCreate(turn, "stop despite shutdown");
+      const observed = Promise.withResolvers<void>();
+      let stoppedByUser: true | undefined;
+      const stop = startSignalPoll(signals, "run", {
+        onSteer: async () => {},
+        onAbort: async () => {
+          stoppedByUser = true;
+          observed.resolve();
+        },
+      });
+      await signals.send("run", { kind: "abort" });
+      await observed.promise;
+      cancel.abort();
+      await stop();
+      return { reply: "", stopped: true, stoppedByUser };
+    });
+    const routed = createHarnessRouter(new Map([[harnessId, harness]]), createMockHarness(), async () => ({
+      harnessId,
+      modelId: "test",
+    }));
+    await routed.turns.runTurn(stubTurn(emitted, { cancel: cancel.signal }));
+    assert.equal(calls.length, 1);
+    assert.equal(latestGoalRecord(emitted)?.status, "paused");
+    assert.equal(rehydrateOpenGoal(emitted)?.status, "paused");
+  });
+}

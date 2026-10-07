@@ -38,7 +38,7 @@ test("harness adapters declare their native control and tool transports", async 
     ["mock", "in-process", "plugin", "dynamic", "in-process-mcp"],
   );
   assert.equal(pi.profile.capabilities.has("fast-mode"), true);
-  assert.equal(opencode.profile.capabilities.has("fast-mode"), false);
+  assert.equal(opencode.profile.capabilities.has("fast-mode"), true);
   assert.equal(opencode.profile.capabilities.has("thinking-level"), false);
 });
 

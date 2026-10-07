@@ -1,4 +1,6 @@
 import type { ScopeId } from "../types.ts";
+import type { MemoryCaptureMetadata } from "./records.ts";
+import { classifiedMemory } from "./classification.ts";
 import type { HarnessModelUtilities } from "../harness/harness.ts";
 import type { MemoryService } from "./memory-service.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -12,17 +14,19 @@ import {
 import { createAgentOnlyStrategy } from "./strategies/agent-only.ts";
 
 export interface MemoryStrategy {
-  onTurnEnd?(ctx: {
-    scopeId: ScopeId;
-    input: string;
-    reply: string;
-    actorId?: string;
-    autonomous?: boolean;
-    conversationScopeId?: ScopeId;
-    conversationLabel?: string;
-    sessionId?: string;
-    idempotencyKey?: string;
-  }): Promise<void>;
+  onTurnEnd?(
+    ctx: MemoryCaptureMetadata & {
+      scopeId: ScopeId;
+      input: string;
+      reply: string;
+      actorId?: string;
+      autonomous?: boolean;
+      conversationScopeId?: ScopeId;
+      conversationLabel?: string;
+      sessionId?: string;
+      idempotencyKey?: string;
+    },
+  ): Promise<void>;
   maintain?(scopeId: ScopeId): Promise<void>;
   promptLines?(): string[];
 }
@@ -50,8 +54,9 @@ export function createMemoryStrategy(
   kind: MemoryStrategyKind,
   deps: MemoryStrategyDeps,
 ): { strategy: MemoryStrategy; memory: MemoryService } {
+  deps = { ...deps, memory: classifiedMemory(deps.memory, deps.harness) };
   if (kind === "scratch-promote") {
-    return createScratchPromote({
+    const scratch = createScratchPromote({
       harness: deps.harness,
       memory: deps.memory,
       workspace: deps.workspace,
@@ -61,6 +66,7 @@ export function createMemoryStrategy(
       ...(deps.captureAllowed ? { captureAllowed: deps.captureAllowed } : {}),
       ...(deps.onCaptureError ? { onCaptureError: deps.onCaptureError } : {}),
     });
+    return { strategy: scratch.strategy, memory: classifiedMemory(scratch.memory, deps.harness) };
   }
   const consolidator = createConsolidator({
     harness: deps.harness,

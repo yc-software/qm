@@ -6,72 +6,139 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: cicd-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  core-typecheck:
-    name: Core typecheck
+  reuse:
+    name: Resolve exact tested tree
+    timeout-minutes: 3
+    continue-on-error: true
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      reusable: ${{ steps.proof.outcome == 'success' && steps.proof.outputs.reusable == 'true' }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .node-version
+      - name: Verify exact successful PR tree
+        id: proof
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/reuse-ci.ts
+
+  core-typecheck:
+    name: Core typecheck
+    needs: reuse
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install and typecheck
+        if: needs.reuse.outputs.reusable != 'true'
         run: |
           npm ci
           npm run typecheck
       - name: Desktop sign-in tests
+        if: needs.reuse.outputs.reusable != 'true'
         run: |
           npm ci --prefix desktop --ignore-scripts
           npm test --prefix desktop
 
   core-tests:
     name: Core tests (${{ matrix.shard }}/5)
+    needs: reuse
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5]
     steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm ci
       - name: Build connector SDK
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm run build:connector-sdk
+      - name: Install Helm for chart tests
+        if: needs.reuse.outputs.reusable != 'true'
+        run: |
+          cd "$(mktemp -d)"
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz.sha256sum
+          sha256sum -c helm-v3.19.0-linux-amd64.tar.gz.sha256sum
+          tar -xzf helm-v3.19.0-linux-amd64.tar.gz
+          sudo install linux-amd64/helm /usr/local/bin/helm
       - name: Verify root test shard plan
-        if: matrix.shard == 1
+        if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
         run: npm run test:root:shard:check
       - name: Root tests
+        if: needs.reuse.outputs.reusable != 'true'
         env:
           CORE_TEST_SHARD: ${{ matrix.shard }}/5
         run: npm run test:root:shard
 
   core:
     name: Core
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     needs:
       - core-typecheck
       - core-tests
     steps:
       - name: Core checks passed
-        run: echo "Core typecheck and root test shards passed."
+        env:
+          TYPECHECK: ${{ needs.core-typecheck.result }}
+          TESTS: ${{ needs.core-tests.result }}
+        run: test "$TYPECHECK" = success && test "$TESTS" = success
 
   cli:
     name: CLI
+    needs: reuse
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
@@ -79,10 +146,12 @@ jobs:
             cli/package-lock.json
             package-lock.json
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
       - name: Install, typecheck, unit + packaged-artifact + e2e tests
+        if: needs.reuse.outputs.reusable != 'true'
         working-directory: cli
         env:
           QM_TERRAFORM_BIN: terraform
@@ -93,11 +162,14 @@ jobs:
           npm test
           npm run test:e2e
       - name: Install root dependencies
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm ci
       - name: Build the CLI package
+        if: needs.reuse.outputs.reusable != 'true'
         working-directory: cli
         run: npm run build
       - name: Deployment stack contracts
+        if: needs.reuse.outputs.reusable != 'true'
         run: |
           npm run typecheck:contract
           node --test "deploy/stacks/*/test/*.test.ts"
@@ -138,10 +210,17 @@ jobs:
 
   lint:
     name: Lint
+    needs: reuse
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
@@ -149,21 +228,28 @@ jobs:
             package-lock.json
             plugins/web-ui/package-lock.json
       - name: Install
+        if: needs.reuse.outputs.reusable != 'true'
         run: |
           npm ci
           npm ci --prefix plugins/web-ui
           npm ci --prefix desktop --ignore-scripts
       - name: Formatting
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm run format:check
       - name: Lint whole repo, incl. plugins
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm run lint
       - name: Dead code (knip)
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm run lint:knip
       - name: Oxlint
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm run lint:ox
 
   core-postgres:
     name: Core Postgres tests
+    needs: reuse
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -179,29 +265,40 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm ci
       - name: Build connector SDK
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm run build:connector-sdk
       - name: Postgres-backed tests (durability + cross-process)
+        if: needs.reuse.outputs.reusable != 'true'
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: npm run test:pg
       - name: Swarm HTTP runtime tests
+        if: needs.reuse.outputs.reusable != 'true'
         env:
           SWARM_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: node --experimental-test-module-mocks --test test/swarm-orchestrator.test.ts
       - name: Model registry cross-process tests
+        if: needs.reuse.outputs.reusable != 'true'
         env:
           MODEL_OVERLAY_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: node --experimental-test-module-mocks --test test/model-overlay-postgres.test.ts
       - name: Memorable provider e2e (real CLI against Postgres)
+        if: needs.reuse.outputs.reusable != 'true'
         env:
           MEMORABLE_E2E_DB_URL: postgres://postgres:postgres@localhost:5432/qm
           MEMORABLE_E2E_BIN: node node_modules/memorable-cli/dist/cli.js
@@ -212,29 +309,45 @@ jobs:
 
   admin-plugin:
     name: Admin plugin
+    needs: reuse
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: plugins/admin/package-lock.json
       - name: Install, typecheck, test
+        if: needs.reuse.outputs.reusable != 'true'
         working-directory: plugins/admin
         run: |
           npm ci
           npm run typecheck
           npm test
       - name: Build and boot production image
+        if: needs.reuse.outputs.reusable != 'true'
         run: bash scripts/smoke-surface-image.sh admin
 
   web-ui-plugin:
     name: Web UI plugin
+    needs: reuse
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
@@ -243,10 +356,12 @@ jobs:
             plugins/web-ui/package-lock.json
             plugins/admin/package-lock.json
       - name: Install core and mounted admin dependencies
+        if: needs.reuse.outputs.reusable != 'true'
         run: |
           npm ci
           npm ci --prefix plugins/admin
       - name: Install, typecheck, test, build
+        if: needs.reuse.outputs.reusable != 'true'
         working-directory: plugins/web-ui
         run: |
           npm ci
@@ -254,44 +369,127 @@ jobs:
           npm test
           npm run build
       - name: Build and boot production image
+        if: needs.reuse.outputs.reusable != 'true'
         run: bash scripts/smoke-surface-image.sh web-ui
 
   auth-plugin:
     name: Auth plugin
+    needs: reuse
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: plugins/auth/package-lock.json
       - name: Install, typecheck, test
+        if: needs.reuse.outputs.reusable != 'true'
         working-directory: plugins/auth
         run: |
           npm ci
           npm run typecheck
           npm test
       - name: Build and boot production image
+        if: needs.reuse.outputs.reusable != 'true'
         run: bash scripts/smoke-surface-image.sh auth
 
   portal-plugin:
     name: Portal plugin
+    needs: reuse
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
+      - name: Reuse the exact successful PR tree
+        if: needs.reuse.outputs.reusable == 'true'
+        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: plugins/portal/package-lock.json
       - name: Install embedded auth dependencies
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm ci --prefix plugins/auth
       - name: Install, typecheck, test
+        if: needs.reuse.outputs.reusable != 'true'
         working-directory: plugins/portal
         run: |
           npm ci
           npm run typecheck
           npm test
       - name: Build and boot production image
+        if: needs.reuse.outputs.reusable != 'true'
         run: bash scripts/smoke-surface-image.sh portal
+
+  certify:
+    name: Certify tested tree
+    timeout-minutes: 3
+    continue-on-error: true
+    if: always() && !cancelled() && github.event_name == 'pull_request'
+    needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate receipt eligibility
+        env:
+          PR_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id }}
+          CHECKS: ${{ toJSON(needs) }}
+        run: |
+          test -n "$PR_REPOSITORY_ID"
+          test "$PR_REPOSITORY_ID" = "$GITHUB_REPOSITORY_ID"
+          node -e 'const checks = JSON.parse(process.env.CHECKS); for (const id of ["core", "cli", "lint", "core-postgres", "admin-plugin", "web-ui-plugin", "auth-plugin", "portal-plugin", "coauthor-trailers"]) { if (checks[id]?.result !== "success") throw new Error(`${id} did not pass`); }'
+      - name: Checkout tested commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Record the immutable tested tree
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'QM_CI_TREE={"sha":"%s","tree":"%s","runId":%s,"attempt":%s,"pr":%s}\n' "$GITHUB_SHA" "$(git rev-parse HEAD^{tree})" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$PR_NUMBER"
+
+  notify-deployments:
+    name: Notify deployments of green main
+    timeout-minutes: 3
+    continue-on-error: true
+    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Deliver the signed green-main receipt
+        env:
+          CHECKS: ${{ toJSON(needs) }}
+          WEBHOOK_URL: ${{ secrets.QM_GREEN_MAIN_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.QM_GREEN_MAIN_WEBHOOK_SECRET }}
+        run: |
+          test "$(jq -r '[.[] | .result] | all(. == "success")' <<<"$CHECKS")" = true
+          if test -z "$WEBHOOK_URL" || test -z "$WEBHOOK_SECRET"; then
+            echo "no deployment webhook configured"
+            exit 0
+          fi
+          body="$(jq -cn --arg sha "$GITHUB_SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{event: "main_green", repository: "yc-software/qm", sha: $sha, run_id: $run, attempt: $attempt}')"
+          signature="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -r | cut -d' ' -f1)"
+          status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            -H 'content-type: application/json' \
+            -H 'x-github-event: push' \
+            -H "x-hub-signature-256: sha256=$signature" \
+            --data "$body" "$WEBHOOK_URL" || true)"
+          case "$status" in
+            2*) echo "deployment webhook responded $status" ;;
+            *) echo "::warning::deployment webhook responded ${status:-000}; downstream will fall back to polling" ;;
+          esac

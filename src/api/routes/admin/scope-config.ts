@@ -46,7 +46,18 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
-  if (["base-model", "runtime", "webui-models", "browse-model", "auto-flagger"].includes(resource))
+  if (
+    [
+      "base-model",
+      "runtime",
+      "cron-runtime",
+      "subagent-runtime",
+      "fallback-runtime",
+      "webui-models",
+      "browse-model",
+      "auto-flagger",
+    ].includes(resource)
+  )
     await deps.refreshModels?.();
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
@@ -141,10 +152,13 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
-  const crons = await app.listCrons();
-  const deployments = await app.listDeployments();
-  const skills = await app.listSkills();
-  const environmentRows = await app.listEnvironments();
+  const [crons, deployments, skills, environmentRows, rollups] = await Promise.all([
+    app.listCrons(),
+    app.listDeployments(),
+    app.listSkills(),
+    app.listEnvironments(),
+    deps.sessions?.scopeSessionRollups(scope, true) ?? [],
+  ]);
   const environments = environmentRows.map(({ environment, attachments }) => ({
     id: environment.id,
     name: environment.name,
@@ -164,16 +178,17 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     ...environments.map((environment) => environment.id),
     ...environments.flatMap((environment) => environment.attachedScopes),
   ];
-  const labels = await discoverScopes(app, deps, owners);
+  const previewIds = rollups.flatMap((r) => (r.previewSessionId ? [r.previewSessionId] : []));
+  const [labels, previews] = await Promise.all([
+    discoverScopes(app, deps, owners),
+    deps.sessions?.lastUserMessages(previewIds) ?? new Map<string, string>(),
+  ]);
   const countBy = (ids: string[]): Map<string, number> => {
     const m = new Map<string, number>();
     for (const id of ids) m.set(id, (m.get(id) ?? 0) + 1);
     return m;
   };
-  const rollups = (await deps.sessions?.scopeSessionRollups(scope, true)) ?? [];
   const rollupBy = new Map(rollups.map((r) => [r.scopeId, r]));
-  const previewIds = rollups.flatMap((r) => (r.previewSessionId ? [r.previewSessionId] : []));
-  const previews = (await deps.sessions?.lastUserMessages(previewIds)) ?? new Map<string, string>();
   const cronN = countBy(crons.map((c) => c.ownerScopeId));
   const deployN = countBy(deployments.map((d) => d.ownerScopeId));
   const skillN = countBy(skills.map((s) => s.scopeId));
@@ -258,6 +273,9 @@ const SETTINGS_RESOURCES = {
   models: [
     "baseModel",
     "runtime",
+    "cronRuntime",
+    "subagentRuntime",
+    "fallbackRuntime",
     "approvedHarnesses",
     "webuiModels",
     "interactiveFastMode",
@@ -358,14 +376,30 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     name: resolvedCurrent?.name ?? currentId + " (configured)",
     provider: resolvedCurrent?.provider ?? (currentId.includes("/") ? "openrouter" : ""),
   };
+  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
+    (value): value is { harnessId: string; modelId: string } =>
+      !!value &&
+      typeof (value as { harnessId?: unknown }).harnessId === "string" &&
+      typeof (value as { modelId?: unknown }).modelId === "string",
+  );
   const modelsFor = (harnessId: string) => {
     const models = selectableCatalogForHarness(catalog, harnessId);
     if (preserveCurrent && currentHarness === harnessId && !models.some((model) => model.id === currentModel.id))
       models.push(currentModel);
+    const configured = purposeRuntimes.filter((runtime) => runtime.harnessId === harnessId);
+    for (const runtime of configured) {
+      if (!models.some((model) => model.id === runtime.modelId))
+        models.push({
+          id: runtime.modelId,
+          name: resolveModel(runtime.modelId)?.name ?? `${runtime.modelId} (configured)`,
+          provider: resolveModel(runtime.modelId)?.provider ?? "",
+        });
+    }
     return models.filter(
       (model) =>
         modelServiceable(model.id, providersFor(harnessId)) ||
-        (preserveCurrent && currentHarness === harnessId && currentModel.id === model.id),
+        (preserveCurrent && currentHarness === harnessId && currentModel.id === model.id) ||
+        configured.some((runtime) => runtime.modelId === model.id),
     );
   };
   return {
@@ -374,9 +408,18 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     baseModelOptions: modelsFor(deps.harnessId ?? "pi"),
     harnessDefault: deps.harnessId ?? "pi",
     harnessOptions: HARNESS_IDS.filter(
-      (id) => id !== "mock" && (approvedHarnesses.includes(id) || runtime?.harnessId === id),
+      (id) =>
+        id !== "mock" &&
+        (approvedHarnesses.includes(id) ||
+          runtime?.harnessId === id ||
+          purposeRuntimes.some((runtime) => runtime.harnessId === id)),
     ),
-    modelsByHarness: Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)])),
+    modelsByHarness: Object.fromEntries(
+      HARNESS_IDS.map((id) => [
+        id,
+        modelsFor(id).map((model) => ({ ...model, effortLevels: thinkingLevelsForHarness(id, model.id) })),
+      ]),
+    ),
     thinkingLevelsByHarness: Object.fromEntries(
       HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),
     ),

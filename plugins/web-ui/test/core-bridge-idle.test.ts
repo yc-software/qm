@@ -1,3 +1,4 @@
+import { buildTimeline } from "../src/timeline.ts";
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -414,4 +415,35 @@ test("a stored quarantine refusal renders the canned copy on the web, never the 
   assert.equal(final.stopReason, "error");
   assert.doesNotMatch(final.errorMessage ?? "", /internal screening details/);
   assert.match(final.errorMessage ?? "", /security screen flagged/);
+});
+
+test("live run polling includes only consumed visible steering in activity order", async () => {
+  instantSleep();
+  stubRuns([
+    {
+      status: "done",
+      result: { status: "ok", reply: "Done" },
+      activity: [
+        { seq: 1, type: "user", createdAt: 1, payload: { text: "start" } },
+        { seq: 2, type: "tool_call", createdAt: 2, payload: { tool: "execute", callId: "a" } },
+        { seq: 3, type: "tool_result", createdAt: 3, payload: { tool: "execute", callId: "a" } },
+        { seq: 4, type: "user", createdAt: 4, payload: { text: "Change direction", steered: true } },
+        { seq: 5, type: "user", createdAt: 5, payload: { text: "Hidden", steered: true, hidden: true } },
+        { seq: 6, type: "tool_call", createdAt: 6, payload: { tool: "execute", callId: "b" } },
+      ],
+    },
+  ]);
+  const stream = createAssistantMessageEventStream();
+  const partial = blankAssistant() as AssistantWork;
+  partial.work = { status: "thinking", activity: [] };
+  await pollRun(stream, partial, "run-steer", freshAcc(Date.now()));
+  const final = (await drain(stream)) as AssistantWork;
+  assert.deepEqual(
+    final.work!.activity.map((entry) => entry.seq),
+    [2, 3, 4, 6],
+  );
+  assert.deepEqual(
+    buildTimeline(final.work!).map((item) => item.kind),
+    ["tool", "steer", "tool"],
+  );
 });

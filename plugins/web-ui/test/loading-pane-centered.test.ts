@@ -7,7 +7,7 @@ const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const sessions = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
 
 test("the loading pane renders chat-loading as the shell's only child", () => {
-  const fn = chat.match(/function mountLoadingPane\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+  const fn = chat.match(/function mountLoadingPane\(\): \(\) => boolean \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(fn, /custom-chat-shell/);
   assert.match(fn, /chat-loading/);
 });

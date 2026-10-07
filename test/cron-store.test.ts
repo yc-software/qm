@@ -894,3 +894,70 @@ test("backfillFires survives a cron deleted mid-loop: entries still reach the ta
   assert.equal((await store.listFires("stays")).total, 1);
   assert.equal((await backing.get("stays"))!.fireLog, undefined, "the surviving cron is still stripped");
 });
+
+test("Open owner authorization is durable, distinct from legacy mode, and cannot be cleared by a patch", async () => {
+  const backing = createMemoryMap<Cron>();
+  const store = createCronStore(backing);
+  const input = {
+    ...base,
+    ownerScopeId: scopeId("group", "g1"),
+    runAs: "scopeShared" as const,
+    schedule: { everyMs: 60_000 },
+  };
+  const legacy = await store.create(input);
+  const open = await store.create({ ...input, ownerResourcesRequireOpen: true });
+  assert.notEqual(open.id, legacy.id);
+  const restored = createCronStore(backing);
+  assert.equal((await restored.get(open.id))?.ownerResourcesRequireOpen, true);
+  await restored.update(open.id, { title: "edited", runAs: "owner", ownerResourcesRequireOpen: false });
+  await restored.update(open.id, { runAs: "scopeShared" });
+  assert.equal((await restored.get(open.id))?.ownerResourcesRequireOpen, true);
+  assert.equal((await restored.get(legacy.id))?.ownerResourcesRequireOpen, undefined);
+});
+
+test("cron runtime overrides survive store reload, distinguish creation, and clear without changing the task", async () => {
+  const backing = createMemoryMap<Cron>();
+  const store = createCronStore(backing);
+  const input = { ...base, schedule: { everyMs: 60_000 } };
+  const runtime = { harnessId: "pi" as const, modelId: "gpt-6-luna", effortLevel: "low" };
+  const inherited = await store.create(input);
+  const overridden = await store.create({ ...input, runtime });
+  assert.notEqual(inherited.id, overridden.id);
+  assert.equal((await store.create({ ...input, runtime })).id, overridden.id);
+  const reloaded = createCronStore(backing);
+  assert.deepEqual((await reloaded.get(overridden.id))?.runtime, runtime);
+  await reloaded.update(overridden.id, { title: "new title" });
+  assert.deepEqual((await store.get(overridden.id))?.runtime, runtime);
+  const cleared = await reloaded.update(overridden.id, { runtime: null });
+  assert.equal(cleared?.runtime, null);
+  assert.equal(cleared?.action, input.action);
+  assert.deepEqual(cleared?.schedule, overridden.schedule);
+});
+
+test("cron runtime rejects malformed settings and tasks that would ignore them", async () => {
+  const store = createCronStore();
+  const runtime = { harnessId: "pi" as const, modelId: "gpt-6-luna", effortLevel: "low" };
+  for (const invalid of [
+    {},
+    { ...runtime, modelId: " " },
+    { ...runtime, effortLevel: "auto" },
+    { ...runtime, effortLevel: "garbage" },
+    { ...runtime, fastMode: "yes" },
+    { ...runtime, surprise: true },
+  ]) {
+    await assert.rejects(
+      store.create({ ...base, schedule: { everyMs: 60_000 }, runtime: invalid as never }),
+      /runtime requires/,
+    );
+  }
+  await assert.rejects(
+    store.create({ ...base, schedule: { everyMs: 60_000 }, loopId: "loop", runtime }),
+    /runtime overrides require/,
+  );
+  await assert.rejects(
+    store.create({ ...base, schedule: { everyMs: 60_000 }, message: "hello", runtime }),
+    /runtime overrides require/,
+  );
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 }, runtime });
+  await assert.rejects(store.update(cron.id, { action: "" }), /runtime overrides require/);
+});

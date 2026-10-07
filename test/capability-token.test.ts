@@ -1,9 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { deflateRawSync } from "node:zlib";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import {
   BLOB_TRANSFER_AUD,
   CAPABILITY_TTL_MS,
   mintCapabilityToken,
+  parseSandboxCapabilityTtlMs,
   verifyBlobTransferCapability,
   verifyCapabilityToken,
   type CapabilityClaims,
@@ -16,6 +20,56 @@ const claims = (over: Partial<CapabilityClaims> = {}): CapabilityClaims => ({
   destination: { type: "slack", target: "D123", audienceScopeId: "personal:U1" },
   exp: Date.now() + CAPABILITY_TTL_MS,
   ...over,
+});
+
+test("large room capabilities fit an 8 KiB header without losing authorization claims", async () => {
+  const members = Array.from({ length: 120 }, (_, i) => ({
+    id: `${createHash("sha256").update(String(i)).digest("hex").slice(0, 16)}@example.test`,
+    type: i === 119 ? ("guest" as const) : ("internal" as const),
+    displayName: `Member ${i}`,
+    teamIds: ["engineering", `team-${i % 4}`],
+  }));
+  const c = claims({ members, keychainMembers: members.filter((p) => p.type === "internal"), grants: ["read"] });
+  const value = { orgId: "default-org", ...c };
+  const legacy = await mintSignedPayload(value, SECRET);
+  assert.ok(Buffer.byteLength(legacy) > 16 * 1024);
+  assert.equal(await mintCapabilityToken(c, SECRET), legacy);
+  assert.equal(await mintCapabilityToken(c, SECRET, false), legacy);
+  const token = await mintCapabilityToken(c, SECRET, true);
+  assert.ok(Buffer.byteLength(`x-agent-capability: ${token}\r\n`) < 8 * 1024);
+  assert.deepEqual(await verifyCapabilityToken(token, SECRET), value);
+  assert.deepEqual(await verifyCapabilityToken(legacy, SECRET), value);
+  assert.deepEqual(await verifyCapabilityToken(token, ["rotated-secret", SECRET]), value);
+  assert.equal(await verifyCapabilityToken(token, "wrong-secret"), null);
+  assert.equal(await verifyCapabilityToken(token, SECRET, c.exp), null);
+  const [header, payload, signature] = token.split(".");
+  const altered = Buffer.from(signature!, "base64url");
+  altered[0] = altered[0]! ^ 1;
+  assert.equal(await verifyCapabilityToken(`${header}.${payload}.${altered.toString("base64url")}`, SECRET), null);
+});
+
+test("compressed capability envelopes reject malformed and oversized claims", async () => {
+  for (const value of [
+    { encoding: "unknown", claims: "e30" },
+    { encoding: "deflate-raw", claims: 42 },
+    { encoding: "deflate-raw", claims: "not-compressed" },
+    { encoding: "deflate-raw", claims: deflateRawSync("not-json").toString("base64url") },
+    { encoding: "deflate-raw", claims: deflateRawSync("null").toString("base64url") },
+    { encoding: "deflate-raw", claims: deflateRawSync("x".repeat(1024 * 1024 + 1)).toString("base64url") },
+  ]) {
+    assert.equal(await verifyCapabilityToken(await mintSignedPayload(value, SECRET), SECRET), null);
+  }
+  await assert.rejects(mintCapabilityToken(claims({ threadRef: "x".repeat(1024 * 1024) }), SECRET), /size limit/);
+  for (const invalid of [{ timezone: "not-a-zone" }, { grants: [1] }, { runAttempt: 0 }]) {
+    const token = await mintSignedPayload(
+      {
+        encoding: "deflate-raw",
+        claims: deflateRawSync(JSON.stringify(claims(invalid as Partial<CapabilityClaims>))).toString("base64url"),
+      },
+      SECRET,
+    );
+    assert.equal(await verifyCapabilityToken(token, SECRET), null);
+  }
 });
 
 test("mint → verify round-trips the claims", async () => {
@@ -156,5 +210,27 @@ test("session and run-attempt claims round-trip and reject malformed values", as
       ),
       null,
     );
+  }
+});
+
+test("sandbox capability TTL defaults to 48 hours and accepts hours or no expiry", () => {
+  assert.equal(parseSandboxCapabilityTtlMs(undefined), 48 * 3_600_000);
+  assert.equal(parseSandboxCapabilityTtlMs(" "), 48 * 3_600_000);
+  assert.equal(parseSandboxCapabilityTtlMs("72"), 72 * 3_600_000);
+  assert.equal(parseSandboxCapabilityTtlMs("0"), 0);
+  assert.equal(parseSandboxCapabilityTtlMs("None"), 0);
+  for (const bad of ["-1", "abc", "Infinity", "1e20", "0.00000001"])
+    assert.throws(() => parseSandboxCapabilityTtlMs(bad), /SANDBOX_CAPABILITY_TTL_HOURS/);
+});
+
+test("no-expiry capabilities are restricted to sandbox audiences and retain signature checks", async () => {
+  for (const aud of ["control-plane", "oauth-consent", "credential-broker", "egress-proxy"]) {
+    const token = await mintCapabilityToken(claims({ aud, exp: 0 }), SECRET);
+    assert.ok(await verifyCapabilityToken(token, SECRET, Number.MAX_SAFE_INTEGER));
+    assert.equal(await verifyCapabilityToken(token, "rotated-secret"), null);
+  }
+  for (const aud of [undefined, "browser-model", "blob-transfer", "secret-drop", "unknown"]) {
+    const token = await mintCapabilityToken(claims({ aud, exp: 0 }), SECRET);
+    assert.equal(await verifyCapabilityToken(token, SECRET), null);
   }
 });

@@ -621,6 +621,10 @@ test("sliding renewal: a fresh session is NOT re-stamped, an aged one is re-issu
   assert.match(setCookie, new RegExp(`Max-Age=${SESSION_TTL_S}\\b`), "the renewed cookie carries a full TTL");
   const claims = open(decodeURIComponent(m![1] ?? ""), sessionKey) as { sub: string; exp: number } | null;
   assert.equal(claims?.sub, "U1", "the renewed cookie is valid and preserves the sub");
+  const twin = aged.headers.getSetCookie().find((cookie) => cookie.startsWith("portal_session_x="));
+  assert.ok(twin?.startsWith(`portal_session_x=${m![1]};`), "renewal re-issues the framed twin with the same session");
+  assert.match(twin!, /SameSite=Lax/, "the twin falls back to Lax on a non-https origin");
+  assert.match(twin!, new RegExp(`Max-Age=${SESSION_TTL_S}\\b`));
   assert.ok(
     (claims?.exp ?? 0) > Math.floor(Date.now() / 1000) + SESSION_TTL_S - 800,
     "exp is pushed out to ~now + full TTL",

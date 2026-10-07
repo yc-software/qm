@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -6,7 +7,6 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { collectBlob } from "../persistence/blob-transfer.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
@@ -55,7 +55,6 @@ const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const HYDRATED_MARKER = `${HOME_DIR}/.qm-hydrated`;
-const IN_MEMORY_ADOPT_MAX_BYTES = 256 * 1024 * 1024;
 const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
 const swallowGone = (error: unknown): void => {
   if (!(error instanceof ModalSandboxGoneError)) throw error;
@@ -405,6 +404,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   async function withSessionUnlocked<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
     const scratchKey = scratchKeyByName.get(name);
+    if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
     const reviveScratch = async (): Promise<ModalSession> => {
       const session = await client.create({ tags: tags("scratch") });
       sessionByName.set(name, session);
@@ -744,7 +744,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("modal-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },
@@ -783,34 +783,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     },
 
     exportFiles: execExport.exportFiles,
-
-    async adoptHomeSnapshot(scopeId: string, blobId: string): Promise<void> {
-      const blobTransfer = opts.blobTransfer;
-      if (!blobTransfer) throw new Error("modal adoptHomeSnapshot: no blob transfer store wired");
-      const ref = blobTransfer.s3Ref?.(blobId);
-      if (ref && snapshots.adoptFromS3) {
-        await snapshots.adoptFromS3(scopeId, ref);
-      } else {
-        const blob = await blobTransfer.open(blobId);
-        if (!blob) throw new Error(`modal adoptHomeSnapshot: blob ${blobId} not found`);
-        if (blob.sizeBytes > IN_MEMORY_ADOPT_MAX_BYTES) {
-          blob.stream.destroy();
-          throw new Error(
-            `modal adoptHomeSnapshot: blob is ${blob.sizeBytes} bytes; adopting over ${IN_MEMORY_ADOPT_MAX_BYTES} needs S3-backed blob and snapshot stores`,
-          );
-        }
-        await snapshots.put(scopeId, await collectBlob(blob.stream));
-      }
-      const name = sandboxScopeName(prefix, scopeId);
-      return provisionQueue(scopeId, async () => {
-        const session = sessionByName.get(name);
-        sessionByName.delete(name);
-        const stored = await store.get(scopeId);
-        if (session) await session.terminate().catch(swallowGone);
-        else if (stored) await client.terminate(stored.sandboxId).catch(swallowGone);
-        await store.delete(scopeId);
-      });
-    },
 
     async persistHomeSnapshot(scopeId: string): Promise<void> {
       const name = sandboxScopeName(prefix, scopeId);
@@ -903,8 +875,12 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           }
           activeScratch.delete(handle.id);
           const session = sessionByName.get(handle.id);
+          if (session) {
+            if (tdOpts?.destroy) await session.terminate();
+            else await session.terminate().catch(swallowAs("modal-sandbox: scratch terminate", undefined));
+          }
           sessionByName.delete(handle.id);
-          if (session) await session.terminate().catch(swallowAs("modal-sandbox: scratch terminate", undefined));
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;

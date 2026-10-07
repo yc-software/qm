@@ -30,7 +30,7 @@ function fixture() {
     runs: {
       get: async () => ({
         status: "running",
-        sessionId: "test-session",
+        sessionId: "cron:test-cron:fire:test-fire",
         attempts: 1,
         leaseToken: "test-lease",
         leaseExpiresAt: Date.now() + 60_000,
@@ -41,6 +41,7 @@ function fixture() {
       calls.push({ url: String(input), init });
       const result = replies.shift();
       if (result instanceof Error) throw result;
+      if (result instanceof Response) return result;
       return Response.json(result);
     }) as typeof fetch,
   };
@@ -50,6 +51,7 @@ function fixture() {
     const url = new URL(path, "http://localhost");
     const res = {
       setHeader() {},
+      getHeader() {},
       writeHead(code: number) {
         status = code;
       },
@@ -380,6 +382,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
 const privateCap: CapabilityClaims = {
   runId: "test-run",
   sessionId: "test-session",
+  threadRef: "cron:test-cron:fire:test-fire",
   runAttempt: 1,
   runLeaseToken: "test-lease",
   actorId: "alice",
@@ -476,6 +479,17 @@ test("authorized personal automation may execute but cannot initiate consent", a
   assert.equal((await f.invoke("/v1/composio/execute", execution, null, cap)).status, 200);
 });
 
+test("cron discovery accepts a current capability with distinct thread and session identifiers", async () => {
+  const f = fixture();
+  await f.own();
+  f.replies.push({ items: [{ slug: "googlecalendar", name: "Google Calendar" }] });
+  const cap = { ...privateCap, liveActor: false, triggered: true };
+  const result = await f.invoke("/v1/composio/toolkits", undefined, null, cap);
+  assert.equal(result.status, 200);
+  assert.equal(result.data.items[0].id, "googlecalendar");
+  assert.equal(f.calls.length, 1);
+});
+
 test("execution never retries a provider failure", async () => {
   const f = fixture();
   await f.own();
@@ -506,7 +520,13 @@ test("callback completion is browser-only and preserves the durable return URL",
 });
 
 test("finished runs and stale lease capabilities cannot reuse backend connection access", async () => {
-  for (const patch of [{ runId: undefined }, { runLeaseToken: "stale" }, { runAttempt: 2 }, { sessionId: "another" }]) {
+  for (const patch of [
+    { runId: undefined },
+    { runLeaseToken: "stale" },
+    { runAttempt: 2 },
+    { threadRef: undefined },
+    { threadRef: "another" },
+  ]) {
     const f = fixture();
     await f.own();
     assert.equal((await f.invoke("/v1/composio/execute", execution, null, { ...privateCap, ...patch })).status, 403);
@@ -794,4 +814,28 @@ test("linked identities retain provider accounts and Slack status until unlinked
   } finally {
     installPrincipalLinks(null);
   }
+});
+
+test("authorization failures keep a redacted upstream cause for operators", async (t) => {
+  const f = fixture();
+  await f.own();
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+  f.replies.push(
+    new Response(JSON.stringify({ error: "toolkit not enabled", echoed: "private-key", api_key: "sk-other" }), {
+      status: 400,
+      headers: { "x-request-id": "req_123" },
+    }),
+  );
+  const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail" });
+  assert.equal(r.status, 502);
+  assert.equal(r.data.error, "composio_authorization_failed");
+  assert.doesNotMatch(r.text, /toolkit not enabled|private-key|req_123/);
+  const report = logged.find((line) => line.includes("composio: authorize"));
+  assert.ok(report, "authorization failure is reported");
+  assert.match(report, /toolkit=gmail/);
+  assert.match(report, /http 400/);
+  assert.match(report, /toolkit not enabled/);
+  assert.match(report, /req_123/);
+  assert.doesNotMatch(report, /private-key|sk-other/);
 });

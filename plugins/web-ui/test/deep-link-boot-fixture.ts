@@ -1,34 +1,51 @@
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import type { Conversation } from "../src/conv-types.ts";
+import type { CoreContext, CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 export interface Harness {
   requests: string[];
+  setTranscriptStatus: (status: number) => void;
+  openSession: (session: CoreSession, prefetch?: Promise<TranscriptPage | null>) => Promise<void>;
   setConnections: (items: unknown[], status?: number) => void;
   releaseSessions: () => void;
   releaseTranscript: () => void;
   releaseApprovals: () => void;
+  releaseRuntimeConfig: () => void;
+  releaseRemoteSplit: () => void;
   sessionsReady: () => Promise<void>;
+  refreshSessions: () => Promise<boolean>;
   boot: () => Promise<void>;
+  switchView: (view: "chats" | "settings") => void;
+  renderList: () => void;
+  drawChatsPage: () => void;
   appState: { currentView: string };
   sessionsState: { list: Array<{ id: string }>; loaded: boolean; openingKey: string | null };
-  visibleConversation: () => { state: { sessionId: string | null; threadRef: string | null } };
+  visibleConversation: () => Conversation;
   mainText: () => string;
   close: () => Promise<void>;
 }
 
 interface HarnessOptions {
   path: string;
+  session?: CoreSession;
   messageLink?: boolean;
   transcriptStatus?: number;
   transcriptFailures?: number;
   holdTranscript?: boolean;
   holdApprovals?: boolean;
+  holdRuntimeConfig?: boolean;
+  holdRemoteSplit?: boolean;
+  remoteCanvas?: unknown;
   listSessions?: unknown[];
+  contexts?: CoreContext[];
+  entries?: unknown[];
   savedCanvas?: boolean;
   welcome?: boolean;
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
+  openNewChat?: boolean;
 }
 
 export const SESSION = {
@@ -39,6 +56,8 @@ export const SESSION = {
 };
 
 export async function harness(opts: HarnessOptions): Promise<Harness> {
+  const session = opts.session ?? SESSION;
+  let transcriptStatus = opts.transcriptStatus;
   const dom = new JSDOM('<!doctype html><div id="app"></div>', {
     url: `http://localhost${opts.path}`,
     pretendToBeVisual: true,
@@ -86,6 +105,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   dom.window.HTMLElement.prototype.scrollIntoView = function () {
     this.setAttribute("data-scrolled", "true");
   };
+  dom.window.HTMLElement.prototype.getAnimations = () => [];
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const realSetTimeout = globalThis.setTimeout;
   const realSetInterval = globalThis.setInterval;
@@ -94,6 +114,10 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   let releaseSessions = (): void => {};
   let releaseTranscript = (): void => {};
   let releaseApprovals = (): void => {};
+  let releaseRuntimeConfig = (): void => {};
+  let releaseRemoteSplit = (): void => {};
+  const runtimeHeld = new Promise<void>((resolve) => (releaseRuntimeConfig = resolve));
+  const remoteSplitHeld = new Promise<void>((resolve) => (releaseRemoteSplit = resolve));
   const approvalsHeld = new Promise<void>((resolve) => (releaseApprovals = resolve));
   const sessionsHeld = new Promise<void>((resolve) => (releaseSessions = resolve));
   const transcriptHeld = new Promise<void>((resolve) => (releaseTranscript = resolve));
@@ -116,6 +140,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     if (path.startsWith("/api/composio/toolkits"))
       return Response.json({ items: [{ id: "gmail", name: "Gmail", description: "Email" }], nextCursor: null });
     if (path.startsWith("/api/runtime-config")) {
+      if (opts.holdRuntimeConfig) await runtimeHeld;
       return Response.json({
         scopeId: "personal:tester",
         approvedHarnesses: [],
@@ -127,22 +152,28 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         upgradeAvailable: false,
       });
     }
-    if (path.startsWith("/api/ui-state")) return Response.json({ value: null, updatedAt: 0 });
+    if (path.startsWith("/api/ui-state?key=open-new-chat")) {
+      return Response.json({ value: opts.openNewChat ?? null, updatedAt: opts.openNewChat ? 1 : 0 });
+    }
+    if (path.startsWith("/api/ui-state")) {
+      if (opts.holdRemoteSplit) await remoteSplitHeld;
+      return Response.json({ value: opts.remoteCanvas ?? null, updatedAt: opts.remoteCanvas ? 1 : 0 });
+    }
     if (path.startsWith("/api/sessions/") && path.includes("/approvals")) {
       if (opts.holdApprovals) await approvalsHeld;
       return Response.json({ approvals: [] });
     }
-    if (path.startsWith(`/api/sessions/${SESSION.id}`)) {
+    if (path.startsWith(`/api/sessions/${session.id}`)) {
       if (opts.holdTranscript) await transcriptHeld;
       if (failuresLeft > 0) {
         failuresLeft--;
-        return Response.json({ error: "not_found" }, { status: opts.transcriptStatus ?? 500 });
+        return Response.json({ error: "not_found" }, { status: transcriptStatus ?? 500 });
       }
       if (opts.messageLink) {
         const older = path.includes("beforeSeq=");
         const seqs = older ? [10, 11] : [80, 81];
         return Response.json({
-          session: SESSION,
+          session,
           entries: seqs.map((seq) => ({
             seq,
             type: seq % 2 ? "assistant" : "user",
@@ -152,13 +183,13 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
           earlierEntries: older ? 0 : 80,
         });
       }
-      return Response.json({ session: SESSION, entries: [] });
+      return Response.json({ session, entries: opts.entries ?? [] });
     }
     if (path === "/api/sessions") {
       await sessionsHeld;
       return Response.json({ sessions: opts.listSessions ?? [] });
     }
-    return Response.json({ contexts: [], items: [], crons: [] });
+    return Response.json({ contexts: opts.contexts ?? [], items: [], crons: [] });
   };
 
   const globals = {
@@ -222,6 +253,11 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const split = await vite.ssrLoadModule("/src/split.ts");
   return {
     requests,
+    setTranscriptStatus: (status) => {
+      transcriptStatus = status;
+      failuresLeft = status === 200 ? 0 : Number.POSITIVE_INFINITY;
+    },
+    openSession: sessions.openSession as Harness["openSession"],
     setConnections: (items, status = 200) => {
       connectedItems = items;
       connectedStatus = status;
@@ -229,8 +265,14 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     releaseSessions,
     releaseTranscript,
     releaseApprovals,
+    releaseRuntimeConfig,
+    releaseRemoteSplit,
     sessionsReady: sessions.sessionsReady as () => Promise<void>,
+    refreshSessions: sessions.refreshSessions as () => Promise<boolean>,
     boot: shell.boot as () => Promise<void>,
+    switchView: shell.switchView as Harness["switchView"],
+    renderList: sessions.renderList as () => void,
+    drawChatsPage: sessions.drawChatsPage as () => void,
     appState: shell.appState as Harness["appState"],
     sessionsState: sessions.sessionsState as Harness["sessionsState"],
     visibleConversation: () =>
@@ -245,6 +287,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       releaseSessions();
       releaseTranscript();
       releaseApprovals();
+      releaseRuntimeConfig();
+      releaseRemoteSplit();
       for (let drain = 0; drain < 5 && inFlight.size; drain++) {
         await Promise.allSettled(inFlight);
         await new Promise((resolve) => realSetTimeout(resolve, 0));

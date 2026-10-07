@@ -224,3 +224,33 @@ for (const field of ["contextWindow", "maxTokens"] as const) {
     );
   });
 }
+
+for (const protocol of ["openai", "openai-responses", "anthropic"] as const) {
+  for (const reasoning of [undefined, false, true]) {
+    test(`custom ${protocol} reasoning=${reasoning} survives persistence and runtime mappings`, async () => {
+      const spec = { ...GATEWAY, protocol, models: [{ ...GATEWAY.models[0]!, reasoning }] };
+      const backing = createMemoryMap<StoredCustomProvider>();
+      const store = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
+      await store.upsert(spec, "local", "admin@example.com");
+      const reloaded = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
+      setCustomProviders(await reloaded.enabled());
+      const model = resolveCustomModel("acme-large")!;
+      assert.equal(model.reasoning, reasoning ?? false);
+      const json = customModelsJson() as {
+        providers: Record<string, { models: Array<{ reasoning: boolean; cost: typeof model.cost }> }>;
+      };
+      assert.equal(json.providers[spec.id]!.models[0]!.reasoning, reasoning ?? false);
+      assert.deepEqual(json.providers[spec.id]!.models[0]!.cost, model.cost);
+      assert.deepEqual((await reloaded.statuses())[0]!.models, spec.models);
+    });
+  }
+}
+
+test("custom provider reasoning rejects non-boolean capabilities", () => {
+  for (const reasoning of ["true", "false", 0, 1, null, {}]) {
+    assert.throws(
+      () => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "acme-large", reasoning } as never] }),
+      /reasoning must be a boolean/,
+    );
+  }
+});

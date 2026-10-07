@@ -1,6 +1,5 @@
 apiVersion: v2
 name: qm
-description: Deploys the qm surfaces (core, auth, web-ui, admin, portal, egress-proxy) built from deploy/*/Dockerfile.
+description: Deploys qm core, web-ui (with admin), portal (with auth), and egress-proxy.
 type: application
-version: 0.2.7
-appVersion: "1.0.5"
+version: 0.2.8

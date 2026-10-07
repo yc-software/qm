@@ -97,6 +97,7 @@ function buildOrchestrator(
     harness?: Harness;
     memoryPolicy?: import("../src/memory/policy.ts").MemoryPolicy;
     crons?: CronStore;
+    connectorStatusCache?: ConnectorStatusCache;
     sandbox?: Sandbox;
     skills?: SkillStore;
     skillBundles?: SkillBundleStore;
@@ -190,11 +191,11 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   };
 
   const ordered = [
-    "Sandbox environment profile",
     "Skills",
     "Where you are",
     "Where scheduled tasks post",
     "Connected apps",
+    "Sandbox environment profile",
     "What you remember",
   ];
   assert.doesNotMatch(prompt, /\n## Your logins\n/);
@@ -366,7 +367,7 @@ test("Open labels and audits a carried personal skill without granting it to the
   assert.deepEqual(await acl.list(), []);
 });
 
-test("Open loads included memories in both directions with provenance and capture stays in the room", async () => {
+test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
   let member = true;
   const { orchestrator, config, memory, workspace } = buildOrchestrator({
     sandbox: readSandbox(),
@@ -393,7 +394,7 @@ test("Open loads included memories in both directions with provenance and captur
   });
   assert.match(prompt.reply ?? "", /Sharing posture: Open/);
   assert.match(prompt.reply ?? "", /can reveal private information in a shared reply/);
-  assert.match(prompt.reply ?? "", /### personal:U1[\s\S]*PERSONAL_OPEN_MEMORY/);
+  assert.doesNotMatch(prompt.reply ?? "", /PERSONAL_OPEN_MEMORY/);
 
   await orchestrator.handleTurn({
     surface: "test",
@@ -469,16 +470,10 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
   assert.equal(first.status, "ok");
   assert.equal(second.status, "ok");
 
-  for (const title of [
-    "Sandbox environment profile",
-    "Skills",
-    "Where you are",
-    "Where scheduled tasks post",
-    "Connected apps",
-  ]) {
+  for (const title of ["Skills", "Where you are", "Where scheduled tasks post", "Connected apps"]) {
     assert.ok(systemOf(first.reply ?? "").includes(`\n## ${title}\n`), `expected "## ${title}" in the system prompt`);
   }
-  for (const title of ["The user's local time", "What you remember", "Your logins"]) {
+  for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
     assert.ok(
       !systemOf(first.reply ?? "").includes(`\n## ${title}\n`),
       `"## ${title}" must not be in the system prompt`,
@@ -837,7 +832,6 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
   let updated = false;
   const securityScreener: SecurityScreener = {
     provider: "test",
-    shadow: false,
     classify: async ({ payload }) => {
       if (!updated && payload.includes("SAFE_DESCRIPTION")) {
         updated = true;
@@ -967,7 +961,8 @@ test("steered documents use the inbound security screen before writing their con
     prepared = await turn.prepareSteer!("read the attachment", {
       surface: "web",
       actor: { externalId: actor.id },
-      conversation: { kind: "dm", threadRef: "steer-screen" },
+      conversation: { kind: "dm", threadRef: "web:alice:inbox" },
+      conversationHeader: "REFRESH_WITH_ATTACHMENT",
       text: "read the attachment",
       attachments: [{ name: "unsafe.txt", mimetype: "text/plain", ...blob }],
     });
@@ -975,7 +970,6 @@ test("steered documents use the inbound security screen before writing their con
   };
   const securityScreener: SecurityScreener = {
     provider: "test",
-    shadow: false,
     classify: async ({ payload }) => ({
       verdict: { decision: payload.includes("STEER_UNTRUSTED_CONTENT") ? "strict" : "auto" },
       score: 0,
@@ -983,11 +977,12 @@ test("steered documents use the inbound security screen before writing their con
     }),
   };
   const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
-  const result = await orchestrator.handleTurn(dm("steer-screen", "hello"));
+  const result = await orchestrator.handleTurn(dm("web:alice:inbox", "hello", { surface: "web" }));
   assert.equal(result.status, "ok", result.reason);
   assert.deepEqual(prepared?.attachments, []);
   assert.deepEqual(prepared?.documents, []);
   assert.match(prepared?.text ?? "", /unsafe.txt.*withheld/);
+  assert.match(prepared?.text ?? "", /REFRESH_WITH_ATTACHMENT/);
   assert.equal(
     writes.some((path) => path.endsWith("unsafe.txt")),
     false,
@@ -1066,7 +1061,6 @@ test("steered native office documents are screened after extraction", async () =
   };
   const securityScreener: SecurityScreener = {
     provider: "test",
-    shadow: false,
     classify: async ({ payload }) => {
       const blocked = payload.includes("DOCX-QUARTZ-731");
       screened ||= blocked;
@@ -1152,5 +1146,121 @@ for (const surfaceTools of [false, true]) {
     const users = entries.filter((entry) => entry.type === "user");
     assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);
     assert.doesNotMatch(JSON.stringify(users[1]!.payload), /ALPHA_MARKER|BETA_MARKER/);
+  });
+}
+
+test("profile and scheduled-work changes append fresh snapshots without rewriting the cached prefix or history", async () => {
+  const crons = createCronStore();
+  const sandbox = fakeSandbox();
+  const seen: HarnessTurnInput[] = [];
+  const harness = createMockHarness();
+  const runTurn = harness.turns.runTurn;
+  harness.turns.runTurn = async (turn) => {
+    seen.push(turn);
+    return runTurn(turn);
+  };
+  const { orchestrator, sessions } = buildOrchestrator({ crons, sandbox, harness });
+  const input = dm("dm:U1:snapshot-cache", "hello");
+  const first = await orchestrator.handleTurn(input);
+  assert.equal(first.status, "ok");
+  const originalHistory = await sessions.getEntries(first.sessionId!);
+  const cron = await crons.create({
+    owner: actor.id,
+    createdBy: actor.id,
+    ownerScopeId: scopeId("personal", actor.id),
+    schedule: { everyMs: 300_000 },
+    action: "check the synthetic status page",
+  });
+  sandbox.profile.spec = { os: "Other Linux", cpus: 8, workdir: "/new/workspace", homeDir: "/new/home" };
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "next" })).status, "ok");
+  await crons.setEnabled(cron.id, false);
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "third" })).status, "ok");
+  delete sandbox.profile.spec;
+  crons.list = async () => {
+    throw new Error("inventory unavailable");
+  };
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
+  for (const turn of seen) {
+    assert.equal(turn.systemPrompt, seen[0]!.systemPrompt);
+    assert.doesNotMatch(turn.systemPrompt, /Sandbox environment profile|Already scheduled here|synthetic status/);
+    assert.match(turn.systemPrompt, /only workspace files ship/);
+    assert.match(turn.systemPrompt, /don't re-create it/);
+    assert.match(turn.systemPrompt, /historical/);
+    assert.match(turn.systemPrompt, /A missing profile means unknown capabilities/);
+  }
+  assert.match(seen[0]!.environment!, /Debian 12/);
+  assert.match(seen[0]!.environment!, /No active scheduled work/);
+  assert.match(seen[1]!.environment!, /Other Linux|8 vCPU/);
+  assert.match(seen[1]!.environment!, /check the synthetic status page/);
+  assert.doesNotMatch(seen[2]!.environment!, /check the synthetic status page/);
+  assert.match(seen[2]!.environment!, /No active scheduled work/);
+  assert.doesNotMatch(seen[3]!.environment!, /Sandbox environment profile/);
+  assert.match(seen[3]!.environment!, /Scheduled-work status is unavailable/);
+  assert.doesNotMatch(seen[3]!.environment!, /Other Linux|synthetic status|No active scheduled work/);
+  assert.deepEqual(seen[1]!.history, originalHistory);
+  assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
+});
+
+test("connector revocation still refreshes system-authority permissions", async () => {
+  let revoked = false;
+  const { orchestrator } = buildOrchestrator({
+    connectorStatusCache: {
+      get: async () => ({
+        principalId: actor.id,
+        checkedAt: Date.now(),
+        providers: { google: { connected: true, needsReconnect: revoked } },
+      }),
+      put: async () => {},
+    },
+  });
+  const first = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
+  revoked = true;
+  const second = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
+  const prefix = (reply: string) => reply.split("\n\n<environment>")[0]!;
+  assert.match(prefix(first.reply!), /Connected: Google/);
+  assert.match(prefix(second.reply!), /Needs reconnect: Google.*Do not use these apps/);
+  assert.doesNotMatch(prefix(second.reply!), /Connected: Google/);
+  assert.notEqual(prefix(first.reply!), prefix(second.reply!));
+});
+
+for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {
+  test(`live inbox steering refreshes context with ${mode} screening`, async () => {
+    const harness = createMockHarness();
+    const thread = mode === "ordinary" ? "web:alice:default" : "web:alice:inbox";
+    let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+    harness.turns.runTurn = async (turn) => {
+      prepared = await turn.prepareSteer!("summarize again", {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: thread },
+        text: "summarize again",
+        conversationHeader: "UPDATED_INBOX_SNAPSHOT",
+      });
+      return { reply: "done" };
+    };
+    let refreshedScreens = 0;
+    const securityScreener: SecurityScreener = {
+      provider: "test",
+      classify: async ({ payload }) => {
+        if (payload.includes("UPDATED_INBOX_SNAPSHOT")) {
+          refreshedScreens++;
+          if (mode === "unavailable") throw new Error("screen unavailable");
+          if (mode === "blocked") return { verdict: { decision: "strict" }, score: 1, threshold: 1 };
+        }
+        return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
+      },
+    };
+    const { orchestrator, config } = buildOrchestrator({ harness, securityScreener });
+    if (mode === "observe") await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+    const result = await orchestrator.handleTurn(dm(thread, "hello", { surface: "web" }));
+    assert.equal(result.status, "ok", result.reason);
+    if (mode === "safe" || mode === "observe") assert.match(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
+    else if (mode === "ordinary") assert.equal(prepared!.text, "summarize again");
+    else {
+      assert.doesNotMatch(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
+      assert.match(prepared!.text, /withheld/);
+    }
+    if (mode === "ordinary") assert.equal(refreshedScreens, 0);
+    else assert.ok(refreshedScreens > 0);
   });
 }

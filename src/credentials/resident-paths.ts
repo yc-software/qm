@@ -2,6 +2,20 @@ import { posix } from "node:path";
 import { shq } from "../util/shell.ts";
 import { pathUnder } from "../util/paths.ts";
 import { homeRelativePath } from "./paths.ts";
+import {
+  BASE_EPHEMERAL_CRED_LINKS,
+  DISPLACED_DIR_REL,
+  DURABLE_CREDENTIAL_PATHS,
+  type CredentialPathSpec,
+} from "../../cli/src/credential-paths.ts";
+
+export {
+  BASE_EPHEMERAL_CRED_LINKS,
+  CREDENTIAL_PATH_RE,
+  DISPLACED_DIR_REL,
+  builtInCredentialPaths,
+  type CredentialPathSpec,
+} from "../../cli/src/credential-paths.ts";
 
 export const BASE_RESIDENT_AUTH_PATHS = [
   ".aws",
@@ -12,26 +26,7 @@ export const BASE_RESIDENT_AUTH_PATHS = [
   ".git-credentials",
 ] as const;
 
-export const BASE_EPHEMERAL_CRED_LINKS: ReadonlyArray<{ rel: string; kind: "dir" | "file" }> = [
-  { rel: ".aws", kind: "dir" },
-  { rel: ".netrc", kind: "file" },
-  { rel: ".config/gh", kind: "dir" },
-  { rel: ".config/glab", kind: "dir" },
-  { rel: ".config/glab-cli", kind: "dir" },
-  { rel: ".config/gcloud", kind: "dir" },
-];
-
-const DURABLE_CREDENTIAL_PATHS = [".ssh", ".git-credentials"] as const;
 export const EPHEMERAL_CRED_DIR = "/tmp/agent-creds";
-
-//
-
-export const DISPLACED_DIR_REL = ".agent-displaced";
-
-export interface CredentialPathSpec {
-  path: string;
-  kind: "file" | "directory";
-}
 
 export function residentAuthPaths(extra: readonly CredentialPathSpec[] = []): string[] {
   return [...new Set([...BASE_RESIDENT_AUTH_PATHS, ...extra.map((entry) => entry.path)])];
@@ -60,19 +55,6 @@ export function captureRootForTarget(target: string): CredentialPathSpec | undef
 
 export function configCredentialDirs(): string[] {
   return BASE_EPHEMERAL_CRED_LINKS.filter((l) => l.rel.startsWith(".config/")).map((l) => l.rel);
-}
-
-export const CREDENTIAL_PATH_RE = /^[A-Za-z0-9._/@+-]+$/;
-
-export function builtInCredentialPaths(): CredentialPathSpec[] {
-  return [
-    ...BASE_EPHEMERAL_CRED_LINKS.map(({ rel, kind }) => ({
-      path: rel,
-      kind: kind === "dir" ? ("directory" as const) : ("file" as const),
-    })),
-    { path: ".ssh", kind: "directory" },
-    { path: ".git-credentials", kind: "file" },
-  ];
 }
 
 const SERVICE_ALIASES: Readonly<Record<string, readonly string[]>> = { glab: ["glab-cli"] };

@@ -324,7 +324,9 @@ test("a handoff command approval recovered on a fresh instance still reports bac
   const { requestId, cardTs, statusTs } = await f.postRequest();
 
   await f.newInstance().click("agent_request_run", requestId, { ts: cardTs });
-  assert.deepEqual(f.store.get(requestId)?.approvalRequestIds, ["req-9"]);
+  const continuationId = f.submitted[0].gatewayContext.details.agent_request_id;
+  assert.notEqual(continuationId, requestId);
+  assert.deepEqual(f.store.get(continuationId)?.approvalRequestIds, ["req-9"]);
   const waiting = f.updates.filter((u) => u.channel === "C1" && u.ts === statusTs);
   assert.match(String(waiting.at(-1)?.text), /approve a command/);
 
@@ -378,4 +380,35 @@ test("the leftover strip is case-insensitive and safe on non-ASCII text", () => 
   const start = process.hrtime.bigint();
   extractAgentRequests(("[[ask-agent:" + "x".repeat(88)).repeat(10000));
   assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 100);
+});
+
+test("an early approval has durable handoff context without making the original Run button reusable", async () => {
+  const f = durableFixture();
+  const { requestId, cardTs } = await f.postRequest();
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.core.submitTurn = async (body) => {
+    f.submitted.push(body);
+    const continuationId = body.gatewayContext?.details?.agent_request_id;
+    assert.equal(typeof continuationId, "string");
+    assert.notEqual(continuationId, requestId);
+    assert.ok(f.store.has(String(continuationId)));
+    assert.equal(f.store.has(requestId), false);
+    started();
+    await pending;
+    return { status: "ok", reply: "done" };
+  };
+  const first = f.newInstance().click("agent_request_run", requestId, { ts: cardTs });
+  await ready;
+  await f.newInstance().click("agent_request_run", requestId, { ts: cardTs });
+  assert.equal(f.submitted.length, 1);
+  release();
+  await first;
+  assert.equal(f.store.size, 0);
 });

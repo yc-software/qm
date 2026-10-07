@@ -17,17 +17,15 @@ export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout:
   if (spec.diskGb) size.push(`${spec.diskGb} GB disk`);
   const head = [spec.os, size.join(" / ")].filter(Boolean).join(" · ");
   if (head) lines.push(`${head}.`);
-  if (spec.runtimes?.length) lines.push(`Runtimes: ${spec.runtimes.join(", ")}.`);
-  if (spec.tools?.length) lines.push(`Installed CLIs: ${spec.tools.join(", ")}.`);
+  if (spec.runtimes?.length) lines.push(`Runtimes: ${spec.runtimes.toSorted().join(", ")}.`);
+  if (spec.tools?.length) lines.push(`Installed CLIs: ${spec.tools.toSorted().join(", ")}.`);
   if (spec.notInstalled?.length) {
-    lines.push(`NOT installed (install on demand if a task needs one): ${spec.notInstalled.join(", ")}.`);
+    lines.push(`NOT installed (install on demand if a task needs one): ${spec.notInstalled.toSorted().join(", ")}.`);
   }
 
   const cwd = spec.workdir ?? ".";
   const home = spec.homeDir ?? "~";
-  const ws = [
-    `The workspace path is \`${cwd}\` (read-write). Recovery depends on the sandbox provider; save durable outputs to git or Files. Keep workspace outputs here, including apps you publish with \`apps\` (only workspace files ship, not files elsewhere under \`$HOME\`). \`$HOME\` (\`${home}\`) holds native logins and config; its recovery has the same provider limits.`,
-  ];
+  const ws = [`The workspace path is \`${cwd}\` (read-write). \`$HOME\` (\`${home}\`) holds native logins and config.`];
   if (layout.hasGlobal) ws.push("Shared org files are at `./global` (read-only).");
   if (layout.teamCount > 0) {
     ws.push(`Team files are at \`./team-*\` (read-only; ${layout.teamCount} mounted).`);
@@ -53,7 +51,7 @@ export function renderResidentLoginsBlock(
     "Logins survive machine replacement automatically: the platform keeps an encrypted copy core-side and restores it onto a fresh machine; they are never written into workspace backups.",
     "To (re)log in, start the login command as a background process using the available process controls. A device-flow login prints a URL/code then waits for the person to approve. Relay the URL/code, then watch or poll the process until it exits; never kill it mid-flight. Capture into your keychain is automatic.",
   ];
-  for (const c of present) {
+  for (const c of present.sort((a, b) => a.id.localeCompare(b.id))) {
     if (record.connectors[c.id] === "active") {
       lines.push(`- ${c.label} — ✓ signed in`);
     } else {
@@ -69,7 +67,9 @@ export function renderConnectedAppsBlock(
   connectionsUrl?: string,
 ): string {
   const allowed = new Set(availableProviders);
-  const entries = Object.entries(record?.providers ?? {}).filter(([name]) => allowed.has(name));
+  const entries = Object.entries(record?.providers ?? {})
+    .filter(([name]) => allowed.has(name))
+    .sort(([a], [b]) => a.localeCompare(b));
   const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name]) => connectorLabel(name));
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)
@@ -83,7 +83,7 @@ export function renderConnectedAppsBlock(
     return lines.join("\n");
   }
   const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));
-  const available = availableProviders.filter((name) => !connectedNames.has(name));
+  const available = availableProviders.filter((name) => !connectedNames.has(name)).sort();
   if (available.length) {
     lines.push(
       `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,

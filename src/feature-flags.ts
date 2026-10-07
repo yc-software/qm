@@ -2,7 +2,16 @@ import type { DurableMap } from "./persistence/durable-map.ts";
 import { orgId as configOrgId } from "./config.ts";
 import { scopeId, type ScopeId } from "./types.ts";
 
-export const FEATURE_NAMES = ["persistent_subagents", "responsive_spine", "inbox_loops"] as const;
+export const FEATURE_NAMES = [
+  "app_annotations",
+  "persistent_subagents",
+  "responsive_spine",
+  "inbox_loops",
+  "slack_loading_indicator",
+  "external_app_sharing",
+  "loop_triage",
+  "swarms",
+] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 
 export interface FeatureFlagRecord {
@@ -49,4 +58,14 @@ export function createFeatureFlagStore(
       return record;
     },
   };
+}
+
+export const EXTERNAL_APP_SHARING_OFF =
+  "sharing apps outside the organization is turned off; an org admin can enable the external_app_sharing flag";
+
+export function externalAppSharingAllowed(
+  flags: FeatureFlagStore | undefined,
+  ownerScopeId: ScopeId,
+): Promise<boolean> {
+  return flags ? flags.enabled("external_app_sharing", ownerScopeId) : Promise.resolve(false);
 }
