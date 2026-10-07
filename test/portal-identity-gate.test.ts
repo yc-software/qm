@@ -166,13 +166,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     const path = "/v1/sessions/s1/messages/0/edit";
     assert.equal((await post(path, { principalId: "U1", text: "fixed" })).status, 401);
     assert.equal(
-      (
-        await post(
-          path,
-          { principalId: "U2", text: "fixed" },
-          { "x-portal-identity": await token("U1") },
-        )
-      ).status,
+      (await post(path, { principalId: "U2", text: "fixed" }, { "x-portal-identity": await token("U1") })).status,
       403,
     );
   });

@@ -63,7 +63,10 @@ test("the submitted editor remains clickable inside the sticky prompt row", () =
   const buttons = dom.window.document.querySelectorAll<HTMLElement>(".queued-steer");
   assert.equal(dom.window.getComputedStyle(row).pointerEvents, "none");
   assert.equal(dom.window.getComputedStyle(editor).pointerEvents, "auto");
-  assert.deepEqual([...buttons].map((button) => dom.window.getComputedStyle(button).pointerEvents), ["auto", "auto"]);
+  assert.deepEqual(
+    [...buttons].map((button) => dom.window.getComputedStyle(button).pointerEvents),
+    ["auto", "auto"],
+  );
 });
 
 test("collapsed prompt content uses a readable six-line cutoff", () => {

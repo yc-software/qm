@@ -1974,11 +1974,7 @@ export function createChatSurface(
     return role === "user" || role === "user-with-attachments" ? slackWireToPlain(raw) : stripSlackDirectives(raw);
   }
 
-  function messageMeta(
-    message: AgentMessage,
-    index: number,
-    editable = false,
-  ): TemplateResult | typeof nothing {
+  function messageMeta(message: AgentMessage, index: number, editable = false): TemplateResult | typeof nothing {
     const text = copyableText(message).trim();
     const ts = (message as { timestamp?: number }).timestamp;
     if (!text && ts === undefined) return nothing;
@@ -2090,12 +2086,7 @@ export function createChatSurface(
         }}
       ></textarea>
       <span class="submitted-edit-note">Creates a new conversation from before this message.</span>
-      <button
-        type="button"
-        class="queued-steer"
-        ?disabled=${edit.saving}
-        @click=${() => void saveSubmittedEdit(edit)}
-      >
+      <button type="button" class="queued-steer" ?disabled=${edit.saving} @click=${() => void saveSubmittedEdit(edit)}>
         ${edit.saving ? "Saving…" : "Save and rerun"}
       </button>
       <button type="button" class="queued-steer" ?disabled=${edit.saving} @click=${cancelSubmittedEdit}>Cancel</button>
@@ -2110,11 +2101,7 @@ export function createChatSurface(
     drawActiveChat();
     try {
       const forked = await editSubmittedMessage(edit.sessionId, edit.seq, text);
-      if (
-        submittedEdit !== edit ||
-        chatState.sessionId !== edit.sessionId ||
-        chatState.threadRef !== edit.threadRef
-      )
+      if (submittedEdit !== edit || chatState.sessionId !== edit.sessionId || chatState.threadRef !== edit.threadRef)
         return;
       const split = inheritedTranscript(forked.session, forked.entries ?? []);
       submittedEdit = null;

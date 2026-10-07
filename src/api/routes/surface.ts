@@ -153,10 +153,15 @@ async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
   const entryAttachments = (visible.entry.payload as { attachments?: unknown }).attachments;
   const stagedAttachments: IncomingAttachment[] = [];
   const discardStaged = () =>
-    Promise.all(stagedAttachments.map((attachment) => deps.blobTransfer?.delete(attachment.blobId).catch(() => undefined)));
+    Promise.all(
+      stagedAttachments.map((attachment) => deps.blobTransfer?.delete(attachment.blobId).catch(() => undefined)),
+    );
   if (Array.isArray(entryAttachments) && entryAttachments.length) {
     if (!deps.blobTransfer) {
-      return sendJson(res, 409, { error: "attachment_unavailable", message: "The original attachments are unavailable." });
+      return sendJson(res, 409, {
+        error: "attachment_unavailable",
+        message: "The original attachments are unavailable.",
+      });
     }
     try {
       for (const attachment of entryAttachments as AttachmentMeta[]) {
@@ -175,7 +180,10 @@ async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
       }
     } catch {
       await discardStaged();
-      return sendJson(res, 409, { error: "attachment_unavailable", message: "The original attachments are unavailable." });
+      return sendJson(res, 409, {
+        error: "attachment_unavailable",
+        message: "The original attachments are unavailable.",
+      });
     }
   }
   const fork = await app.forkSession(sessionId, b.principalId, { upToSeq: seq - 1 });

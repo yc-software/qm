@@ -126,13 +126,13 @@ test("submitted web messages edit by rerunning an authorized durable fork", asyn
   assert.equal(finished.status, "done");
   const durable = (await built.app.getSession(result.session.id))!.entries;
   const durableUser = durable.filter((entry) => entry.type === "user").at(-1)!;
-  assert.equal(
-    durableUser.payload && (durableUser.payload as { text?: string }).text,
-    "fixed detail",
-  );
+  assert.equal(durableUser.payload && (durableUser.payload as { text?: string }).text, "fixed detail");
   assert.equal((durableUser.payload as { attachments?: unknown[] }).attachments?.length, 1);
   assert.match(JSON.stringify(durableUser.payload), /notes\.txt/);
-  assert.doesNotMatch(durable.map((entry) => JSON.stringify(entry.payload)).join("\n"), /wrong detail|later turn must not survive/);
+  assert.doesNotMatch(
+    durable.map((entry) => JSON.stringify(entry.payload)).join("\n"),
+    /wrong detail|later turn must not survive/,
+  );
   const modelContext = JSON.stringify(await built.sessions.getTape(result.session.id));
   assert.match(modelContext, /context that stays/);
   assert.match(modelContext, /fixed detail/);
