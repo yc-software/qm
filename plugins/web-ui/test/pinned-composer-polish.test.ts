@@ -56,7 +56,7 @@ test("queued cards tuck beneath the next card just as the queue tucks beneath th
 
 test("the submitted editor remains clickable inside the sticky prompt row", () => {
   const dom = new JSDOM(
-    `<style>${css.replace(/^@import.*$/m, "")}</style><div class="message-stack"><article class="message-row user-row"><div class="submitted-edit queued-chip queued-editing"><button class="queued-steer">Save and rerun</button><button class="queued-steer">Cancel</button></div></article></div>`,
+    `<style>${css.replace(/^@import.*$/m, "")}</style><div class="message-stack"><article class="message-row user-row latest-prompt"><div class="submitted-edit queued-chip queued-editing"><button class="queued-steer">Save and rerun</button><button class="queued-steer">Cancel</button></div></article></div>`,
   );
   const row = dom.window.document.querySelector<HTMLElement>(".user-row")!;
   const editor = dom.window.document.querySelector<HTMLElement>(".submitted-edit")!;

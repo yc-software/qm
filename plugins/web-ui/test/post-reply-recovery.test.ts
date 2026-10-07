@@ -681,7 +681,7 @@ test("post replies remain visible in new and continuing conversations", async (t
             Response.json({ session: fork, entries: [], turn: { status: "queued", runId: "finished-edit" } }),
           );
         }
-        if (path.startsWith("/api/sessions/fast-fork") && !path.endsWith("/approvals")) {
+        if (path.startsWith("/api/sessions/fast-fork") && !path.endsWith("/approvals") && !path.endsWith("/swarm")) {
           transcriptCalls++;
           return Promise.resolve(
             Response.json({
