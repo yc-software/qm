@@ -640,16 +640,17 @@ test("Claude includes steered native and fallback documents without capturing th
   assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
 });
 
-test("Claude coordinators expose neither command tools nor native subagents", async () => {
+test("Claude coordinators expose native web search but neither command tools nor native subagents", async () => {
   currentScript = async function* () {
     yield resultMessage("ready");
   };
   const harness = createClaudeHarness({});
   const { turn } = harnessTurn({ readOnly: false, delegateWork: true });
   await harness.turns.runTurn(turn);
-  assert.deepEqual(capturedOptions.tools, []);
+  assert.deepEqual(capturedOptions.tools, ["WebSearch"]);
   assert.equal(capturedOptions.agents, undefined);
   const allowed = capturedOptions.allowedTools as string[];
+  assert.ok(allowed.includes("WebSearch"));
   for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background"]) assert.ok(!allowed.includes(name));
   await harness.turns.close?.();
 });

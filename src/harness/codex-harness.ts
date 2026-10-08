@@ -989,7 +989,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         experimentalRawEvents: true,
         environments: [],
         config: {
-          web_search: "disabled",
+          web_search: "live",
           ...(turn.runtime?.fastMode === true ? { service_tier: "priority" } : {}),
           ...(reasoningEffort ? { model_reasoning_effort: reasoningEffort } : {}),
           features: {

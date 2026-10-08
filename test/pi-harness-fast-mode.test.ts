@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyTurnEffort,
   applyFastSpeed,
+  applyNativeWebSearch,
   applyThinkingBinding,
   piUsageToCallUsage,
   scaleCost,
@@ -554,4 +555,17 @@ test("compaction retries a refused summary on the configured fallback model", as
     globalThis.fetch = realFetch;
   }
   assert.deepEqual(models, ["claude-sonnet-5", "gpt-6-sol"]);
+});
+
+test("applyNativeWebSearch adds hosted web search to OpenAI Responses requests only", () => {
+  for (const api of ["openai-responses", "openai-codex-responses"]) {
+    const body = { tools: [{ type: "function", name: "execute" }] } as Record<string, unknown>;
+    applyNativeWebSearch(body, api);
+    assert.deepEqual(body.tools, [{ type: "function", name: "execute" }, { type: "web_search" }], api);
+  }
+  for (const api of ["anthropic-messages", "openai-completions", undefined]) {
+    const body = { tools: [] } as Record<string, unknown>;
+    applyNativeWebSearch(body, api);
+    assert.deepEqual(body.tools, [], String(api));
+  }
 });
