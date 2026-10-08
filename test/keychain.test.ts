@@ -1394,6 +1394,28 @@ describe("/v1/keychain routes (capability-authed)", () => {
       200,
       "nothing is consumed",
     );
+    assert.equal(
+      (
+        await post(
+          "/v1/keychain/use",
+          { credential: credential.id },
+          await capFor("U_OWN", "personal:U_OWN", { liveAuthor: true }),
+        )
+      ).status,
+      200,
+      "a subagent delegated from the owner's live turn (liveAuthor) loads their own credential without a grant",
+    );
+    assert.equal(
+      (
+        await post(
+          "/v1/keychain/use",
+          { credential: credential.id },
+          await capFor("U_OWN", "channel:C9", { liveAuthor: true }),
+        )
+      ).status,
+      403,
+      "a delegated live-author turn still never crosses into a shared scope",
+    );
 
     assert.equal(
       (

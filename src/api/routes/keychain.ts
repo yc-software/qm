@@ -14,6 +14,7 @@ import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 
 async function resolveScopeNames(
@@ -302,11 +303,11 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       if (typeof b.grant === "string") {
         m = await kc.materialize(b.grant, capability.scopeId, actorId);
       } else {
-        if (capability.liveActor !== true) {
+        if (!livePersonCapability(capability)) {
           return sendJson(res, 403, {
             error: "forbidden",
             message:
-              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
+              "own-credential use is implied only on a turn its owner sent live, or a subagent delegated from one — this turn is neither; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
           });
         }
         m = await kc.materializeOwnById(actorId, b.credential as string, capability.scopeId);
