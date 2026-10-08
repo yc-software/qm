@@ -222,7 +222,7 @@ import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
-import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
+import { reconcileMessageRevisions, revisionAnchorAt, slackMessageDeleted } from "./message-revisions.ts";
 
 export {
   egressClaimAllowingControlPlane,
@@ -606,6 +606,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const messageTs = input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         input.origin.kind === "human" || input.origin.kind === "ambient" ? input.origin.entryTs : undefined;
+      if (
+        input.surface === "slack" &&
+        (await slackMessageDeleted(
+          deps.surfaceCache?.readMessages.bind(deps.surfaceCache),
+          conversation.threadRef,
+          messageTs,
+        ))
+      )
+        return { status: "silent" };
       const coreReceivedAt = Date.now();
       let detectMs: number | undefined;
       let compactMs: number | undefined;

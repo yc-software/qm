@@ -79,3 +79,47 @@ test("an edit the ingest path could not record is caught up at the end of the ne
     await built.runtime.stop();
   }
 });
+
+test("a deleted trigger arriving before run admission is silent while its replacement runs", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "rev-delete-")) }));
+  try {
+    await built.app.ingestSurfaceEvents([{ container: "C1", ts: "t1", deleted: true }]);
+    const obsolete = await built.app.turn(channelTurn("answer the deleted request", "t1"));
+    assert.equal(obsolete.status, "silent");
+    const replacement = await built.app.turn(channelTurn("answer the replacement", "t2"));
+    assert.equal(replacement.status, "ok");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("ingesting a deletion durably aborts the matching run without stopping its replacement", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "rev-ingest-")) }));
+  try {
+    const principal = { id: "U1", type: "internal" as const };
+    const enqueue = async (messageTs: string) =>
+      (
+        await built.runs.enqueue({
+          sessionId: "ch:C1:t1",
+          request: {
+            surface: "slack",
+            actor: principal,
+            text: "review this",
+            conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [principal] },
+            origin: { kind: "human", messageTs },
+          },
+        })
+      ).run;
+    const obsolete = await enqueue("t1");
+    await built.runs.claimById(obsolete.id, "test-worker", 60_000);
+    const replacement = await enqueue("t2");
+    await built.app.ingestSurfaceEvents([{ container: "C1", ts: "t1", deleted: true }]);
+    assert.deepEqual(
+      (await built.signals.pending(obsolete.id)).map(({ signal }) => signal.kind),
+      ["abort"],
+    );
+    assert.deepEqual(await built.signals.pending(replacement.id), []);
+  } finally {
+    await built.runtime.stop();
+  }
+});

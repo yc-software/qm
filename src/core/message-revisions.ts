@@ -8,6 +8,8 @@ import {
 import { parseSlackThreadRef, slackThreadRefCandidates } from "../slack/message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import type { RunStore } from "../runs/run-store.ts";
+import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import { sleep } from "../util/async.ts";
 
 export interface MessageRevisionPayload {
@@ -212,4 +214,33 @@ export async function reconcileMessageRevisions(opts: {
     if (await recordRevision(opts.sessions, opts.lease, opts.session, entries, row)) recorded++;
   }
   return recorded;
+}
+
+export async function slackMessageDeleted(
+  readMessages: SurfaceCache["readMessages"] | undefined,
+  threadRef: string,
+  ts: string | undefined,
+): Promise<boolean> {
+  const ref = parseSlackThreadRef(threadRef);
+  if (!readMessages || !ref || !ts) return false;
+  const messages = await readMessages(ref.container, { timestamps: [ts], includeDeleted: true, noFallback: true });
+  return messages.some((message) => message.ts === ts && message.deleted === true);
+}
+
+export async function abortDeletedMessageRuns(
+  runs: RunStore,
+  signals: RunSignalStore | undefined,
+  events: readonly IngestEvent[],
+): Promise<void> {
+  if (!signals) return;
+  for (const event of events) {
+    if (!event.deleted || event.self) continue;
+    for (const threadRef of slackThreadRefCandidates(event.container, event.ts, event.sub ?? undefined)) {
+      for (const run of await runs.inFlightForThread(threadRef)) {
+        const origin = run.request.origin;
+        if (run.request.surface !== "slack" || origin.kind !== "human" || origin.messageTs !== event.ts) continue;
+        await signals.send(run.id, { kind: "abort", dedupeKey: `deleted-message:${run.id}:${event.ts}` });
+      }
+    }
+  }
 }

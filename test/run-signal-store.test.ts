@@ -731,3 +731,25 @@ test("a queued steer remains durable until its native intake acknowledges it", a
   await stop();
   assert.deepEqual(await store.pending("intake"), []);
 });
+
+test("startSignalPoll honors an abort queued before the harness subscribed without waiting for polling", async () => {
+  const signals = createMemoryRunSignalStore();
+  await signals.send("deleted-trigger", { kind: "abort" });
+  const aborted = Promise.withResolvers<void>();
+  const stop = startSignalPoll(
+    signals,
+    "deleted-trigger",
+    {
+      onAbort: async () => {
+        aborted.resolve();
+      },
+      onSteer: async () => {},
+    },
+    { intervalMs: 60_000 },
+  );
+  try {
+    await aborted.promise;
+  } finally {
+    await stop();
+  }
+});

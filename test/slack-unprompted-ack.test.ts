@@ -11,7 +11,7 @@ const directory = {
   classifyUserCached: async () => ({ actor }),
 } as unknown as Directory;
 
-function harness(run: (hooks: any) => Promise<unknown>) {
+function harness(run: (hooks: any) => Promise<unknown>, isDeleted: () => boolean = () => false) {
   const reactions: string[] = [];
   const posts: string[] = [];
   const postArgs: Array<Record<string, unknown>> = [];
@@ -37,6 +37,7 @@ function harness(run: (hooks: any) => Promise<unknown>) {
   };
   const handler = createTurnHandler({
     core: {
+      readSurfaceMessages: async () => [{ ts: "2.000", deleted: isDeleted() }],
       stageBlob: async () => ({ blobId: "b", sizeBytes: 0 }),
       reportRunEditRef: async () => {},
       reportTurnMetrics: async () => {},
@@ -189,3 +190,19 @@ test("waitRun signals replying only once the run has passed detection and begun 
   });
   assert.equal(replying, 1);
 });
+
+for (const fails of [false, true]) {
+  test(`deleting an addressed request suppresses its direct ${fails ? "error" : "reply"}`, async () => {
+    let deleted = false;
+    const h = harness(
+      async () => {
+        deleted = true;
+        if (fails) throw new Error("failed after deletion");
+        return { status: "ok", reply: "obsolete response" };
+      },
+      () => deleted,
+    );
+    await h.handler.handleIncoming({ ...h.followup, unprompted: false }, h.client);
+    assert.deepEqual(h.posts, []);
+  });
+}

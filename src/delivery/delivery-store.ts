@@ -13,7 +13,7 @@ export function logDeliveryExpiry(d: Delivery, now: number, reason = "overaged")
 }
 
 export function turnDeliveryProvenance(input: {
-  origin: Pick<TurnOrigin, "kind">;
+  origin: Pick<TurnOrigin, "kind"> & { messageTs?: string };
   surface: string | undefined;
   fireKey: string;
   sourceScopeId: ScopeId;
@@ -28,6 +28,9 @@ export function turnDeliveryProvenance(input: {
     fireKey: input.fireKey,
     sourceScopeId: input.sourceScopeId,
     sourceThreadRef: input.sourceThreadRef,
+    ...(input.surface === "slack" && input.origin.kind === "human" && input.origin.messageTs
+      ? { sourceMessageTs: input.origin.messageTs }
+      : {}),
     ...(input.sourceSessionId !== undefined ? { sourceSessionId: input.sourceSessionId } : {}),
     ...(input.sourceUserSeq !== undefined ? { sourceUserSeq: input.sourceUserSeq } : {}),
     ...(input.sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq: input.sourceAssistantEntrySeq } : {}),

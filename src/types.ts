@@ -240,6 +240,7 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  sourceMessageTs?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;

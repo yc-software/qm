@@ -1,3 +1,4 @@
+import { slackMessageDeleted } from "../core/message-revisions.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
 import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval-store.ts";
@@ -225,6 +226,15 @@ export function createDeliveryPoller(deps: {
           post: async () => {
             const tPost = performance.now();
             try {
+              if (
+                d.provenance?.surface === "slack" &&
+                (await slackMessageDeleted(
+                  core.readSurfaceMessages?.bind(core),
+                  d.provenance.sourceThreadRef,
+                  d.provenance.sourceMessageTs,
+                ))
+              )
+                return undefined;
               const continuation = extractPrivateContinuation(d.text);
               if (
                 runId &&

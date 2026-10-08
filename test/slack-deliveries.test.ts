@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import type { DeliveryProvenance } from "../src/types.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
 
 const mixedFiles = [
@@ -17,7 +18,15 @@ async function deliver(
   sourceThreadRef?: string,
   webUiPublicUrl?: string,
   text = "two screenshots and the notes",
-  row: { createdAt?: number; history?: Record<string, unknown>[]; loseAck?: boolean; approval?: unknown } = {},
+  row: {
+    createdAt?: number;
+    history?: Record<string, unknown>[];
+    loseAck?: boolean;
+    approval?: unknown;
+    provenance?: DeliveryProvenance;
+    deleted?: boolean;
+    readFailure?: boolean;
+  } = {},
 ) {
   const delivery = {
     id: "D1",
@@ -26,6 +35,7 @@ async function deliver(
     ...(sourceThreadRef
       ? { provenance: { trigger: "cron", sourceThreadRef, sourceTitle: "Weekly <project> & check-in" } }
       : {}),
+    ...(row.provenance ? { provenance: row.provenance } : {}),
     destination: { type: "slack", target: "C1:100.200", ...destination },
     attachments: mixedFiles,
     createdAt: row.createdAt ?? Date.now(),
@@ -47,6 +57,13 @@ async function deliver(
   const core = {
     holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
     getApproval: async () => row.approval ?? null,
+    readSurfaceMessages: async (container: string, opts: { timestamps: string[]; includeDeleted: boolean }) => {
+      assert.equal(container, "C1");
+      assert.deepEqual(opts.timestamps, ["99.100"]);
+      assert.equal(opts.includeDeleted, true);
+      if (row.readFailure) throw new Error("cache unavailable");
+      return [{ container, ts: "99.100", deleted: row.deleted }];
+    },
     readBlob: async (id: string) => Buffer.from(id),
     claimDeliveries: async (type: string) => queues.get(type)?.splice(0) ?? [],
     ackDelivery: async (id: string) => {
@@ -385,3 +402,41 @@ for (const type of ["slack", "group", "principal"]) {
     assert.deepEqual(recovered.acknowledgements, ["D1"]);
   });
 }
+
+const deletedTriggerProvenance: DeliveryProvenance = {
+  trigger: "conversation",
+  surface: "slack",
+  fireKey: "post:run1:0",
+  sourceScopeId: "channel:C1",
+  sourceThreadRef: "ch:C1:100.200",
+  sourceMessageTs: "99.100",
+};
+
+test("queued reply and attachments are suppressed when the triggering reply was deleted", async () => {
+  const result = await deliver({}, undefined, undefined, "obsolete reply", {
+    provenance: deletedTriggerProvenance,
+    deleted: true,
+  });
+  assert.deepEqual(result.acknowledgements, ["D1"]);
+  assert.deepEqual(result.posts, []);
+  assert.deepEqual(result.uploads, []);
+});
+
+test("a surviving trigger still delivers its queued reply and attachments", async () => {
+  const result = await deliver({}, undefined, undefined, "current reply", {
+    provenance: deletedTriggerProvenance,
+    deleted: false,
+  });
+  assert.deepEqual(result.acknowledgements, ["D1"]);
+  assert.ok(result.uploads.length > 0);
+});
+
+test("a failed deletion check retries without posting or acknowledging the delivery", async () => {
+  const result = await deliver({}, undefined, undefined, "reply", {
+    provenance: deletedTriggerProvenance,
+    readFailure: true,
+  });
+  assert.deepEqual(result.acknowledgements, []);
+  assert.deepEqual(result.posts, []);
+  assert.deepEqual(result.uploads, []);
+});

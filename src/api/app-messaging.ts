@@ -18,7 +18,7 @@ import {
 import { isVisible } from "../directory/visibility.ts";
 import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
-import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
+import { abortDeletedMessageRuns, hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
@@ -342,6 +342,7 @@ export function createMessagingMethods(
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
       if (surface === "slack" && hasRevisionEvents(events)) {
+        await abortDeletedMessageRuns(deps.runs, deps.signals, events);
         void recordMessageRevisions(deps.sessions, events).catch(
           reportFailureAs("revisions: surface revision record", undefined),
         );

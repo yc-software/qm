@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import {
+  abortDeletedMessageRuns,
+  slackMessageDeleted,
   messageRevision,
   reconcileMessageRevisions,
   recordMessageRevisions,
@@ -457,4 +459,59 @@ test("imported agent posts receive attributed edits and deletions without creati
     reconstructMessagesFromHistory(entries).some((m) => m.role === "assistant"),
     false,
   );
+});
+
+for (const threadRef of ["dm:D1", "dm:D1:100.1", "ch:C1:100.1", "grp:G1:100.1"]) {
+  test(`deletion cancels only runs triggered by that message in ${threadRef}`, async () => {
+    const { createMemoryRunStore } = await import("../src/runs/memory-run-store.ts");
+    const { createMemoryRunSignalStore } = await import("../src/runs/run-signal-store.ts");
+    const { runs } = createMemoryRunStore();
+    const signals = createMemoryRunSignalStore();
+    const container = parseSlackThreadRef(threadRef)!.container;
+    const actor = { id: "U1", type: "internal" as const };
+    const enqueue = async (messageTs: string, surface = "slack") =>
+      (
+        await runs.enqueue({
+          sessionId: threadRef,
+          request: {
+            surface,
+            actor,
+            text: "review this",
+            conversation: { kind: "dm", threadRef, channelRef: container, audience: [actor] },
+            origin: { kind: "human", messageTs },
+          },
+        })
+      ).run;
+    const active = await enqueue("100.1");
+    await runs.claimById(active.id, "worker", 60_000);
+    const pending = await enqueue("100.1");
+    const replacement = await enqueue("100.2");
+    const web = await enqueue("100.1", "web");
+    const event = { container, ts: "100.1", deleted: true };
+    await abortDeletedMessageRuns(runs, signals, [{ ...event, deleted: false, editedAt: Date.now() }]);
+    assert.equal((await signals.pending(active.id)).length, 0);
+    await abortDeletedMessageRuns(runs, signals, [event, event]);
+    assert.deepEqual(
+      (await signals.pending(active.id)).map(({ signal }) => signal.kind),
+      ["abort"],
+    );
+    assert.deepEqual(
+      (await signals.pending(pending.id)).map(({ signal }) => signal.kind),
+      ["abort"],
+    );
+    assert.equal((await signals.pending(replacement.id)).length, 0);
+    assert.equal((await signals.pending(web.id)).length, 0);
+  });
+}
+
+test("message liveness uses durable tombstones without fetching missing Slack history", async () => {
+  const cache = createMemorySurfaceCache({
+    liveFallback: async () => {
+      throw new Error("must not fetch");
+    },
+  });
+  await cache.ingest([{ container: "C1", ts: "100.1", deleted: true }]);
+  assert.equal(await slackMessageDeleted(cache.readMessages, "ch:C1:100.1", "100.1"), true);
+  assert.equal(await slackMessageDeleted(cache.readMessages, "ch:C1:100.1", "100.2"), false);
+  assert.equal(await slackMessageDeleted(cache.readMessages, "ch:C2:100.1", "100.1"), false);
 });

@@ -1,3 +1,4 @@
+import { slackMessageDeleted } from "../core/message-revisions.ts";
 import {
   externalSlackNamespace,
   extractPrivateContinuation,
@@ -253,6 +254,7 @@ export function createTurnHandler(deps: {
       blocks?: Array<Record<string, unknown>>,
       idempotencyKey?: string,
     ): Promise<string | undefined> => {
+      if (await slackMessageDeleted(core.readSurfaceMessages?.bind(core), threadRef, inc.ts)) return undefined;
       const replyArgs = (text: string, withBlocks: boolean): Record<string, unknown> => ({
         ...slackReplyArgs(inc.channel, text, replyThreadTs, { threadOnly: inc.kind === "channel", unfurlLinks: false }),
         ...(withBlocks && blocks ? { blocks } : {}),
@@ -653,6 +655,11 @@ export function createTurnHandler(deps: {
       await goalNotice?.settle();
     } catch (err) {
       await settleAck();
+      if (await slackMessageDeleted(core.readSurfaceMessages?.bind(core), threadRef, inc.ts)) {
+        if (queuedRunId) ackRunDelivery(queuedRunId);
+        await finishTaskAck();
+        return;
+      }
       if (inc.unprompted) {
         if (!accepted) inc.ackGate?.failed(errMessage(err));
         console.error(
@@ -677,6 +684,13 @@ export function createTurnHandler(deps: {
     // trigger's own ack and stand down.
     if (result.steered) {
       await settleAck();
+      return;
+    }
+
+    if (await slackMessageDeleted(core.readSurfaceMessages?.bind(core), threadRef, inc.ts)) {
+      if (queuedRunId) ackRunDelivery(queuedRunId);
+      await settleAck();
+      await finishTaskAck();
       return;
     }
 
@@ -721,6 +735,7 @@ export function createTurnHandler(deps: {
       const tDeliverStart = performance.now();
       const runKey = queuedRunId ? `run:${queuedRunId}` : undefined;
       const deliverReply = async (): Promise<void> => {
+        if (await slackMessageDeleted(core.readSurfaceMessages?.bind(core), threadRef, inc.ts)) return;
         let uploadError: unknown;
         if (result.attachments?.length) {
           try {
