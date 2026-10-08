@@ -55,7 +55,7 @@ export function isSharedScope(id: ScopeId | undefined): boolean {
 export type ConversationKind = "dm" | "channel" | "group";
 
 export interface Conversation {
-  teamScoped?: boolean;
+  teamIds?: string[];
   kind: ConversationKind;
   threadRef: string;
   channelRef?: string;

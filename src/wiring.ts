@@ -1,4 +1,4 @@
-import { createTeamStore, type TeamRecord, type TeamStore } from "./teams/teams.ts";
+import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
@@ -549,7 +549,7 @@ export interface BuiltApp {
   livenessCache: LivenessCache;
   deviceFlowCutover: DeviceFlowCutoverStore;
   featureFlags: FeatureFlagStore;
-  teams: TeamStore;
+  teams?: TeamStore;
   replayDedupe?: ReplayDedupe;
   brokerSessions?: BrokerSessionStore;
   directory: DirectoryStore;
@@ -714,7 +714,9 @@ export function buildApp(
     resets: artifactMap<DeviceFlowCutoverReset>("device_flow_cutover_resets"),
   });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
-  const teams = createTeamStore(artifactMap<TeamRecord>("teams"), featureFlags, scopeId("org", config.orgId));
+  const teams = config.databaseUrl
+    ? createPostgresTeamStore(config.databaseUrl, featureFlags, scopeId("org", config.orgId))
+    : undefined;
   const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
