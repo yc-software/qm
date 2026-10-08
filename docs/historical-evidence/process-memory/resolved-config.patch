@@ -1,0 +1,254 @@
+diff --git a/src/index.ts b/src/index.ts
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -29,16 +29,17 @@ const server = createServer(built.app, {
+   runs: built.runs,
+   workspace: built.workspace,
+   memory: built.memory,
+   blobTransfer: built.blobTransfer,
+   sandboxBackend: built.sandbox.profile.backend,
+   ...(built.computerBackups ? { computerBackups: built.computerBackups } : {}),
+ });
+ 
++await built.config.hydrate?.();
+ built.runtime.start();
+ 
+ server.listen(config.port, () => {
+   console.log(
+     `[agent-platform] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
+       `runStore=${config.runStore ?? config.sessionStore}, workers=${config.workers ?? 2})`,
+   );
+ });
+diff --git a/src/resolution/config-store.ts b/src/resolution/config-store.ts
+--- a/src/resolution/config-store.ts
++++ b/src/resolution/config-store.ts
+@@ -25,16 +25,37 @@ import {
+   type DecryptedServiceCredential,
+ } from "../credentials/service-credential-store.ts";
+ 
+ export interface StoredResidentialProxyCredentials {
+   usernameEnc?: string;
+   passwordEnc?: string;
+ }
+ 
++// Persisted shapes for the scoped config the store keeps in a sync read-cache. Each carries
++// its own `scopeId` because a DurableMap's `all()` returns values, not keys, so hydrate keys
++// the cache off the record. JSON-serializable for the Postgres `(id, json)` map.
++export interface PersistedSoul {
++  scopeId: ScopeId;
++  content: string;
++  version: number;
++}
++export interface PersistedCommandPolicy {
++  scopeId: ScopeId;
++  policy: CommandPolicy;
++}
++export interface PersistedEgressPolicy {
++  scopeId: ScopeId;
++  policy: EgressPolicy;
++}
++export interface PersistedScopedFlag {
++  scopeId: ScopeId;
++  on: boolean;
++}
++
+ export interface ScopedConfigStore {
+   getSoul(id: ScopeId): string | null;
+   setSoul(id: ScopeId, content: string): number;
+   soulVersion(id: ScopeId): number;
+   getCommandPolicy(id: ScopeId): CommandPolicy | null;
+   setCommandPolicy(id: ScopeId, policy: CommandPolicy): void;
+   getEgress(id: ScopeId): EgressPolicy | null;
+   setEgress(id: ScopeId, policy: EgressPolicy): void;
+@@ -50,33 +71,61 @@ export interface ScopedConfigStore {
+   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
+   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
+   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
+   getConnectorClientSecret(id: ScopeId, provider: string): Promise<DecryptedConnectorClient | null>;
+   setServiceCredential(id: ScopeId, input: ServiceCredentialInput): Promise<void>;
+   listServiceCredentials(id: ScopeId): Promise<PublicServiceCredential[]>;
+   deleteServiceCredential(id: ScopeId, slug: string): Promise<void>;
+   getServiceCredentialSecret(id: ScopeId, slug: string): Promise<DecryptedServiceCredential | null>;
++  // Load the persisted soul / command-policy / egress / flag overrides into the sync
++  // read-cache. Call once at startup before serving so a restart doesn't reset scoped config
++  // to the org floor. A no-op in the no-DATABASE_URL (memory-map) case.
++  hydrate?(): Promise<void>;
+ }
+ 
+ export function createMemoryConfigStore(
+   orgId: string,
+   opts: {
+     connectorClients?: DurableMap<StoredConnectorClient>;
+     residentialProxies?: DurableMap<ResidentialProxyConfig>;
+     residentialProxyCredentials?: DurableMap<StoredResidentialProxyCredentials>;
+     serviceCredentials?: DurableMap<StoredServiceCredential>;
++    souls?: DurableMap<PersistedSoul>;
++    commandPolicies?: DurableMap<PersistedCommandPolicy>;
++    egressPolicies?: DurableMap<PersistedEgressPolicy>;
++    deployAuthSplits?: DurableMap<PersistedScopedFlag>;
++    publishMemberGrants?: DurableMap<PersistedScopedFlag>;
+     connectorSecretKey?: Buffer | string;
+   } = {},
+ ): ScopedConfigStore {
++  // In-memory read-cache for the hot-path config (soul / command-policy / egress / flags).
++  // Reads stay sync; writes are write-through to the durable stores below and `hydrate()`
++  // reloads the cache at startup, so the data survives a deploy and is consistent per-instance.
+   const souls = new Map<ScopeId, { content: string; version: number }>();
+   const policies = new Map<ScopeId, CommandPolicy>();
+   const egress = new Map<ScopeId, EgressPolicy>();
+   const deployAuthSplit = new Map<ScopeId, boolean>();
+   const publishPrivateMemberGrants = new Map<ScopeId, boolean>();
++  // Durable backing for the read-cache (Postgres when wired with a pg map, else in-memory).
++  const soulStore = opts.souls ?? createMemoryMap<PersistedSoul>();
++  const commandPolicyStore = opts.commandPolicies ?? createMemoryMap<PersistedCommandPolicy>();
++  const egressStore = opts.egressPolicies ?? createMemoryMap<PersistedEgressPolicy>();
++  const deployAuthStore = opts.deployAuthSplits ?? createMemoryMap<PersistedScopedFlag>();
++  const publishGrantStore = opts.publishMemberGrants ?? createMemoryMap<PersistedScopedFlag>();
++  const persistWarn = (what: string) => (e: unknown) => console.error(`[config] failed to persist ${what}:`, e);
++  // Write-through is fire-and-forget to keep setters sync, but each config key is an upsert to
++  // the SAME durable row, so two quick writes to one scope must not race: serialize per (kind,
++  // scope) so the durable row ends on the value the sync cache holds (else a later `hydrate()`
++  // could load a stale soul/policy/egress). The op runs after the prior one settles, pass or fail.
++  const writeChains = new Map<string, Promise<unknown>>();
++  const persist = (key: string, what: string, op: () => Promise<unknown>): void => {
++    const next = (writeChains.get(key) ?? Promise.resolve()).then(op, op).catch(persistWarn(what));
++    writeChains.set(key, next);
++  };
+   const residentialProxy = opts.residentialProxies ?? createMemoryMap<ResidentialProxyConfig>();
+   const residentialProxyCreds = opts.residentialProxyCredentials ?? createMemoryMap<StoredResidentialProxyCredentials>();
+   const connectorClients = opts.connectorClients ?? createMemoryMap<StoredConnectorClient>();
+   const serviceCredentials = opts.serviceCredentials ?? createMemoryMap<StoredServiceCredential>();
+   const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32));
+   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
+   const decryptProxyCreds = (rec: StoredResidentialProxyCredentials | null): ProxyCredentials => ({
+     ...(rec?.usernameEnc ? { username: decryptSecret(rec.usernameEnc, connectorKey) } : {}),
+@@ -90,32 +139,59 @@ export function createMemoryConfigStore(
+       "You are a helpful internal assistant for this organization. Be concise, " +
+       "accurate, and respect data boundaries: never reveal information to people " +
+       "who are not party to the current conversation.",
+     version: 1,
+   });
+   policies.set(org, defaultOrgPolicy());
+   egress.set(org, { allowedHosts: [], deniedHosts: [] });
+ 
++  let hydrated: Promise<void> | null = null;
++
+   return {
++    hydrate() {
++      if (!hydrated) {
++        hydrated = (async () => {
++          for (const r of await soulStore.all()) souls.set(r.scopeId, { content: r.content, version: r.version });
++          for (const r of await commandPolicyStore.all()) policies.set(r.scopeId, r.policy);
++          for (const r of await egressStore.all()) egress.set(r.scopeId, r.policy);
++          for (const r of await deployAuthStore.all()) deployAuthSplit.set(r.scopeId, r.on);
++          for (const r of await publishGrantStore.all()) publishPrivateMemberGrants.set(r.scopeId, r.on);
++        })();
++      }
++      return hydrated;
++    },
+     getSoul: (id) => souls.get(id)?.content ?? null,
+     setSoul(id, content) {
+       const version = (souls.get(id)?.version ?? 0) + 1;
+       souls.set(id, { content, version });
++      persist(`soul:${id}`, "soul", () => soulStore.put(id, { scopeId: id, content, version }));
+       return version;
+     },
+     soulVersion: (id) => souls.get(id)?.version ?? 0,
+     getCommandPolicy: (id) => policies.get(id) ?? null,
+-    setCommandPolicy: (id, policy) => void policies.set(id, policy),
++    setCommandPolicy(id, policy) {
++      policies.set(id, policy);
++      persist(`policy:${id}`, "command policy", () => commandPolicyStore.put(id, { scopeId: id, policy }));
++    },
+     getEgress: (id) => egress.get(id) ?? null,
+-    setEgress: (id, policy) => void egress.set(id, policy),
++    setEgress(id, policy) {
++      egress.set(id, policy);
++      persist(`egress:${id}`, "egress policy", () => egressStore.put(id, { scopeId: id, policy }));
++    },
+     getDeployAuthSplit: (id) => (deployAuthSplit.get(org) ?? false) || (deployAuthSplit.get(id) ?? false),
+-    setDeployAuthSplit: (id, on) => void deployAuthSplit.set(id, on),
++    setDeployAuthSplit(id, on) {
++      deployAuthSplit.set(id, on);
++      persist(`deploy:${id}`, "deploy-auth split", () => deployAuthStore.put(id, { scopeId: id, on }));
++    },
+     getPublishPrivateMemberGrants: (id) => (publishPrivateMemberGrants.get(org) ?? false) || (publishPrivateMemberGrants.get(id) ?? false),
+-    setPublishPrivateMemberGrants: (id, on) => void publishPrivateMemberGrants.set(id, on),
++    setPublishPrivateMemberGrants(id, on) {
++      publishPrivateMemberGrants.set(id, on);
++      persist(`publish:${id}`, "publish-member-grants flag", () => publishGrantStore.put(id, { scopeId: id, on }));
++    },
+     getResidentialProxy: async (id) => {
+       const cfg = await residentialProxy.get(id);
+       return cfg ? { ...cfg } : null;
+     },
+     setResidentialProxy: async (id, cfg) => {
+       await residentialProxy.put(id, { ...cfg });
+     },
+     getResidentialProxyCredentials: async (id) => decryptProxyCreds(await residentialProxyCreds.get(id)),
+diff --git a/src/runs/worker-main.ts b/src/runs/worker-main.ts
+--- a/src/runs/worker-main.ts
++++ b/src/runs/worker-main.ts
+@@ -1,13 +1,15 @@
+ import { loadConfig } from "../config.ts";
+ import { buildApp } from "../wiring.ts";
+ 
+ const config = loadConfig();
+-const { runtime } = buildApp(config);
++const built = buildApp(config);
++await built.config.hydrate?.();
++const { runtime } = built;
+ runtime.start();
+ console.log(
+   `[agent-platform:worker] draining runs (org=${config.orgId}, runStore=${config.runStore}, workers=${config.workers})`,
+ );
+ 
+ let shuttingDown = false;
+ function shutdown(signal: string): void {
+   if (shuttingDown) return;
+diff --git a/src/wiring.ts b/src/wiring.ts
+--- a/src/wiring.ts
++++ b/src/wiring.ts
+@@ -1,13 +1,13 @@
+ import { mkdirSync } from "node:fs";
+ import { join } from "node:path";
+ import { RUN_DEFAULTS, type Config } from "./config.ts";
+ import { createIdentityService, type IdentityService } from "./identity/identity-service.ts";
+-import { createMemoryConfigStore, type ScopedConfigStore, type StoredResidentialProxyCredentials } from "./resolution/config-store.ts";
++import { createMemoryConfigStore, type ScopedConfigStore, type StoredResidentialProxyCredentials, type PersistedSoul, type PersistedCommandPolicy, type PersistedEgressPolicy, type PersistedScopedFlag } from "./resolution/config-store.ts";
+ import { createResolutionService } from "./resolution/resolution-service.ts";
+ import { createAclStore, type AclStore } from "./acl/acl-store.ts";
+ import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
+ import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
+ import { installSeedSkills } from "./skills/seed.ts";
+ import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+ import { createPostgresLeaderLease, createNoopLeaderLease, DEFAULT_LEADER_LEASE_TTL_MS, type LeaderLease } from "./persistence/leader-lease.ts";
+ import { createPostgresAdvisoryLock, createNoopAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
+@@ -136,18 +136,27 @@ export function buildApp(config: Config): BuiltApp {
+   const deployAdvisoryLock: AdvisoryLock = pgArtifactMap
+     ? createPostgresAdvisoryLock(pgArtifactMap.pool)
+     : createNoopAdvisoryLock();
+   const configStore = createMemoryConfigStore(config.orgId, {
+     connectorClients: artifactMap<StoredConnectorClient>("connector_clients"),
+     residentialProxies: artifactMap<ResidentialProxyConfig>("residential_proxy_config"),
+     residentialProxyCredentials: artifactMap<StoredResidentialProxyCredentials>("residential_proxy_credentials"),
+     serviceCredentials: artifactMap<StoredServiceCredential>("service_credentials"),
++    souls: artifactMap<PersistedSoul>("soul_configs"),
++    commandPolicies: artifactMap<PersistedCommandPolicy>("command_policies"),
++    egressPolicies: artifactMap<PersistedEgressPolicy>("egress_policies"),
++    deployAuthSplits: artifactMap<PersistedScopedFlag>("deploy_auth_split"),
++    publishMemberGrants: artifactMap<PersistedScopedFlag>("publish_member_grants"),
+     ...(config.connectorSecretKey ?? config.signingSecret ? { connectorSecretKey: (config.connectorSecretKey ?? config.signingSecret) as string } : {}),
+   });
++  // Warm the config read-cache from its durable backing so a restart doesn't reset scoped
++  // soul/policy/egress to the org floor. Fire-and-forget here; the entrypoints await it
++  // (the same memoized promise) before serving.
++  void configStore.hydrate?.();
+   const skills: SkillStore = createSkillStore({
+     backing: artifactMap<Skill>("skills"),
+     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
+   });
+   const livenessCache = createLivenessCache(artifactMap<ScopeLivenessRecord>("credential_liveness"));
+   const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
+   if (config.seedSkills !== false) {
+     void installSeedSkills(skills, { dir: config.skillsSeedDir ?? join(process.cwd(), "skills-seed"), scopeId: scopeId("org", config.orgId) }).catch((e) => {

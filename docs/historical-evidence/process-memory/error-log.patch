@@ -1,0 +1,188 @@
+diff --git a/src/admin/error-log.ts b/src/admin/error-log.ts
+--- a/src/admin/error-log.ts
++++ b/src/admin/error-log.ts
+@@ -1,38 +1,51 @@
+ /**
+  * Operational error telemetry (spec §16 `error_events`) — distinct from the
+  * security audit log. Captures operational failures (command-policy denials, turn
+  * errors, …) for the admin "Errors" view. Scope-labelled and **content-minimized**:
+  * messages carry shape/codes, never rows/secrets/message bodies (it must never become
+  * a content side-channel).
++ *
++ * Like {@link MetricsSink}/{@link AuditLog} this is a swappable seam: the in-memory ring
++ * buffer here is the dev/test default; a durable {@link createPostgresErrorLog} drops in via
++ * wiring.ts when DATABASE_URL is set. `list` is async so a Postgres backend can query it; the
++ * in-memory default resolves immediately. Durability matters because core runs blue-green +
++ * multi-instance: an event in one instance's RAM vanishes on redeploy and is invisible to an
++ * admin query that lands on another instance, so the in-memory log can't be the durable trace.
+  */
+ 
+ import type { ScopeId } from "../types.ts";
+ import { createScopedEventSink } from "./scoped-event-sink.ts";
+ 
+ export interface ErrorEvent {
+   ts: number;
+   category: string; // e.g. "command_policy" | "egress" | "turn"
+   code: string; // e.g. "denied" | "error"
+   message: string; // redacted/structural — never content
+   scopeLabel: ScopeId;
+   sessionId?: string;
+ }
+ 
+ export interface ErrorLog {
++  /** Record an event. Best-effort and non-blocking — a durable backend writes through async. */
+   record(e: Omit<ErrorEvent, "ts">): void;
+-  list(opts?: { scopeId?: string; limit?: number }): ErrorEvent[];
++  /**
++   * Most-recent-first, optionally filtered to an exact scope label and capped at `limit`.
++   * Async so a durable (Postgres) backend can query it; the in-memory default resolves
++   * immediately.
++   */
++  list(opts?: { scopeId?: string; limit?: number }): Promise<ErrorEvent[]>;
+ }
+ 
+ const MAX = 5000;
+ 
+ export function createErrorLog(): ErrorLog {
+   const sink = createScopedEventSink<ErrorEvent, Omit<ErrorEvent, "ts">>({
+     max: MAX,
+     defaultLimit: 200,
+     stamp: (e) => ({ ...e, ts: Date.now() }),
+   });
+   return {
+     record: (e) => sink.record(e),
+-    list: (opts = {}) => sink.list(opts),
++    list: (opts = {}) => Promise.resolve(sink.list(opts)),
+   };
+ }
+diff --git a/src/admin/postgres-error-log.ts b/src/admin/postgres-error-log.ts
+new file mode 100644
+--- /dev/null
++++ b/src/admin/postgres-error-log.ts
+@@ -0,0 +1,82 @@
++/**
++ * Postgres-backed {@link ErrorLog} — durable operational error telemetry (spec §16
++ * `error_events`). The in-memory default ({@link createErrorLog}) is a bounded ring buffer
++ * that RESETS on every deploy and lives on a single instance, so on a blue-green / multi-instance
++ * core the admin "Errors" view is structurally blind: an event recorded into one instance's RAM
++ * is gone after a redeploy and invisible to an admin query that lands on a different instance —
++ * leaving the failed-runs row as the only durable trace. This persists every event so the Errors
++ * view reads off real history that survives restarts/redeploys/machine-replacement and is shared
++ * across instances. Mirrors {@link createPostgresMetricsSink}.
++ *
++ * Records SHAPE only — category/code, a redacted/structural message, scope label, and an optional
++ * session id for triage (spec §16: never message/file content), so it can never become a content
++ * side-channel. `record` is fire-and-forget (best-effort telemetry never blocks or fails a turn);
++ * `list` queries Postgres for the admin projection.
++ *
++ * `pg` is loaded lazily via {@link createPgPool} (dynamic import), so this stays out of the
++ * core's default zero-runtime-dep import graph until a Postgres deploy selects it (wiring.ts).
++ */
++
++import { createPgPool } from "../persistence/pg-pool.ts";
++import type { ScopeId } from "../types.ts";
++import type { ErrorEvent, ErrorLog } from "./error-log.ts";
++
++function rowToEvent(r: Record<string, unknown>): ErrorEvent {
++  return {
++    ts: Number(r.ts),
++    category: String(r.category),
++    code: String(r.code),
++    message: String(r.message),
++    scopeLabel: r.scope_label as ScopeId,
++    // Absent on events that weren't tied to a session (e.g. a process-session reconcile failure).
++    ...(r.session_id == null ? {} : { sessionId: String(r.session_id) }),
++  };
++}
++
++export function createPostgresErrorLog(connectionString: string): ErrorLog {
++  const { q } = createPgPool(
++    connectionString,
++    `
++      CREATE TABLE IF NOT EXISTS error_events(
++        id BIGSERIAL PRIMARY KEY,
++        ts BIGINT NOT NULL,
++        scope_label TEXT NOT NULL,
++        category TEXT NOT NULL,
++        code TEXT NOT NULL,
++        message TEXT NOT NULL,
++        session_id TEXT
++      );
++      CREATE INDEX IF NOT EXISTS error_events_by_ts ON error_events(ts DESC);
++      CREATE INDEX IF NOT EXISTS error_events_by_scope_ts ON error_events(scope_label, ts DESC);
++    `,
++  );
++
++  return {
++    record(e) {
++      const ts = Date.now();
++      // Fire-and-forget: telemetry must never block or fail a turn. A write error is logged, not thrown.
++      void q(
++        "INSERT INTO error_events(ts, scope_label, category, code, message, session_id) VALUES ($1,$2,$3,$4,$5,$6)",
++        [ts, e.scopeLabel, e.category, e.code, e.message, e.sessionId ?? null],
++      ).catch((err) => console.error("[errors] failed to persist error event:", err));
++    },
++    async list(opts = {}) {
++      const limit = opts.limit ?? 200;
++      const conds: string[] = [];
++      const params: unknown[] = [];
++      if (opts.scopeId !== undefined) {
++        params.push(opts.scopeId);
++        conds.push(`scope_label = $${params.length}`);
++      }
++      params.push(limit);
++      const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
++      // `id` (BIGSERIAL) breaks ties so "most-recent-first" is deterministic even for events
++      // recorded within the same millisecond (ts has ms resolution; a burst of denials can collide).
++      const rows = await q(
++        `SELECT ts, scope_label, category, code, message, session_id FROM error_events ${where} ORDER BY ts DESC, id DESC LIMIT $${params.length}`,
++        params,
++      );
++      return rows.map(rowToEvent);
++    },
++  };
++}
+diff --git a/src/wiring.ts b/src/wiring.ts
+--- a/src/wiring.ts
++++ b/src/wiring.ts
+@@ -79,16 +79,17 @@ import { createApp, type App } from "./api/app.ts";
+ import { createAdminService, parseAdminGrants, defaultAdminGrants, type AdminService } from "./admin/admin-service.ts";
+ import {
+   createAdminGrantStore,
+   createMapAdminGrantPersistence,
+   type AdminGrant,
+ } from "./admin/admin-grant-store.ts";
+ import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
+ import { createErrorLog, type ErrorLog } from "./admin/error-log.ts";
++import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
+ import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
+ import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
+ import { createFleetRegistry, type FleetRegistry } from "./admin/fleet.ts";
+ 
+ /** The run-queue runtime: the in-process worker pool + reaper (G6). */
+ export interface Runtime {
+   /** Start the in-process worker pool + reaper. */
+   start(): void;
+@@ -402,17 +403,21 @@ export function buildApp(config: Config): BuiltApp {
+       ? createPostgresProcessRegistry(config.databaseUrl)
+       : createMemoryProcessRegistry()
+     : undefined;
+ 
+   // ── Observability, deploy stack, and the orchestrator ───────────────────────────────
+   // The admin-plane signals (errors/metrics/fleet), the streaming channel, the `publish`
+   // deploy stack, and the orchestrator that ties identity/resolution/sandbox/harness/etc.
+   // into a turn. The orchestrator + App share one instance of each dependency.
+-  const errors = createErrorLog();
++  // Durable when DATABASE_URL is set (prod) so operational error telemetry survives deploys/
++  // restarts and is shared across blue-green / multi-instance core (spec §16 `error_events`); the
++  // in-memory ring buffer remains the dev/test default. Without this the Errors view is blind on
++  // prod — an event recorded into one instance's RAM is gone after a redeploy.
++  const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
+   // Durable when DATABASE_URL is set (prod) so latency telemetry survives deploys/restarts
+   // (spec §16 latency budget); the in-memory ring buffer remains the dev/test default.
+   const metrics = config.databaseUrl ? createPostgresMetricsSink(config.databaseUrl) : createMetricsSink();
+   const credentialUsage = createCredentialUsageSink();
+   const fleet = createFleetRegistry();
+   // In-flight partial-reply channel (streaming): the worker writes deltas, the HTTP
+   // poll reads them — same process via the in-process worker pool below, so a plain
+   // in-memory channel is shared between writer and reader.
