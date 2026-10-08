@@ -308,7 +308,7 @@ function effort(level: string | undefined): "low" | "medium" | "high" | "xhigh" 
 
 export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
   const configuredModel = opts.modelId;
-  const judgeModelId = opts.judgeModelId ?? "claude-haiku-4-5";
+  const judgeModelId = opts.judgeModelId ?? "claude-haiku-5-5";
   const resolveModelId = (scope?: ScopeId) =>
     [
       typeof configuredModel === "function" ? configuredModel(scope) : configuredModel,

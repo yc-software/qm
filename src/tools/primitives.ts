@@ -203,6 +203,8 @@ export interface ToolContext extends SurfaceToolDeps {
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
+  /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
+  humanTurn?: boolean;
   commandCredentialHandles?: readonly string[];
   registerLogin?(
     service: string,
@@ -523,6 +525,7 @@ export interface ToolContextDeps {
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
+  humanTurn?: boolean;
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
@@ -1168,6 +1171,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
+    ...(deps.humanTurn ? { humanTurn: true } : {}),
     ...(deps.sessionSyscalls
       ? {
           sessionSyscalls: {

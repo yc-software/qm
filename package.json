@@ -46,7 +46,7 @@
     "sandbox:local:build": "bash scripts/local-sandbox-build.sh",
     "sandbox:porter:build": "docker build --platform linux/amd64 -t \"${PORTER_SANDBOX_IMAGE:?Set PORTER_SANDBOX_IMAGE to the registry tag to publish}\" porter && docker push \"$PORTER_SANDBOX_IMAGE\"",
     "deploy:porter-runner-image": "docker build --platform linux/amd64 -t \"${PORTER_DEPLOY_RUNNER_IMAGE:?Set PORTER_DEPLOY_RUNNER_IMAGE to the registry tag to publish}\" -f deploy/porter-runner/Dockerfile . && docker push \"$PORTER_DEPLOY_RUNNER_IMAGE\"",
-    "test:pg": "node scripts/run-pg-tests.mjs test/batch-paths.test.ts test/session-append-many.test.ts test/cron-queue.test.ts test/postgres-migration-startup.test.ts test/postgres-swarms.test.ts test/postgres-store.test.ts test/postgres-instance-registry.test.ts test/readiness.test.ts test/postgres-grant-store.test.ts test/postgres-admin-grants.test.ts test/postgres-file-artifact-store.test.ts test/postgres-file-upload-store.test.ts test/postgres-directory-store.test.ts test/postgres-map.test.ts test/postgres-background-ownership.test.ts test/postgres-resource-search.test.ts test/deploy-store-pg.test.ts test/postgres-cron-fires.test.ts test/postgres-migration-adoption.test.ts test/postgres-migrations.test.ts test/postgres-metrics-sink.test.ts test/postgres-error-log.test.ts test/postgres-audit-log.test.ts test/postgres-budget.test.ts test/postgres-rate-limiter.test.ts test/postgres-credential-usage-sink.test.ts test/postgres-config-store.test.ts test/postgres-delivery-store.test.ts test/postgres-replay-dedupe.test.ts test/postgres-broker-sessions.test.ts test/postgres-egress-audit-sink.test.ts test/postgres-memory-service.test.ts test/run-signal-store.test.ts test/postgres-listener.test.ts test/postgres-run-activity-store.test.ts test/leader-lease.test.ts test/advisory-lock.test.ts test/loop-ingress-pg.test.ts test/persistence-init-retry.test.ts test/migrate-principals.test.ts test/postgres-surface-cache.test.ts test/slack-mirror-fidelity.test.ts test/run-retry-delay.test.ts test/postgres-run-stream.test.ts test/migrate-main.test.ts",
+    "test:pg": "node scripts/run-pg-tests.mjs test/batch-paths.test.ts test/session-append-many.test.ts test/cron-queue.test.ts test/postgres-migration-startup.test.ts test/postgres-swarms.test.ts test/postgres-store.test.ts test/postgres-instance-registry.test.ts test/readiness.test.ts test/postgres-grant-store.test.ts test/postgres-admin-grants.test.ts test/postgres-file-artifact-store.test.ts test/postgres-file-upload-store.test.ts test/postgres-directory-store.test.ts test/postgres-map.test.ts test/postgres-background-ownership.test.ts test/postgres-resource-search.test.ts test/deploy-store-pg.test.ts test/postgres-cron-fires.test.ts test/postgres-migration-adoption.test.ts test/postgres-migrations.test.ts test/postgres-metrics-sink.test.ts test/postgres-error-log.test.ts test/postgres-audit-log.test.ts test/postgres-app-page-views.test.ts test/postgres-budget.test.ts test/postgres-rate-limiter.test.ts test/postgres-credential-usage-sink.test.ts test/postgres-config-store.test.ts test/postgres-delivery-store.test.ts test/postgres-replay-dedupe.test.ts test/postgres-broker-sessions.test.ts test/postgres-egress-audit-sink.test.ts test/postgres-memory-service.test.ts test/run-signal-store.test.ts test/postgres-listener.test.ts test/postgres-run-activity-store.test.ts test/leader-lease.test.ts test/advisory-lock.test.ts test/loop-ingress-pg.test.ts test/persistence-init-retry.test.ts test/migrate-principals.test.ts test/postgres-surface-cache.test.ts test/slack-mirror-fidelity.test.ts test/run-retry-delay.test.ts test/postgres-run-stream.test.ts test/migrate-main.test.ts",
     "livetest": "node scripts/api-livetest.ts",
     "bench:memory": "node --env-file-if-exists=.env scripts/memory-bench.ts",
     "prepare": "node .husky/install.mjs",
@@ -58,6 +58,7 @@
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
     "lint:knip": "knip",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "migrate:transcript-tape": "node scripts/migrate-transcript-tape.ts",
     "build:app-annotations": "node scripts/build-app-devbar.mjs"
   },
@@ -123,7 +124,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
     "@types/tar-stream": "^3.1.4",

@@ -60,7 +60,7 @@ async function runTurnEnforcingGoal(
     meter.turns += result.modelCalls ?? 1;
     const tokens = inputTokens(result);
     meter.tokens += tokens;
-    goal.tokensUsed += tokens;
+    if (goal.status !== "paused") goal.tokensUsed += tokens;
   };
   account();
   const remainingWallMs = () =>
@@ -96,11 +96,11 @@ async function runTurnEnforcingGoal(
       return blocked() ? "halted" : "ok";
     },
   });
+  bankGoalTurn(goal, startedAt);
   if (result.stopped && (result.stoppedByUser || !input.cancel?.aborted) && goal.status === "active") {
     goal.status = "paused";
     goal.updatedAt = Date.now();
   }
-  bankGoalTurn(goal, startedAt);
   await dispatched.emit({ type: "system", payload: goalSnapshotPayload(goal), scopeLabel: input.scopeLabel });
   return result;
 }

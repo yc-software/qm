@@ -76,6 +76,7 @@ import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../loops/sources/adapter.ts";
 import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
@@ -192,6 +193,7 @@ export interface ServerDeps {
   deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;
   deployAppsLoginPath?: "/auth/login" | "/auth/trusted/login";
+  appPageViews?: AppPageViewLog;
   scheduler?: Scheduler;
   webhookReceiver?: WebhookReceiver;
   loopIngress?: LoopIngressService;

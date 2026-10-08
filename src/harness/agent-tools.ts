@@ -4100,12 +4100,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
       "you are stopping work. An independent fresh-context verifier reads only the objective, your note, and any " +
       "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
-      "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block, pause, or " +
-      "resume a goal; only the user stops it.",
+      "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
+      'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
+      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap.",
     parameters: Type.Object({
-      status: Type.Literal("complete"),
+      status: Type.Union([Type.Literal("complete"), Type.Literal("resume")]),
       note: Type.String({
-        description: "The concrete evidence (commands, output, results, links) that proves the objective is achieved.",
+        description:
+          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume: quote the user's request to resume.",
       }),
       files: Type.Optional(
         Type.Array(Type.String(), {
@@ -4115,19 +4117,53 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
     }),
     async execute(callId, params) {
-      const p = params as { note: string; files?: string[] };
+      const p = params as { status?: "complete" | "resume"; note: string; files?: string[] };
+      const status = p.status === "resume" ? "resume" : "complete";
       await recordCall(callId, {
         tool: "goal",
         action: "update",
-        status: "complete",
+        status,
         ...(p.note ? { note: p.note } : {}),
       });
       const goal = ref.goal;
+      if (status === "resume") {
+        if (goal?.status !== "paused") {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "not_paused" },
+            text(goal?.status === "active" ? "The goal is already active." : "No paused goal to resume."),
+            true,
+          );
+        }
+        // Only a person's own message can lift a pause the person put there;
+        // crons, webhooks, ambient and delegated wakes cannot.
+        if (ref.current?.humanTurn !== true) {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "human_required" },
+            text(
+              "Only the user can resume a paused goal, by asking in their own message; this run was not started by one. The goal stays paused.",
+            ),
+            true,
+          );
+        }
+        goal.status = "active";
+        goal.updatedAt = goal.activeSince = Date.now();
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "update", goal },
+          text("The goal is active again and enforced as before. Continue working toward it."),
+        );
+      }
       if (goal?.status !== "active") {
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", error: "no_active_goal" },
-          text(goal?.status === "paused" ? "The goal is paused by the user." : "No active goal to complete."),
+          text(
+            goal?.status === "paused"
+              ? "The goal is paused by the user. Only the user can resume it, by asking to."
+              : "No active goal to complete.",
+          ),
           true,
         );
       }

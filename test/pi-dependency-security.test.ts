@@ -68,6 +68,38 @@ test("Pi and MCP security overrides are materialized by the root lockfile", () =
   );
 });
 
+function versionAtLeast(version: unknown, floor: string): boolean {
+  if (typeof version !== "string") return false;
+  const parts = version.split(".").map(Number);
+  const minimum = floor.split(".").map(Number);
+  for (const [index, required] of minimum.entries()) {
+    const actual = parts[index] ?? 0;
+    if (actual !== required) return actual > required;
+  }
+  return true;
+}
+
+// The core image runs `npm audit --omit=dev --audit-level=moderate`, so a lockfile that
+// falls back below these advisory fixes fails the release build.
+const advisoryFixes = {
+  "@modelcontextprotocol/sdk": "1.31.0", // GHSA-6qxp-vccf-f47h
+  "proxy-addr": "2.0.8", // GHSA-jqcg-44mw-7w3h
+  "smol-toml": "1.9.0", // GHSA-r4xh-jqrq-34v2
+};
+
+test("the root lockfile carries the releases that fix production dependency advisories", () => {
+  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as {
+    packages?: Record<string, { version?: unknown }>;
+  };
+  for (const [dependency, floor] of Object.entries(advisoryFixes)) {
+    const versions = lockedVersions(lock.packages ?? {}, dependency);
+    assert.ok(versions.length > 0, `${dependency} is missing from the lockfile`);
+    for (const version of versions) {
+      assert.ok(versionAtLeast(version, floor), `${dependency}@${String(version)} is below the advisory fix ${floor}`);
+    }
+  }
+});
+
 test("MCP Streamable HTTP works through the patched Hono major", async (t) => {
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await transport.start();

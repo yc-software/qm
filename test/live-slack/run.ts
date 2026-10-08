@@ -56,7 +56,7 @@ async function buildEnv(): Promise<Env> {
     qaUserId: qaAuth.userId,
     teamId: qaAuth.teamId,
     anthropicApiKey: requireEnv("ANTHROPIC_API_KEY"),
-    judgeModel: process.env.LIVE_E2E_JUDGE_MODEL ?? "claude-haiku-4-5-20251001",
+    judgeModel: process.env.LIVE_E2E_JUDGE_MODEL ?? "claude-haiku-5-5",
     ...(process.env.LIVE_E2E_TARGET_CHANNEL ? { targetChannel: process.env.LIVE_E2E_TARGET_CHANNEL } : {}),
     sandbox:
       process.env.LIVE_E2E_SANDBOX_AVAILABLE === "1" ||

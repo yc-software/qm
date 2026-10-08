@@ -139,6 +139,7 @@ import type {
 import { personalScope, scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
+import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import { createRateLimiter, type RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
 import { createBudgetTracker, estimateCostUsd } from "./ratelimit/budget.ts";
@@ -549,6 +550,7 @@ export interface BuiltApp {
   projects: ProjectStore;
   environments: EnvironmentStore;
   processes?: ProcessRegistry;
+  appPageViews?: AppPageViewLog;
   monitors: MonitorStore;
   browserSessionStore?: BrowserSessionStore;
   monitorPoller?: MonitorPoller;
@@ -1560,6 +1562,8 @@ export function buildApp(
     processes = config.databaseUrl ? createPostgresProcessRegistry(config.databaseUrl) : createMemoryProcessRegistry();
   }
 
+  const appPageViews =
+    config.databaseUrl && config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(config.databaseUrl) : undefined;
   const brokerSessions = config.databaseUrl ? createPostgresBrokerSessions(config.databaseUrl) : undefined;
   const replayDedupe = config.databaseUrl ? createPostgresReplayDedupe(config.databaseUrl) : createMemoryReplayDedupe();
   const metrics = config.databaseUrl ? createPostgresMetricsSink(config.databaseUrl) : createMetricsSink();
@@ -2861,6 +2865,7 @@ export function buildApp(
     projects,
     environments,
     ...(processes ? { processes } : {}),
+    ...(appPageViews ? { appPageViews } : {}),
     monitors,
     ...(browserSessionStore ? { browserSessionStore } : {}),
     ...(monitorPoller ? { monitorPoller } : {}),
@@ -2973,6 +2978,7 @@ export function serverDeps(
     ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
     ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
     ...(config.deployAppsLoginPath ? { deployAppsLoginPath: config.deployAppsLoginPath } : {}),
+    ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
     loopIngress: built.loopIngress,
