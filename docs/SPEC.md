@@ -119,24 +119,20 @@ Letting one file or module absorb unrelated responsibilities until changes requi
 - **[qm#175](https://github.com/yc-software/qm/pull/175): Chat surface.** `plugins/web-ui/src/chat.ts` combines transcript rendering and pagination, pane lifecycle and URL state, command-approval submission, active-run recovery, session forking, and connector-auth widgets inside `createChatSurface`. The multiview change rewrites that shared closure, so changing how a pane mounts also means navigating approval and execution-recovery state. _Status:_ these responsibilities still share `chat.ts`.
 - **[qm#488](https://github.com/yc-software/qm/pull/488): Web server entrypoint.** `plugins/web-ui/server/index.ts` combines session cookies and sign-in, OAuth callback forwarding, core API transport, request-body handling, and route handlers for sessions, files, projects, and crons. The PR extracts a shared router and relay helpers, but keeps the product domains and authentication flows in the same server module. _Status:_ partial cleanup; the shared entrypoint still owns those domains.
 
-### Mismatched UI (5 examples)
+### Mismatched UI (4 examples)
 
 Building interface pieces that disagree with the surrounding product in appearance, structure, or interaction. Reuse the existing components and design rules, and check the result in its containing surface so duplicated chrome and inconsistent typography do not slip through.
 
 - **Admin UI versus web UI:** The same product has separate admin and web interfaces with different layouts, styling, and controls. Moving between them should not feel like switching products. [qm#1441](https://github.com/yc-software/qm/pull/1441) migrated admin views to Lit while explicitly retaining the existing admin CSS and layout; sharing a rendering library did not unify the UI.
 - **Artifact pages under Browse:** Skills, crons, webhooks, apps, and files each developed their own search, filters, and toggles when they could use more or less the same controls. Skills has its own scope/source/status filters; crons has ownership tabs and a disabled toggle; apps has another tab implementation; files renders its own search and ownership/type filters. The implementations are visible together in [qm#963](https://github.com/yc-software/qm/pull/963). Artifact-specific options can vary, but the common search, filtering, and toggle interactions should be shared across Browse.
 - **[qm#1545](https://github.com/yc-software/qm/pull/1545)** (2026-09-22): Transcript elements each hardcoded their own font-size, so multiview panes showed 15px/14px headers beside 12px text; unified on one --chat-font-size base. _Status:_ wound back in [qm#1545](https://github.com/yc-software/qm/pull/1545).
-- **[qm#1053](https://github.com/yc-software/qm/pull/1053)** (2026-09-11): A parallel 'Beautiful UI' design system (10 stacked PRs) and an admin redesign with an Original/New toggle were built next to the existing web UI styles. _Status:_ wound back in [qm#1053](https://github.com/yc-software/qm/pull/1053) (closed with #1054-#1062, #992, #1215).
 - **[qm#513](https://github.com/yc-software/qm/pull/513)** (2026-08-13): Multiview panes showed two stacked headers (pane chrome plus the hosted chat's own top bar). _Status:_ wound back in [qm#513](https://github.com/yc-software/qm/pull/513).
 
-### Over-indexing on YC (4 examples)
+### Over-indexing on YC (3 examples)
 
 QM is for organizations in general. YC's usage guides development but architecture should not be _warped_ to fit our purposes and customizations. Leaking YC _data_ is a separate concern.
 
-Our reliance on internal YCLI should not substitute for a connector story that works for organizations without it.
-
 - **Dedicated people-directory configuration:** Role lookup from a people website became its own People directory admin card, org-wide URL setting, and save path in the generic product. This could have been ordinary organization knowledge or a deployment tool. _Status:_ [qm#1441](https://github.com/yc-software/qm/pull/1441) removes the dedicated admin card.
-- **Assuming Slack supplies the organization's people:** Project-member search only consulted the directory populated by Slack, so web-only deployments could not find users who already existed in Admin → Users. General organization membership had been tied to one communication surface. _Status:_ [qm#928](https://github.com/yc-software/qm/pull/928) adds lookup through the shared user roster.
 - **[qm#1008](https://github.com/yc-software/qm/pull/1008)** (2026-09-09): A 29-file 'software factory' loop (Linear auto-triage, forge ship contract) built for YC's own workflow was ported into public src/loops/factory before it had ever run end to end. _Status:_ wound back in [qm#1026](https://github.com/yc-software/qm/pull/1026).
 - **[qm#530](https://github.com/yc-software/qm/pull/530)** (2026-08-15): Assistant and org names were fixed across prompts, manifests, auth and UI; made deployment-configurable with neutral defaults. _Status:_ wound back in [qm#530](https://github.com/yc-software/qm/pull/530).
 
