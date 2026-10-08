@@ -13,18 +13,7 @@ export const SWARM_DEFAULTS = {
 
 export type SwarmSettings = typeof SWARM_DEFAULTS;
 
-export const SWARM_MAXIMUMS: Readonly<SwarmSettings> = {
-  agents: 256,
-  depth: 8,
-  messages: 256,
-  notifications: 1_024,
-  spawnRequests: 64,
-  contextBytes: 16_384,
-  textBytes: 16_384,
-  waitMs: 30_000,
-  turnMs: 3_600_000,
-  lifetimeMs: 86_400_000,
-};
+const MAX_TIMER_MS = 2_147_483_647;
 
 export function resolveSwarmSettings(input: unknown = {}, defaults: SwarmSettings = SWARM_DEFAULTS): SwarmSettings {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid swarm settings");
@@ -34,7 +23,7 @@ export function resolveSwarmSettings(input: unknown = {}, defaults: SwarmSetting
   const settings = { ...defaults, ...input };
   for (const key of Object.keys(SWARM_DEFAULTS) as Array<keyof SwarmSettings>) {
     const value = settings[key];
-    if (!Number.isSafeInteger(value) || value < 1 || value > SWARM_MAXIMUMS[key])
+    if (!Number.isSafeInteger(value) || value < 1 || (key === "turnMs" && value > MAX_TIMER_MS))
       throw new Error(`invalid swarm setting: ${key}`);
   }
   if (settings.agents < 2) throw new Error("swarm settings must allow the root and a worker");
