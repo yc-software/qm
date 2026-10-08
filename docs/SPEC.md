@@ -36,11 +36,13 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 
 ### Overengineering (3 examples)
 
-Adding machinery beyond what the actual requirements need: abstractions without real callers, speculative extension points, or scaffolding that costs more to maintain than the behavior it supports. Prefer the smallest coherent solution, especially when deleting or extending existing code is enough.
+Let sLOC +/- be your guide here. Small and net-negative LOC fixes will be rewarded. This codebase at baseline is flabby -- many bugs can be fixed by _deleting_, _removing_, _simplifying_. For features: use restraint when adding new subsystems that increase surface area and widen the config matrix we will have to support.
 
-- **qm#1311** (2026-09-16): Admin redesign (#1276) shipped an Original/New comparison toggle, duplicate original cards/styles and variant URL plumbing; replacement PR removed ~1,006 net lines of scaffolding. _Status:_ wound back in qm#1311.
-- **qm#896** (2026-09-02): An optional core-search backend injection point had no production caller and existed only for tests; removed. _Status:_ wound back in qm#896.
-- **qm#894** (2026-09-02): Procedural memory ('Memorable') landed as a pluggable provider under a new scope-aware memory router (#700) with MEMORY_PROVIDER_CONFIG routes, alongside a separate MEMORY_STRATEGY switch.
+Past mistakes and examples:
+
+- Amendments to the master spec that are way too large for the importance of what the PR actually adds
+- The loops subsystem should have just re-used the crons machinery, but it built its own little empire for no reason
+- The artifact pages in the web UI could have all used the same group-by backbone, but each one got its own design for no reason
 
 ### Band-aid fixes (8 examples)
 
