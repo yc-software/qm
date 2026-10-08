@@ -1574,6 +1574,9 @@ export function buildApp(
   const runStreamEvents = config.databaseUrl
     ? createPostgresNotifyBus<RunStreamEvent>(config.databaseUrl, "run_stream", "run-stream")
     : createMemoryEventBus<RunStreamEvent>("run-stream");
+  const contextRequestSettled = config.databaseUrl
+    ? createPostgresNotifyBus<string>(config.databaseUrl, "context_request_settled", "context-request-settled")
+    : createMemoryEventBus<string>("context-request-settled");
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
     onDelta: (runId, text, offset) => emitRunText(runStreamEvents, runId, text, offset),
@@ -2165,6 +2168,7 @@ export function buildApp(
     sessionStateBus,
     ledgerEventBus,
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
+    contextRequestSettled,
     engaged,
     reaperPoke: pokeReaper,
     surfaceCache,
@@ -2775,6 +2779,7 @@ export function buildApp(
           ledgerEventBus.close?.(),
           runActivity.close?.(),
           runStreamEvents.close?.(),
+          contextRequestSettled.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
       await harness.turns.close?.();
