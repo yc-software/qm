@@ -27,9 +27,10 @@ const clip = (value: string | null, max: number): string | null => (value === nu
 
 export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
   const { q } = createPgPool(connectionString, "deploy/app-page-views/0001", [
+    "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
     `CREATE TABLE IF NOT EXISTS app_page_views(
       id BIGSERIAL PRIMARY KEY,
-      deployment_id TEXT NOT NULL,
+      deployment_id TEXT NOT NULL REFERENCES deployments(id),
       version INTEGER,
       viewer TEXT,
       auth_mode TEXT NOT NULL,

@@ -3,6 +3,16 @@ import assert from "node:assert/strict";
 import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
 
 const URL = process.env.DATABASE_URL;
+const view = () => ({
+  deploymentId: "dep-1",
+  version: null,
+  viewer: null,
+  authMode: "public" as const,
+  at: 1_700_000_000_002,
+  path: "/",
+  ip: null,
+  userAgent: null,
+});
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres page-view tests";
 
 test("pg page-view log stores one row per view with clipped request fields", { skip }, async () => {
@@ -11,6 +21,8 @@ test("pg page-view log stores one row per view with clipped request fields", { s
   try {
     await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE");
     await admin.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/app-page-views/%'").catch(() => {});
+    await admin.query("CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+    await admin.query(`INSERT INTO deployments (id, json) VALUES ('dep-1', '{}') ON CONFLICT (id) DO NOTHING`);
     const log = createPostgresAppPageViewLog(URL!);
     await log.record({
       deploymentId: "dep-1",
@@ -53,7 +65,17 @@ test("pg page-view log stores one row per view with clipped request fields", { s
     assert.equal(rows[1].auth_mode, "public");
     assert.equal(rows[1].path.length, 2048);
     assert.equal(rows[1].ip, null);
+    await assert.rejects(
+      log.record({ ...view(), deploymentId: "no-such-app" }),
+      (err: { code?: string }) => err.code === "23503",
+    );
+    await assert.rejects(
+      admin.query("DELETE FROM deployments WHERE id = 'dep-1'"),
+      (err: { code?: string }) => err.code === "23503",
+    );
   } finally {
+    await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE").catch(() => {});
+    await admin.query("DELETE FROM deployments WHERE id = 'dep-1'").catch(() => {});
     await admin.end();
   }
 });
