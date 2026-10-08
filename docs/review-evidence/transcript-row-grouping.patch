@@ -1,0 +1,202 @@
+diff --git a/plugins/web-ui/src/chat.ts b/plugins/web-ui/src/chat.ts
+index 38a1ff85..1d9ac468 100644
+--- a/plugins/web-ui/src/chat.ts
++++ b/plugins/web-ui/src/chat.ts
+@@ -1386,9 +1386,37 @@ export function createChatSurface(
+     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
+     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
+     if (messages.length) {
+-      messageContent = messages.map((m, i) =>
+-        settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage),
+-      );
++      messageContent = [];
++      for (let i = 0; i < messages.length; i++) {
++        const message = messages[i]!;
++        const next = messages[i + 1];
++        const work = (next as AssistantWork | undefined)?.work;
++        const delegationContinuation =
++          message.role === "assistant" &&
++          Boolean(messageText(message).trim()) &&
++          next?.role === "assistant" &&
++          !messageText(next).trim() &&
++          work?.activity.some((activity) => (activity.payload as ToolPayload | null)?.tool === "session");
++        if (delegationContinuation) {
++          const streaming = agent.state.isStreaming && next === agent.state.streamingMessage;
++          messageContent.push(
++            html`<section class="assistant-response">
++              ${chatMessage(message, i - inheritedOffset, false, true)}
++              ${chatMessage(next, i + 1 - inheritedOffset, streaming, true)}
++              ${streaming ? nothing : messageMeta(message, i + 1 - inheritedOffset)}
++            </section>`,
++          );
++          i++;
++        } else {
++          messageContent.push(
++            settledChatMessage(
++              message,
++              i - inheritedOffset,
++              agent.state.isStreaming && message === agent.state.streamingMessage,
++            ),
++          );
++        }
++      }
+     }
+     const tier = ctx.density();
+     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
+@@ -1601,7 +1629,12 @@ export function createChatSurface(
+     return tpl;
+   }
+ 
+-  function chatMessage(message: AgentMessage, index: number, isStreaming = false): TemplateResult | typeof nothing {
++  function chatMessage(
++    message: AgentMessage,
++    index: number,
++    isStreaming = false,
++    sharedMeta = false,
++  ): TemplateResult | typeof nothing {
+     const hidden = message as { opener?: boolean; resumeAnchor?: boolean };
+     if (hidden.opener || hidden.resumeAnchor) return nothing;
+     const role = (message as { role?: string }).role;
+@@ -1624,6 +1657,7 @@ export function createChatSurface(
+       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
+       return html`
+         <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
++          ${(message as { subagentTask?: boolean }).subagentTask ? html`<div class="steer-label">Assigned by parent</div>` : nothing}
+           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
+           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
+           <div class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}">
+@@ -1710,7 +1744,7 @@ export function createChatSurface(
+           <div class="assistant-body">
+             ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
+             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
+-            ${isStreaming ? nothing : messageMeta(msg, index)}
++            ${isStreaming || sharedMeta ? nothing : messageMeta(msg, index)}
+           </div>
+         </article>
+       `;
+@@ -2385,8 +2419,21 @@ export function createChatSurface(
+     const animating = active && !stopping;
+     let label = stopping ? "Stop requested" : workLabel(work);
+     if (stopped) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
+-    let fold =
+-      timeline.length || tail.trim() || work.pendingApprovals?.length
++    const sections: Array<{ delegated: boolean; items: TimelineItem[] }> = [];
++    for (const item of timeline) {
++      const delegated = item.kind === "tool" && sessionPresentation(item.row, work.status) !== null;
++      const last = sections.at(-1);
++      if (last?.delegated === delegated) last.items.push(item);
++      else sections.push({ delegated, items: [item] });
++    }
++    if (!sections.length || (sections.at(-1)?.delegated && tail.trim())) sections.push({ delegated: false, items: [] });
++    const folds = sections.map((section, index) => {
++      if (section.delegated)
++        return html`<div class="delegated-work">
++          ${repeat(section.items, timelineKey, (item) => renderTimelineItem(item, work))}
++        </div>`;
++      const sectionTail = index === sections.length - 1 ? tail : "";
++      return section.items.length || sectionTail.trim() || work.pendingApprovals?.length
+         ? html`<details
+             class=${stopped ? "stopped-work" : `work work-fold work-${work.status}`}
+             ?open=${active || !!work.pendingApprovals?.length}
+@@ -2397,10 +2444,10 @@ export function createChatSurface(
+             ${stopped ? nothing : html`<div class="work-divider"></div>`}
+             <div class="work-rows">
+               ${repeat(
+-                activityGroups(timeline),
++                activityGroups(section.items),
+                 (items) => timelineKey(items[0]!),
+                 (items) => {
+-                  if (items[0]?.kind === "text") return renderTimelineItem(items[0], work);
++                  if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
+                   const summary = activityGroupSummary(items, work.status);
+                   const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
+                     summary.category
+@@ -2414,12 +2461,12 @@ export function createChatSurface(
+                   </details>`;
+                 },
+               )}
+-              ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamingTextTail(baseline, work.activity))}</div>` : nothing}
++              ${sectionTail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(sectionTail, animating, streamingTextTail(baseline, work.activity))}</div>` : nothing}
+             </div>
+           </details>`
+         : nothing;
+-    if (stopped && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
+-    return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
++    });
++    return html`${stopped && !timeline.length && !tail.trim() ? html`<div class="stopped-head">${label}</div>` : nothing}${folds}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+   }
+ 
+   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
+@@ -2535,7 +2582,10 @@ export function createChatSurface(
+ 
+   function subagentChip(title: string, sessionId?: string): TemplateResult {
+     const session = sessionsState.list.find((row) => row.id === sessionId);
+-    const inner = html`<span dir="auto">${session?.title || title}</span>`;
++    let state = session?.working ? "Working" : "";
++    if (session?.awaitingInput) state = "Needs input";
++    const inner = html`<span dir="auto">${session?.title || title}</span
++      >${state ? html`<span class="subagent-state">${state}</span>` : nothing}`;
+     if (!sessionId) return html`<span class="subagent-chip">${inner}</span>`;
+     return html`<button
+       class="subagent-chip"
+diff --git a/plugins/web-ui/src/shell.css b/plugins/web-ui/src/shell.css
+index e69ee84d..da5a5530 100644
+--- a/plugins/web-ui/src/shell.css
++++ b/plugins/web-ui/src/shell.css
+@@ -12487,3 +12487,56 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
+   font-size: 11px;
+   line-height: 1.5;
+ }
++
++.delegated-work {
++  margin: 8px 0;
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++}
++.delegated-work .tool-summary {
++  flex-wrap: wrap;
++  row-gap: 4px;
++}
++.delegated-work .session-action {
++  flex: none;
++}
++.delegated-work .subagent-chip {
++  flex: 0 1 auto;
++  max-width: 100%;
++}
++.subagent-state {
++  flex: none;
++  color: var(--muted-foreground);
++  font-size: 11px;
++}
++.split-pane-parent {
++  min-width: 0;
++  max-width: 30%;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  color: var(--muted-foreground);
++  text-decoration: none;
++}
++.split-pane-parent:hover {
++  color: var(--foreground);
++  text-decoration: underline;
++}
++
++.assistant-response {
++  position: relative;
++  min-width: 0;
++  padding-bottom: var(--meta-lane);
++}
++.assistant-response > .assistant-row {
++  padding-bottom: 0;
++}
++.assistant-response > .assistant-row + .assistant-row .delegated-work {
++  margin-top: 4px;
++}
++.assistant-response:hover > .message-meta,
++.assistant-response > .message-meta:focus-within {
++  opacity: 1;
++  pointer-events: auto;
++}
