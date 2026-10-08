@@ -120,7 +120,9 @@ test("the tile cap only judges dockview's own panel drags", () => {
 test("boot mounts a restored canvas before it awaits the session list", () => {
   const boot = shell.match(/export async function boot\(\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(boot, "boot not found");
-  const early = boot.indexOf("if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);");
+  const early = boot.indexOf(
+    "if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);",
+  );
   const listStart = boot.indexOf("const sessions = refreshSessions({ showLoading: true });");
   const listAwait = boot.lastIndexOf("await sessions;");
   assert.ok(early > 0, "boot must offer the canvas its head start");
@@ -132,7 +134,7 @@ test("boot mounts a restored canvas before it awaits the session list", () => {
 
   assert.match(
     boot.slice(listAwait),
-    /\} else if \(!mountRestoredCanvas\(\) && !mainConversation\(\)\.state\.threadRef\) \{/,
+    /\} else if \(!\(restoreLast && mountRestoredCanvas\(\)\) && !mainConversation\(\)\.state\.threadRef\) \{/,
   );
   const mount = fn(split, "mountRestoredCanvas");
   assert.match(mount, /if \(isPhone\(\) \|\| \(restoreOnly && !splitState\.active\)\) return false;/);
@@ -143,7 +145,10 @@ test("boot's fallback never replaces a chat the user mounted during the wait", (
   const boot = shell.match(/export async function boot\(\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
   const listAwait = boot.lastIndexOf("await sessions;");
   const tail = boot.slice(listAwait);
-  assert.match(tail, /\} else if \(!mountRestoredCanvas\(\) && !mainConversation\(\)\.state\.threadRef\) \{/);
+  assert.match(
+    tail,
+    /\} else if \(!\(restoreLast && mountRestoredCanvas\(\)\) && !mainConversation\(\)\.state\.threadRef\) \{/,
+  );
   const guard = tail.indexOf("!mainConversation().state.threadRef");
   const mint = tail.indexOf("newChat();", guard);
   assert.ok(guard > 0 && mint > guard, "the guard must gate the mint, not follow it");

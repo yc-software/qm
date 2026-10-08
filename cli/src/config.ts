@@ -708,10 +708,7 @@ function validate(raw: unknown, path: string): QmConfig {
       `${path}: "env.core.SANDBOX_BACKEND" is blank — name the backend core should run, or remove the key; every target forwards env.core verbatim, so a blank value leaves core with no backend`,
     );
   }
-  if (
-    (effectiveSandboxBackend({ env, sandbox }) === "superserve" || scopeUsesSuperserve(env.core)) &&
-    !env.core?.SUPERSERVE_TEMPLATE?.trim()
-  ) {
+  if (effectiveSandboxBackend({ env, sandbox }) === "superserve" && !env.core?.SUPERSERVE_TEMPLATE?.trim()) {
     throw new CliError(
       `${path}: the superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE (the ready qm-agent-<release> template); core refuses to start without it`,
     );
@@ -979,30 +976,11 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
   }
 }
 
-function scopeUsesSuperserve(core: Record<string, string> | undefined): boolean {
-  try {
-    const scopes: unknown = JSON.parse(core?.SANDBOX_SCOPE_BACKENDS || "{}");
-    return Boolean(
-      scopes &&
-      typeof scopes === "object" &&
-      !Array.isArray(scopes) &&
-      Object.values(scopes).some((value) => typeof value === "string" && value.trim() === "superserve"),
-    );
-  } catch {
-    return false;
-  }
-}
-
 export function requiresAwsMicrovmImage(config: QmConfig): boolean {
   if (config.target !== "aws") return false;
   const core = config.env.core;
   if ((core?.DEPLOY_PROVIDER?.trim() || "aws") === "aws") return true;
-  if ((core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "aws") === "aws") return true;
-  const scopes: unknown = JSON.parse(core?.SANDBOX_SCOPE_BACKENDS || "{}");
-  if (!scopes || typeof scopes !== "object" || Array.isArray(scopes)) {
-    throw new CliError("SANDBOX_SCOPE_BACKENDS must be an object");
-  }
-  return Object.values(scopes).some((value) => typeof value === "string" && value.trim() === "aws");
+  return (core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "aws") === "aws";
 }
 
 function validateAwsFrontDoor(config: QmConfig, path: string): void {

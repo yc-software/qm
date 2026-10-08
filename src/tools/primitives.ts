@@ -11,8 +11,6 @@ import { join } from "node:path";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import { ROUTE_CACHE_TTL_MS, type SandboxBackendName } from "../sandbox/sandbox-routing.ts";
-import type { SandboxMigrationRunner } from "../sandbox/sandbox-migration-runner.ts";
 import { CapabilityUnsupportedError, hasParentPathSegment, supportsAgentComputerExport } from "../sandbox/sandbox.ts";
 import type {
   ApprovalGrantModes,
@@ -27,11 +25,7 @@ import type {
   WorkspaceLayer,
 } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import {
-  defaultPublishAudience,
-  type PublishAudience,
-  type PublishAudienceKind,
-} from "../resolution/publish-audience.ts";
+import { type PublishAudienceKind } from "../resolution/publish-audience.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import type { GapPhase, GapWork } from "../sessions/session-store.ts";
@@ -203,6 +197,8 @@ export interface ToolContext extends SurfaceToolDeps {
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
+  /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
+  humanTurn?: boolean;
   commandCredentialHandles?: readonly string[];
   registerLogin?(
     service: string,
@@ -226,7 +222,6 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<unknown>;
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
   restartComputer(sandboxId?: string): Promise<void>;
-  migrateComputer(to: string): Promise<{ from: string; to: string }>;
   read(path: string, signal?: AbortSignal): Promise<ReadResult>;
   skill(name: string, opts?: { path?: string; sandboxId?: string; signal?: AbortSignal }): Promise<SkillResult>;
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
@@ -246,7 +241,10 @@ export interface ToolContext extends SurfaceToolDeps {
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<ClientToolResult | "timeout" | "cancelled">;
-  backgroundStart(command: string, opts?: { ttlSeconds?: number; sandboxId?: string }): Promise<BackgroundStartResult>;
+  backgroundStart(
+    command: string,
+    opts: { purpose: string; ttlSeconds?: number; sandboxId?: string },
+  ): Promise<BackgroundStartResult>;
   backgroundPoll(
     processId: string,
     opts?: { sinceCursor?: number; maxBytes?: number; waitSeconds?: number },
@@ -474,10 +472,8 @@ export interface ToolContextDeps {
   grantedHandles: GrantedHandle[];
   context?: TurnContext;
   sharedMaterializeDir?: string;
-  sandboxMigration?: SandboxMigrationRunner;
   sandboxResources?: SandboxResources;
   invalidateProvision?: () => void;
-  migrateSettleMs?: number;
   workspace: WorkspaceStore;
   deploy: DeployService;
   acl: AclStore;
@@ -523,6 +519,7 @@ export interface ToolContextDeps {
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
+  humanTurn?: boolean;
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
@@ -722,60 +719,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!writableScopeId) throw new Error("this turn has no scoped computer to restart");
       await deps.sandbox.restartComputer(writableScopeId);
     },
-    async migrateComputer(to: string): Promise<{ from: string; to: string }> {
-      if (writableScopeId && (await deps.sandboxResources?.resolve(writableScopeId)) !== undefined)
-        throw new Error("this scope uses sandbox resources; create a sandbox and change its default independently");
-      const runner = deps.sandboxMigration;
-      if (!runner) throw new Error("computer migration is not available on this deployment");
-      if (!writableScopeId) throw new Error("this turn has no scoped computer to migrate");
-      const available = runner.availableBackends();
-      if (!(available as string[]).includes(to)) {
-        throw new Error(
-          `${JSON.stringify(to)} is not an available backend here — choose one of: ${available.join(", ")}`,
-        );
-      }
-      const approvalCommand = `computer:"migrate" to:"${to}"`;
-      const approvalKey = `computer-migrate:${to}`;
-      if (!deps.authorizeCommand(approvalCommand, approvalKey)) {
-        throw new NeedsApproval(
-          approvalCommand,
-          `moving this computer to ${to} re-homes its files onto a different provider and can take several minutes`,
-          "approval",
-          undefined,
-          approvalKey,
-        );
-      }
-      try {
-        const result = await runner.migrateScope(writableScopeId, to as SandboxBackendName, "agent-requested", {
-          copyTimeoutSec: 1800,
-        });
-        deps.auditLog?.record({
-          at: Date.now(),
-          principalId: deps.createdBy,
-          action: "sandbox_routes.migrate",
-          resource: `${result.from}->${result.to} sha=${result.sha.slice(0, 12)}`,
-          scopeLabel: writableScopeId,
-        });
-        await new Promise((res) => setTimeout(res, deps.migrateSettleMs ?? ROUTE_CACHE_TTL_MS));
-        deps.invalidateProvision?.();
-        return { from: result.from, to: result.to };
-      } catch (err) {
-        deps.auditLog?.record({
-          at: Date.now(),
-          principalId: deps.createdBy,
-          action: "sandbox_routes.migrate_failed",
-          resource: errMessage(err).slice(0, 200),
-          scopeLabel: writableScopeId,
-        });
-        throw new Error(
-          errMessage(err).replace(
-            "Migrate with force to accept the loss.",
-            "An operator can force this from the admin console.",
-          ),
-          { cause: err },
-        );
-      }
-    },
     async execute(
       command: string,
       execOpts?: {
@@ -919,7 +862,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           } catch (error) {
             const message = errMessage(error);
             const masked = mask(message);
-            if (masked !== message) throw new MaskedExecutionError(masked);
+            if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
             throw error;
           }
           return reached ? { ...r, reached } : r;
@@ -1084,6 +1027,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async publish(input: PublishInput): Promise<PublishResult> {
       if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
+      if (input.share !== undefined || input.public !== undefined)
+        throw new Error("publish is always private to the owner; use apps action share to grant access");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
       const createdInScope: ScopeId = writableScopeId;
       let effectiveEntrypoint = input.entrypoint;
@@ -1116,30 +1061,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           )
         : {};
 
-      const pc = deps.publishContext;
-      const aud: PublishAudience =
-        pc && orgScopeId
-          ? defaultPublishAudience({
-              kind: pc.conversationKind,
-              ...(pc.isPrivate !== undefined ? { isPrivate: pc.isPrivate } : {}),
-              ...(pc.isMpim !== undefined ? { isMpim: pc.isMpim } : {}),
-              ...(pc.publishMembers ? { members: pc.publishMembers } : {}),
-              orgScopeId,
-              ownerId: deps.createdBy,
-            })
-          : { kind: "owner", grantees: [] };
-      const optOut = Array.isArray(input.share) && input.share.length === 0;
-      const desiredDefault = optOut ? [] : aud.grantees;
-      const doReconcile = effectiveEntrypoint !== undefined && (optOut || !aud.incomplete);
-      const snapshotAt = Date.now();
-      const resolvedShare = input.share?.map((s) => {
-        const scope = s.scope === "org" ? orgScopeId : s.scope;
-        if (!scope) throw new Error('cannot resolve "org" — no org scope is mounted in this session');
-        if (parseScopeId(scope).kind === null) {
-          throw new Error(`invalid share target "${s.scope}" — use "org" or a scope id like personal:<id> or org:<id>`);
-        }
-        return { scope, permission: s.permission };
-      });
       return once(async () => {
         const d = await deps.deploy.deployOrUpdate({
           ownerScopeId: owner,
@@ -1154,29 +1075,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
-          ...(input.public !== undefined ? { public: input.public } : {}),
-          ...(doReconcile
-            ? {
-                defaultAudience: {
-                  contextScopeId: createdInScope,
-                  granteeScopeIds: desiredDefault,
-                  snapshotAt,
-                  ...(optOut ? { force: true } : {}),
-                },
-              }
-            : {}),
-          ...(resolvedShare?.length ? { share: resolvedShare } : {}),
         });
         const ref = d.name ?? d.id;
         const grantees = await deps.deploy.deploymentGrantees(d.id);
-        const base = audienceFromGrantees(
+        const audience = audienceFromGrantees(
           grantees.map((g) => g.scope),
           d.createdInScope,
         );
-        const audience: PublishAudienceDescriptor =
-          aud.incomplete && effectiveEntrypoint !== undefined && input.share === undefined && aud.reason
-            ? { ...base, note: aud.reason }
-            : base;
         const urlBase = deps.publicWebUrl?.replace(/\/$/, "") ?? "";
         const url = publicUrlOf(d.endpoint) ?? `${urlBase}/d/${ref}/`;
         const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
@@ -1246,6 +1151,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
+    ...(deps.humanTurn ? { humanTurn: true } : {}),
     ...(deps.sessionSyscalls
       ? {
           sessionSyscalls: {
@@ -1284,7 +1190,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async backgroundStart(
       command: string,
-      opts?: { ttlSeconds?: number; sandboxId?: string },
+      opts: { purpose: string; ttlSeconds?: number; sandboxId?: string },
     ): Promise<BackgroundStartResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       let handle: SandboxHandle;
@@ -1301,6 +1207,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           deps.backgroundBroker!.start(
             handle,
             deps.scopedCommand?.(command, handle.env) ?? command,
+            opts.purpose,
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
           ),
         () => true,

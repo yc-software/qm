@@ -334,7 +334,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
 
         return handle;
       } catch (err) {
-        await cleanupFailedProvision(sandbox, handle);
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },

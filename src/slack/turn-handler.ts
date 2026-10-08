@@ -34,6 +34,7 @@ import {
   dedupedRun,
   deliveryCandidatesFor,
   deliveryMetadata,
+  statusPlaceholderKey,
   channelThreadRef,
   dmThreadRef,
   downloadSlackFile,
@@ -395,13 +396,14 @@ export function createTurnHandler(deps: {
     }
 
     let ack: AckPresenter | undefined;
+    const statusKey = (): string | undefined => (queuedRunId ? statusPlaceholderKey(queuedRunId) : undefined);
     const startAck = (): AckPresenter =>
       (ack ??= createAckPresenter({
         taskManaged,
         postAck: async (text) => {
           const rendered = toSlackMrkdwn(text);
           if (await taskList?.addLead(rendered)) return;
-          const ts = await postReply(rendered);
+          const ts = await postReply(rendered, undefined, statusKey());
           if (ts) {
             await taskList?.attach(ts, rendered);
           }
@@ -424,7 +426,7 @@ export function createTurnHandler(deps: {
     if (!inc.unprompted) startAck();
     if (!inc.unprompted) {
       taskList = createTaskListPresenter({
-        post: (text, blocks) => postReply(text, blocks),
+        post: (text, blocks) => postReply(text, blocks, statusKey()),
         update: (ts, text, blocks, metadata) =>
           client.chat
             .update({
@@ -534,7 +536,16 @@ export function createTurnHandler(deps: {
     const turn: Omit<CoreTurnBody, "approval"> = {
       actor,
       ...(inc.userId
-        ? { slackSource: { accountId: deps.accountId ?? "default", teamId: ids.ownTeamId, userId: inc.userId } }
+        ? {
+            slackSource: {
+              accountId: deps.accountId ?? "default",
+              teamId: ids.ownTeamId,
+              userId: inc.userId,
+              ...(deps.externalAccess
+                ? { externalPolicyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
+                : {}),
+            },
+          }
         : {}),
       ...(deps.externalAccess && inc.kind === "channel" && inc.userId
         ? {

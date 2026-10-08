@@ -1,4 +1,4 @@
-import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
@@ -34,6 +34,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from ".
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -1225,6 +1226,7 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
     return null;
   };
 
+  await selectDefaultSandbox(built, "U_ALICE", "channel:C9");
   let mark = fakeSprites.execScripts().length;
   const turn = (triggered: boolean): TurnRequest =>
     ({

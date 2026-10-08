@@ -24,14 +24,24 @@ export function externalSlackRequestAllowed(
       externalSlackNamespace(supplied.teamId, current) ===
         externalSlackNamespace(supplied.teamId, {
           companyDomains: supplied.companyDomains,
+          companyTeamIds: supplied.companyTeamIds,
           serviceCredentials: supplied.serviceCredentials,
         }) &&
       ref.startsWith(`${externalSlackNamespace(supplied.teamId, current)}:`)
     );
   }
   if (ref.includes("external-slack:")) return false;
+  if (request.slackSource) {
+    const source = request.slackSource;
+    const policy = policies[source.accountId];
+    return (
+      !policy ||
+      (request.conversation.kind === "dm" &&
+        source.externalPolicyNamespace === externalSlackNamespace(source.teamId, policy))
+    );
+  }
+  if (ref.startsWith("slack-account:")) return false;
   if (request.conversation.kind === "dm") return true;
-  if (request.slackSource) return !policies[request.slackSource.accountId];
   return !(Object.keys(policies).length && (request.surface === "slack" || historicalSlack));
 }
 

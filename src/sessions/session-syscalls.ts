@@ -1,9 +1,4 @@
-import {
-  memoryBoundedEntries,
-  memoryContextPayload,
-  nextMemoryContext,
-  type MemoryContextSnapshot,
-} from "../memory/context-boundary.ts";
+import { memoryContextPayload, type MemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
@@ -544,11 +539,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return inFlight.length ? "pending" : "idle";
       }
 
-      const readableTitles = new Set<string>();
-      const visibleTitle = (target: Session) =>
-        !binding.memoryContext || readableTitles.has(target.id) ? target.title?.trim() || target.id : target.id;
+      const visibleTitle = (target: Session) => target.title?.trim() || target.id;
       async function visibleHistory(target: Session): Promise<SessionEntry[]> {
-        readableTitles.delete(target.id);
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
@@ -557,15 +549,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             deps.sessions.visibleEntries(target.id, id),
           ),
         );
-        if (binding.memoryContext) {
-          const all = await deps.sessions.getEntries(target.id);
-          const last = all.findLast((entry) => memoryContextPayload(entry));
-          const next = nextMemoryContext(all, binding.memoryContext, all.at(-1)?.seq ?? -1);
-          if (next.throughSeq > (last ? memoryContextPayload(last)!.throughSeq : -1)) return [];
-          if (next.throughSeq < 0) readableTitles.add(target.id);
-          const visible = new Set(memoryBoundedEntries(all).map((entry) => entry.seq));
-          for (let i = 0; i < views.length; i++) views[i] = views[i]!.filter((entry) => visible.has(entry.seq));
-        }
         const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
         return filterHistoryForAudience(
           (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq))),
@@ -573,11 +556,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           binding.scopeId,
           binding.orgScopeId ?? binding.scopeId,
         );
-      }
-
-      async function safeTitle(target: Session): Promise<string> {
-        await visibleHistory(target);
-        return visibleTitle(target);
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -686,7 +664,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return {
                   ok: true,
                   sessionId: existing.id,
-                  title: await safeTitle(existing),
+                  title: visibleTitle(existing),
                   liveRunsRemaining: Math.max(0, cap - live),
                 };
               if (live >= cap) {
@@ -702,7 +680,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 binding.session.channelName,
                 binding.session.surface ?? binding.request.surface,
               );
-              const title = existing ? await safeTitle(existing) : input.name?.trim() || autoTitle(task);
+              const title = existing ? visibleTitle(existing) : input.name?.trim() || autoTitle(task);
               const meta: SpawnMeta = {
                 ...(caller.origin.kind === "automation"
                   ? {
@@ -823,7 +801,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               );
               const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
               assertAudienceCompatible(caller, request);
-              const title = await safeTitle(target);
+              const title = visibleTitle(target);
               if (input.interrupt) {
                 if (privateMessage)
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
@@ -996,7 +974,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           for (const session of recent)
             sessions.push({
               sessionId: session.id,
-              title: binding.memoryContext ? await safeTitle(session) : session.title?.trim() || "Untitled",
+              title: session.title?.trim() || "Untitled",
               status: await statusOf(session),
               current: session.id === binding.session.id,
             });
@@ -1158,6 +1136,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "finalAttempt",
     "background",
     "cancel",
+    "shutdown",
     "queueMs",
     "modelAccount",
     "privateSessionMessage",

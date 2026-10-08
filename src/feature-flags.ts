@@ -3,6 +3,7 @@ import { orgId as configOrgId } from "./config.ts";
 import { scopeId, type ScopeId } from "./types.ts";
 
 export const FEATURE_NAMES = [
+  "app_annotations",
   "persistent_subagents",
   "responsive_spine",
   "inbox_loops",

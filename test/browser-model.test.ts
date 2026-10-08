@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer } from "node:http";
@@ -138,6 +139,7 @@ test("gateway deployment provisions a browser token without exposing the company
     },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
+  await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (layers, opts) => {
@@ -175,6 +177,7 @@ test("gateway browsing never selects a direct provider when callback signing or 
       },
     });
     const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
+    await selectDefaultSandbox(built, "U1", "personal:U1");
     let captured: ProvisionOptions | undefined;
     const provision = built.sandbox.provision.bind(built.sandbox);
     built.sandbox.provision = (layers, opts) => {
@@ -234,6 +237,7 @@ test("company browsing without a gateway uses current deployment credentials and
   const server = createServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (layers, opts) => {

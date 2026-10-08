@@ -623,8 +623,7 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
         },
       },
       ({ path }) => {
-        if (scopeBackend === "aws") assert.throws(() => loadConfigAt(path), /AWS_DEPLOY_IMAGE/);
-        else assert.equal(loadConfigAt(path).config.env.core?.DEPLOY_PROVIDER, "fly");
+        assert.equal(loadConfigAt(path).config.env.core?.DEPLOY_PROVIDER, "fly");
       },
     );
   }
@@ -969,20 +968,6 @@ test("superserve backend requires the agent template in env.core", () => {
     {
       sandbox: { backend: "local" },
       env: { core: { SANDBOX_SCOPE_BACKENDS: JSON.stringify({ personal: "superserve" }) } },
-    },
-    ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE/);
-    },
-  );
-  withConfig(
-    {
-      sandbox: { backend: "local" },
-      env: {
-        core: {
-          SANDBOX_SCOPE_BACKENDS: JSON.stringify({ personal: "superserve" }),
-          SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-        },
-      },
     },
     ({ path }) => assert.doesNotThrow(() => loadConfigAt(path)),
   );

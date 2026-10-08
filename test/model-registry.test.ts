@@ -135,6 +135,36 @@ test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, an
   assert.equal(modelSupportedByHarness(id, "codex"), false);
 });
 
+test("Haiku 5.5 offers every effort, keeps thinking off available, rejects temperature and fast mode, and leaves defaults alone", () => {
+  const id = "claude-haiku-5-5";
+  const model = resolveModel(id);
+  assert.ok(model);
+  assert.equal(String(model.provider), "anthropic");
+  assert.equal(model.api, "anthropic-messages");
+  assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max" });
+  assert.equal((model.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking, true);
+  assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
+  assert.equal(safeModelMetadata(id)?.label, "Haiku 5.5");
+  assert.deepEqual(safeModelMetadata(id)?.effortLevelsByHarness.pi, [
+    "auto",
+    "default",
+    "adaptive",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultracode",
+  ]);
+  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
+  for (const harness of ["pi", "claude", "opencode", "mock"]) {
+    assert.equal(modelSupportedByHarness(id, harness), true);
+    assert.equal(defaultModelForHarness(harness), "claude-opus-5");
+  }
+  assert.equal(modelSupportedByHarness(id, "codex"), false);
+});
+
 test("FAST_MODE_MODEL_IDS derives from the registry — the web-ui client reads this, keeps no copy", () => {
   assert.deepEqual(
     [...FAST_MODE_MODEL_IDS].sort(),

@@ -235,6 +235,18 @@ test("old valid results are returned while a newer refresh is running", async ()
   assert.deepEqual(await f.service.get("alice", []), { activities, pending: true });
 });
 
+test("the newest valid run wins over older ones", async () => {
+  const f = fixture();
+  await f.service.get("alice", []);
+  await f.settle();
+  const newer = activities.map((activity) => ({ ...activity, title: `${activity.title} today` }));
+  f.output(JSON.stringify(newer));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await f.deps.scheduler.runNow((await f.crons.list())[0]!.id);
+  await f.settle();
+  assert.deepEqual(await f.service.get("alice", []), { activities: newer, pending: false });
+});
+
 test("fire results cannot point at another personal scope or an unrelated thread", async () => {
   for (const foreignScope of [true, false]) {
     const f = fixture();

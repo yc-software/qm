@@ -1685,7 +1685,7 @@ test("live consumed steers join canonical history once and survive stopped/error
     assert.equal(live.length, 2);
     assert.equal((live[1] as { entrySeq?: number }).entrySeq, 3);
     live.push({ ...entriesToMessages(entries).at(-1)!, stopReason: reason } as AgentMessage);
-    assert.equal(forkCutSeq(entries, live.filter((message) => message.role === "user").length, false), undefined);
-    assert.equal(forkCutSeq(entries, 2, true), 3);
+    assert.equal(forkCutSeq(entries, live, live.length - 1), 5);
+    assert.equal(forkCutSeq(entries, live, 1), 3);
   }
 });

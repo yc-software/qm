@@ -64,7 +64,11 @@ async function resolveScopeNames(
 
 async function handleKeychain(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, pathname, method, body, capability, params } = ctx;
-  if (!deps.keychain) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.keychain)
+    return sendJson(res, 503, {
+      error: "keychain_unavailable",
+      message: "The keychain isn't set up on this server. An operator needs to set CONNECTOR_SECRET_KEY.",
+    });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "keychain routes require an agent capability token" });
   const kc = deps.keychain;

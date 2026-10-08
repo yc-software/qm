@@ -14,6 +14,7 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
@@ -48,6 +49,7 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
           managesScope: async () => false,
         },
         res: {
+          getHeader: () => undefined,
           writeHead: (value: number) => {
             status = value;
           },
@@ -458,7 +460,10 @@ test("email filters leave Slack unchanged while source counts include all open c
     })),
   ]);
   const keys = (feed: any) => feed.items.map((item: any) => item.dedupeKey).sort();
-  const triaged = (await w.call()).data;
+  const initial = (await w.call()).data;
+  assert.equal(initial.filter, "human");
+  assert.deepEqual(keys(initial), ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]);
+  const triaged = (await w.call("GET", null, "filter=triaged")).data;
   assert.equal(triaged.filter, "triaged");
   assert.deepEqual(keys(triaged), ["question", "slack-bot", "slack-question", "slack-resolved"]);
   assert.equal(triaged.total, 8);
@@ -468,6 +473,7 @@ test("email filters leave Slack unchanged while source counts include all open c
     [slack!.id, 4],
   ]);
   for (const [filter, expected] of [
+    ["triaged", ["question", "slack-bot", "slack-question", "slack-resolved"]],
     ["human", ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
     ["all", ["pending", "question", "receipt", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
   ] as const) {
@@ -491,14 +497,14 @@ test("email filters leave Slack unchanged while source counts include all open c
       keys((await w.call("GET", null, `loopId=${email!.id}`)).data),
       expected.filter((key) => !key.startsWith("slack-")),
     );
-    assert.equal((await w.call("GET", null, "", "mallory")).data.filter, "triaged");
+    assert.equal((await w.call("GET", null, "", "mallory")).data.filter, "human");
   }
   const receipt = (await w.call()).data.items.find((item: any) => item.dedupeKey === "receipt");
   assert.equal(receipt.sourcePayload.automated, true);
   assert.equal(receipt.state, "held");
   assert.equal(receipt.proposal, undefined);
   await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "invalid", updatedAt: Date.now() });
-  assert.equal((await w.call()).data.filter, "triaged");
+  assert.equal((await w.call()).data.filter, "human");
   const question = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "question")!;
   await w.deps.items.recordAction(question.id, { kind: "dismiss", outcome: "dismissed" });
   const afterDismiss = (await w.call()).data;
@@ -523,7 +529,7 @@ test("inbox filters apply before pagination even when automated messages fill mu
       },
     ]);
   }
-  const triaged = (await w.call()).data;
+  const triaged = (await w.call("GET", null, "filter=triaged")).data;
   assert.equal(triaged.total, 85);
   assert.equal(triaged.items.length, 5);
   assert.equal(triaged.nextCursor, null);
@@ -596,4 +602,59 @@ test("email classification is projected only by the flagged inbox endpoint", asy
   for (const filter of ["all", "human", "triaged"]) {
     assert.equal((await disabled.call("GET", null, `filter=${filter}`)).status, 403);
   }
+});
+
+test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and aliases", async (t) => {
+  const store = createLoopStore();
+  const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
+  const { loop: personal } = await store.create({
+    ...base,
+    owner: "alice",
+    ownerScopeId: "personal:alice",
+    name: "Mine",
+  });
+  const { loop: group } = await store.create({ ...base, owner: "alice", ownerScopeId: "group:core", name: "Team" });
+  const members = new Set(["alice", "bob", "carol"]);
+  const route = inboxRoutes.find((r) => "path" in r && r.path === "/v1/inbox/viewers")!;
+  const ask = async (body: unknown, capability: unknown = null) => {
+    let status = 0;
+    let data: any;
+    await route.handle({
+      method: "POST",
+      body,
+      url: new URL("http://local/v1/inbox/viewers"),
+      capability,
+      deps: {
+        loops: { store },
+        identity: {
+          refresh: async () => {},
+          classify: (id: string) => ({ id, type: id === "carol" ? "deactivated" : "internal" }),
+        },
+      },
+      app: {
+        samePerson: async (a: string, b: string) => a === b,
+        membershipControlsScope: async (scope: string) => scope.startsWith("group:"),
+        managesScope: async (who: string, scope: string) => scope === "group:core" && members.has(who),
+      },
+      res: {
+        getHeader: () => undefined,
+        writeHead: (value: number) => {
+          status = value;
+        },
+        end: (value: string) => {
+          data = JSON.parse(value);
+        },
+      },
+    } as unknown as ApiCtx);
+    return { status, data };
+  };
+  const candidates = ["alice", "bob-slack", "carol", "mallory"];
+  installPrincipalLinks({ canonical: (key) => (key === "bob-slack" ? "bob" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
+  assert.deepEqual((await ask({ loopId: personal.id, candidates })).data.viewers, ["alice"]);
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob-slack"]);
+  members.delete("alice");
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["bob-slack"]);
+  assert.equal((await ask({ loopId: "missing", candidates })).status, 404);
+  assert.equal((await ask({ loopId: group.id, candidates }, { actorId: "mallory" })).status, 403);
 });

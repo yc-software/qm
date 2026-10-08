@@ -1,3 +1,4 @@
+import { previewFile } from "./file-open.ts";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
@@ -279,6 +280,9 @@ export function menuSelect(props: {
   options: MenuSelectOption[];
   onSelect: (value: string | null) => void;
   ariaLabel: string;
+  ariaDescription?: string;
+  disabled?: boolean;
+  keyboardNavigation?: boolean;
   prefix?: string;
   className?: string;
 }): TemplateResult {
@@ -291,14 +295,20 @@ export function menuSelect(props: {
         class="menu-option ${active ? "active" : ""}"
         type="button"
         role="menuitemradio"
+        ?disabled=${props.disabled ?? false}
         aria-checked=${active ? "true" : "false"}
         aria-disabled=${o.disabledHint ? "true" : nothing}
         aria-description=${o.disabledHint || nothing}
         ${tip(o.disabledHint ?? "")}
         @click=${(e: Event) => {
           e.stopPropagation();
-          if (o.disabledHint) return;
+          if (props.disabled || o.disabledHint) return;
           closeFormMenus();
+          if (props.keyboardNavigation)
+            (e.currentTarget as HTMLElement)
+              .closest(".form-menu-control")
+              ?.querySelector<HTMLButtonElement>(".menu-button")
+              ?.focus();
           props.onSelect(o.value ?? null);
         }}
       >
@@ -313,6 +323,33 @@ export function menuSelect(props: {
     <div
       class=${`menu-control form-menu-control field-menu${props.className ? ` ${props.className}` : ""}`}
       data-drop="down"
+      @keydown=${(e: KeyboardEvent) => {
+        if (!props.keyboardNavigation || props.disabled) return;
+        const control = e.currentTarget as HTMLElement;
+        const trigger = control.querySelector<HTMLButtonElement>(".menu-button")!;
+        const open = control.classList.contains("open");
+        if (e.key === "Escape" || e.key === "Tab") {
+          if (!open) return;
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            trigger.focus();
+          }
+          closeFormMenus();
+          return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+        e.preventDefault();
+        const options = [...control.querySelectorAll<HTMLButtonElement>(".menu-option:not(:disabled)")];
+        if (!options.length) return;
+        if (!open) toggleFormMenu(e);
+        const index = options.indexOf(document.activeElement as HTMLButtonElement);
+        let next = (index + (e.key === "ArrowUp" ? -1 : 1) + options.length) % options.length;
+        if (index < 0) next = e.key === "ArrowUp" ? options.length - 1 : 0;
+        if (e.key === "Home") next = 0;
+        if (e.key === "End") next = options.length - 1;
+        options[next]?.focus();
+      }}
     >
       <button
         class="menu-button"
@@ -320,7 +357,17 @@ export function menuSelect(props: {
         aria-haspopup="menu"
         aria-expanded="false"
         aria-label=${props.ariaLabel}
-        @click=${toggleFormMenu}
+        aria-description=${props.ariaDescription ?? nothing}
+        ?disabled=${props.disabled ?? false}
+        @click=${(event: MouseEvent) => {
+          toggleFormMenu(event);
+          const control = (event.currentTarget as HTMLElement).closest(".form-menu-control");
+          if (props.keyboardNavigation && event.detail === 0 && control?.classList.contains("open"))
+            (
+              control.querySelector<HTMLButtonElement>(".menu-option.active:not(:disabled)") ??
+              control.querySelector<HTMLButtonElement>(".menu-option:not(:disabled)")
+            )?.focus();
+        }}
       >
         <span class="menu-label">${props.prefix ?? ""}${selected?.label ?? ""}</span>${icon(ChevronDown, 14)}
       </button>
@@ -479,13 +526,20 @@ export function chipBadge(
   size?: number,
   href?: string,
   download = false,
+  mimetype?: string,
 ): TemplateResult {
   const inner = html`${icon(glyph, 14)}<span dir="auto">${name}</span
     >${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}`;
   if (!href) return html`<span class="file-chip">${inner}</span>`;
   if (download) return html`<a class="file-chip" href=${href} download=${name}>${inner}</a>`;
   return html`<span class="file-chip-group"
-    ><a class="file-chip" href=${href} target="_blank" rel="noreferrer">${inner}</a
+    ><a
+      class="file-chip"
+      href=${href}
+      target="_blank"
+      rel="noreferrer"
+      @click=${(event: MouseEvent) => previewFile(event, name, href, mimetype)}
+      >${inner}</a
     ><a class="file-chip-download" href=${href} download=${name} title="Download ${name}" aria-label="Download ${name}"
       >${icon(Download, 14)}</a
     ></span

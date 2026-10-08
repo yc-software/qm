@@ -1,4 +1,5 @@
 import type { SmtpTlsMode } from "./smtp.ts";
+import { isMissingOrPlaceholder } from "../../chassis/src/env.ts";
 import { parsePasswordHash } from "./password.ts";
 
 type EmailTransportKind = "resend" | "smtp";
@@ -44,13 +45,7 @@ export interface AuthConfig {
   coreSigningSecret: string | undefined;
 }
 
-const PLACEHOLDER = /^(replace-me|placeholder|changeme|todo)$/i;
 const MAX_RATE_LIMIT_SLOTS = 64;
-
-function isMissingOrPlaceholder(value: string | undefined): boolean {
-  const candidate = value?.trim();
-  return !candidate || PLACEHOLDER.test(candidate);
-}
 
 function numberFrom(raw: string | undefined, fallback: number): number {
   const parsed = Number(raw);

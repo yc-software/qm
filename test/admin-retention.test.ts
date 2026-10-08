@@ -47,6 +47,8 @@ test("computeRetention: DAU/WAU/MAU, cohorts, new-vs-returning, and channel appr
   assert.deepEqual(report.perUser.turns, { p50: 1, p95: 4 });
 
   assert.equal(report.cohorts.length, 3);
+  for (const cohort of report.cohorts) assert.equal(new Date(`${cohort.week}T00:00:00Z`).getUTCDay(), 1);
+  assert.equal(report.cohorts[2]!.week, "1972-09-25");
   assert.deepEqual(report.cohorts[1]!.retained, [100, 0, 0, 0, 100]);
   assert.equal(report.cohorts[1]!.size, 1);
   assert.equal(report.cohorts[2]!.size, 3);

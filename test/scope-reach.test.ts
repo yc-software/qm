@@ -249,6 +249,7 @@ test("reachExec ON (no scratch): scope is a free string; a room routes to reachT
     "timeout_seconds",
     "credentials",
     "scope",
+    "retrySafe",
   ]);
   await call(execute, { command: "cat x", scope: "#project-alpha" });
   assert.deepEqual(seen.at(-1)!.opts, { reachTarget: "#project-alpha" });
@@ -271,6 +272,7 @@ test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room",
     "credentials",
     "scope",
     "durable",
+    "retrySafe",
   ]);
   await call(execute, { command: "x", scope: "scratch" });
   assert.deepEqual(seen.at(-1)!.opts, { scratch: true });
@@ -334,6 +336,16 @@ function freshApp(extra: Partial<Config> = {}) {
   return buildApp(config);
 }
 
+async function roomApp() {
+  const built = freshApp({ reachExecEnabled: true });
+  await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
+  const room = scopeId("channel", "C-ph");
+  const resources = built.sandboxResources.forTurn({ actorId: "U1", scopeId: room, isCurrent: async () => true });
+  const record = await resources.create("U1", room, resources.defaultBackend(), "project-alpha", "room-ph");
+  await resources.setDefault("U1", room, record.id);
+  return built;
+}
+
 const dm = (text: string): TurnRequest => ({
   surface: "test",
   actor: { externalId: "U1", displayName: "Alice" },
@@ -355,42 +367,38 @@ const channelTurn = (text: string): TurnRequest => ({
 });
 
 test("DM + directory + flag: execute(scope:#room) runs on that channel's own computer", async () => {
-  const built = freshApp({ reachExecEnabled: true });
-  await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
+  const built = await roomApp();
   const res = await built.app.turn(
     dm("!reach #project-alpha sh -c \"echo 'still here' > smoke.txt && cat smoke.txt\""),
   );
   assert.equal(res.status, "ok");
   assert.equal(res.reply, "still here");
   assert.ok(
-    fakeSprites.calls.some((c) => c.method === "WS" && /\/sprites\/qm-channel-c-ph-[^/]+\/exec$/.test(c.path)),
+    fakeSprites.calls.some((c) => c.method === "WS" && /\/sprites\/qm-sandbox-room-ph-[^/]+\/exec$/.test(c.path)),
     "the command landed on the channel's computer",
   );
 });
 
 test("reach preserves a durable workspace even without a login-probe cache", async () => {
-  const built = freshApp({ reachExecEnabled: true });
-  await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
+  const built = await roomApp();
   await built.app.turn(dm("!reach #project-alpha printf retained > keep.txt"));
-  assert.ok(fakeSprites.names().some((n) => n.startsWith("qm-channel-c-ph-")));
+  assert.ok(fakeSprites.names().some((n) => n.startsWith("qm-sandbox-room-ph-")));
   const result = await built.app.turn(dm("!reach #project-alpha cat keep.txt"));
   assert.equal(result.reply, "retained");
 });
 
 test("reach teardown keeps (does not destroy) a room with its own computer", async () => {
-  const built = freshApp({ reachExecEnabled: true });
-  await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
+  const built = await roomApp();
   await built.livenessCache.put({ scopeId: scopeId("channel", "C-ph"), checkedAt: 1, connectors: {} });
   await built.app.turn(dm("!reach #project-alpha echo hi"));
   assert.ok(
-    fakeSprites.names().some((n) => n.startsWith("qm-channel-c-ph-")),
+    fakeSprites.names().some((n) => n.startsWith("qm-sandbox-room-ph-")),
     "an operated room's computer is kept, not destroyed",
   );
 });
 
 test("Trap 1 e2e: the reach tool_result is labeled the session scope and survives the audience filter", async () => {
-  const built = freshApp({ reachExecEnabled: true });
-  await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
+  const built = await roomApp();
   const res = await built.app.turn(dm("!reach #project-alpha echo hello"));
   assert.equal(res.reply, "hello");
   const entries = await built.sessions.getEntries(res.sessionId!);

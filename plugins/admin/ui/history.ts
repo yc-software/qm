@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { bareCard, card, denseList, pager, renderer, node } from "./shared.ts";
+import { bareCard, card, denseList, renderer, node } from "./shared.ts";
 
 export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   const paint = renderer(root);
@@ -15,17 +15,30 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   };
   const cron = s.historyKind === "cron" ? s.cron : null;
   const total = (cron ? d.total : count(s.historyKind)) || sessions.length;
-  const limit = d.limit || s.pageSize;
-  const offset = d.offset || 0;
-  s.correctPage(Math.floor(offset / limit) + 1, cron);
   const route = (extra: any) => ({
     view: "history",
     scope: s.scope,
     session: null,
-    page: 1,
+    cursor: null,
     historyKind: s.historyKind,
     ...extra,
   });
+  const pages =
+    s.cursor || d.nextCursor
+      ? html`<div class="pager">
+          <button type="button" class="page" ?disabled=${!s.cursor} @click=${() => s.go(route({ cron }))}>
+            ← Newest</button
+          ><span class="pageinfo">${s.plural(total, "session")}</span
+          ><button
+            type="button"
+            class="page"
+            ?disabled=${!d.nextCursor}
+            @click=${() => s.go(route({ cron, cursor: d.nextCursor }))}
+          >
+            Older →
+          </button>
+        </div>`
+      : nothing;
   const mode = s.historyModeLabel(s.historyKind);
   const tabs = [
     "conversation",
@@ -111,7 +124,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
                 (row) => s.go(route({ session: row.id })),
                 "No " + mode.toLowerCase() + " in this scope.",
               ),
-            )}${pager(total, limit, offset, (page) => s.go(route({ page, cron })))}${
+            )}${pages}${
               s.scopeKind(s.scope) !== "org" && !cron
                 ? html`<div>
                     ${

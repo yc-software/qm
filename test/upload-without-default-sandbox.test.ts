@@ -6,7 +6,7 @@ import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 
 test("an upload in a scope without a default sandbox still reaches the agent", async () => {
-  const built = buildApp(testConfig({ sandboxResourcesEnabled: true, eagerProvisionEnabled: false }));
+  const built = buildApp(testConfig({ eagerProvisionEnabled: false }));
   await built.directory.replace([{ principalId: "U1", displayName: "Synthetic User", type: "internal" }]);
   await built.directory.replaceChannels(
     [{ channelId: "C1", name: "synthetic-upload", isPrivate: true }],

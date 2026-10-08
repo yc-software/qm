@@ -1661,7 +1661,7 @@ for (const surface of ["slack", "web"] as const) {
 test("children of a Slack group turn keep its source so external-workspace policy admits them", async () => {
   const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
   const { externalSlackNamespace } = await import("../src/slack/external-access.ts");
-  const access = { companyDomains: ["partner.example"], serviceCredentials: ["search"] };
+  const access = { companyDomains: ["partner.example"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["search"] };
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
@@ -1840,7 +1840,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   assert.deepEqual(await newAudience.start!({ fork: true }), { ok: false, message: unshareable });
   const hidden = await newAudience.list!();
   assert.ok(hidden.ok);
-  assert.ok(!hidden.sessions.some((s) => s.title === "room"));
+  assert.ok(hidden.sessions.some((s) => s.title === "room"));
   const slack = forTurn(true, { surface: "slack" });
   for (const out of [
     await slack.list!(),

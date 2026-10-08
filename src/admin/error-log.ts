@@ -36,7 +36,7 @@ export function withErrorReporting(store: ErrorLog): ErrorLog {
     ...store,
     record(event, error) {
       if (!errorAlreadyReported(error)) {
-        reportBackendError(error ?? new Error("Recorded backend failure"), `${event.category}:${event.code}`);
+        reportBackendError(error ?? new Error(event.message), `${event.category}:${event.code}`, { ...event });
         markErrorReported(error);
       }
       store.record(event);

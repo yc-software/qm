@@ -26,7 +26,7 @@ const PNG = Buffer.from(
 );
 
 async function scopeWithoutDefault() {
-  const built = buildApp(testConfig({ sandboxResourcesEnabled: true, eagerProvisionEnabled: false }));
+  const built = buildApp(testConfig({ eagerProvisionEnabled: false }));
   await built.directory.replace([{ principalId: "U1", displayName: "Synthetic User", type: "internal" }]);
   await built.directory.replaceChannels(
     [{ channelId: "C1", name: "synthetic-upload", isPrivate: true }],

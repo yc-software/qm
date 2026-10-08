@@ -19,6 +19,7 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
     deps: { loops: { store, items }, featureFlags: { enabled: async () => previewEnabled } },
     res: {
       setHeader() {},
+      getHeader() {},
       writeHead(code: number) {
         status = code;
       },
@@ -99,6 +100,7 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
     },
     res: {
       setHeader() {},
+      getHeader() {},
       writeHead(code: number) {
         status = code;
       },
@@ -169,6 +171,7 @@ test("sent chat preserves long quoted recipient headers and rejects oversized in
     deps: { loops: { store, items }, featureFlags: { enabled: async () => true } },
     res: {
       setHeader() {},
+      getHeader() {},
       writeHead(code: number) {
         status = code;
       },

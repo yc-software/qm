@@ -96,7 +96,7 @@ the same as the app _working_. So for anything browsable, sanity-check it locall
 publish:
 
 1. Run it locally. Start the server in the background on a port — e.g.
-   `PORT=8080 node server.js` via `sandbox` action `start_process` (`background` action `start`
+   `PORT=8080 node server.js` via `sandbox` action `start_process` with `purpose: "App preview server"` (`background` action `start`
    before sandbox-resource activation), so it keeps serving while you check.
 2. Probe it with `curl` — confirm it answers, returns the status you expect, and the main
    page/endpoint is actually there (real content, not a stack trace or a blank 500):
@@ -111,19 +111,9 @@ publish:
 
 ## Sharing — say who can reach it
 
-Publication uses the conversation's default audience when `audience` is omitted.
-Pass `audience: []` to suppress default grants for an owner-only publication; this does
-not revoke existing explicit grants. Supply publication-time grants with `audience`:
-
-```
-apps({
-  action: "publish",
-  dir: "dist", entrypoint: "node server.js", name: "status-board",
-  audience: [{ scope: "org:acme", permission: "read" }],
-})
-```
-
-For a later grant, use the app ID or handle:
+Publishing is always private to you: a new app is reachable only by its owner, and
+republishing never changes who can reach it. Grant access as a separate step with the app
+ID or handle:
 
 ```
 apps({ action: "share", id: "status-board", toScope: "org", permission: "read" })

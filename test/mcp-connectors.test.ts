@@ -262,3 +262,35 @@ test("per-user connectors select an explicit account slot without falling back t
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
+
+test("background MCP refresh contains registry failures at startup, on change, and on its timer", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const backing = createMemoryMap<McpServer>();
+  const store = createMcpServerStore(backing);
+  const { fetch } = fakeServerFetch();
+  const list = t.mock.method(store, "list", async () => {
+    throw new Error("registry unavailable");
+  });
+  const errors = t.mock.method(console, "error", () => {});
+  const service = createMcpToolService({ servers: store, fetchImpl: fetch, refreshIntervalMs: 100 });
+  t.after(() => service.close());
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  await settle();
+  assert.equal(list.mock.callCount(), 1);
+  await store.put(server());
+  await settle();
+  assert.equal(list.mock.callCount(), 2);
+  t.mock.timers.tick(100);
+  await settle();
+  assert.equal(list.mock.callCount(), 3);
+  assert.equal(errors.mock.callCount(), 3);
+  await assert.rejects(service.refresh(), /registry unavailable/);
+  list.mock.restore();
+  t.mock.timers.tick(100);
+  await settle();
+  assert.deepEqual(
+    service.toolDefs().map((tool) => tool.name),
+    ["crm_query", "crm_update"],
+  );
+  assert.equal(await service.call("crm_query", {}), "ran query");
+});

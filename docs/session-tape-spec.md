@@ -102,8 +102,12 @@ tape changes the write contract:
 1. take the per-session writer lease  (existing code, unchanged)
 2. rows = SELECT tape; ctx = fold(rows, audience)
 3. if this is a RETRY of a reaped run whose user message is already the trailing
-   turn on the tape → do not re-append it; append `interrupt` if a tool call
-   dangles; prepend the resume note ("outcome unknown, don't redo side effects")
+   turn on the tape → do not re-append it. If a tool call dangles and the model
+   marked it `retrySafe` (every tool schema carries that optional boolean; the
+   `tool_call` entry records it plus the stripped input under `rerun`), the
+   harness re-runs it before the model is called and appends the real
+   `toolResult` row; otherwise append `interrupt` and prepend the resume note
+   ("outcome unknown, don't redo side effects")
 4. else append the user message (bare_text + env footer as tagged block)
 5. loop: call model; append response rows; run tools; append result rows —
    each step's appends committed before the next dispatch

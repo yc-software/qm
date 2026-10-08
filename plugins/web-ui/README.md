@@ -327,30 +327,24 @@ origin to the web application's connection policy.
 
 Reporting starts after authentication and stops on sign-out or an authentication
 failure. It is disabled during impersonation and when the browser DSN is unset.
-Only uncaught errors and unhandled promise rejections are collected. Events retain
-standard error types, release, and same-origin compiled asset filenames with line
-and column numbers. Fingerprints use the sanitized error type, capture mechanism,
-and last retained stack position. Identical asset locations group across release
-label changes; changed asset hashes start separate groups. Without a retained
-frame, grouping falls back to the sanitized type and mechanism.
-Other stack frames and function names are omitted. Messages,
-URLs, requests, user identities, content, attachments, breadcrumbs, replay, logs,
-and tracing are excluded. A final transport gate rejects unsanitized SDK failures
-and non-event envelopes. Requests omit cookies and referrers. The ingestion
-server can still see the network source IP. Delivery is best effort.
+It collects uncaught errors, unhandled promise rejections, and errors the client
+catches and handles (tagged with an `error_code` naming the catch site and grouped
+by it). Events carry the full error message, cause chain, stack, release, org and
+signed-in user. Delivery is best effort.
 
 ### Browser performance timing
 
 Set `SENTRY_BROWSER_TRACES_SAMPLE_RATE` (0 to 1, default 0) alongside `SENTRY_BROWSER_DSN` to sample
 browser timings; `0.1` is a reasonable start. Each timing is sampled independently at that rate
 and carries its own random trace id. A page reports one `pageload` transaction (time to first
-byte, DOM content loaded, load, first and largest contentful paint, and a `page` tag drawn from
-the fixed list of application views) and one `http.client` transaction per same-origin request
+byte, DOM content loaded, load, first and largest contentful paint, and a `page` attribute for
+the application view) and one `http.client` transaction per same-origin request
 made through the web client's shared fetch helper, measured to response headers and named by a
 fixed `/api/<resource>` allowlist (`GET /api/sessions/*`) with the HTTP status. At most 200
-timings are sent per page. URLs, query strings, identifiers, and request or response content are
-never included; timings stop with error reporting on sign-out, authentication failure, and
-impersonation.
+timings are sent per page. The full page/request URL, including query strings, is retained as a
+span attribute. Transactions, child spans, descriptions, attributes, and any attached request or
+user context are sent without scrubbing. Timings stop with error reporting on sign-out,
+authentication failure, and impersonation.
 
 ## Personal AI accounts
 

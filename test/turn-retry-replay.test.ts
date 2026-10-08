@@ -52,6 +52,7 @@ function fakeSandbox(): Sandbox {
 
 function buildScenario() {
   const turns: string[] = [];
+  const continued: Array<boolean | undefined> = [];
   const harness = defineHarness(
     {
       id: "pi",
@@ -63,6 +64,7 @@ function buildScenario() {
     {
       async runTurn(turn) {
         turns.push(turn.input);
+        continued.push(turn.continueTurn);
         const userEntry = await turn.emit({
           type: "user",
           payload: { text: turn.input },
@@ -144,7 +146,7 @@ function buildScenario() {
       (e) => e.type === "user" && String((e.payload as { text?: string }).text ?? "").startsWith(ASK),
     );
   };
-  return { orchestrator, sessions, runs, turns, input, asks };
+  return { orchestrator, sessions, runs, turns, continued, input, asks };
 }
 
 test("a retry replays the answer the previous attempt recorded instead of asking again", async () => {
@@ -236,7 +238,7 @@ test("the replay does not need the session lease, so a busy session cannot reque
 
 async function seedTurn(
   sessions: ReturnType<typeof buildScenario>["sessions"],
-  entries: Array<{ type: "user" | "assistant" | "tool_call"; payload: Record<string, unknown> }>,
+  entries: Array<{ type: "user" | "assistant" | "tool_call" | "tool_result"; payload: Record<string, unknown> }>,
 ): Promise<number> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
   const { lease } = await sessions.acquireLease(session.id);
@@ -283,4 +285,44 @@ test("a turn that recorded no reply replays as silent, not as an empty answer", 
   assert.equal(retry.status, "silent", "an empty reply must not surface as a turn with no response");
   assert.equal(retry.reply, undefined);
   assert.equal(turns.length, 0);
+});
+
+test("a resume whose recorded work ends at a tool result asks the harness to continue the assistant turn", async () => {
+  const { orchestrator, sessions, runs, turns, continued, input, asks } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const marker = await seedTurn(sessions, [
+    { type: "user", payload: { text: ASK } },
+    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
+    { type: "tool_result", payload: { callId: "c1", result: "a.txt" } },
+  ]);
+  await runs.noteTurnUserSeq(run.id, marker);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(continued, [true], "the harness is told the tape ends at a recorded tool result");
+  assert.match(turns[0]!, /^\(system note:/, "the note still travels as the fallback input");
+  assert.equal((await asks()).length, 1);
+});
+
+test("a resume whose last tool call has no recorded result is not asked to continue", async () => {
+  const { orchestrator, sessions, runs, continued, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const marker = await seedTurn(sessions, [
+    { type: "user", payload: { text: ASK } },
+    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
+  ]);
+  await runs.noteTurnUserSeq(run.id, marker);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(continued, [undefined]);
+});
+
+test("a first attempt and a no-work retry are never asked to continue", async () => {
+  const { orchestrator, runs, continued, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 }));
+  const again = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await orchestrator.handleTurn(input(ASK, { runId: again.id, attempt: 2 }));
+  assert.deepEqual(continued, [undefined, undefined]);
 });

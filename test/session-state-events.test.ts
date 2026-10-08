@@ -284,10 +284,15 @@ test("a parent stays working while a subagent runs after its own turn ends — p
   const built = freshApp();
   const parentThread = "web:U1:parent";
   const childThread = "web:U1:parent-child";
+  const got = record(built.sessionStateBus);
   const parent = await built.app.turn(dm("hello", parentThread));
   const child = await built.app.turn(dm("hello", childThread));
+  assert.ok(
+    await waitFor(() => statesFor(got, parentThread).includes("idle") && statesFor(got, childThread).includes("idle")),
+    "both greeting turns settle before the delegation starts",
+  );
+  got.length = 0;
   await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
-  const got = record(built.sessionStateBus);
   const { run: parentRun } = await built.runs.enqueue({
     sessionId: parentThread,
     request: resolvedDm("delegate", parentThread),

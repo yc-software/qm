@@ -10,6 +10,7 @@ import { scopeId } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -110,6 +111,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   const bob = { externalId: "BOB" };
   const alice = { externalId: "ALICE" };
   const room = scopeId("channel", "C-owner-auth");
+  await selectDefaultSandbox(built, "BOB", room);
   const conversation = {
     kind: "channel" as const,
     threadRef: "ch:C-owner-auth:cron",
@@ -350,8 +352,11 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     }),
     (error: Error) => {
       assert.equal(error.message, "Disposable sandbox destruction failed");
-      assert.equal(error.cause, undefined);
-      assert.ok(!error.stack?.includes("persistent control-plane deletion failure"));
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(
+        error.errors.map((attempt: Error) => attempt.message),
+        Array(3).fill("persistent control-plane deletion failure"),
+      );
       return true;
     },
   );
@@ -414,6 +419,7 @@ test("cutover policy retains legacy files only in prefer-ephemeral mode", async 
     },
   );
   const room = scopeId("channel", "C-acmecli-fallback");
+  await selectDefaultSandbox(built, actor.externalId, room);
   await built.keychain!.save({
     ownerId: room,
     service: "acmecli",
@@ -513,6 +519,7 @@ test("a nonlegacy policy never places brokered STS on a shared room", async () =
     },
   );
   const room = scopeId("channel", "C-acmecli-flag-off");
+  await selectDefaultSandbox(built, actor.externalId, room);
   await built.keychain!.save({
     ownerId: room,
     service: "acmecli",

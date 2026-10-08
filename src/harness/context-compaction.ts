@@ -17,7 +17,7 @@ function headTailSlice(s: string, maxChars: number, tailChars: number): string {
 }
 
 export const INTERRUPTED_TOOL_RESULT =
-  "[interrupted — the platform restarted while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]";
+  "[interrupted — a routine platform deploy restarted the agent while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]";
 
 export const CONTEXT_SUMMARY_HEADER =
   "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
@@ -101,8 +101,9 @@ export function compactTranscript(history: SessionEntry[]): string {
   const resultByCallId = new Map<string, true>();
   for (const entry of history) {
     if (entry.type !== "tool_result") continue;
-    const cid = (entry.payload as { callId?: unknown } | null)?.callId;
-    if (typeof cid === "string" && cid) resultByCallId.set(cid, true);
+    const payload = entry.payload as { callId?: unknown; interrupted?: unknown } | null;
+    if (typeof payload?.callId === "string" && payload.callId && payload.interrupted !== true)
+      resultByCallId.set(payload.callId, true);
   }
   const lines: string[] = [];
   const push = (line: string) => lines.push(headTailSlice(line, MAX_COMPACT_ENTRY_CHARS, COMPACT_ENTRY_TAIL_CHARS));

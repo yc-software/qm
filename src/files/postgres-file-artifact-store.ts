@@ -1,3 +1,4 @@
+import { likeContains } from "../persistence/like.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
@@ -105,8 +106,8 @@ export function createPostgresFileArtifactStore(
       filters.push(`created_in_scope = $${params.length}::text`);
     }
     if (opts?.nameQuery != null) {
-      params.push(`%${opts.nameQuery.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
-      filters.push(`name ILIKE $${params.length}::text`);
+      params.push(likeContains(opts.nameQuery));
+      filters.push(`name ILIKE $${params.length}::text ESCAPE '\\'`);
     }
     const visible = `SELECT * FROM file_artifacts WHERE ${filters.join(" AND ")}`;
     const documents =

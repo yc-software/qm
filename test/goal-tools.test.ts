@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createGrindMeter } from "../src/harness/grind.ts";
-import { goalContinuationPrompt, rehydrateOpenGoal } from "../src/harness/goal.ts";
+import {
+  bankGoalTurn,
+  goalContinuationPrompt,
+  goalFloorUnmet,
+  goalPausedNote,
+  goalSnapshotPayload,
+  rehydrateOpenGoal,
+} from "../src/harness/goal.ts";
 import type { ScopeId } from "../src/types.ts";
 
 function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
@@ -105,7 +112,7 @@ for (const status of ["blocked", "paused", "active"]) {
   });
 }
 
-test("agent cannot close or resume a user-paused goal", async () => {
+test("agent cannot close a user-paused goal or replace it", async () => {
   const { ref, create, update } = toolbox();
   await create.execute("c1", { objective: "long haul" });
   ref.goal!.status = "paused";
@@ -207,6 +214,94 @@ test("get frames free text as data and escapes tag characters in it", async () =
   assert.doesNotMatch(read.replace(/^<goal>$|^<\/goal>$/gm, ""), /<\/?goal>/);
 });
 
+test("resume is refused on turns no person started, and the goal stays paused", async () => {
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "long haul", floor: { minMs: 60_000 } });
+  ref.goal!.status = "paused";
+  const before = structuredClone(ref.goal);
+  for (const current of [null, {}, { humanTurn: false }]) {
+    ref.current = current as never;
+    const result = await update.execute("u1", { status: "resume", note: "resume it" });
+    assert.match(textOf(result as never), /Only the user can resume/);
+    assert.deepEqual(ref.goal, before);
+  }
+});
+
+test("a person's own request resumes a paused goal with its objective, floor and banked time intact", async () => {
+  const { ref, create, update } = toolbox();
+  const entries: Array<{ type: string; payload: unknown }> = [];
+  ref.emit = async (entry) => {
+    entries.push(structuredClone(entry));
+  };
+  await create.execute("c1", { objective: "long haul", floor: { minMs: 60_000 }, token_cap: 500 });
+  ref.goal!.status = "paused";
+  ref.goal!.activeMs = 1234;
+  ref.current = { humanTurn: true } as never;
+  const result = await update.execute("u1", { status: "resume", note: "user: please resume the goal" });
+  assert.match(textOf(result as never), /active again/);
+  assert.equal(ref.goal?.status, "active");
+  assert.deepEqual(ref.goal?.floor, { minMs: 60_000 });
+  assert.equal(ref.goal?.capTokens, 500);
+  assert.equal(ref.goal?.activeMs, 1234);
+  assert.equal(rehydrateOpenGoal(entries)?.status, "active");
+  const floored = await update.execute("u2", { status: "complete", note: "done" });
+  assert.match(textOf(floored as never), /work floor is not met/);
+});
+
+test("stop, then a later human turn resumes from the persisted pause and completes", async () => {
+  const history: Array<{ type: string; payload: unknown }> = [];
+  const first = toolbox();
+  first.ref.emit = async (entry) => {
+    history.push(structuredClone(entry));
+  };
+  await first.create.execute("c1", { objective: "ship it" });
+  first.ref.goal!.status = "paused"; // what the harness does on a user stop
+  history.push({ type: "system", payload: goalSnapshotPayload(first.ref.goal!) });
+
+  const next = toolbox();
+  next.ref.emit = first.ref.emit;
+  next.ref.goal = rehydrateOpenGoal(history);
+  assert.equal(next.ref.goal?.status, "paused");
+  assert.match(
+    goalPausedNote(next.ref.goal!),
+    /explicitly asks to resume[\s\S]*never resume it on your own initiative/,
+  );
+  next.ref.current = { humanTurn: true } as never;
+  await next.update.execute("u1", { status: "resume", note: "user: resume the goal" });
+  assert.equal(rehydrateOpenGoal(history)?.status, "active");
+  await next.update.execute("u2", { status: "complete", note: "verified" });
+  assert.equal(next.ref.goal?.status, "complete");
+  assert.equal(rehydrateOpenGoal(history), null);
+});
+
+test("time spent while paused never counts toward the floor after a resume", async () => {
+  const { ref, create, update } = toolbox();
+  const minute = 60_000;
+  await create.execute("c1", { objective: "long haul", floor: { minMs: 30 * minute } });
+  const t0 = ref.goal!.createdAt;
+  bankGoalTurn(ref.goal!, t0, t0 + 5 * minute); // the stopped turn still counts
+  ref.goal!.status = "paused";
+  for (let i = 0; i < 3; i++) bankGoalTurn(ref.goal!, t0 + (10 + i * 10) * minute, t0 + (20 + i * 10) * minute);
+  assert.equal(ref.goal!.activeMs, 5 * minute);
+  ref.current = { humanTurn: true } as never;
+  await update.execute("u1", { status: "resume", note: "user: resume" });
+  const meter = { ...createGrindMeter(), startedAt: t0 };
+  assert.equal(goalFloorUnmet(ref.goal!, meter, ref.goal!.activeSince! + minute), true);
+  assert.equal(goalFloorUnmet(ref.goal!, meter, ref.goal!.activeSince! + 26 * minute), false);
+});
+
+test("resume only applies to a paused goal", async () => {
+  const { ref, create, update } = toolbox();
+  ref.current = { humanTurn: true } as never;
+  assert.match(textOf((await update.execute("u0", { status: "resume", note: "x" })) as never), /No paused goal/);
+  await create.execute("c1", { objective: "obj" });
+  assert.match(textOf((await update.execute("u1", { status: "resume", note: "x" })) as never), /already active/);
+  await update.execute("u2", { status: "complete", note: "verified" });
+  assert.equal(ref.goal?.status, "complete");
+  await update.execute("u3", { status: "resume", note: "x" });
+  assert.equal(ref.goal?.status, "complete");
+});
+
 test("goal mutation receipts are durable before returning and rehydrate without an end-of-turn snapshot", async () => {
   const { ref, create, update } = toolbox();
   const entries: Array<{ type: string; payload: unknown }> = [];
@@ -232,7 +327,7 @@ test("agent cannot pause a goal or bypass its work floor", async () => {
   assert.deepEqual(ref.goal, before);
 });
 
-test("goal update schema offers only complete", () => {
+test("goal update schema offers only complete and resume", () => {
   const { tools } = toolbox();
   const goal = tools.find((tool) => tool.name === "goal")!;
   assert.doesNotMatch(JSON.stringify(goal.parameters), /"paused"|"blocked"|"active"/);

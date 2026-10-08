@@ -111,7 +111,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
       headers: { "content-type": "text/event-stream" },
     });
   }) as typeof fetch;
-  for (const modelId of [adaptiveId, "claude-opus-5-5", "claude-sonnet-5-5"])
+  for (const modelId of [adaptiveId, "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
     for (const route of ["api-key", "personal-key", "oauth", "gateway"] as const) {
       await t.test(`${modelId}/${route}`, async () => {
         const harness = createPiHarness({

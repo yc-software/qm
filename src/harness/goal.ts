@@ -13,8 +13,10 @@
  *   floor works the same way (matching Codex/Claude Code goal features):
  *   completing or stopping under an unmet floor is answered with a
  *   keep-going prompt, never a hard tool rejection.
- * - Only a human pressing stop in the UI stops a goal (it pauses). The
- *   agent cannot block, pause, resume, or complete it: it may only REQUEST
+ * - Only a human pressing stop in the UI stops a goal (it pauses), and only
+ *   a person's own message can resume it (goal update "resume" is refused on
+ *   cron, webhook, ambient and delegated turns). The agent cannot block,
+ *   pause, or complete it on its own: it may only REQUEST
  *   completion with evidence, and a fresh-context verifier (the harness's
  *   judge model, which never saw the work) decides. A rejection's reasons
  *   become the next continuation prompt. The harness never waives a goal.
@@ -39,6 +41,8 @@ export interface GoalRecord {
   updatedAt: number;
   /** Time spent actually running turns on this goal, banked at each turn end. */
   activeMs?: number;
+  /** When the user last resumed the goal; time before it (while paused) never counts. */
+  activeSince?: number;
   completionNote?: string;
   /** Reasons the verifier gave for rejecting the last completion request. */
   verifierFeedback?: string;
@@ -160,7 +164,8 @@ export function goalPausedNote(goal: GoalRecord): string {
   return (
     `[goal] This session has a PAUSED goal (paused when a turn was stopped or by request):\n` +
     `<objective>\n${escapeTags(goal.objective)}\n</objective>\n` +
-    `Do not pursue it and do not treat it as enforced.`
+    `Do not pursue it and do not treat it as enforced. If the user's message explicitly asks to resume it, ` +
+    `call goal action update with status "resume"; never resume it on your own initiative.`
   );
 }
 
@@ -211,12 +216,14 @@ export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
   const floor = sanitizeFloor(goal.floor);
   const capTokens = positiveInteger(goal.capTokens);
   const activeMs = finitePositive(goal.activeMs);
-  const { floor: _floor, capTokens: _capTokens, activeMs: _activeMs, ...rest } = goal;
+  const activeSince = finitePositive(goal.activeSince);
+  const { floor: _floor, capTokens: _capTokens, activeMs: _activeMs, activeSince: _activeSince, ...rest } = goal;
   return {
     ...rest,
     objective: String(goal.objective ?? ""),
     tokensUsed: Math.floor(finitePositive(goal.tokensUsed) ?? 0),
     ...(activeMs ? { activeMs } : {}),
+    ...(activeSince ? { activeSince } : {}),
     ...(capTokens ? { capTokens } : {}),
     ...(floor ? { floor } : {}),
   };
@@ -266,9 +273,16 @@ function goalFloorApplies(goal: GoalRecord): boolean {
   return goal.floor !== undefined && goal.status === "active";
 }
 
-/** Active time on the goal: banked turns plus the running turn (counted from when the goal existed). */
+function goalClockStart(goal: GoalRecord, turnStartedAt: number): number {
+  return Math.max(turnStartedAt, goal.activeSince ?? goal.createdAt);
+}
+
+/** Active time on the goal: banked turns plus the running turn (counted since the goal was created or last resumed). A paused goal accrues nothing. */
 export function goalActiveMs(goal: GoalRecord, turnStartedAt: number | undefined, now = Date.now()): number {
-  const running = turnStartedAt === undefined ? 0 : Math.max(0, now - Math.max(turnStartedAt, goal.createdAt));
+  const running =
+    turnStartedAt === undefined || goal.status === "paused"
+      ? 0
+      : Math.max(0, now - goalClockStart(goal, turnStartedAt));
   return (goal.activeMs ?? 0) + running;
 }
 
@@ -325,7 +339,7 @@ export function createFloorCapPolicy(opts: {
 function goalFloorEndsAt(goal: GoalRecord, turnStartedAt: number): number | undefined {
   const f = goal.floor;
   if (f?.minMs === undefined || Object.keys(f).length !== 1) return undefined;
-  return Math.max(turnStartedAt, goal.createdAt) + f.minMs - (goal.activeMs ?? 0);
+  return goalClockStart(goal, turnStartedAt) + f.minMs - (goal.activeMs ?? 0);
 }
 
 export function goalFloorUnmet(goal: GoalRecord, meter: GrindMeter, now = Date.now()): boolean {

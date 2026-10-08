@@ -433,7 +433,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
         return handle;
       } catch (err) {
-        await cleanupFailedProvision(sandbox, handle);
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },

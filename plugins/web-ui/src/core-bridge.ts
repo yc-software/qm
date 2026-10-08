@@ -1,4 +1,4 @@
-import { reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
+import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { EventType } from "@tanstack/ai/client";
@@ -15,6 +15,7 @@ import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
 import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabilities.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
+import { messageEntrySeqs } from "./message-link.ts";
 
 const BASE_URL = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
 
@@ -211,7 +212,7 @@ export async function loadInheritedTranscript(
 }
 
 export interface SessionBackgroundView {
-  jobs: Array<{ processId: string; command: string; startedAt: number; expiresAt: number }>;
+  jobs: Array<{ processId: string; command: string; purpose?: string; startedAt: number; expiresAt: number }>;
   watches: Array<{
     id: string;
     processId: string;
@@ -302,26 +303,33 @@ export async function forkSession(
   });
 }
 
-export function forkCutSeq(entries: SessionEntry[], userOrdinal: number, isUserMessage: boolean): number | undefined {
-  const seqs = forkableUserSeqs(entries);
-  if (isUserMessage) return seqs[userOrdinal - 1];
-  const nextUser = seqs[userOrdinal];
-  return nextUser !== undefined ? nextUser - 1 : undefined;
-}
-
-function forkableUserSeqs(entries: SessionEntry[]): number[] {
-  const seqs: number[] = [];
-  for (const e of entries) {
-    if (e.type !== "user" || e.seq === undefined) continue;
-    const p = e.payload as { text?: string; attachments?: unknown[]; hidden?: boolean } | null;
-    if (p?.hidden) continue;
-    if ((p?.text ?? "") || (p?.attachments?.length ?? 0)) seqs.push(e.seq);
+export function forkCutSeq(
+  entries: SessionEntry[],
+  messages: readonly unknown[],
+  index: number,
+  floorSeq = -1,
+): number | undefined {
+  const isUser = (message: unknown): boolean => {
+    const m = message as { role?: string; opener?: boolean; resumeAnchor?: boolean } | undefined;
+    return (m?.role === "user" || m?.role === "user-with-attachments") && !m.opener && !m.resumeAnchor;
+  };
+  let base = floorSeq;
+  let unsaved = 0;
+  for (let i = index; i >= 0; i--) {
+    const seqs = messageEntrySeqs(messages[i]);
+    if (seqs.length) {
+      base = Math.max(...seqs);
+      break;
+    }
+    if (isUser(messages[i])) unsaved++;
   }
-  return seqs;
-}
-
-export function userMessagesBefore(entries: SessionEntry[], anchorSeq: number): number {
-  return forkableUserSeqs(entries).filter((seq) => seq < anchorSeq).length;
+  if (isUser(messages[index]) && !unsaved) return base;
+  const later = entries.flatMap((entry) =>
+    entry.type === "user" && entry.seq !== undefined && entry.seq > base && userEntryMessage(entry) ? [entry.seq] : [],
+  );
+  if (isUser(messages[index])) return later[unsaved - 1];
+  const nextUser = later[unsaved];
+  return nextUser !== undefined ? nextUser - 1 : entries.at(-1)?.seq;
 }
 
 export const TAIL_TURNS = 25;
@@ -364,7 +372,10 @@ export function unresolvedApprovals(approvals: PendingApproval[]): PendingApprov
 export function fetchSessionApprovals(id: string): Promise<{ approvals: PendingApproval[] } | null> {
   return api<{ approvals: PendingApproval[] }>(`/api/sessions/${encodeURIComponent(id)}/approvals`)
     .then((result) => ({ approvals: unresolvedApprovals(result.approvals) }))
-    .catch(() => null);
+    .catch((error: unknown) => {
+      reportHandledError("web:approvals_fetch", error);
+      return null;
+    });
 }
 
 export async function fetchEntry(sessionId: string, seq: number): Promise<SessionEntry> {

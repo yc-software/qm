@@ -1,4 +1,4 @@
-import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintCapabilityToken, CREDENTIAL_BROKER_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { swallowAs } from "../src/util/errors.ts";
 

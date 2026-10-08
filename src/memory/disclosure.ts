@@ -6,6 +6,7 @@ import type { CurrentScopeMembers, IsCurrentSharedScopeMember } from "../resolut
 import { legacyMemoryRecords, parseMemoryRecords, restoreMemoryRecords, type MemoryRecords } from "./records.ts";
 import { memoryBlocks } from "./notebook.ts";
 import { queryBullets, recallBody, type MemoryService } from "./memory-service.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 
 type RecordEntry = MemoryRecords["records"][number];
 
@@ -38,7 +39,7 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
   const once = (key: string, read: () => Promise<boolean>) => {
     let decision = decisions.get(key);
     if (!decision) {
-      decision = read().catch(() => false);
+      decision = read().catch(swallowAs(`memory disclosure: ${key}`, false));
       decisions.set(key, decision);
     }
     return decision;
@@ -51,7 +52,7 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
         : (input
             .currentScopeMembers?.(input.targetScope)
             .then((members) => members ?? [])
-            .catch(() => []) ?? Promise.resolve([])));
+            .catch(swallowAs("memory disclosure: audience", [])) ?? Promise.resolve([])));
   const native = (scope: ScopeId) => input.nativeScopes.includes(scope);
   function entitled(person: Principal, scope: ScopeId): Promise<boolean> {
     return once(`member:${person.id}:${scope}`, async () => {
@@ -93,7 +94,8 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
     async narrow(scope: ScopeId) {
       try {
         return await narrow(scope);
-      } catch {
+      } catch (e) {
+        swallow("memory disclosure: narrow", e);
         return false;
       }
     },
@@ -105,7 +107,8 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
         return (
           await Promise.all(record.sources.map((source) => sourceAllowed(source.scopeId, record.sensitivity)))
         ).every(Boolean);
-      } catch {
+      } catch (e) {
+        swallow("memory disclosure: allows", e);
         return false;
       }
     },

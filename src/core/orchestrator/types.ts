@@ -25,7 +25,6 @@ import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts"
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
 import type { Sandbox } from "../../sandbox/sandbox.ts";
-import type { SandboxMigrationRunner } from "../../sandbox/sandbox-migration-runner.ts";
 import type { ProcessRegistry } from "../../processes/process-registry.ts";
 import type { MonitorStore } from "../../monitors/monitor-store.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
@@ -105,6 +104,7 @@ export interface OrchestratorInput extends Omit<
   finalAttempt?: boolean;
   background?: boolean;
   cancel?: AbortSignal;
+  shutdown?: AbortSignal;
   queueMs?: number;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
@@ -130,7 +130,6 @@ export interface OrchestratorDeps {
   workspace: WorkspaceStore;
   files: FileArtifactStore;
   sandbox: Sandbox;
-  sandboxMigration?: SandboxMigrationRunner;
   sandboxResources?: SandboxResources;
   modelGateway: ModelGateway;
   auditLog: AuditLog;

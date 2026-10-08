@@ -1,5 +1,5 @@
 import { continueInPrivate } from "./private-continuation.ts";
-import { type ExternalSlackAccess } from "./external-access.ts";
+import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
 import { registerDeployAccessActions } from "./deploy-access.ts";
 import { SlackPluginStartCleanupError } from "../surfaces/slack-runtime.ts";
@@ -347,9 +347,12 @@ export async function startSlackPlugin(
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
     onEngaged: (runId, channel, threadTs) => {
-      void core.sessionStatus?.start(statusClient, statusAccount(), runId, channel, threadTs).finally(() => {
-        void reconcileStatus();
-      });
+      void core.sessionStatus
+        ?.start(statusClient, statusAccount(), runId, channel, threadTs)
+        .catch(swallowAs("slack: session status start", undefined))
+        .finally(() => {
+          void reconcileStatus();
+        });
     },
     onSettled: () => {
       void reconcileStatus();
@@ -441,7 +444,10 @@ export async function startSlackPlugin(
       if (!account || (teamId && account.teamId !== teamId)) return undefined;
       return account.client;
     },
-    externalAccount: (id) => !!slackAccountClients.get(id)?.policy,
+    externalNamespace: (id) => {
+      const account = slackAccountClients.get(id);
+      return account?.policy ? externalSlackNamespace(account.teamId, account.policy) : undefined;
+    },
     continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
     core,
     flow,
@@ -540,6 +546,7 @@ export async function startSlackPlugin(
           followerRetry.unref?.();
         }
       })
+      .catch(swallowAs("slack: delivery drain", undefined))
       .finally(() => {
         deliveriesPollInFlight = false;
         if (deliveriesPollAgain) {
@@ -562,7 +569,10 @@ export async function startSlackPlugin(
   const serviceContextRequest = (r: SurfaceContextRequest): void => {
     if (stopped || !r?.id || contextRequestsInFlight.has(r.id)) return;
     contextRequestsInFlight.add(r.id);
-    void surfaceContext.fulfillSurfaceContext(app.client, r).finally(() => contextRequestsInFlight.delete(r.id));
+    void surfaceContext
+      .fulfillSurfaceContext(app.client, r)
+      .catch(swallowAs("slack: context request fulfillment", undefined))
+      .finally(() => contextRequestsInFlight.delete(r.id));
   };
   let unsubscribeContextRequests = (): void => {};
   if (CORE_SINGLETON) {

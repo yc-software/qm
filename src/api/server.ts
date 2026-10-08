@@ -25,14 +25,8 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import {
-  armBodyDeadline,
-  canonicalPayload,
-  PayloadTooLargeError,
-  readRawBody,
-  sendJson,
-  verifyOrReject,
-} from "./http.ts";
+import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import { findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
@@ -390,7 +384,7 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     return;
   }
   reportBackendError(err);
-  console.error("[server] 500 %s %s: %s", req.method ?? "?", req.url ?? "?", errMessage(err));
+  console.error("[server] 500 %s %s: %s", req.method ?? "?", loggablePath(req.url), errMessage(err));
   if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "internal server error" });
   else res.destroy();
 }
@@ -460,7 +454,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
 
   fastify.setErrorHandler((err, request, reply) => {
     reportBackendError(err);
-    console.error("%s", `[server] 500 ${request.raw.method ?? "?"} ${request.raw.url ?? "?"}:`, errMessage(err));
+    console.error("%s", `[server] 500 ${request.raw.method ?? "?"} ${loggablePath(request.raw.url)}:`, errMessage(err));
     return reply.code(500).send({ error: "internal_error", message: "internal server error" });
   });
 
@@ -547,7 +541,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         finishTiming({
           name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
           status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
-          data: { http_status: res.writableFinished ? String(res.statusCode) : undefined },
+          data: { url: req.url, http_status: res.writableFinished ? String(res.statusCode) : undefined },
         }),
       );
     req.on("error", () => res.destroy());
@@ -600,6 +594,12 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     routing(req, res);
   }
   return server;
+}
+
+export function loggablePath(url: string | undefined): string {
+  if (!url) return "?";
+  const query = url.indexOf("?");
+  return query < 0 ? url : `${url.slice(0, query)}?<query omitted>`;
 }
 
 export function createServer(app: App, deps: ServerOptions = {}): Server {

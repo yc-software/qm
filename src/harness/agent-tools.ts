@@ -90,6 +90,7 @@ export interface ToolContextRef {
   onGapWork?: (work: GapWork) => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
 
@@ -345,7 +346,7 @@ export type CoreToolOptions = Omit<
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    sandboxResources: config.sandboxResourcesEnabled,
+    sandboxResources: true,
     scratchExec: config.scratchExecEnabled,
     // Availability is checked per turn; Open can be enabled without restarting the harness.
     ownerAuthExec: true,
@@ -429,11 +430,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const callId = (payload as { callId?: unknown } | null)?.callId;
       if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
+    if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload)) payload = { ...payload, interrupted: true };
     await ref.emit({ type, payload, scopeLabel });
   };
 
-  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...sandboxLog(payload), callId });
+  const retryMarks = new Map<string, RetryMark>();
+  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
+    const mark = retryMarks.get(callId);
+    return log("tool_call", {
+      ...sandboxLog(payload),
+      callId,
+      ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
+    });
+  };
 
   const resultQueue = createKeyedQueue();
   const quarantinedMessages = new Set<string>();
@@ -742,7 +751,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...sandboxLog({ tool: "execute", ...scopeNote }),
         callId,
         isError: true,
-        result: "Command execution failed.",
+        result: `Command execution failed: ${redactSecrets(errMessage(e))}`,
       });
       throw e;
     }
@@ -1145,9 +1154,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
-      "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
-      "publication-time grants. `public: true` makes the app reachable without sign-in; it is never the default and is refused unless an org admin has enabled external app sharing. " +
-      "Use apps action share for subsequent grants. Share the full absolute URL " +
+      "deployment name, not its ID. Publishing is always private to the owner and never changes who can reach an app; " +
+      "grant access separately with apps action share. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
       "Egress is open, " +
@@ -1170,7 +1178,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }),
           {
             description:
-              "Publication-time access grants. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Existing explicit grants survive. Use apps action share for subsequent grants.",
+              "First-publish access grants only. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Refused when republishing an existing app; use apps action share instead.",
           },
         ),
       ),
@@ -1203,12 +1211,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       rollbackTo: Type.Optional(
         Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
       ),
-      public: Type.Optional(
-        Type.Boolean({
-          description:
-            "Explicitly set whether anyone with the link can open the app without signing in. Defaults to private for new apps; omit to preserve the current setting on updates.",
-        }),
-      ),
       alwaysOn: Type.Optional(
         Type.Boolean({
           description:
@@ -1233,7 +1235,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         name: params.name,
       });
       try {
-        const r = await tc.publish({ ...params, share: params.audience } as PublishInput);
+        const legacy = params as { audience?: PublishInput["share"] };
+        const r = await tc.publish({ ...params, share: legacy.audience } as PublishInput);
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
@@ -1274,8 +1277,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "memory",
     description:
       "Your durable memory of the person or team you work for — the ONE way to read or change it. " +
-      "It is NOT a file: never write it with files action write or shell commands (those land on your computer " +
-      "and are silently lost). It persists across every conversation and surface (continuity — " +
+      "It is NOT a file: writing MEMORY.md with files or the shell does not touch it. It persists across every conversation and surface (continuity — " +
       "you're a colleague who remembers, not a fresh chat each time); this conversation can only " +
       "ever touch its OWN memory, no one else's, by design. " +
       'action="search" finds remembered facts matching every word of `query` (case-insensitive) ' +
@@ -1283,11 +1285,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Every line is loaded into your context on every future turn, so memory is your most " +
       "expensive storage: it is an index, not a datastore. Save pointers to data, never the data " +
       "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
-      "belongs in a file on your computer, with at most one memory line naming that file and what " +
-      "it holds. If a fact is a list that grows, it's a file. Two caveats: files are this " +
+      "belongs in a file written with the files tool, with at most one memory line naming that file and what " +
+      "it holds. If a fact is a list that grows, it's a file. Files are this " +
       "conversation's own (a pointer read from another conversation is a hint of where state " +
-      "lives, not a path you can open), and disk is less durable than memory — keep working " +
-      "state you could rebuild from its source. " +
+      "lives, not a path you can open). " +
       'action="remember" appends durable `facts` now — short, self-contained bullets (a preference, ' +
       "an identifier, an ongoing project, how they like to work); never secrets, credentials, " +
       "one-off trivia, or anything already recorded somewhere you can look up. " +
@@ -1855,7 +1856,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
       ),
       purpose: Type.Optional(
-        Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Start preview server')." }),
+        Type.String({
+          description:
+            "Short job description, about 5 words (e.g. 'App preview server'). Required for start; displayed to the user instead of code.",
+        }),
       ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
       process_id: Type.Optional(
@@ -1939,7 +1943,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 text("[error] background start requires `command`."),
                 true,
               );
+            if (!params.purpose?.trim())
+              return recordResult(
+                callId,
+                { tool: "background", action: params.action, error: "start requires purpose" },
+                text("[error] background start requires `purpose`: a short description of the job, about 5 words."),
+                true,
+              );
             const r = await tc.backgroundStart(params.command, {
+              purpose: params.purpose,
               ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
               ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
             });
@@ -2137,7 +2149,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                       ? jobs
                           .map(
                             (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.command}`,
+                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
                           )
                           .join("\n")
                       : "(no background jobs)",
@@ -2202,7 +2214,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     purpose: Type.Optional(
       Type.String({
         description:
-          "Human-readable intent label, at most 4 words (e.g. 'Check Python version'). Describe the purpose, not the code. Required for exec and management actions; optional for process actions.",
+          "Human-readable intent label, about 5 words (e.g. 'App preview server'). Describe what the job does, not the code. Required for exec, management actions, and start_process; optional for other process actions.",
       }),
     ),
     timeout_seconds: Type.Optional(
@@ -2237,7 +2249,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     set_default: ["purpose", "sandbox_id"],
     retire: ["purpose", "sandbox_id"],
     exec: ["purpose", "command"],
-    start_process: ["command"],
+    start_process: ["purpose", "command"],
     read_process: ["process_id"],
     write_stdin: ["process_id", "data"],
     signal_process: ["process_id"],
@@ -4076,12 +4088,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
       "you are stopping work. An independent fresh-context verifier reads only the objective, your note, and any " +
       "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
-      "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block, pause, or " +
-      "resume a goal; only the user stops it.",
+      "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
+      'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
+      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap.",
     parameters: Type.Object({
-      status: Type.Literal("complete"),
+      status: Type.Union([Type.Literal("complete"), Type.Literal("resume")]),
       note: Type.String({
-        description: "The concrete evidence (commands, output, results, links) that proves the objective is achieved.",
+        description:
+          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume: quote the user's request to resume.",
       }),
       files: Type.Optional(
         Type.Array(Type.String(), {
@@ -4091,19 +4105,53 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
     }),
     async execute(callId, params) {
-      const p = params as { note: string; files?: string[] };
+      const p = params as { status?: "complete" | "resume"; note: string; files?: string[] };
+      const status = p.status === "resume" ? "resume" : "complete";
       await recordCall(callId, {
         tool: "goal",
         action: "update",
-        status: "complete",
+        status,
         ...(p.note ? { note: p.note } : {}),
       });
       const goal = ref.goal;
+      if (status === "resume") {
+        if (goal?.status !== "paused") {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "not_paused" },
+            text(goal?.status === "active" ? "The goal is already active." : "No paused goal to resume."),
+            true,
+          );
+        }
+        // Only a person's own message can lift a pause the person put there;
+        // crons, webhooks, ambient and delegated wakes cannot.
+        if (ref.current?.humanTurn !== true) {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "human_required" },
+            text(
+              "Only the user can resume a paused goal, by asking in their own message; this run was not started by one. The goal stays paused.",
+            ),
+            true,
+          );
+        }
+        goal.status = "active";
+        goal.updatedAt = goal.activeSince = Date.now();
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "update", goal },
+          text("The goal is active again and enforced as before. Continue working toward it."),
+        );
+      }
       if (goal?.status !== "active") {
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", error: "no_active_goal" },
-          text(goal?.status === "paused" ? "The goal is paused by the user." : "No active goal to complete."),
+          text(
+            goal?.status === "paused"
+              ? "The goal is paused by the user. Only the user can resume it, by asking to."
+              : "No active goal to complete.",
+          ),
           true,
         );
       }
@@ -4349,8 +4397,63 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
   return active.map((t) =>
-    withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+    withRetrySafety(
+      withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+      retryMarks,
+    ),
   );
+}
+
+const RETRY_SAFE_FIELD = "retrySafe";
+
+const RETRY_SAFE_SCHEMA = Type.Optional(
+  Type.Boolean({
+    description:
+      "true if re-running this exact call is harmless (reads, searches, idempotent writes) so the platform may re-run it after an interruption; false if it would duplicate a side effect (sending a message, charging, creating a record).",
+  }),
+);
+const RERUN_INPUT_MAX_CHARS = 4_000;
+
+interface RetryMark {
+  safe: boolean;
+  rerun?: { tool: string; input: Record<string, unknown> };
+}
+
+function withRetrySafeField(parameters: unknown): unknown | null {
+  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return null;
+  if (RETRY_SAFE_FIELD in parameters.properties) return null;
+  return { ...parameters, properties: { ...parameters.properties, [RETRY_SAFE_FIELD]: RETRY_SAFE_SCHEMA } };
+}
+
+function stripRetrySafeField(params: unknown): { params: unknown; retrySafe?: boolean } {
+  if (!isObj(params) || !(RETRY_SAFE_FIELD in params)) return { params };
+  const { [RETRY_SAFE_FIELD]: retrySafe, ...rest } = params;
+  return { params: rest, ...(typeof retrySafe === "boolean" ? { retrySafe } : {}) };
+}
+
+function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): ToolDefinition {
+  const parameters = withRetrySafeField(tool.parameters);
+  if (!parameters) return tool;
+  const inner = tool.execute.bind(tool);
+  return {
+    ...tool,
+    parameters: parameters as ToolDefinition["parameters"],
+    async execute(callId: string, params: unknown, ...rest: unknown[]) {
+      const stripped = stripRetrySafeField(params);
+      if (stripped.retrySafe !== undefined && isObj(stripped.params)) {
+        const replayable = stripped.retrySafe && JSON.stringify(stripped.params).length <= RERUN_INPUT_MAX_CHARS;
+        marks.set(callId, {
+          safe: stripped.retrySafe,
+          ...(replayable ? { rerun: { tool: tool.name, input: stripped.params } } : {}),
+        });
+      }
+      try {
+        return await (inner as (...args: unknown[]) => unknown)(callId, stripped.params, ...rest);
+      } finally {
+        marks.delete(callId);
+      }
+    },
+  } as ToolDefinition;
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);

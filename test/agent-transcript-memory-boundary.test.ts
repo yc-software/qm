@@ -6,7 +6,7 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildMemoryContextSnapshot } from "../src/memory/context-boundary.ts";
 import type { MemoryRecords } from "../src/memory/records.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
@@ -109,8 +109,8 @@ async function fixture() {
     setAudience: (next: Principal[]) => {
       audience = next;
     },
-    get: (query = "") =>
-      fetch(`${base}/v1/conversations/${session.id}${query}`, { headers: { "x-agent-capability": token } }),
+    get: (query = "", id = session.id) =>
+      fetch(`${base}/v1/conversations/${id}${query}`, { headers: { "x-agent-capability": token } }),
     list: () => fetch(`${base}/v1/conversations`, { headers: { "x-agent-capability": token } }),
     post: (suffix: string, body: unknown = {}) =>
       fetch(`${base}/v1/conversations/${session.id}${suffix}`, {
@@ -131,7 +131,7 @@ async function fixture() {
 }
 
 for (const change of ["remove", "reclassify", "posture", "audience"] as const) {
-  test(`agent transcript ${change === "audience" ? "rejects" : "preserves"} retained context after ${change}`, async () => {
+  test(`agent transcript preserves retained context after ${change}`, async () => {
     const f = await fixture();
     try {
       await f.checkpoint();
@@ -147,9 +147,8 @@ for (const change of ["remove", "reclassify", "posture", "audience"] as const) {
           { id: "eve", type: "internal" },
         ]);
       const response = await f.get();
-      assert.equal(response.status, change === "audience" ? 403 : 200);
-      if (change === "audience") assert.deepEqual(await response.json(), { error: "forbidden" });
-      else assert.match(await response.text(), /PRIVATE_SENTINEL/);
+      assert.equal(response.status, 200);
+      assert.match(await response.text(), /PRIVATE_SENTINEL/);
       if (change !== "audience") {
         const fresh = await f.memoryRead();
         assert.equal(fresh.status, 200);
@@ -164,19 +163,49 @@ for (const change of ["remove", "reclassify", "posture", "audience"] as const) {
   });
 }
 
-test("agent transcript fails closed for an unknown checkpoint", async () => {
+test("agent transcripts use viewer access for old, cross-scope and project sessions", async () => {
   const f = await fixture();
   try {
-    await f.append("assistant", { text: "PRIVATE_SENTINEL" });
-    const response = await f.get();
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), { error: "forbidden" });
+    const project = await f.built.app.createProject("alice", "Research");
+    assert.ok(project);
+    const crossScope = await f.built.sessions.getOrCreateByThread("web:alice:old", "dm", HOME);
+    const projectSession = await f.built.sessions.getOrCreateByThread("web:alice:project", "group", project.scopeId);
+    const hidden = await f.built.sessions.getOrCreateByThread("web:mallory:hidden", "dm", "personal:mallory");
+    for (const session of [f.session, crossScope, projectSession, hidden]) {
+      const owner = session.id === hidden.id ? "mallory" : "alice";
+      await f.built.sessions.addParticipant(session.id, owner);
+      if (session.id === f.session.id) await f.append("assistant", { text: "readable history" });
+      else {
+        const { lease: active } = await f.built.sessions.acquireLease(session.id, "turn");
+        assert.ok(active);
+        if (session.id === projectSession.id)
+          await f.built.sessions.append(active, {
+            type: "system",
+            scopeLabel: session.scopeId,
+            payload: {
+              kind: "memory_context",
+              snapshot: buildMemoryContextSnapshot({ targetScope: session.scopeId, audience: [] }),
+              throughSeq: -1,
+            },
+          });
+        await f.built.sessions.append(active, {
+          type: "assistant",
+          scopeLabel: session.scopeId,
+          payload: { text: "readable history" },
+        });
+        await f.built.sessions.releaseLease(active);
+      }
+      const response = await f.get("", session.id);
+      assert.equal(response.status, owner === "alice" ? 200 : 404);
+      if (owner === "alice") assert.match(await response.text(), /readable history/);
+      else assert.doesNotMatch(await response.text(), /readable history/);
+    }
   } finally {
     await f.close();
   }
 });
 
-test("agent transcript enforces durable cutoff through old pages, pins and metadata", async () => {
+test("agent transcript retains viewer-visible history across memory checkpoints", async () => {
   const f = await fixture();
   try {
     await f.checkpoint();
@@ -190,12 +219,13 @@ test("agent transcript enforces durable cutoff through old pages, pins and metad
     await f.append("assistant", { text: "SAFE_REPLY" });
     const response = await f.get();
     assert.equal(response.status, 200);
-    const text = await response.text();
-    assert.match(text, /SAFE_REPLY/);
-    assert.doesNotMatch(text, /PRIVATE_SENTINEL|memory_context|earlierEntries/);
+    const body = (await response.json()) as { entries: unknown[] };
+    assert.match(JSON.stringify(body.entries), /SAFE_REPLY/);
+    assert.match(JSON.stringify(body.entries), /PRIVATE_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(body.entries), /memory_context/);
     const oldPage = await f.get(`?beforeSeq=${old.seq + 1}`);
     assert.equal(oldPage.status, 200);
-    assert.deepEqual(((await oldPage.json()) as { entries: unknown[] }).entries, []);
+    assert.match(JSON.stringify(((await oldPage.json()) as { entries: unknown[] }).entries), /PRIVATE_SENTINEL/);
     assert.match(await (await f.human()).text(), /PRIVATE_SENTINEL/);
   } finally {
     await f.close();
@@ -233,7 +263,7 @@ test("adding an authorized fact preserves an otherwise compatible checkpoint", a
   }
 });
 
-test("agent list and patch responses do not disclose retained titles or statuses", async () => {
+test("agent list and patch responses include viewer-visible titles and statuses", async () => {
   const f = await fixture();
   try {
     await f.built.sessions.updateTitle(f.session.id, "PRIVATE_TITLE");
@@ -242,15 +272,16 @@ test("agent list and patch responses do not disclose retained titles or statuses
     assert.equal(listed.status, 200);
     const listing = await listed.text();
     assert.match(listing, new RegExp(f.session.id));
-    assert.doesNotMatch(listing, /PRIVATE_TITLE|PRIVATE_STATUS/);
+    assert.match(listing, /PRIVATE_TITLE/);
+    assert.match(listing, /PRIVATE_STATUS/);
     const patch = await f.post("", { archived: true });
     assert.equal(patch.status, 200);
-    assert.doesNotMatch(await patch.text(), /PRIVATE_TITLE|PRIVATE_STATUS/);
+    assert.match(await patch.text(), /PRIVATE_TITLE/);
     const renamed = await f.post("", { title: "safe title" });
     assert.equal(renamed.status, 200);
     const renamedBody = await renamed.text();
     assert.match(renamedBody, /safe title/);
-    assert.doesNotMatch(renamedBody, /PRIVATE_STATUS/);
+    assert.match(renamedBody, /PRIVATE_STATUS/);
     const cleared = await f.post("", { status: null });
     assert.equal(cleared.status, 200);
     assert.equal(((await cleared.json()) as { conversation: { status: null } }).conversation.status, null);

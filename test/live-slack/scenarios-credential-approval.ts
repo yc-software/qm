@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { assert, type Actor, type Ctx, type Env, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
-import { signedRequestHeaders } from "../../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 
 const EVENTS_URL = () =>
   process.env.SLACK_EVENTS_TARGET_URL ?? `http://127.0.0.1:${process.env.SLACK_EVENTS_PORT ?? "8182"}/slack/events`;

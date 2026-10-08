@@ -142,6 +142,8 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
       reaperIntervalMs: 60_000,
     }),
   );
+  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
+  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
   built.runtime.start();
   try {
     const ack = await built.app.turn({
