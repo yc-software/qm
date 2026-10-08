@@ -54,10 +54,13 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
 - **Give every Wall of shame category its own independent reviewer.** For every PR,
   dispatch a separate fresh-context review agent for each category in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame); new categories automatically require
-  their own reviewer. Each reads the category and its historical examples, examines the
+  their own reviewer. The items under Honorable mentions are the one exception: assign
+  them to one combined reviewer and report that review as a single lens. Each reviewer
+  reads their assigned guidance and historical examples, examines the
   diff and affected paths, and returns an accept/reject verdict with code or text citations, concrete
   findings, and the smallest correction needed. Run reviewers in parallel within
-  available capacity, queuing the rest; never combine categories to save review work.
+  available capacity, queuing the rest; do not combine categories beyond the explicit
+  Honorable mentions exception.
   Also record an informational score for each applicable category from 0 to 5 during
   an observation period: 0 = not assessable from available evidence,
   1 = severe violation, 2 = material violation, 3 = minor violation, 4 = no violation found,

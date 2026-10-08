@@ -129,17 +129,20 @@ Building interface pieces that disagree with the surrounding product in appearan
 - **[qm#1053](https://github.com/yc-software/qm/pull/1053)** (2026-09-11): A parallel 'Beautiful UI' design system (10 stacked PRs) and an admin redesign with an Original/New toggle were built next to the existing web UI styles. _Status:_ wound back in [qm#1053](https://github.com/yc-software/qm/pull/1053) (closed with #1054-#1062, #992, #1215).
 - **[qm#513](https://github.com/yc-software/qm/pull/513)** (2026-08-13): Multiview panes showed two stacked headers (pane chrome plus the hosted chat's own top bar). _Status:_ wound back in [qm#513](https://github.com/yc-software/qm/pull/513).
 
-### Over-indexing on YC (3 examples)
+### Over-indexing on YC (4 examples)
 
-Treating one organization’s identity or workflow as a requirement of the shared product. Keep defaults and core behavior useful across deployments, and put organization-specific names, assumptions, and workflows in that deployment’s configuration or extensions.
+QM is for organizations in general. YC's usage guides development but architecture should not be _warped_ to fit our purposes and customizations. Leaking YC _data_ is a separate concern.
 
-- **[qm#1315](https://github.com/yc-software/qm/pull/1315)** (2026-09-16): The generic web UI onboarding says 'the agent harness we use to run YC' and 'your YC partner in a box', and the welcome ideas cite 'YC Deal' and 'the YC investor database'.
+Our reliance on internal YCLI should not substitute for a connector story that works for organizations without it.
+
+- **Dedicated people-directory configuration:** Role lookup from a people website became its own People directory admin card, org-wide URL setting, and save path in the generic product. This could have been ordinary organization knowledge or a deployment tool. _Status:_ [qm#1441](https://github.com/yc-software/qm/pull/1441) removes the dedicated admin card.
+- **Assuming Slack supplies the organization's people:** Project-member search only consulted the directory populated by Slack, so web-only deployments could not find users who already existed in Admin → Users. General organization membership had been tied to one communication surface. _Status:_ [qm#928](https://github.com/yc-software/qm/pull/928) adds lookup through the shared user roster.
 - **[qm#1008](https://github.com/yc-software/qm/pull/1008)** (2026-09-09): A 29-file 'software factory' loop (Linear auto-triage, forge ship contract) built for YC's own workflow was ported into public src/loops/factory before it had ever run end to end. _Status:_ wound back in [qm#1026](https://github.com/yc-software/qm/pull/1026).
 - **[qm#530](https://github.com/yc-software/qm/pull/530)** (2026-08-15): Assistant and org names were fixed across prompts, manifests, auth and UI; made deployment-configurable with neutral defaults. _Status:_ wound back in [qm#530](https://github.com/yc-software/qm/pull/530).
 
 ### Regex (3 examples)
 
-Using regex to infer structure or meaning that should come from a parser, a typed error, a stored field, or a model call. These patterns become brittle substitutes for the authoritative data; use the source that actually owns the structure or decision.
+Some people, when confronted with a _**problem**_, think “I know, I'll use _**regular expressions**_.” Now they have _**two problems**_.
 
 Main has 1,443 production regex sites in 380 files; cleanup is the regex-removal backlog.
 
@@ -147,14 +150,37 @@ Main has 1,443 production regex sites in 380 files; cleanup is the regex-removal
 - **[qm#1210](https://github.com/yc-software/qm/pull/1210)** (2026-09-15): Composio consent links are found by regex-scanning model text for URLs and Markdown links, then stripped with dynamically built `RegExp`s, rather than arriving as a typed connector-link field.
 - **[qm#169](https://github.com/yc-software/qm/pull/169)** (2026-08-03): The agent self-API allowlist is a chain of path regexes (`/^\/v1\/projects\/[^/]+$/`, …) instead of matching on the router's declared routes.
 
-### YC info leaking into public qm (1 example)
+### YC info leaking into public qm (2 examples)
 
 Publishing organization-specific information in the public repository through code, docs, fixtures, screenshots, or change descriptions. Inspect outgoing content for private identities, operational details, and internal references; keep private deployment material in private storage.
 
+- **[qm#1315](https://github.com/yc-software/qm/pull/1315)** (2026-09-16): The generic web UI onboarding says 'the agent harness we use to run YC' and 'your YC partner in a box', and the welcome ideas cite 'YC Deal' and 'the YC investor database'.
 - **[qm#1504](https://github.com/yc-software/qm/pull/1504)** (2026-09-22): Public docs/test fixtures had org-specific rollout guidance and identity examples plus 92 tracked screenshots (8.1 MB); scrubbed and AGENTS.md now bans committed screenshots. _Status:_ wound back in [qm#1504](https://github.com/yc-software/qm/pull/1504) (partially; YC welcome copy remains).
 
-### Discarded error evidence (1 example)
+### Discarded error evidence (3 examples)
 
-Replacing or swallowing a failure so the evidence needed to diagnose it disappears. Preserve the primary error and related cleanup failures, with secrets redacted, in access-controlled diagnostics; a concise user-facing message must not be the only surviving record.
+Replacing or swallowing a failure so the evidence needed to diagnose it disappears.
 
-- **Sandbox startup and cleanup** (2026-10-02): A provider authentication failure reached the tool transcript as a bare "Command execution failed." The cleanup wrappers in `src/sandbox/sandbox.ts` dropped the original causes, destruction retries in `src/core/orchestrator/sandboxes.ts` swallowed every exception, and `src/harness/agent-tools.ts` recorded only the generic status. Keep the primary failure and every cleanup failure, redacted, in access-controlled diagnostics; a short user-facing message never replaces the evidence. _Status:_ unresolved on main 5dbebac6. [qm#2018](https://github.com/yc-software/qm/pull/2018).
+- **Sandbox startup and cleanup** (2026-10-02): A provider authentication failure reached the tool transcript as a bare "Command execution failed." The cleanup wrappers in `src/sandbox/sandbox.ts` dropped the original causes, destruction retries in `src/core/orchestrator/sandboxes.ts` swallowed every exception, and `src/harness/agent-tools.ts` recorded only the generic status. _Status:_ wound back in [qm#2018](https://github.com/yc-software/qm/pull/2018).
+- **Rejected session titles:** `sanitizeTitle` returned `undefined` for rejected model output. The fallback title made the request look successful, while neither the rejected text nor the rule that rejected it reached the error log. _Status:_ [qm#1303](https://github.com/yc-software/qm/pull/1303) records the rejection rule and a bounded sample in the durable error log.
+- **Failed transaction rollback:** `withPgTransaction` and copied transaction handlers awaited `ROLLBACK` before rethrowing the original error. If rollback also failed, its exception replaced the actual transaction failure. _Status:_ still present on main; [qm#1834](https://github.com/yc-software/qm/pull/1834) proposes preserving the original error and discarding the broken connection.
+
+### Over-testing
+
+Description and examples pending human input.
+
+### Performance (4 examples)
+
+Doing unnecessary work, repeating expensive work, or making independent work wait. Watch for hot polling loops, unbounded database reads, unstable prompt prefixes that defeat caching, and locks that serialize unrelated operations.
+
+- **Polling that writes even when nothing is due:** The cron scheduler sent a synthetic tick job every second and repeatedly submitted cron jobs. Idle scheduling still generated database writes and queue churn. _Status:_ [qm#2007](https://github.com/yc-software/qm/pull/2007) removes the per-second tick job; mutation and completion hooks keep jobs current, with periodic repair on the scheduler lease holder.
+- **Unbounded admin list queries:** The session list combined per-row JSON subqueries with full-history sorting and OFFSET pagination. A routine admin page could saturate Postgres and starve the shared connection pool used by actual turns. _Status:_ [qm#2076](https://github.com/yc-software/qm/pull/2076) makes the list query bounded and removes repeated work from each row.
+- **Serializing independent sandbox operations:** A single exclusive machine lock covered commands, file operations, and status checks. One long-running command blocked unrelated sessions using the same computer. _Status:_ [qm#1748](https://github.com/yc-software/qm/pull/1748) lets ordinary operations share the lock while keeping destructive lifecycle operations exclusive.
+- **Defeating prompt caching with incidental changes:** Changing countdowns, fresh sandbox/job snapshots, and inventories rendered in discovery order kept changing otherwise reusable prompt prefixes. _Status:_ [qm#1618](https://github.com/yc-software/qm/pull/1618) stabilizes snapshots and timestamps; [qm#1690](https://github.com/yc-software/qm/pull/1690) fixes the remaining inventory-order churn.
+
+### Honorable mentions
+
+These can be addressed by a single combined reviewer.
+
+- **Screenshots:** The repo is not to be cluttered with screenshots or images of any kind that aren't actually used in UI.
+- **Code comments:** Not allowed -- these historically have reinforced drift and reward-hacky agent decisions, providing air cover for future agents to do the same.
