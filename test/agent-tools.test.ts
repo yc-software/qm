@@ -7,7 +7,7 @@ import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "
 import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
-import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
+import { CommandDenied, NeedsApproval, type AttachResult, type ToolContext } from "../src/tools/primitives.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 
@@ -3695,6 +3695,32 @@ test("a files read approval cannot authorize writes or sharing", async () => {
     ref.pausedOnApproval = false;
     assert.match(textOut(await call(files, params)), /needs human approval/);
     assert.equal(ref.pendingApprovals!.at(-1)!.approvalKey, `tool:files:${params.action}`);
+  }
+});
+
+test("files share tells the model whether a self-share reached the reply", async () => {
+  const file = { name: "out.txt", mimetype: "text/plain", sizeBytes: 3, artifactId: "art-851" };
+  const cases: Array<[AttachResult, RegExp]> = [
+    [{ ok: true, files: [file], staged: 1 }, /also attached to your reply/],
+    [{ ok: false, message: "too many files" }, /access granted, but not attached to your reply: too many files/],
+  ];
+  for (const [delivery, expected] of cases) {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const tc = {
+      ...fakeToolContext(),
+      async write() {
+        return { shared: [{ scope: "personal:U1" as const, permission: "read" as const }], delivery };
+      },
+    };
+    const files = createAgentTools({
+      current: tc,
+      emit: (e) => void emitted.push(e as never),
+      scopeLabel: "personal:U1",
+    }).find((tool) => tool.name === "files")!;
+    assert.match(textOut(await call(files, { action: "share", path: "out.txt", scope: "personal:U1" })), expected);
+    const result = emitted.find((e) => e.type === "tool_result")!.payload;
+    assert.deepEqual(result.files, delivery.ok ? [file] : undefined);
+    assert.equal(result.deliveryError, delivery.ok ? undefined : "too many files");
   }
 });
 
