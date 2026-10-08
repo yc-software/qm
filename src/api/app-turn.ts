@@ -689,7 +689,13 @@ export function createTurnMethods(
 
     async listSessionApprovals(sessionId, viewer) {
       if (!(await sessionForViewer(sessionId, viewer))) return [];
-      return pendingApprovalForSession(sessionId, { blockingOnly: false, viewer });
+      const children = (await deps.sessions.childrenOf?.(sessionId)) ?? [];
+      const lists = await Promise.all(
+        [sessionId, ...children.map((c) => c.id)].map((id) =>
+          pendingApprovalForSession(id, { blockingOnly: false, viewer }),
+        ),
+      );
+      return lists.flat();
     },
 
     pendingApprovalForThread(threadRef, viewer) {

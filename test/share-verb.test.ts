@@ -631,3 +631,27 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   const orgRecords = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status === "published");
   assert.equal(orgRecords.length, 1);
 });
+
+test("an agent turn cannot share or move an app org-wide without an approved request", async () => {
+  for (const move of [false, true]) {
+    const state = ownerState();
+    const svc = createControlService(fakeApp(state));
+    const agent = { ...cap("U1"), sessionId: "s1" };
+    const held = await svc.shareArtifact({ type: "deploy", id: "D1", scope: "org", ...(move ? { move } : {}) }, agent);
+    assert.equal(held.ok, false);
+    assert.equal(!held.ok && held.code, "approval_required");
+    assert.equal((await grantsOf(state)).length, 0);
+    assert.equal(state.moves.length, 0);
+    const approved = await svc.shareArtifact(
+      { type: "deploy", id: "D1", scope: "org", visibilityApproved: true, ...(move ? { move } : {}) },
+      agent,
+    );
+    assert.ok(approved.ok, JSON.stringify(approved));
+  }
+  const svc = createControlService(fakeApp(ownerState()));
+  const channel = await svc.shareArtifact(
+    { type: "deploy", id: "D1", scope: scopeId("channel", "C1") },
+    { ...cap("U1"), sessionId: "s1" },
+  );
+  assert.ok(channel.ok, "narrower grants are unaffected");
+});

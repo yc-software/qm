@@ -4088,6 +4088,38 @@ test("background process guidance reflects the configured sandbox token lifetime
   assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
 });
 
+test("apps visibility widening pauses the turn on an approval card instead of applying", async () => {
+  const held = (key: string) =>
+    new NeedsApproval(`apps share x ${key}`, "widen", "approval", undefined, key, { session: false, always: false });
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async setDeploymentPublic() {
+        throw held("public-share");
+      },
+      async shareArtifact() {
+        throw held("org");
+      },
+    },
+    pendingApprovals: [],
+  };
+  const apps = createAgentTools(ref, { controlTools: true }).find((t) => t.name === "apps")!;
+  for (const args of [
+    { action: "share", id: "x", public: true },
+    { action: "share", id: "x", toScope: "org" },
+  ]) {
+    assert.match(textOut(await call(apps, args)), /needs human approval/);
+  }
+  assert.equal(ref.pausedOnApproval, true);
+  assert.deepEqual(
+    ref.pendingApprovals!.map((a) => [a.approvalKey, a.grantModes]),
+    [
+      ["public-share", { session: false, always: false }],
+      ["org", { session: false, always: false }],
+    ],
+  );
+});
+
 test("every tool schema carries the optional retrySafe flag, which is stripped before the tool runs and recorded on the call", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {

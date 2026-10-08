@@ -385,3 +385,25 @@ for (const type of ["slack", "group", "principal"]) {
     assert.deepEqual(recovered.acknowledgements, ["D1"]);
   });
 }
+
+test("a scheduled task's approval card renders at the task's destination, and only there", async () => {
+  const at = { type: "slack", target: "C1:100.200" };
+  const approval = {
+    requestId: "A1",
+    command: "apps share x public:true",
+    reason: "approval",
+    grantModes: { session: false, always: false },
+    request: { surface: "cron", actor: { externalId: "U1" }, triggerDestination: at },
+  };
+  const out = await deliver({ commandApprovalId: "A1" }, undefined, undefined, "Approval needed", { approval });
+  assert.equal(out.posts.length, 1);
+  assert.match(JSON.stringify(out.posts[0]!.blocks), /hilo_allow_once/);
+  const elsewhere = await deliver(
+    { target: "C2:1.2", commandApprovalId: "A1" },
+    undefined,
+    undefined,
+    "Approval needed",
+    { approval },
+  );
+  assert.equal(elsewhere.posts.length, 0, "a card never lands in a channel the task does not post to");
+});

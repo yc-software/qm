@@ -27,6 +27,8 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
+import { NeedsApproval } from "../src/tools/primitives.ts";
+import { visibilityApprovalKey } from "../src/deploy/visibility-approval.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
@@ -401,7 +403,8 @@ const appSandbox = (): Sandbox => {
   } as unknown as Sandbox;
 };
 
-function toolCtx(deploy: DeployService): ToolContext {
+function toolCtx(deploy: DeployService, approved: string[] = []): ToolContext {
+  const approvals = new Set(approved);
   return createToolContext({
     sandbox: appSandbox(),
     provision: async () => ({}) as SandboxHandle,
@@ -410,7 +413,7 @@ function toolCtx(deploy: DeployService): ToolContext {
       { scopeId: scopeId("org", "default-org"), mountPath: "global", mode: "ro" },
     ],
     commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
+    authorizeCommand: (_command: string, key?: string) => key !== undefined && approvals.delete(key),
     grantedHandles: [],
     workspace: {} as never,
     deploy,
@@ -887,4 +890,58 @@ test("uniform app share uses the same invitation sender", async () => {
   assert.ok(result.ok, JSON.stringify(result));
   assert.equal(result.invitation?.emailSent, true);
   assert.deepEqual(sent, ["invitee@example.com"]);
+});
+
+test("widening an app to public or org-wide holds for approval; narrowing never does", async () => {
+  const { deploy } = makeDeploy();
+  await toolCtx(deploy).publish({ entrypoint: "x", name: "held" });
+
+  await assert.rejects(
+    () => toolCtx(deploy).setDeploymentPublic("held", true),
+    (e: unknown) =>
+      e instanceof NeedsApproval &&
+      e.approvalKey === visibilityApprovalKey("held", "public") &&
+      e.grantModes?.always === false &&
+      e.grantModes.session === false,
+  );
+  assert.equal((await deploy.getDeployment("held"))?.public, undefined, "held request did not widen");
+
+  const made = await toolCtx(deploy, [visibilityApprovalKey("held", "public")]).setDeploymentPublic("held", true);
+  assert.equal(made.public, true, "an approved request applies");
+  assert.equal((await toolCtx(deploy).setDeploymentPublic("held", true)).public, true, "already public needs nothing");
+  assert.equal((await toolCtx(deploy).setDeploymentPublic("held", false)).public, false, "narrowing needs no approval");
+  await assert.rejects(
+    () => toolCtx(deploy).setDeploymentPublic("held", true),
+    NeedsApproval,
+    "an approval is single-use: widening again asks again",
+  );
+});
+
+test("agent turn tokens cannot widen an app through the HTTP share endpoint", async () => {
+  const { app, deploy } = apiHarness();
+  await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "api-held",
+  });
+  const agent = { ...cap("U1"), sessionId: "s1" } as CapabilityClaims;
+
+  const pub = await callShare(app, agent, "api-held", { public: true });
+  assert.equal(pub.status, 403);
+  assert.equal(pub.body.error, "approval_required");
+  assert.equal((await deploy.getDeployment("api-held"))?.public, undefined);
+
+  const org = await callShare(app, agent, "api-held", { scope: "org" });
+  assert.equal(org.status, 403);
+  assert.equal(org.body.error, "approval_required");
+  assert.equal((await deploy.reachDeployment("api-held", "U2")).status, "denied");
+
+  assert.equal((await callShare(app, agent, "api-held", { public: false })).status, 200, "narrowing is allowed");
+  assert.equal(
+    (await callShare(app, cap("U1"), "api-held", { public: true })).status,
+    200,
+    "the owner's own UI action is the approval",
+  );
 });

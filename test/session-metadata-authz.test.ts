@@ -110,3 +110,18 @@ test("a dropped project member cannot discard or retitle a session they can no l
   assert.ok(await built.sessions.get(sessionId), "the session survives the refused discard");
   assert.equal(await built.app.discardSession(sessionId, "owner"), true, "the owner can still discard it");
 });
+
+test("a sub-agent's held approval is listed inline in its parent session too", async () => {
+  const built = freshApp();
+  const parent = await built.app.turn(dm("plan the work", "web:alice:parent", "alice"));
+  const child = await built.app.turn(dm("!run git push --force origin main", "web:alice:child", "alice"));
+  assert.equal(child.status, "pending_approval");
+  await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  const inParent = await built.app.listSessionApprovals(parent.sessionId!, "alice");
+  assert.deepEqual(
+    inParent.map((a) => a.requestId),
+    (await built.app.listSessionApprovals(child.sessionId!, "alice")).map((a) => a.requestId),
+  );
+  assert.equal(inParent.length, 1);
+  assert.deepEqual(await built.app.listSessionApprovals(parent.sessionId!, "carol"), [], "outsiders still see nothing");
+});

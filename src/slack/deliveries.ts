@@ -1,6 +1,6 @@
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
-import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval-store.ts";
+import { approvalDeliveryKey, approvalDeliveryRecipient, approvalDestination } from "../core/approval-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalMessage } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
@@ -29,7 +29,7 @@ import {
   applyReactions,
 } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
-import type { Delivery } from "../types.ts";
+import type { Delivery, PendingApprovalRecord } from "../types.ts";
 import type { TurnFlow } from "./turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
@@ -241,6 +241,16 @@ export function createDeliveryPoller(deps: {
                 await deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
                 return undefined;
               }
+              if (d.destination.commandApprovalId) {
+                const approval = await approvalFor(core, d);
+                if (!approval) return undefined;
+                const card = approvalMessage([{ ...approval, reason: approval.reason ?? "Approval required" }]);
+                await postClient.chat.postMessage({
+                  ...slackReplyArgs(channel, card.text, threadTs),
+                  blocks: card.blocks,
+                });
+                return undefined;
+              }
               if (d.destination.react) {
                 const { messageTs, emoji } = d.destination.react;
                 const { failed } = await applyReactions(client, channel, messageTs, [emoji]);
@@ -432,20 +442,8 @@ export function createDeliveryPoller(deps: {
                 await deliverKeychainCard(core, client, d, dm, d.destination.threadTs, deps.webUiPublicUrl);
                 return undefined;
               }
-              const commandApproval = d.destination.commandApprovalId
-                ? await core.getApproval(d.destination.commandApprovalId)
-                : null;
-              const requester = approvalDeliveryRecipient(
-                commandApproval?.request?.actor as { externalId?: string } | undefined,
-              );
-              if (
-                d.destination.commandApprovalId &&
-                (!commandApproval ||
-                  !requester ||
-                  !samePerson(requester, d.destination.target) ||
-                  d.idempotencyKey !== approvalDeliveryKey(d.destination.commandApprovalId, commandApproval))
-              )
-                return undefined;
+              const commandApproval = d.destination.commandApprovalId ? await approvalFor(core, d) : null;
+              if (d.destination.commandApprovalId && !commandApproval) return undefined;
               let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
               if (d.destination.deploymentAccess) card = deployAccessMessage(d.destination.deploymentAccess, d.text);
               if (commandApproval)
@@ -535,4 +533,20 @@ export function createDeliveryPoller(deps: {
   }
 
   return { pollDeliveries };
+}
+
+async function approvalFor(
+  core: { getApproval(id: string): Promise<unknown> },
+  d: { idempotencyKey?: string; destination: { type: string; target: string; commandApprovalId?: string } },
+): Promise<(PendingApprovalRecord & { requestId: string }) | null> {
+  const id = d.destination.commandApprovalId!;
+  const approval = (await core.getApproval(id)) as (PendingApprovalRecord & { requestId: string }) | null;
+  const requester = approvalDeliveryRecipient(approval?.request?.actor as { externalId?: string } | undefined);
+  if (!approval?.request || !requester || d.idempotencyKey !== approvalDeliveryKey(id, approval)) return null;
+  const expected = approvalDestination(approval.request, requester);
+  const matches =
+    d.destination.type === "principal"
+      ? samePerson(requester, d.destination.target)
+      : expected.type === d.destination.type && expected.target === d.destination.target;
+  return matches ? approval : null;
 }

@@ -1,3 +1,9 @@
+import {
+  visibilityApprovalCommand,
+  visibilityApprovalKey,
+  visibilityApprovalReason,
+  type VisibilityWidening,
+} from "../deploy/visibility-approval.ts";
 import type { MemoryCaptureMetadata } from "../memory/records.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
@@ -585,6 +591,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
   };
 
+  const requireVisibilityApproval = (app: string, widening: VisibilityWidening): void => {
+    const command = visibilityApprovalCommand(app, widening);
+    const approvalKey = visibilityApprovalKey(app, widening);
+    if (deps.authorizeCommand(command, approvalKey, true)) return;
+    throw new NeedsApproval(command, visibilityApprovalReason(app, widening), "approval", undefined, approvalKey, {
+      session: false,
+      always: false,
+    });
+  };
+
   const ledger = deps.ledger ?? createNullLedger();
   const runId = deps.runId;
   const attempt = deps.attempt ?? 1;
@@ -1100,6 +1116,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setDeploymentPublic(id: string, isPublic: boolean) {
+      if (isPublic) {
+        const current = await deps.deploy.getDeployment(id);
+        if (current && current.public !== true) requireVisibilityApproval(current.name ?? current.id, "public");
+      }
       const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
@@ -1328,11 +1348,22 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         async (c, cl) => c.writeSoul(content, cl, expectedVersion),
         (r) => r.ok,
       ),
-    shareArtifact: (req) =>
-      controlOp(
-        (c, cl) => c.shareArtifact(req, cl),
+    shareArtifact: async (req) => {
+      let approved = false;
+      const targetScope = req.scope === "org" && orgScopeId ? orgScopeId : req.scope;
+      if (req.type === "deploy" && targetScope !== undefined && parseScopeId(targetScope).kind === "org") {
+        const current = await deps.deploy.getDeployment(req.id);
+        const granted = current && orgScopeId ? await deps.deploy.deploymentGrantees(current.id) : [];
+        if (req.move || !granted.some((g) => g.scope === orgScopeId)) {
+          requireVisibilityApproval(current?.name ?? req.id, "org");
+          approved = true;
+        }
+      }
+      return controlOp(
+        (c, cl) => c.shareArtifact(approved ? { ...req, visibilityApproved: true } : req, cl),
         (r) => r.ok,
-      ),
+      );
+    },
 
     post: (text, opts, files) =>
       surfaceOp(

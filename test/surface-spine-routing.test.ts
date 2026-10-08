@@ -637,7 +637,17 @@ for (const command of ["!finish-silent-approval", "!finish-silent-paused"]) {
     const result = await built.app.turn({ ...mention(command, "C-approval", command), async: false });
     assert.equal(result.status, "pending_approval");
     assert.equal(result.pendingApprovals?.length, 1);
-    assert.equal((await built.deliveries.pending("slack")).length, 0);
+    const pending = (await built.deliveries.pending("slack")) as Array<{
+      destination: { target: string; commandApprovalId?: string };
+    }>;
+    assert.equal(pending.filter((d) => !d.destination.commandApprovalId).length, 0, "silence posts no reply");
+    const cards = pending.filter((d) => d.destination.commandApprovalId);
+    assert.equal(cards.length, 1, "the approval card is the only Slack delivery");
+    assert.equal(
+      cards[0]!.destination.target,
+      `slack:C-approval:${command}`,
+      "the card lands in the requesting thread",
+    );
   });
 }
 

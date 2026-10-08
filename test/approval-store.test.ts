@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createApprovalStore } from "../src/core/approval-store.ts";
+import { approvalDestination, createApprovalStore } from "../src/core/approval-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
@@ -91,4 +91,48 @@ test("system approvals stay pending without enqueuing or reviving an impossible 
   assert.deepEqual(await backing.get("A2"), approval);
   assert.deepEqual(await deliveries.pending("principal"), []);
   assert.equal((await deliveries.get(stale.id))?.expiredAt, expiredAt, "a sweep must not revive the stale DM");
+});
+
+test("scheduled-task approvals post at the task's own destination, like credential cards", async () => {
+  const channel = { type: "slack", target: "C9:100.200", audienceScopeId: "channel:C9" as const };
+  const deliveries = createDeliveryStore();
+  const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), deliveries);
+  const toChannel = record("cron:K1");
+  toChannel.request!.surface = "cron";
+  toChannel.request!.triggerDestination = channel;
+  await approvals.put("A1", toChannel);
+  const [channelCard] = await deliveries.pending("slack");
+  assert.equal(channelCard?.destination.target, "C9:100.200");
+  assert.equal(channelCard?.destination.commandApprovalId, "A1");
+
+  const noDestination = record("cron:K2");
+  noDestination.request!.surface = "cron";
+  await approvals.put("A2", noDestination);
+  const ownerCards = await deliveries.pending("principal");
+  assert.equal(ownerCards.length, 1, "no destination falls back to the owner's DM");
+  assert.equal(ownerCards[0]!.destination.target, "U1");
+
+  const otherPerson = record("cron:K3");
+  otherPerson.request!.surface = "cron";
+  otherPerson.request!.triggerDestination = { type: "principal", target: "U2", audienceScopeId: "personal:U2" };
+  assert.equal(approvalDestination(otherPerson.request!, "U1").target, "U1", "never DMs someone else's card");
+
+  const web = record("cron:K4");
+  web.request!.surface = "cron";
+  web.request!.triggerDestination = { type: "web", target: "s1" } as never;
+  assert.equal(approvalDestination(web.request!, "U1").target, "U1");
+});
+
+test("Slack channel approvals post in the requesting thread; DMs stay in the DM", async () => {
+  const thread = record("slack:C1:1.0");
+  thread.request!.conversation = { kind: "channel", threadRef: "slack:C1:1.0", channelRef: "C1" };
+  thread.request!.deliveryTarget = "C1:1.0";
+  assert.deepEqual(approvalDestination(thread.request!, "U1"), {
+    type: "slack",
+    target: "C1:1.0",
+    audienceScopeId: "channel:C1",
+  });
+  const dm = record("dm:D1");
+  dm.request!.deliveryTarget = "D1";
+  assert.equal(approvalDestination(dm.request!, "U1").type, "principal");
 });
