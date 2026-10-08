@@ -1416,6 +1416,11 @@ describe("/v1/keychain routes (capability-authed)", () => {
       403,
       "a delegated live-author turn still never crosses into a shared scope",
     );
+    assert.equal(
+      (await post("/v1/keychain/use", { credential: credential.id }, await capFor("U_OWN", "channel:C9"))).status,
+      403,
+      "a background turn in a shared scope needs a grant",
+    );
 
     assert.equal(
       (
@@ -1430,8 +1435,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
     );
     assert.equal(
       (await post("/v1/keychain/use", { credential: credential.id }, await capFor("U_OWN"))).status,
-      403,
-      "a non-live personal turn (unprompted/detection — no liveActor) cannot pull own credentials by id",
+      200,
+      "a background turn in the owner's personal scope (no live flags) loads their own credential",
     );
     assert.equal(
       (
@@ -1441,8 +1446,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
           await capFor("U_OWN", "personal:U_OWN", { triggered: true }),
         )
       ).status,
-      403,
-      "a trigger-fired turn runs as the owner without them speaking — refused",
+      200,
+      "a scheduled/trigger-fired turn in the owner's personal scope loads their own credential without a grant",
     );
     assert.equal(
       (await post("/v1/keychain/use", { credential: credential.id }, await liveOwn("U_ELSE"))).status,

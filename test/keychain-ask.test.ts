@@ -1091,9 +1091,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       assert.equal(seed.status, "ok");
       const session = await built.sessions.getByThread(threadRef);
       assert.ok(session);
-      const denied = await post("/v1/keychain/use", { credential: credential.id }, token);
-      assert.equal(denied.status, 403);
-      assert.match(((await denied.json()) as any).message, /keychain\/asks/);
+      assert.equal(
+        (await post("/v1/keychain/use", { credential: credential.id }, token)).status,
+        200,
+        "a scheduled turn in the owner's personal scope loads their own credential directly; the ask flow stays available",
+      );
       const requested = await post(
         "/v1/keychain/asks",
         { credential: credential.id, purpose: "read-only dummy scheduled check", requestedMode: mode },
@@ -1160,7 +1162,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await assert.rejects(decide(ask.id, "U_BOB", "deny"), (e: KeychainError) => e.status === 403);
     assert.equal((await decide(ask.id, "U_ALICE", "deny")).ask.status, "declined");
     assert.equal((await built.keychain!.getAsk(ask.id))?.status, "declined");
-    assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 403);
+    assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 200);
     assert.equal(
       (
         await post(
