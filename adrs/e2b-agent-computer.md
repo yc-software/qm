@@ -1,22 +1,24 @@
 # E2B as a selectable agent-computer backend
 
-Ondrej from E2B here. qm core already has an E2B backend (`SANDBOX_BACKEND=e2b`), but an operator can only reach it by setting `env.core.SANDBOX_BACKEND` by hand, because the CLI config rejects `"sandbox.backend": "e2b"`. And the image you get from `npm run build:e2b-template` is thin: no gh, no AWS CLI, no Claude Code or Codex. So we did the E2B side and this PR does the small qm side.
+Drew from E2B here. This PR lets an operator pick E2B for agent computers with `"sandbox.backend": "e2b"`, the same way #922 did for Agent37.
 
-What E2B published
+Core already has the E2B backend (`SANDBOX_BACKEND=e2b`). The CLI was the missing piece: its config rejects `"sandbox.backend": "e2b"`, so the only way in is setting `env.core.SANDBOX_BACKEND` by hand. The image from `npm run build:e2b-template` is also thin, with no gh, AWS CLI, Claude Code or Codex.
 
-- `qm-sandbox`, a public agent-computer template. Same tools as your sandbox base image (`fly/Dockerfile`): Claude Code, Codex, gh, AWS CLI, the venv at `/opt/agent-venv`, x-api. 8 vCPU and 8 GiB where the plan allows, runs as `user` in `/home/user/workspace` like the backend expects. Tagged releases, so a deployment can pin one.
-- `qm-core`, for small teams and trials that want everything on E2B. `e2b sandbox create qm` starts core with a setup page, and the scopes run on `qm-sandbox`. It is not a replacement for the Fly or AWS targets.
+So E2B now publishes two public templates in all three regions (US, EU, APAC), by bare name:
 
-What this PR changes
+- `qm-sandbox`, the per-scope agent computer. Same tools as your sandbox base image (`fly/Dockerfile`), 8 vCPU and 8 GiB, runs as `user` in `/home/user/workspace`.
+- `qm-core`, core on E2B for small teams and trials. `e2b sandbox create qm` starts it with a setup page. It does not replace the Fly or AWS targets.
 
-- `"sandbox.backend": "e2b"` in the CLI, on every target, the same way agent37 is wired: type, allowlist, validation, forwarding `SANDBOX_BACKEND` to core, and the stray Fly settings check. One test, modeled on the agent37 one.
-- `docs/e2b-template.md` starts with the public template and the one-hour-plan setting below. Building your own image stays documented.
+What the PR adds
 
-What it does not change
+- `"sandbox.backend": "e2b"` in the CLI, wired like agent37: type, allowlist on docker, fly and aws, validation message, forwarding `SANDBOX_BACKEND` to core, and the stray Fly settings check. One test, modeled on the agent37 one. The CLI suite passes on Node 24 (624/624).
+- `docs/e2b-template.md` now starts with `qm-sandbox:v1.0.0` and the one-hour plan setting.
 
-- No backend code. The E2B profile still lists gh and aws as not installed. That is right for `qm-base` and wrong for `qm-sandbox`. Two ways to fix it: bring `deploy/e2b/e2b.Dockerfile` up to the base image and drop them from the list, or probe the sandbox once at provision. Until then, a deployment layer that advertises gh and aws takes them off the list.
-- No default changes.
+What it does not do
 
-One thing operators hit: core asks E2B for a 61 minute timeout (its one-hour command cap plus a minute). Plans capped at one hour reject every create with `400: Timeout cannot be greater than 1 hours`. `E2B_MAX_LIFETIME_SEC=3600` fixes it and caps a command at 59 minutes. It is in the docs now.
+- No backend code and no default changes.
+- The E2B profile still lists gh and aws as not installed, which is wrong for `qm-sandbox`. A deployment layer that advertises them takes them off the list.
 
-If you would rather take only this file and do the code yourselves, as CONTRIBUTING suggests, say so and I will trim the PR.
+One thing operators hit: core asks E2B for a 61 minute timeout, so plans capped at one hour reject every create. `E2B_MAX_LIFETIME_SEC=3600` fixes it, and the docs say so.
+
+If you would rather take only this file and do the code yourselves, say so and I will trim the PR.
