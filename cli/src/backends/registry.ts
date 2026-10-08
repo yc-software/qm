@@ -268,6 +268,8 @@ const aws: HostingProvider = {
       }
       return [entry.slice(0, split), entry.slice(split + 1)] as const;
     });
+    const repeated = prebuilt?.find(([name], index) => prebuilt.findIndex(([other]) => other === name) !== index);
+    if (repeated) throw new CliError(`--prebuilt lists ${repeated[0]} more than once`, { clause: "cli.invocation" });
     return {
       dryRun,
       yes: flags["yes"] === true,

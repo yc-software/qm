@@ -17,7 +17,11 @@ test("the release publishes signed images and never a package", () => {
 test("the release is the sole sandbox-base publisher and bakes in the browser engine", () => {
   const workflow = readFileSync(".github/workflows/release-package.yml", "utf8");
 
-  assert.match(workflow, /"sandbox-base"\]'\) \}\}\n/);
+  assert.ok(
+    workflow.includes(
+      `name: \${{ fromJSON(inputs.images || '["core","web-ui","admin","portal","auth","egress-proxy","sandbox-base"]') }}\n`,
+    ),
+  );
   assert.match(workflow, /file: \$\{\{ matrix\.name == 'sandbox-base' && 'fly\/Dockerfile' \|\| /);
   assert.match(
     workflow,

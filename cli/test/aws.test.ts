@@ -2969,6 +2969,15 @@ if (args.includes("inspect")) process.stdout.write(fs.readFileSync(${JSON.string
       ...overrides,
     });
   try {
+    const parse = (value: string) =>
+      hostingProvider("aws").upOptions(
+        { config: single, configDir: dir, configPath: join(dir, "qm.config.json"), sandboxDir: dir, target: "aws" },
+        { "build-from": sourceDir, prebuilt: value },
+        false,
+      );
+    assert.deepEqual(parse(`core=${prebuilt}`).prebuilt, { core: prebuilt });
+    assert.throws(() => parse(prebuilt), /--prebuilt expects <workload>=<image>@sha256:<digest>/);
+    assert.throws(() => parse(`core=${prebuilt},core=${prebuilt}x`), /--prebuilt lists core more than once/);
     await assert.rejects(() => up({ buildFrom: false }), /--prebuilt requires --build-from/);
     await assert.rejects(
       () => up({ prebuilt: { core: "ghcr.io/acme/core:latest" } }),

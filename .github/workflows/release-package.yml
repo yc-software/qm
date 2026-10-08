@@ -19,6 +19,7 @@ permissions:
 jobs:
   image:
     if: github.ref == 'refs/heads/main'
+    timeout-minutes: 45
     runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     env:
       ARCHITECTURE: ${{ inputs.architecture || 'amd64' }}

@@ -325,7 +325,7 @@ test("deployment notice fires only for a fully green main push and holds no repo
   assert.ok(job.includes("continue-on-error: true"));
   assert.ok(!job.includes("exit 1"));
   assert.ok(job.includes(`all(. == "success")`));
-  assert.equal([...job.matchAll(/^ {6}- (?:name|uses):/gm)].length, 1);
+  assert.equal([...job.split("\n    steps:\n")[1]!.matchAll(/^ {6}- /gm)].length, 1);
   assert.ok(!job.includes("uses: actions/checkout"));
 });
 
