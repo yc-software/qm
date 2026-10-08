@@ -86,7 +86,7 @@ export class GatewayModelUnavailableError extends Error {
   }
 }
 
-export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string }>(
+export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
   config: ModelGatewayTransportConfig | undefined,
   model: T,
 ): { model: T; target: string; apiKey: string; headers: Record<string, string> } | undefined {
@@ -99,6 +99,7 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
   return {
     model: {
       ...model,
+      compat: { ...model.compat, sendSessionAffinityHeaders: true },
       baseUrl: isGatewayModelId(model.id)
         ? `${config.url.replace(/\/v1$/, "")}${model.api === "anthropic-messages" ? "" : "/v1"}`
         : config.url,
