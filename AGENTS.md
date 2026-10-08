@@ -63,8 +63,12 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   1 = severe violation, 2 = material violation, 3 = minor violation, 4 = no violation found,
   5 = meets 4 and demonstrably removes or simplifies an existing instance of the pattern.
   A reviewer may mark a category not applicable only with a reason
-  grounded in the diff and affected paths, recorded as accept with no score. Record every
-  verdict and score against the reviewed commit in the PR. Reject for a concrete violation
+  grounded in the diff and affected paths, recorded as accept with no score. Every PR
+  description must include a concise Wall of shame report: one entry per category naming
+  the lens and its reviewer, their accept/reject verdict, their score (or reasoned N/A),
+  and 1–2 sentences summarizing what that reviewer found. Identify the reviewed commit
+  and keep the report current after reassessment; summarize the actual reviews, never
+  invent scores or substitute the author's assessment. Reject for a concrete violation
   or insufficient evidence to assess an applicable category. Block merging if any review
   is missing, any reviewer rejects, or any concrete finding remains unresolved. Scores
   have no effect on acceptance or merging; do not apply a threshold or aggregate score.
