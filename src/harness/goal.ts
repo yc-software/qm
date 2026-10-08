@@ -13,8 +13,10 @@
  *   floor works the same way (matching Codex/Claude Code goal features):
  *   completing or stopping under an unmet floor is answered with a
  *   keep-going prompt, never a hard tool rejection.
- * - Only a human pressing stop in the UI stops a goal (it pauses). The
- *   agent cannot block, pause, resume, or complete it: it may only REQUEST
+ * - Only a human pressing stop in the UI stops a goal (it pauses), and only
+ *   a person's own message can resume it (goal update "resume" is refused on
+ *   cron, webhook, ambient and delegated turns). The agent cannot block,
+ *   pause, or complete it on its own: it may only REQUEST
  *   completion with evidence, and a fresh-context verifier (the harness's
  *   judge model, which never saw the work) decides. A rejection's reasons
  *   become the next continuation prompt. The harness never waives a goal.
@@ -160,7 +162,8 @@ export function goalPausedNote(goal: GoalRecord): string {
   return (
     `[goal] This session has a PAUSED goal (paused when a turn was stopped or by request):\n` +
     `<objective>\n${escapeTags(goal.objective)}\n</objective>\n` +
-    `Do not pursue it and do not treat it as enforced.`
+    `Do not pursue it and do not treat it as enforced. If the user's message explicitly asks to resume it, ` +
+    `call goal action update with status "resume"; never resume it on your own initiative.`
   );
 }
 

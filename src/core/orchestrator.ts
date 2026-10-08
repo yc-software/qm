@@ -2855,6 +2855,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.config ? { config: deps.config } : {}),
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
+          ...(humanTurn && !external ? { humanTurn: true } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(!external &&
           deps.sessionSyscalls &&
