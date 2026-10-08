@@ -216,12 +216,14 @@ export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
   const floor = sanitizeFloor(goal.floor);
   const capTokens = positiveInteger(goal.capTokens);
   const activeMs = finitePositive(goal.activeMs);
-  const { floor: _floor, capTokens: _capTokens, activeMs: _activeMs, ...rest } = goal;
+  const activeSince = finitePositive(goal.activeSince);
+  const { floor: _floor, capTokens: _capTokens, activeMs: _activeMs, activeSince: _activeSince, ...rest } = goal;
   return {
     ...rest,
     objective: String(goal.objective ?? ""),
     tokensUsed: Math.floor(finitePositive(goal.tokensUsed) ?? 0),
     ...(activeMs ? { activeMs } : {}),
+    ...(activeSince ? { activeSince } : {}),
     ...(capTokens ? { capTokens } : {}),
     ...(floor ? { floor } : {}),
   };
@@ -275,7 +277,7 @@ function goalClockStart(goal: GoalRecord, turnStartedAt: number): number {
   return Math.max(turnStartedAt, goal.activeSince ?? goal.createdAt);
 }
 
-/** Active time on the goal: banked turns plus the running turn (counted from when the goal existed). A paused goal accrues nothing. */
+/** Active time on the goal: banked turns plus the running turn (counted since the goal was created or last resumed). A paused goal accrues nothing. */
 export function goalActiveMs(goal: GoalRecord, turnStartedAt: number | undefined, now = Date.now()): number {
   const running =
     turnStartedAt === undefined || goal.status === "paused"

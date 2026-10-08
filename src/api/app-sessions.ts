@@ -466,7 +466,7 @@ export function createSessionMethods(
           goals.set(s.id, {
             objective: goal.objective,
             activeMs: goal.activeMs ?? 0,
-            ...(runningSince ? { runningSince: Math.max(runningSince, goal.createdAt) } : {}),
+            ...(runningSince ? { runningSince: Math.max(runningSince, goal.activeSince ?? goal.createdAt) } : {}),
             ...(goal.floor ? { floor: { ...goal.floor } } : {}),
           });
       }
