@@ -109,6 +109,7 @@ export interface HarnessTurnInput {
   triggerTs?: string;
   entryTs?: string;
   environment?: string;
+  timezone?: string;
   priorTurns?: ConversationTurn[];
   overheard?: OverheardEntryPayload[];
   attachments?: AttachmentMeta[];

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
@@ -115,6 +116,36 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   };
   return { turn, entries, modelCalls, llmRequests };
 }
+
+test("Claude notices use each turn's timezone without leaking it into later turns", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("done");
+  };
+  const harness = createClaudeHarness({});
+  for (const [timezone, summer, winter] of [
+    ["America/Los_Angeles", 14, 13],
+    ["america/los_angeles", 14, 13],
+    ["Asia/Kolkata", 2, 2],
+  ] as const) {
+    await harness.turns.runTurn(harnessTurn({ timezone }).turn);
+    const env = capturedOptions.env as NodeJS.ProcessEnv;
+    const actual = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "-e",
+          'process.stdout.write(JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, hours: ["2026-10-09T21:00:00Z", "2026-12-09T21:00:00Z"].map(value => new Date(value).getHours()) }))',
+        ],
+        { env, encoding: "utf8" },
+      ),
+    );
+    assert.equal(env.TZ, new Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions().timeZone);
+    assert.deepEqual(actual.hours, [summer, winter]);
+  }
+  await harness.turns.runTurn(harnessTurn().turn);
+  assert.equal((capturedOptions.env as NodeJS.ProcessEnv).TZ, undefined);
+});
 
 test("a steered turn persists every reply, not only the last result's", async () => {
   const signals = createMemoryRunSignalStore();
