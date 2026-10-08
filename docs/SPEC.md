@@ -36,11 +36,15 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 
 ### Overengineering (3 examples)
 
+Adding machinery beyond what the actual requirements need: abstractions without real callers, speculative extension points, or scaffolding that costs more to maintain than the behavior it supports. Prefer the smallest coherent solution, especially when deleting or extending existing code is enough.
+
 - **qm#1311** (2026-09-16): Admin redesign (#1276) shipped an Original/New comparison toggle, duplicate original cards/styles and variant URL plumbing; replacement PR removed ~1,006 net lines of scaffolding. _Status:_ wound back in qm#1311.
 - **qm#896** (2026-09-02): An optional core-search backend injection point had no production caller and existed only for tests; removed. _Status:_ wound back in qm#896.
 - **qm#894** (2026-09-02): Procedural memory ('Memorable') landed as a pluggable provider under a new scope-aware memory router (#700) with MEMORY_PROVIDER_CONFIG routes, alongside a separate MEMORY_STRATEGY switch.
 
 ### Band-aid fixes (8 examples)
+
+Hiding a symptom while leaving its cause intact. Look for special cases, retries, fallbacks, or cleanup work that compensate for a broken invariant elsewhere; fix that invariant at the layer responsible for it across all affected paths.
 
 - **qm#1743** (2026-09-30): Refusal fallback extended by regex-matching Anthropic usage-policy text and 'gateway model is unavailable' to trigger a hard-coded alternate-model ladder (claude-opus-5 / claude-sonnet-5), plus a new admin fallbackRuntime.
 - **qm#1748** (2026-09-30): Every non-Modal sandbox took one exclusive sandbox-resource:<id> advisory lock around each command/file op, so sessions sharing a computer queued behind each other; replaced a backend!=='modal' special case with shared locks and a parksOnTeardown profile property. _Status:_ wound back in qm#1748.
@@ -53,6 +57,8 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 
 ### Duplication (8 examples)
 
+Giving the same behavior or fact multiple independent implementations or sources of truth. These copies drift, disagree, and multiply maintenance work; reuse the existing owner or consolidate the competing paths.
+
 - **qm#1776** (2026-09-30): Sprites cold-boot '503 Process not ready' exec re-send implemented on main after the same fix (qm#1489) had already landed only on the long-lived factory side branch.
 - **qm#1520** (2026-09-22): Factory required pasted factory-anthropic/-github/-linear/-slack keychain secrets duplicating core's own model auth and connectors (two sources of truth); QM-73..76 resolve from core config/owner connectors instead. _Status:_ wound back in qm#1520, qm#1522, qm#1523, qm#1524 (on factory branch).
 - **qm#1476** (2026-09-21): Context settings had its own model picker separate from the composer's; switched to reuse the composer model/preset picker. _Status:_ wound back in qm#1476 (both plugins/web-ui/src/model-picker.ts and context-model.ts still exist).
@@ -64,10 +70,14 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 
 ### Hand-rolling (2 examples)
 
+Reimplementing a capability that an existing SDK, library, or supported API already provides. Custom protocols and plumbing make us own edge cases that the maintained integration already handles; use that integration when it meets the requirements.
+
 - **qm#1419** (2026-09-22): Sprites backend used raw REST fetches; moved to Sprites SDK 0.2.3 (WebSocket exec, filesystem APIs, checkpoints); sibling PRs #1420-#1422 aligned Modal/E2B/Smolmachines with provider docs. _Status:_ wound back in qm#1419.
 - **qm#1407** (2026-09-22): Internal Fly transports piped data through `fly ssh console` (broke on Windows PTY); replaced with Machines exec API stdin. _Status:_ wound back in qm#1407.
 
 ### Non-durability (4 examples)
+
+Keeping state somewhere that cannot reliably preserve and retrieve it for as long as it is needed. Look for required data tied to a process, sandbox, browser, or unsuitable storage layout; use durable shared storage with a lifecycle and access pattern that fit the data.
 
 - **qm#1789** (2026-09-30): Docker-published apps have no persistent /data mount, so app data is lost on redeploy.
 - **qm#1694** (2026-09-28): Recurring jobs were told to keep checkpoints on sandbox workspace disk, lost when the computer is replaced; now published to durable scoped Files. _Status:_ wound back in qm#1694.
@@ -75,6 +85,8 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 - **qm#64** (2026-08-04): Cron fire log was stored inside the cron's jsonb row, grew without bound, and every fire rewrote the whole log. _Status:_ wound back (src/cron/fire-store.ts; cron-store.ts migrates legacy fireLog out, cron_fires table).
 
 ### Config-matrix expansion (10 examples)
+
+Adding flags, providers, modes, or overlapping settings that multiply the combinations the system must support. Each new choice needs a concrete requirement; prefer one clear behavior, automatic discovery, or a single authoritative setting over more knobs and precedence rules.
 
 - **qm#1784** (2026-09-30): Security screening had three overlapping env knobs (SECURITY_SCREEN_BACKEND, SECURITY_SCREEN_ALL_POSTURES, SECURITY_SCREEN_PROXY_ROLLOUT) plus per-posture inboundScreening; collapsed into one SECURITY_SCREEN=off|observe|enforce. _Status:_ wound back in qm#1784.
 - **qm#1747** (2026-09-30): New SANDBOX_CAPABILITY_TTL_HOURS env var (48h default, or 0/none for non-expiring bearer tokens) right after #1518 hard-set 48h.
@@ -89,9 +101,13 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 
 ### God files (1 example)
 
+Letting one file or module absorb unrelated responsibilities until changes require understanding the whole system. Keep responsibilities with clear owners and boundaries; splitting a file by line count alone does not untangle those responsibilities.
+
 - **qm#1296** (2026-09-16): The AWS deploy backend keeps absorbing capacity proofs, ownership handover and candidate logic.
 
 ### Mismatched UI (3 examples)
+
+Building interface pieces that disagree with the surrounding product in appearance, structure, or interaction. Reuse the existing components and design rules, and check the result in its containing surface so duplicated chrome and inconsistent typography do not slip through.
 
 - **qm#1545** (2026-09-22): Transcript elements each hardcoded their own font-size, so multiview panes showed 15px/14px headers beside 12px text; unified on one --chat-font-size base. _Status:_ wound back in qm#1545.
 - **qm#1053** (2026-09-11): A parallel 'Beautiful UI' design system (10 stacked PRs) and an admin redesign with an Original/New toggle were built next to the existing web UI styles. _Status:_ wound back in qm#1053 (closed with #1054-#1062, #992, #1215).
@@ -99,13 +115,17 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 
 ### Over-indexing on YC (3 examples)
 
+Treating one organization’s identity or workflow as a requirement of the shared product. Keep defaults and core behavior useful across deployments, and put organization-specific names, assumptions, and workflows in that deployment’s configuration or extensions.
+
 - **qm#1315** (2026-09-16): The generic web UI onboarding says 'the agent harness we use to run YC' and 'your YC partner in a box', and the welcome ideas cite 'YC Deal' and 'the YC investor database'.
 - **qm#1008** (2026-09-09): A 29-file 'software factory' loop (Linear auto-triage, forge ship contract) built for YC's own workflow was ported into public src/loops/factory before it had ever run end to end. _Status:_ wound back in qm#1026.
 - **qm#530** (2026-08-15): Assistant and org names were fixed across prompts, manifests, auth and UI; made deployment-configurable with neutral defaults. _Status:_ wound back in qm#530.
 
 ### Regex (3 examples)
 
-Regex standing in for a parser, a typed error, a stored field or a model call. Main has 1,443 production regex sites in 380 files; cleanup is the regex-removal backlog.
+Using regex to infer structure or meaning that should come from a parser, a typed error, a stored field, or a model call. These patterns become brittle substitutes for the authoritative data; use the source that actually owns the structure or decision.
+
+Main has 1,443 production regex sites in 380 files; cleanup is the regex-removal backlog.
 
 - **qm#1354** (2026-09-17): The web UI re-parses shell commands with a hand-written tokenizing regex (and sniffs `sed -n Np` and Markdown headings by pattern) to decide how to present tool activity, instead of using the structured call data.
 - **qm#1210** (2026-09-15): Composio consent links are found by regex-scanning model text for URLs and Markdown links, then stripped with dynamically built `RegExp`s, rather than arriving as a typed connector-link field.
@@ -113,8 +133,12 @@ Regex standing in for a parser, a typed error, a stored field or a model call. M
 
 ### YC info leaking into public qm (1 example)
 
+Publishing organization-specific information in the public repository through code, docs, fixtures, screenshots, or change descriptions. Inspect outgoing content for private identities, operational details, and internal references; keep private deployment material in private storage.
+
 - **qm#1504** (2026-09-22): Public docs/test fixtures had org-specific rollout guidance and identity examples plus 92 tracked screenshots (8.1 MB); scrubbed and AGENTS.md now bans committed screenshots. _Status:_ wound back in qm#1504 (partially; YC welcome copy remains).
 
 ### Discarded error evidence (1 example)
+
+Replacing or swallowing a failure so the evidence needed to diagnose it disappears. Preserve the primary error and related cleanup failures, with secrets redacted, in access-controlled diagnostics; a concise user-facing message must not be the only surviving record.
 
 - **Sandbox startup and cleanup** (2026-10-02): A provider authentication failure reached the tool transcript as a bare "Command execution failed." The cleanup wrappers in `src/sandbox/sandbox.ts` dropped the original causes, destruction retries in `src/core/orchestrator/sandboxes.ts` swallowed every exception, and `src/harness/agent-tools.ts` recorded only the generic status. Keep the primary failure and every cleanup failure, redacted, in access-controlled diagnostics; a short user-facing message never replaces the evidence. _Status:_ unresolved on main 5dbebac6.
