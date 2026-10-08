@@ -17,11 +17,12 @@ test("the release publishes signed images and never a package", () => {
 test("the release is the sole sandbox-base publisher and bakes in the browser engine", () => {
   const workflow = readFileSync(".github/workflows/release-package.yml", "utf8");
 
+  assert.match(workflow, /"sandbox-base"\]'\) \}\}\n/);
+  assert.match(workflow, /file: \$\{\{ matrix\.name == 'sandbox-base' && 'fly\/Dockerfile' \|\| /);
   assert.match(
     workflow,
-    /- name: sandbox-base\n\s+dockerfile: fly\/Dockerfile\n\s+build-args: INSTALL_BROWSER_ENGINE=1\n/,
+    /build-args: \|\n\s+\$\{\{ matrix\.name == 'sandbox-base' && 'INSTALL_BROWSER_ENGINE=1' \|\| '' \}\}\n\s+GIT_SHA=\$\{\{ github\.sha \}\}/,
   );
-  assert.match(workflow, /build-args: \|\n\s+\$\{\{ matrix\.build-args \}\}\n\s+GIT_SHA=\$\{\{ github\.sha \}\}/);
   assert.equal(existsSync(".github/workflows/publish-sandbox-base.yml"), false);
   assert.equal(existsSync(".github/workflows/publish-images.yml"), false);
 });
@@ -35,13 +36,39 @@ test("the release verifies the sandbox base digest is anonymously pullable", () 
     workflow,
     /docker\/login-action@[^\n]+\s+with:\s+registry: ghcr\.io\s+username: \$\{\{ github\.actor \}\}\s+password: \$\{\{ github\.token \}\}/,
   );
-  assert.match(workflow, /platforms: linux\/amd64\s+provenance: false/);
+  assert.match(workflow, /ARCHITECTURE: \$\{\{ inputs\.architecture \|\| 'amd64' \}\}/);
+  assert.match(workflow, /platforms: linux\/\$\{\{ env\.ARCHITECTURE \}\}\s+provenance: false/);
   assert.match(
     workflow,
     /image='ghcr\.io\/yc-software\/qm\/\$\{\{ matrix\.name \}\}@\$\{\{ steps\.build\.outputs\.digest \}\}'\s+cosign sign --yes "\$image"\s+cosign verify "\$image"/,
   );
   assert.ok(workflow.indexOf("docker/login-action") < workflow.indexOf("docker/build-push-action"));
   assert.ok(workflow.indexOf("docker/build-push-action") < workflow.indexOf("Sign exact image"));
+});
+
+test("green main prebuilds the signed arm64 core image beside, not over, the release images", () => {
+  const workflow = readFileSync(".github/workflows/release-package.yml", "utf8");
+  const cicd = readFileSync(".github/workflows/cicd.yml", "utf8");
+
+  assert.match(
+    cicd,
+    /^ {2}core-image:\n {4}name: Core image \(arm64\)\n {4}if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'\n {4}permissions:\n {6}contents: read\n {6}packages: write\n {6}id-token: write\n {4}uses: \.\/\.github\/workflows\/release-package\.yml\n {4}with:\n {6}images: '\["core"\]'\n {6}architecture: arm64\n/m,
+  );
+  assert.match(
+    workflow,
+    /runs-on: \$\{\{ inputs\.architecture == 'arm64' && 'ubuntu-24\.04-arm' \|\| 'ubuntu-latest' \}\}/,
+  );
+  assert.match(
+    workflow,
+    /SUFFIX: \$\{\{ inputs\.architecture && inputs\.architecture != 'amd64' && format\('-\{0\}', inputs\.architecture\) \|\| '' \}\}/,
+  );
+  assert.match(
+    workflow,
+    /tags: ghcr\.io\/yc-software\/qm\/\$\{\{ matrix\.name \}\}:\$\{\{ github\.sha \}\}\$\{\{ env\.SUFFIX \}\}/,
+  );
+  assert.match(workflow, /scope=qm-\$\{\{ matrix\.name \}\}\$\{\{ env\.SUFFIX \}\}/);
+  assert.match(workflow, /name: qm-\$\{\{ matrix\.name \}\}\$\{\{ env\.SUFFIX \}\}-\$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /overwrite: true/);
 });
 
 test("the CLI package publishes publicly with provenance", () => {

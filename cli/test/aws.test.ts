@@ -2921,6 +2921,92 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
   }
 });
 
+test("AWS source builds reuse a prebuilt image only when it matches the clean checkout", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-prebuilt-"));
+  const sourceDir = join(dir, "source");
+  const dockerLog = join(dir, "docker.log");
+  const inspected = join(dir, "inspect.json");
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerLog, "");
+  writeFileSync(
+    dockerBin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(dockerLog)}, args.join(" ") + "\\n");
+if (args.includes("inspect")) process.stdout.write(fs.readFileSync(${JSON.stringify(inspected)}, "utf8"));
+`,
+  );
+  chmodSync(dockerBin, 0o755);
+  mkdirSync(join(sourceDir, "deploy", "core"), { recursive: true });
+  writeFileSync(join(sourceDir, "deploy", "core", "Dockerfile"), "FROM scratch\n");
+  const git = (...args: string[]): string => {
+    const result = spawnSync(
+      "git",
+      ["-C", sourceDir, "-c", "user.email=test@acme.example", "-c", "user.name=test", ...args],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git("init");
+  git("add", "-A");
+  git("commit", "-m", "initial");
+  const head = git("rev-parse", "HEAD");
+  const prebuilt = `ghcr.io/acme/core@sha256:${"b".repeat(64)}`;
+  const image = (env: string, architecture = "amd64") =>
+    writeFileSync(inspected, JSON.stringify({ os: "linux", architecture, config: { Env: [env] } }));
+  const single = oneServiceConfig();
+  const fake = statefulAws(dir, single);
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  const up = (overrides: Parameters<typeof awsUp>[2] = {}) =>
+    awsUp(single, dir, {
+      yes: true,
+      buildFrom: true,
+      buildFromPath: sourceDir,
+      prebuilt: { core: prebuilt },
+      ...overrides,
+    });
+  try {
+    await assert.rejects(() => up({ buildFrom: false }), /--prebuilt requires --build-from/);
+    await assert.rejects(
+      () => up({ prebuilt: { core: "ghcr.io/acme/core:latest" } }),
+      /--prebuilt core must be pinned by digest/,
+    );
+    image(`GIT_SHA=${"f".repeat(40)}`);
+    await assert.rejects(() => up(), /was not built from checkout/);
+    image(`GIT_SHA=${head}`, "arm64");
+    await assert.rejects(() => up(), /has no linux\/amd64 image/);
+    assert.doesNotMatch(readFileSync(dockerLog, "utf8"), /buildx build|imagetools create/);
+
+    image(`GIT_SHA=${head}`);
+    await up();
+    const calls = readFileSync(dockerLog, "utf8");
+    assert.doesNotMatch(calls, /buildx build/);
+    assert.match(calls, new RegExp(`imagetools create --prefer-index=false --tag \\S+qm-core:\\S+ ${prebuilt}`));
+    const state = JSON.parse(readFileSync(fake.state, "utf8"));
+    const manifestId = state.dynamo["deployment/current"].manifestId.S;
+    const manifest = JSON.parse(state.dynamo[`deployment/manifest/${manifestId}`].manifest.S);
+    assert.deepEqual(manifest.imageProvenance.core, {
+      kind: "source-build",
+      source: "checkout",
+      gitCommit: head,
+      dirty: false,
+    });
+    await assert.doesNotReject(() => awsCheckLive(single, { report: false, configDir: dir }));
+
+    const dirtySource = join(dir, "dirty");
+    assert.equal(spawnSync("git", ["clone", "-q", sourceDir, dirtySource]).status, 0);
+    writeFileSync(join(dirtySource, "uncommitted.txt"), "dirty\n");
+    await assert.rejects(() => up({ buildFromPath: dirtySource }), /requires a clean git checkout/);
+  } finally {
+    process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS candidate builds honor their concurrency bound and join failures before publishing", async () => {
   for (const mode of ["serial", "parallel", "failure"]) {
     const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-parallel-"));

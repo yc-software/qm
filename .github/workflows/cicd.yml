@@ -208,6 +208,18 @@ jobs:
           echo "use the contributor's real email, or drop the trailer." >&2
           exit 1
 
+  core-image:
+    name: Core image (arm64)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/release-package.yml
+    with:
+      images: '["core"]'
+      architecture: arm64
+
   dependency-audit:
     name: Production dependency audit
     timeout-minutes: 5
@@ -481,7 +493,17 @@ jobs:
     timeout-minutes: 3
     continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, cli, lint, dependency-audit, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]
+    needs:
+      - core
+      - cli
+      - lint
+      - dependency-audit
+      - core-postgres
+      - admin-plugin
+      - web-ui-plugin
+      - auth-plugin
+      - portal-plugin
+      - core-image
     runs-on: ubuntu-latest
     permissions: {}
     steps:

@@ -295,7 +295,7 @@ test("all quality jobs keep successful names and missing proof runs full checks"
   assert.ok(jobs.core!.includes('test "$TYPECHECK" = success && test "$TESTS" = success'));
   const names: string[] = [];
   for (const [id, block] of Object.entries(jobs)) {
-    if (["reuse", "certify", "notify-deployments"].includes(id)) continue;
+    if (["reuse", "certify", "notify-deployments", "core-image"].includes(id)) continue;
     const name = block.match(/^ {4}name: (.+)$/m)![1]!;
     if (id === "core-tests") names.push(...[1, 2, 3, 4, 5].map((n) => name.replace("${{ matrix.shard }}", String(n))));
     else names.push(name);
@@ -318,14 +318,14 @@ test("deployment notice fires only for a fully green main push and holds no repo
   );
   assert.ok(
     job.includes(
-      "needs: [core, cli, lint, dependency-audit, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]",
+      `needs:\n${["core", "cli", "lint", "dependency-audit", "core-postgres", "admin-plugin", "web-ui-plugin", "auth-plugin", "portal-plugin", "core-image"].map((need) => `      - ${need}\n`).join("")}`,
     ),
   );
   assert.ok(job.includes("permissions: {}"));
   assert.ok(job.includes("continue-on-error: true"));
   assert.ok(!job.includes("exit 1"));
   assert.ok(job.includes(`all(. == "success")`));
-  assert.equal([...job.matchAll(/^ {6}- /gm)].length, 1);
+  assert.equal([...job.matchAll(/^ {6}- (?:name|uses):/gm)].length, 1);
   assert.ok(!job.includes("uses: actions/checkout"));
 });
 
