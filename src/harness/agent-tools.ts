@@ -4135,12 +4135,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           return recordCoreAuthoredResult(
             callId,
             { tool: "goal", action: "update", error: "human_required" },
-            text("Only the user can resume a paused goal, by asking in their own message. Leave it paused."),
+            text(
+              "Only the user can resume a paused goal, by asking in their own message; this run was not started by one. The goal stays paused.",
+            ),
             true,
           );
         }
         goal.status = "active";
-        goal.updatedAt = Date.now();
+        goal.updatedAt = goal.activeSince = Date.now();
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
@@ -4151,7 +4153,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", error: "no_active_goal" },
-          text(goal?.status === "paused" ? "The goal is paused by the user." : "No active goal to complete."),
+          text(
+            goal?.status === "paused"
+              ? "The goal is paused by the user. Only the user can resume it, by asking to."
+              : "No active goal to complete.",
+          ),
           true,
         );
       }

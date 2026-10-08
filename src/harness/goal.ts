@@ -41,6 +41,8 @@ export interface GoalRecord {
   updatedAt: number;
   /** Time spent actually running turns on this goal, banked at each turn end. */
   activeMs?: number;
+  /** When the user last resumed the goal; time before it (while paused) never counts. */
+  activeSince?: number;
   completionNote?: string;
   /** Reasons the verifier gave for rejecting the last completion request. */
   verifierFeedback?: string;
@@ -269,9 +271,16 @@ function goalFloorApplies(goal: GoalRecord): boolean {
   return goal.floor !== undefined && goal.status === "active";
 }
 
-/** Active time on the goal: banked turns plus the running turn (counted from when the goal existed). */
+function goalClockStart(goal: GoalRecord, turnStartedAt: number): number {
+  return Math.max(turnStartedAt, goal.activeSince ?? goal.createdAt);
+}
+
+/** Active time on the goal: banked turns plus the running turn (counted from when the goal existed). A paused goal accrues nothing. */
 export function goalActiveMs(goal: GoalRecord, turnStartedAt: number | undefined, now = Date.now()): number {
-  const running = turnStartedAt === undefined ? 0 : Math.max(0, now - Math.max(turnStartedAt, goal.createdAt));
+  const running =
+    turnStartedAt === undefined || goal.status === "paused"
+      ? 0
+      : Math.max(0, now - goalClockStart(goal, turnStartedAt));
   return (goal.activeMs ?? 0) + running;
 }
 
@@ -328,7 +337,7 @@ export function createFloorCapPolicy(opts: {
 function goalFloorEndsAt(goal: GoalRecord, turnStartedAt: number): number | undefined {
   const f = goal.floor;
   if (f?.minMs === undefined || Object.keys(f).length !== 1) return undefined;
-  return Math.max(turnStartedAt, goal.createdAt) + f.minMs - (goal.activeMs ?? 0);
+  return goalClockStart(goal, turnStartedAt) + f.minMs - (goal.activeMs ?? 0);
 }
 
 export function goalFloorUnmet(goal: GoalRecord, meter: GrindMeter, now = Date.now()): boolean {

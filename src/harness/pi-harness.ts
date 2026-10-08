@@ -2450,11 +2450,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (entry.ref.goal) {
               const g = entry.ref.goal;
 
+              bankGoalTurn(g, grindMeter.startedAt);
               if (userAborted && g.status === "active") {
                 g.status = "paused";
                 g.updatedAt = Date.now();
               }
-              bankGoalTurn(g, grindMeter.startedAt);
               const goalEntry = await turn.emit({
                 type: "system",
                 payload: goalSnapshotPayload(g),
