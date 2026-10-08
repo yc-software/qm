@@ -895,11 +895,11 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
     { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
     {
       sandbox: { backend: "k8s", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*or "superserve"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "e2b"/,
     },
     {
       sandbox: { backend: "fly", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*or "superserve"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "e2b"/,
     },
     {
       sandbox: { backend: "aws", app: "acme-sandboxes" },
@@ -944,6 +944,21 @@ test("agent37 is a deployment backend on every target and rejects unused Fly set
   }
   withConfig({ sandbox: { backend: "agent37", app: "unused" } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /"sandbox.backend": "agent37" ignores "sandbox.app"/);
+  });
+});
+
+test("e2b is a deployment backend on every target and rejects unused Fly settings", () => {
+  for (const target of ["docker", "fly"] as const) {
+    withConfig({ target, sandbox: { backend: "e2b" } }, ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.deepEqual(sandboxCoreEnv(config), {
+        env: { SANDBOX_BACKEND: "e2b" },
+        missingSecrets: [],
+      });
+    });
+  }
+  withConfig({ sandbox: { backend: "e2b", app: "unused" } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "e2b" ignores "sandbox.app"/);
   });
 });
 

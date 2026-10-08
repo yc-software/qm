@@ -46,7 +46,7 @@ export interface PluginEntry {
 }
 
 export interface SandboxConfig {
-  backend?: "local" | "sprites" | "aws" | "agent37" | "superserve";
+  backend?: "local" | "sprites" | "aws" | "agent37" | "superserve" | "e2b";
   app?: string;
   image?: string;
   baseImage?: string;
@@ -236,7 +236,7 @@ export function sandboxCoreEnv(
     sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
       ? effectiveSandboxBackend(config)
       : sb.backend;
-  if (backend === "agent37" || backend === "superserve") {
+  if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
     env.SANDBOX_BACKEND = backend;
     return { env, missingSecrets };
   }
@@ -1505,10 +1505,11 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       o["backend"] !== "sprites" &&
       o["backend"] !== "aws" &&
       o["backend"] !== "agent37" &&
-      o["backend"] !== "superserve"
+      o["backend"] !== "superserve" &&
+      o["backend"] !== "e2b"
     ) {
       throw new CliError(
-        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), "agent37", or "superserve" (Superserve sandboxes)`,
+        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), "agent37", "superserve" (Superserve sandboxes), or "e2b" (E2B sandboxes)`,
       );
     }
     out.backend = o["backend"];
@@ -1572,7 +1573,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
-  if (out.backend === "agent37" || out.backend === "superserve") {
+  if (out.backend === "agent37" || out.backend === "superserve" || out.backend === "e2b") {
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
