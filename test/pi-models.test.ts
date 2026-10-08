@@ -244,7 +244,7 @@ test("context token budget is half of each model's real input room", () => {
   const sonnet55 = getRequiredModel("claude-sonnet-5-5");
   assert.equal(sonnet55.contextWindow, 1_000_000);
   assert.equal(sonnet55.maxTokens, 128_000);
-  assert.deepEqual(sonnet55.cost, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, tiers: undefined });
+  assert.deepEqual(sonnet55.cost, { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, tiers: undefined });
   const haiku55 = getRequiredModel("claude-haiku-5-5");
   assert.equal(haiku55.contextWindow, 1_000_000);
   assert.equal(haiku55.maxTokens, 128_000);
