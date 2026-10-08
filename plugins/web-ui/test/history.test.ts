@@ -714,6 +714,27 @@ test("an attach tool result attaches openable files to the turn's assistant mess
   ]);
 });
 
+test("a share result renders chips only for files it attached to the reply", () => {
+  const file = { name: "out.txt", mimetype: "text/plain", sizeBytes: 3, artifactId: "art-851" };
+  for (const [extra, expected] of [
+    [{ files: [file] }, [file]],
+    [{ deliveryError: "too many files" }, undefined],
+  ] as const) {
+    const entries: SessionEntry[] = [
+      { type: "user", payload: { text: "send it" }, createdAt: 100 },
+      {
+        type: "tool_result",
+        payload: { tool: "files", action: "share", path: "out.txt", callId: "c1", ...extra },
+        createdAt: 111,
+        seq: 3,
+        parentSeq: 2,
+      },
+      { type: "assistant", payload: { text: "Sent." }, createdAt: 120 },
+    ];
+    assert.deepEqual((entriesToMessages(entries, MODEL)[1] as AssistantWork).deliveredFiles, expected);
+  }
+});
+
 test("re-attaching a path renders one chip, not two", () => {
   const attachResult = (callId: string, artifactId: string, seq: number): SessionEntry => ({
     type: "tool_result",

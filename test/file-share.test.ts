@@ -12,6 +12,8 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal, type WorkspaceLayer } from "../src/types.ts";
+import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
+import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 
 const person = (id: string, teamIds?: string[]): Principal => ({
@@ -56,8 +58,10 @@ function toolCtx(opts: {
   grantedHandles?: Awaited<ReturnType<ReturnType<typeof createAclStore>["handlesFor"]>>;
   sharedMaterializeDir?: string;
   createdBy?: string;
+  extra?: Partial<Parameters<typeof createToolContext>[0]>;
 }) {
   return createToolContext({
+    ...opts.extra,
     sandbox: opts.sandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     layers: opts.layers ?? [{ scopeId: opts.scope, mountPath: "", mode: "rw" }],
@@ -409,4 +413,89 @@ test("a workspace-backed share is never served from a stale artifact snapshot", 
   });
   const got = await ctx.read(handles[0]!.handlePath);
   assert.equal(got.content, "version 2", "the live workspace copy wins for workspace-namespace paths");
+});
+
+function selfShareCtx(
+  deliver: Parameters<typeof createToolContext>[0]["attach"],
+  sandbox = memSandbox({ "out-851.txt": new TextEncoder().encode("v1") }).sandbox,
+) {
+  const acl = createAclStore();
+  const me = scopeId("personal", "U851");
+  const tc = toolCtx({
+    scope: me,
+    workspace: ws(),
+    sandbox,
+    acl,
+    extra: { deliverShareToRequester: deliver, requesterScopeId: me },
+  });
+  return { tc, acl, me };
+}
+
+test("sharing a file with the requester in their DM attaches it once to the reply", async () => {
+  const blobs = createMemoryBlobTransferStore();
+  const box = memSandbox({ "out-851.txt": new TextEncoder().encode("v1") });
+  const staging = createAttachStaging({
+    sandbox: box.sandbox,
+    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
+    blobTransfer: blobs,
+    fileRegistration: { store: null as never, ownerScopeId: "personal:U851", createdBy: "U851", seed: "run-851" },
+  });
+  const { tc, acl, me } = selfShareCtx(staging.attach, box.sandbox);
+
+  const first = await tc.write("out-851.txt", undefined, [{ scope: me, permission: "read" }]);
+  await tc.write("out-851.txt", undefined, [{ scope: me, permission: "read" }]);
+
+  assert.deepEqual(first.shared, [{ scope: me, permission: "read" }]);
+  assert.equal(first.delivery?.ok, true);
+  assert.deepEqual(
+    staging.staged().map((a) => a.name),
+    ["out-851.txt"],
+  );
+  assert.equal((await acl.list()).length, 1);
+});
+
+test("sharing with anyone but the requester never attaches to the reply", async () => {
+  const calls: string[][] = [];
+  const { tc } = selfShareCtx(async (files) => {
+    calls.push([...files]);
+    return { ok: true, files: [], staged: 0 };
+  });
+
+  const toChannel = await tc.write("out-851.txt", undefined, [
+    { scope: scopeId("channel", "C851"), permission: "read" },
+  ]);
+  const toOther = await tc.write("out-851.txt", undefined, [
+    { scope: scopeId("personal", "U852"), permission: "read" },
+  ]);
+
+  assert.deepEqual(calls, []);
+  assert.equal(toChannel.delivery, undefined);
+  assert.equal(toOther.delivery, undefined);
+});
+
+test("a self-share outside the requester's DM grants access without attaching", async () => {
+  const me = scopeId("personal", "U851");
+  const r = await toolCtx({
+    scope: me,
+    workspace: ws(),
+    sandbox: memSandbox({ "out-851.txt": new TextEncoder().encode("v1") }).sandbox,
+    acl: createAclStore(),
+    extra: { attach: async () => assert.fail("attach must not run"), requesterScopeId: me },
+  }).write("out-851.txt", undefined, [{ scope: me, permission: "read" }]);
+
+  assert.deepEqual(r, { shared: [{ scope: me, permission: "read" }] });
+});
+
+test("a failed requester attachment is reported and keeps the grant", async () => {
+  for (const deliver of [
+    async () => ({ ok: false as const, message: "too many files" }),
+    async () => Promise.reject(new Error("blob store down")),
+  ]) {
+    const { tc, acl, me } = selfShareCtx(deliver);
+    const r = await tc.write("out-851.txt", undefined, [{ scope: me, permission: "read" }]);
+    assert.deepEqual(r.shared, [{ scope: me, permission: "read" }]);
+    assert.equal(r.delivery?.ok, false);
+    assert.match(r.delivery && !r.delivery.ok ? r.delivery.message : "", /too many files|blob store down/);
+    assert.equal((await acl.list()).length, 1);
+  }
 });

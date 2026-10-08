@@ -3208,11 +3208,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const result = await tc.write(params.path!, undefined, [
           { scope: params.scope!, permission: params.permission },
         ]);
+        const delivery = result.delivery;
+        let deliveryNote = "";
+        if (delivery?.ok) deliveryNote = " — also attached to your reply";
+        else if (delivery) deliveryNote = ` — access granted, but not attached to your reply: ${delivery.message}`;
         return recordResult(
           callId,
-          { tool: "files", action: "share", path: params.path, shared: result.shared },
+          {
+            tool: "files",
+            action: "share",
+            path: params.path,
+            shared: result.shared,
+            ...(delivery?.ok ? { files: delivery.files } : {}),
+            ...(delivery && !delivery.ok ? { deliveryError: delivery.message } : {}),
+          },
           text(
-            result.shared.map((grant) => `shared ${params.path} with ${grant.scope} (${grant.permission})`).join("; "),
+            result.shared.map((grant) => `shared ${params.path} with ${grant.scope} (${grant.permission})`).join("; ") +
+              deliveryNote,
           ),
         );
       } catch (e) {
