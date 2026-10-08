@@ -43,19 +43,34 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   is correct, and that belief is the bias review exists to defeat. Never self-review in the
   authoring context, however small the diff; a green CI run is not review either. What
   scales with risk is how deep the reviewer goes — a change with a narrow blast radius
-  warrants one reviewer at modest effort scoped to the diff, while core control flow, auth
+  warrants modest effort scoped to the diff for each reviewer, while core control flow, auth
   and credentials, data loss or migrations, concurrency and retry logic, spend, public API
   contracts, the shared helpers above that every path flows through, or a diff too large to
   hold in your head warrant high effort and several reviewers with distinct lenses. Judge
   blast radius by checking callers, not by counting files — a one-line edit to a helper with
   fifty importers is not a small change. The reviewer, not the author, has the last word on
   depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
-  rather than staying in its lane. The review must read the current
-  [Wall of shame](./docs/SPEC.md#wall-of-shame) and explicitly check the diff and its
-  affected paths for every violation category, using each historical example to guide
-  the search. Require a brief, evidence-backed verdict for each category: clear, finding,
-  or not applicable with a reason. New categories are automatically part of this checklist.
-  Resolve what they find before merging.
+  rather than staying in its lane. Resolve what they find before merging.
+- **Give every Wall of shame category its own independent reviewer.** For every PR,
+  dispatch a separate fresh-context review agent for each category in the current
+  [Wall of shame](./docs/SPEC.md#wall-of-shame); new categories automatically require
+  their own reviewer. Each reads the category and its historical examples, examines the
+  diff and affected paths, and returns an accept/reject verdict with code or text citations, concrete
+  findings, and the smallest correction needed. Run reviewers in parallel within
+  available capacity, queuing the rest; never combine categories to save review work.
+  Also record an informational score for each applicable category from 0 to 5 during
+  an observation period: 0 = not assessable from available evidence,
+  1 = severe violation, 2 = material violation, 3 = minor violation, 4 = no violation found,
+  5 = meets 4 and demonstrably removes or simplifies an existing instance of the pattern.
+  A reviewer may mark a category not applicable only with a reason
+  grounded in the diff and affected paths, recorded as accept with no score. Record every
+  verdict and score against the reviewed commit in the PR. Reject for a concrete violation
+  or insufficient evidence to assess an applicable category. Block merging if any review
+  is missing, any reviewer rejects, or any concrete finding remains unresolved. Scores
+  have no effect on acceptance or merging; do not apply a threshold or aggregate score.
+  After changes, have independent reviewers reassess affected categories on the new
+  commit and explicitly carry forward unaffected verdicts. These category reviews
+  supplement the correctness, security, and regression review above.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several
