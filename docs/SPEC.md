@@ -34,7 +34,7 @@
 
 Patterns from this repo's history, with the PRs that introduced or removed them.
 
-### Overengineering (3 examples)
+### Overengineering (5 examples)
 
 Let sLOC +/- be your guide here. Small and net-negative LOC fixes will be rewarded. This codebase at baseline is flabby -- many bugs can be fixed by _deleting_, _removing_, _simplifying_. For features: use restraint when adding new subsystems that increase surface area and widen the config matrix we will have to support.
 
@@ -43,14 +43,15 @@ Past mistakes and examples:
 - Amendments to the master spec that are way too large for the importance of what the PR actually adds
 - The loops subsystem should have just re-used the crons machinery, but it built its own little empire for no reason
 - The artifact pages in the web UI could have all used the same group-by backbone, but each one got its own design for no reason
+- **Delivery retries** (2026-08-30): Undeliverable Slack notices prompted a proposal for attempt counters, scheduled exponential backoff, a parked state, and admin visibility. The proposal optimized for eventually delivering messages long after they were useful; simply expiring stale deliveries addressed the actual need.
+- **Harness/model selection** (2026-07-17): A selector grew into a proposed "agent profile" platform with its own catalog, preference layers, upgrade acknowledgments, readiness handling, and cohort rollout. The smaller solution extended the existing scoped setting with a `{ harness, model }` pair and reused the existing configuration and picker machinery.
 
-### Band-aid fixes (8 examples)
+### Band-aid fixes (7 examples)
 
-Hiding a symptom while leaving its cause intact. Look for special cases, retries, fallbacks, or cleanup work that compensate for a broken invariant elsewhere; fix that invariant at the layer responsible for it across all affected paths.
+Hiding a symptom while leaving its true cause unfixed. Smells here are special cases (string matching and regex are especially bad), many-branched conditionals acquiring _yet another_ branch. A bug isn't a problem to fix, it is useful evidence that the system we have built is flawed. Fix the underlying flaw, not the bug.
 
 - **qm#1743** (2026-09-30): Refusal fallback extended by regex-matching Anthropic usage-policy text and 'gateway model is unavailable' to trigger a hard-coded alternate-model ladder (claude-opus-5 / claude-sonnet-5), plus a new admin fallbackRuntime.
 - **qm#1748** (2026-09-30): Every non-Modal sandbox took one exclusive sandbox-resource:<id> advisory lock around each command/file op, so sessions sharing a computer queued behind each other; replaced a backend!=='modal' special case with shared locks and a parksOnTeardown profile property. _Status:_ wound back in qm#1748.
-- **qm#1753** (2026-09-30): Session-counter recount ran on every store init under the global maintenance lock (not a one-time migration), freezing chat writes during blue/green promotion; removed. _Status:_ wound back in qm#1753.
 - **qm#1432** (2026-09-19): Per-turn reconciliation of a shared skills/ index under a sandbox-wide advisory lock (skill projection) stalled turns 5 minutes; replaced with an explicit skill tool and per-turn skill dirs. _Status:_ wound back in qm#1432.
 - **qm#1133** (2026-09-12): A factory-specific retry ladder (FACTORY_READ_RETRIES=6) was added around sandbox readProcess polling after one timeout under load. _Status:_ wound back (factory code absent on current main).
 - **qm#965** (2026-09-07): One legacy \u0000 payload bricked sessions; fixes proposed tolerating poisoned rows and sanitizing every Postgres text write. _Status:_ unknown.
