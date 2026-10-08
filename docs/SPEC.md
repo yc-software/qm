@@ -34,7 +34,7 @@
 
 Patterns from this repo's history, with the PRs that introduced or removed them.
 
-### Overengineering (5 examples)
+### Overengineering (6 examples)
 
 Let sLOC +/- be your guide here. Small and net-negative LOC fixes will be rewarded. This codebase at baseline is flabby -- many bugs can be fixed by _deleting_, _removing_, _simplifying_. For features: use restraint when adding new subsystems that increase surface area and widen the config matrix we will have to support.
 
@@ -45,6 +45,7 @@ Past mistakes and examples:
 - The artifact pages in the web UI could have all used the same group-by backbone, but each one got its own design for no reason
 - **Delivery retries** (2026-08-30): Undeliverable Slack notices prompted a proposal for attempt counters, scheduled exponential backoff, a parked state, and admin visibility. The proposal optimized for eventually delivering messages long after they were useful; simply expiring stale deliveries addressed the actual need.
 - **Harness/model selection** (2026-07-17): A selector grew into a proposed "agent profile" platform with its own catalog, preference layers, upgrade acknowledgments, readiness handling, and cohort rollout. The smaller solution extended the existing scoped setting with a `{ harness, model }` pair and reused the existing configuration and picker machinery.
+- **Admin tool** (2026-09-17–18): Concern about oversized responses grew into a 43-file, roughly 4,580-line patch with field limits, custom JSON validation, layered timeouts, duplicate concurrency limits, and a special handshake. Only after pushback did the agent inventory actual calls and identify large transcripts as the concrete risk. The replacement used bounded transcript pagination and a thin read-only tool: 9 files, +329/−18. _Status:_ oversized implementation rejected before a PR.
 
 ### Band-aid fixes (10 examples)
 
