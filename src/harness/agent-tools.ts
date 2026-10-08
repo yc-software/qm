@@ -1170,18 +1170,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
       "a panel or extension, and `[]` to turn it back off.",
     parameters: Type.Object({
-      audience: Type.Optional(
-        Type.Array(
-          Type.Object({
-            scope: Type.String({ description: "Scope ID or org." }),
-            permission: Type.Union([Type.Literal("read"), Type.Literal("write")]),
-          }),
-          {
-            description:
-              "First-publish access grants only. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Refused when republishing an existing app; use apps action share instead.",
-          },
-        ),
-      ),
       dir: Type.Optional(
         Type.String({
           description:
@@ -1235,8 +1223,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         name: params.name,
       });
       try {
-        const legacy = params as { audience?: PublishInput["share"] };
-        const r = await tc.publish({ ...params, share: legacy.audience } as PublishInput);
+        const r = await tc.publish(params as PublishInput);
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
