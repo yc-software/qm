@@ -51,33 +51,25 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   fifty importers is not a small change. The reviewer, not the author, has the last word on
   depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
   rather than staying in its lane. Resolve what they find before merging.
-- **Give every Wall of shame category its own independent reviewer.** For every PR,
-  dispatch a separate fresh-context review agent for each category in the current
-  [Wall of shame](./docs/SPEC.md#wall-of-shame); new categories automatically require
-  their own reviewer. The items under Honorable mentions are the one exception: assign
-  them to one combined reviewer and report that review as a single lens. Each reviewer
-  reads their assigned guidance and historical examples, examines the
-  diff and affected paths, and returns an accept/reject verdict with code or text citations, concrete
-  findings, and the smallest correction needed. Run reviewers in parallel within
-  available capacity, queuing the rest; do not combine categories beyond the explicit
-  Honorable mentions exception.
-  Also record an informational score for each applicable category from 0 to 5 during
-  an observation period: 0 = not assessable from available evidence,
-  1 = severe violation, 2 = material violation, 3 = minor violation, 4 = no violation found,
-  5 = meets 4 and demonstrably removes or simplifies an existing instance of the pattern.
-  A reviewer may mark a category not applicable only with a reason
-  grounded in the diff and affected paths, recorded as accept with no score. Every PR
-  description must include a concise Wall of shame report: one entry per category naming
-  the lens and its reviewer, their accept/reject verdict, their score (or reasoned N/A),
-  and 1–2 sentences summarizing what that reviewer found. Identify the reviewed commit
-  and keep the report current after reassessment; summarize the actual reviews, never
-  invent scores or substitute the author's assessment. Reject for a concrete violation
-  or insufficient evidence to assess an applicable category. Block merging if any review
-  is missing, any reviewer rejects, or any concrete finding remains unresolved. Scores
-  have no effect on acceptance or merging; do not apply a threshold or aggregate score.
-  After changes, have independent reviewers reassess affected categories on the new
-  commit and explicitly carry forward unaffected verdicts. These category reviews
-  supplement the correctness, security, and regression review above.
+- **Run independent Wall of shame reviews in parallel for every PR.** Dispatch a
+  separate fresh-context subagent or independent reviewer for each lens in the current
+  [Wall of shame](./docs/SPEC.md#wall-of-shame), including newly added lenses. Only
+  Honorable mentions may share one combined reviewer. Launch reviews asynchronously
+  and in parallel within available capacity, queuing any overflow. Do not wait for
+  reviews before opening or updating the PR, running checks, or continuing other work.
+  Each reviewer reads their lens and examples, examines the diff and affected paths,
+  and returns **accept** or **request changes**, a **score out of 100** (higher is
+  better), and **1–2 sentences** explaining their assessment. Cite concrete findings
+  and state the smallest correction needed; explain when a lens has no applicable
+  concerns. Scores are informational, with no aggregate score or numeric merge threshold.
+  Put each reviewer's actual verdict, score, and concise assessment in the **PR
+  description**, labeled by lens and reviewer and tied to the reviewed commit. Update
+  the description as reviews arrive; mark pending reviews honestly and never invent
+  results or substitute the author's self-review. After edits, have independent
+  reviewers reassess affected lenses and explicitly carry forward unaffected results.
+  These reviews run alongside PR work; before merging, every lens must have accepted
+  and all requested changes must be resolved. They supplement the correctness,
+  security, and regression review above.
 - **Disclose config-matrix and database-schema changes in the PR description.** Name
   added, removed, or changed settings, flags, modes, and providers, including changes to
   defaults, precedence, and supported combinations. Name changed tables, columns,
