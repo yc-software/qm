@@ -1,0 +1,80 @@
+--- a/src/slack/task-ack.ts
++++ b/src/slack/task-ack.ts
+@@ -13,6 +13,7 @@
+   previous: string[];
+   finished: boolean;
+   synced?: boolean;
++  completionRequested?: boolean;
+ }
+ 
+ interface ReactionClient {
+@@ -25,7 +26,10 @@
+ export function createTaskAcknowledgements(
+   store: DurableMap<TaskAckState>,
+   lease: LeaderLease,
+-  recovery?: { runs: Pick<RunStore, "get">; deliveries: Pick<DeliveryStore, "pending"> },
++  recovery?: {
++    runs: Pick<RunStore, "get"> & Partial<Pick<RunStore, "delegatedRuns" | "inFlightForThread" | "latestForThread">>;
++    deliveries: Pick<DeliveryStore, "pending">;
++  },
+ ) {
+   if (!store.update) throw new Error("Task acknowledgements require atomic updates");
+   const update = store.update.bind(store);
+@@ -48,6 +52,48 @@
+           leaseLost = true;
+         });
+         let state = await store.get(runId);
++        if (!next && recovery?.runs.delegatedRuns && state && !state.finished) {
++          const delegated = await recovery.runs.delegatedRuns(runId);
++          const source = delegated.length ? await recovery.runs.get(runId) : null;
++          const latest =
++            source && (await recovery.runs.latestForThread?.(source.sessionId, { excludePrivateMessages: true }));
++          if (latest && latest.id !== runId && !delegated.some((run) => run.id === latest.id)) delegated.push(latest);
++          const pending = await recovery.deliveries.pending("slack");
++          const waitingForResult = (
++            await Promise.all(
++              delegated
++                .filter((run) => runResultDelivery(run))
++                .map(async (run) => !(await store.get(run.id))?.finished),
++            )
++          ).some(Boolean);
++          const conversationActive =
++            source && recovery.runs.inFlightForThread
++              ? (await recovery.runs.inFlightForThread(source.sessionId)).some(
++                  (run) => !run.request.privateSessionMessage,
++                )
++              : false;
++          const conversationDelivering =
++            source && pending.some((delivery) => delivery.provenance?.sourceThreadRef === source.sessionId);
++          const waiting =
++            conversationActive ||
++            conversationDelivering ||
++            waitingForResult ||
++            delegated.some(
++              (run) =>
++                !isTerminal(run.status) ||
++                (run.sessionId.startsWith("agent:main:subagent:") && run.returnedAt == null) ||
++                pending.some(
++                  (delivery) =>
++                    delivery.idempotencyKey === `run:${run.id}` ||
++                    delivery.idempotencyKey === `ack:${run.id}` ||
++                    delivery.idempotencyKey?.startsWith(`post:${run.id}:`),
++                ),
++            );
++          if (waiting) {
++            await update(runId, (current) => ({ ...current, completionRequested: true }));
++            return true;
++          }
++        }
+         if (!state) {
+           if (next?.existing) return true;
+           const emoji = next?.pick
+@@ -128,7 +174,7 @@
+       for (const [runId, state] of await store.entries()) {
+         if (!state.finished && recovery) {
+           const run = await recovery.runs.get(runId);
+-          if (run && isTerminal(run.status) && !runResultDelivery(run)) {
++          if (run && isTerminal(run.status) && (state.completionRequested || !runResultDelivery(run))) {
+             const pending = await recovery.deliveries.pending("slack");
+             if (
+               !pending.some(
