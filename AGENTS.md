@@ -50,7 +50,12 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   blast radius by checking callers, not by counting files — a one-line edit to a helper with
   fifty importers is not a small change. The reviewer, not the author, has the last word on
   depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
-  rather than staying in its lane. Resolve what they find before merging.
+  rather than staying in its lane. The review must read the current
+  [Wall of shame](./docs/SPEC.md#wall-of-shame) and explicitly check the diff and its
+  affected paths for every violation category, using each historical example to guide
+  the search. Require a brief, evidence-backed verdict for each category: clear, finding,
+  or not applicable with a reason. New categories are automatically part of this checklist.
+  Resolve what they find before merging.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several
