@@ -25,7 +25,7 @@ function response(body: unknown) {
   return {
     ok: true,
     status: 200,
-    headers: { get: () => "application/json" },
+    headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? "application/json" : null) },
     async text() {
       return JSON.stringify(body);
     },
@@ -40,11 +40,21 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
       const params = new URLSearchParams(init.body);
       return response({ access_token: `${params.get("client_id")}-token`, expires_in: 300 });
     }
-    const rpc = JSON.parse(init.body) as { id: number; params: { name: string; arguments: Record<string, unknown> } };
+    const rpc = JSON.parse(init.body) as {
+      id?: number;
+      method: string;
+      params?: { name: string; arguments: Record<string, unknown> };
+    };
+    if (rpc.method === "initialize") {
+      return response({ jsonrpc: "2.0", id: rpc.id, result: { protocolVersion: "2025-03-26" } });
+    }
+    if (rpc.method === "notifications/initialized") return response({});
     return response({
       jsonrpc: "2.0",
       id: rpc.id,
-      result: { content: [{ type: "text", text: rpc.params.name === "search_knowledge" ? "org knowledge" : "ok" }] },
+      result: {
+        content: [{ type: "text", text: rpc.params?.name === "search_knowledge" ? "org knowledge" : "ok" }],
+      },
     });
   };
   const raw = JSON.stringify({
@@ -73,10 +83,14 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "automatic" }), 0);
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "explicit" }), 1);
 
-  assert.equal(calls[0]?.url, "http://knowledge.internal:8080/token");
-  assert.equal(calls[1]?.authorization, "Bearer ro-token");
-  assert.match(calls[1]?.body ?? "", /search_knowledge/);
-  assert.equal(calls[2]?.url, "http://knowledge.internal:8080/token");
-  assert.equal(calls[3]?.authorization, "Bearer rw-token");
-  assert.match(calls[3]?.body ?? "", /write_knowledge/);
+  const tokens = calls.filter((call) => call.url.endsWith("/token"));
+  const tools = calls.filter((call) => call.body.includes('"method":"tools/call"'));
+  assert.deepEqual(
+    tokens.map((call) => call.url),
+    ["http://knowledge.internal:8080/token", "http://knowledge.internal:8080/token"],
+  );
+  assert.equal(tools[0]?.authorization, "Bearer ro-token");
+  assert.match(tools[0]?.body ?? "", /search_knowledge/);
+  assert.equal(tools[1]?.authorization, "Bearer rw-token");
+  assert.match(tools[1]?.body ?? "", /write_knowledge/);
 });
