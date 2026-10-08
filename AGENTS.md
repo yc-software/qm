@@ -71,6 +71,12 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   After changes, have independent reviewers reassess affected categories on the new
   commit and explicitly carry forward unaffected verdicts. These category reviews
   supplement the correctness, security, and regression review above.
+- **Disclose config-matrix and database-schema changes in the PR description.** Name
+  added, removed, or changed settings, flags, modes, and providers, including changes to
+  defaults, precedence, and supported combinations. Name changed tables, columns,
+  indexes, and constraints, and describe migrations or backfills and any rollout or
+  compatibility implications. Explain why the changes are needed. If either area is
+  unchanged, say so explicitly; keep the disclosure proportional to the change.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several
