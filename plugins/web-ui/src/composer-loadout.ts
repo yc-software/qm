@@ -15,23 +15,33 @@ export function loadoutModelId(value: string): string {
   return separator < 0 ? value : value.slice(separator + 1);
 }
 
-export const ULTRAFAST_MODEL_ID = "gpt-6-astra-ultrafast";
-export const ULTRAFAST_BASE_MODEL_ID = "gpt-6-astra";
+/** Ultrafast selection ids mapped to the standard model they speed up. */
+const ULTRAFAST_BASE_MODEL_IDS: ReadonlyMap<string, string> = new Map([
+  ["gpt-6-astra-ultrafast", "gpt-6-astra"],
+  ["gpt-6.1-sol-ultrafast", "gpt-6.1-sol"],
+]);
+
+export function isUltrafastModelId(id: string): boolean {
+  return ULTRAFAST_BASE_MODEL_IDS.has(id);
+}
 
 export function presetModelId(value: string): string {
   const id = loadoutModelId(value);
-  return id === ULTRAFAST_MODEL_ID ? ULTRAFAST_BASE_MODEL_ID : id;
+  return ULTRAFAST_BASE_MODEL_IDS.get(id) ?? id;
+}
+
+function ultrafastCounterpart(id: string): string | undefined {
+  const base = ULTRAFAST_BASE_MODEL_IDS.get(id);
+  if (base) return base;
+  for (const [ultrafast, standard] of ULTRAFAST_BASE_MODEL_IDS) if (standard === id) return ultrafast;
+  return undefined;
 }
 
 export function ultrafastChoice(options: readonly ModelOption[], selected: ModelOption): ModelOption | undefined {
   if (selected.harnessId !== "pi") return undefined;
-  const id = selected.model.id;
-  if (id !== ULTRAFAST_BASE_MODEL_ID && id !== ULTRAFAST_MODEL_ID) return undefined;
-  return options.find(
-    (option) =>
-      option.harnessId === selected.harnessId &&
-      option.model.id === (id === ULTRAFAST_MODEL_ID ? ULTRAFAST_BASE_MODEL_ID : ULTRAFAST_MODEL_ID),
-  );
+  const target = ultrafastCounterpart(selected.model.id);
+  if (!target) return undefined;
+  return options.find((option) => option.harnessId === selected.harnessId && option.model.id === target);
 }
 
 function uniqueLoadout(entries: readonly LoadoutEntry[]): LoadoutEntry[] {

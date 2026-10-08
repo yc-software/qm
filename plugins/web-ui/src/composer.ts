@@ -56,7 +56,7 @@ import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import {
   LOADOUT_CAP,
-  ULTRAFAST_MODEL_ID,
+  isUltrafastModelId,
   presetModelId,
   ultrafastChoice,
   loadLoadout,
@@ -1899,7 +1899,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function toggleFastMode(agent: Agent): void {
     const selected = currentModelOption();
     if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
-    if (selected?.model.id === ULTRAFAST_MODEL_ID) {
+    if (selected && isUltrafastModelId(selected.model.id)) {
       const target = ultrafastChoice(getModelOptions(scopeKey()), selected);
       if (target) applyLoadout({ ...activeLoadoutEntry(selected), value: target.value, fast: true }, agent);
       return;
