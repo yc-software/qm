@@ -18,7 +18,7 @@ function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
     scopeLabel: { kind: "org", id: "test" } as unknown as ScopeId,
     emit: async () => undefined,
     goalMeter: createGrindMeter(),
-    verifyGoal: async () => ({ complete: true, reasons: "proven" }),
+    governGoal: async () => ({ verdict: "complete", reasons: "proven" }),
     ...(screenToolResult ? { screenToolResult } : {}),
   };
   const tools = createAgentTools(ref);
@@ -70,30 +70,30 @@ test("get reports the record or its absence", async () => {
 
 test("update complete: refused before the verifier while the floor is unmet; the goal stays active", async () => {
   const { ref, create, update } = toolbox();
-  let verifierCalls = 0;
-  ref.verifyGoal = async () => {
-    verifierCalls++;
-    return { complete: true, reasons: "proven" };
+  let governorCalls = 0;
+  ref.governGoal = async () => {
+    governorCalls++;
+    return { verdict: "complete", reasons: "proven" };
   };
   await create.execute("c1", { objective: "work a while", floor: { minTurns: 2 } });
   const early = await update.execute("u1", { status: "complete", note: "did it" });
   assert.match(textOf(early as never), /floor is not met yet.*stays active/);
-  assert.equal(verifierCalls, 0, "the verifier never runs below the floor");
+  assert.equal(governorCalls, 0, "the governor never runs below the floor");
   assert.equal(ref.goal?.status, "active");
   assert.equal(ref.goal?.completionNote, undefined);
 });
 
-test("update complete: at the floor the request goes to the verifier", async () => {
+test("update complete: at the floor the request goes to the governor", async () => {
   const { ref, create, update } = toolbox();
-  let verifierCalls = 0;
-  ref.verifyGoal = async () => {
-    verifierCalls++;
-    return { complete: true, reasons: "proven" };
+  let governorCalls = 0;
+  ref.governGoal = async () => {
+    governorCalls++;
+    return { verdict: "complete", reasons: "proven" };
   };
   await create.execute("c1", { objective: "work a while", floor: { minTurns: 2 } });
   ref.goalMeter!.turns = 2;
   const done = await update.execute("u2", { status: "complete", note: "did it" });
-  assert.equal(verifierCalls, 1);
+  assert.equal(governorCalls, 1);
   assert.match(textOf(done as never), /the goal is complete/);
   assert.equal(ref.goal?.status, "complete");
 });
@@ -123,54 +123,74 @@ test("agent cannot close a user-paused goal or replace it", async () => {
   assert.match(textOf(conflict as never), /already registered/);
 });
 
-test("the agent cannot self-complete: without a verifier the request is rejected", async () => {
+test("the agent cannot self-complete: without a governor the request is rejected", async () => {
   const { ref, create, update } = toolbox();
-  delete ref.verifyGoal;
+  delete ref.governGoal;
   await create.execute("c1", { objective: "ship it" });
   const res = await update.execute("u1", { status: "complete", note: "trust me" });
   assert.match(textOf(res as never), /did not accept completion/);
   assert.equal(ref.goal?.status, "active");
 });
 
-test("a verifier approval closes the goal and sees only the objective and evidence", async () => {
+test("a governor approval closes the goal and sees only the objective and evidence", async () => {
   const { ref, create, update } = toolbox();
   const seen: string[][] = [];
-  ref.verifyGoal = async (objective, evidence) => {
-    seen.push([objective, evidence]);
-    return { complete: true, reasons: "tests pass" };
+  ref.governGoal = async (input) => {
+    seen.push([input.objective, input.evidence ?? ""]);
+    return { verdict: "complete", reasons: "tests pass" };
   };
   await create.execute("c1", { objective: "suite green" });
   const res = await update.execute("u1", { status: "complete", note: "npm test: 0 failures" });
-  assert.match(textOf(res as never), /verifier accepted completion/);
+  assert.match(textOf(res as never), /governor accepted completion/);
   assert.equal(ref.goal?.status, "complete");
   assert.deepEqual(seen, [["suite green", "npm test: 0 failures"]]);
 });
 
-test("a verifier rejection keeps the goal active and feeds its reasons into the next continuation", async () => {
+test("a governor rejection keeps the goal active and feeds its reasons into the next continuation", async () => {
   const { ref, create, update } = toolbox();
-  ref.verifyGoal = async () => ({ complete: false, reasons: "no test output shown" });
+  ref.governGoal = async () => ({ verdict: "continue", reasons: "no test output shown" });
   await create.execute("c1", { objective: "suite green" });
   const res = await update.execute("u1", { status: "complete", note: "done" });
   assert.match(textOf(res as never), /stays active.*no test output shown/);
   assert.equal(ref.goal?.status, "active");
   assert.match(
     goalContinuationPrompt(ref.goal!, createGrindMeter()),
-    /rejected your last completion request[\s\S]*no test output shown/,
+    /the goal is not done[\s\S]*no test output shown/,
   );
-  ref.verifyGoal = async () => ({ complete: true, reasons: "ok" });
+  ref.governGoal = async () => ({ verdict: "complete", reasons: "ok" });
   await update.execute("u2", { status: "complete", note: "npm test: 0 failures" });
   assert.equal(ref.goal?.status, "complete");
-  assert.equal(ref.goal?.verifierFeedback, undefined);
+  assert.equal(ref.goal?.governor, undefined);
 });
 
-test("a failing verifier never closes the goal", async () => {
+test("a completion request can draw a step back, then a pause that ends the goal's turn until the user replies", async () => {
   const { ref, create, update } = toolbox();
-  ref.verifyGoal = async () => {
+  const seenWork: string[] = [];
+  ref.goalRecentWork = () => "tool_call execute: sleep 240";
+  const verdicts = [
+    { verdict: "pause" as const, reasons: "Which AWS account?" },
+    { verdict: "pause" as const, reasons: "Which AWS account?" },
+  ];
+  ref.governGoal = async (input) => (seenWork.push(input.recentWork), verdicts.shift()!);
+  await create.execute("c1", { objective: "deploy" });
+  const first = await update.execute("u1", { status: "complete", note: "waiting on approval" });
+  assert.match(textOf(first as never), /stays active[\s\S]*Take a step back/);
+  assert.equal(ref.goal?.status, "active", "a first pause verdict is downgraded to a step back");
+  const second = await update.execute("u2", { status: "complete", note: "still waiting" });
+  assert.match(textOf(second as never), /paused the goal because it needs the user: Which AWS account\?/);
+  assert.equal(ref.goal?.status, "paused");
+  assert.equal(ref.goal?.pauseReason, "Which AWS account?");
+  assert.deepEqual(seenWork, ["tool_call execute: sleep 240", "tool_call execute: sleep 240"]);
+});
+
+test("a failing governor never closes the goal", async () => {
+  const { ref, create, update } = toolbox();
+  ref.governGoal = async () => {
     throw new Error("model down");
   };
   await create.execute("c1", { objective: "suite green" });
   const res = await update.execute("u1", { status: "complete", note: "done" });
-  assert.match(textOf(res as never), /verifier failed/);
+  assert.match(textOf(res as never), /governor failed/);
   assert.equal(ref.goal?.status, "active");
 });
 
@@ -342,15 +362,15 @@ test("invalid goal status cannot fall through to completion", async () => {
   assert.deepEqual(ref.goal, before);
 });
 
-test("update reads named workspace files into the verifier's evidence", async () => {
+test("update reads named workspace files into the governor's evidence", async () => {
   const { ref, create, update } = toolbox();
   ref.current = {
     read: async (path: string) => ({ content: path === "report.md" ? "# Findings\nthree candidates" : null }),
   } as unknown as ToolContextRef["current"];
   let seen = "";
-  ref.verifyGoal = async (_objective, evidence) => {
-    seen = evidence;
-    return { complete: true, reasons: "report present" };
+  ref.governGoal = async (input) => {
+    seen = input.evidence ?? "";
+    return { verdict: "complete", reasons: "report present" };
   };
   await create.execute("c1", { objective: "write the report" });
   await update.execute("u1", { status: "complete", note: "see report", files: ["report.md", "gone.md"] });

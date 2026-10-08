@@ -132,6 +132,8 @@ import {
   meterGoalCall,
   rehydrateOpenGoal,
   goalSnapshotPayload,
+  goalWorkDigest,
+  type GovernorVerdict,
 } from "./goal.ts";
 
 export interface PiHarnessOptions {
@@ -949,6 +951,24 @@ export function textFromContent(content: unknown): string {
     .filter((c) => c && typeof c === "object" && (c as { type?: unknown }).type === "text")
     .map((c) => (typeof (c as { text?: unknown }).text === "string" ? (c as { text: string }).text : ""))
     .join("");
+}
+
+/** The agent's recent pi messages as governor work lines: what it said, called and got back. */
+function piGoalWork(messages: ReadonlyArray<unknown>): string {
+  const lines: string[] = [];
+  for (const m of messages as ReadonlyArray<{ role?: string; content?: unknown; toolName?: string }>) {
+    if (m.role === "toolResult") lines.push(`tool_result ${m.toolName ?? ""}: ${textFromContent(m.content)}`);
+    else if (m.role === "user" || m.role === "assistant") {
+      const said = textFromContent(m.content);
+      if (said) lines.push(`${m.role}: ${said}`);
+      for (const c of Array.isArray(m.content) ? m.content : [])
+        if ((c as { type?: string }).type === "toolCall")
+          lines.push(
+            `tool_call ${(c as { name?: string }).name ?? ""}: ${JSON.stringify((c as { arguments?: unknown }).arguments ?? {})}`,
+          );
+    }
+  }
+  return goalWorkDigest(lines);
 }
 
 type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
@@ -1844,7 +1864,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           silentRequested: false,
           pollFire: !!dispatched.pollFire,
           screenToolResult: dispatched.screenToolResult,
-          verifyGoal: dispatched.verifyGoal,
+          governGoal: dispatched.governGoal,
           emit: dispatched.emit,
           scopeLabel: dispatched.scopeLabel,
           orgScopeId: dispatched.orgScopeId,
@@ -2144,6 +2164,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           let wallClock!: TurnWallClockOutcome;
           const messagesBefore = entry.agentSession.messages.length;
+          entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
           const freshAssistantStopReason = (): string | undefined => {
             const fresh = entry.agentSession.messages.slice(messagesBefore);
             const last = [...fresh].reverse().find((m) => (m as { role?: string }).role === "assistant") as
@@ -2313,6 +2334,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   !!entry.ref.pausedOnApproval ||
                   !!entry.ref.pendingApprovals?.length ||
                   piRoundFailed(entry.agentSession, messagesBefore),
+                ...(entry.ref.governGoal
+                  ? {
+                      govern: (previous: GovernorVerdict | undefined) =>
+                        entry.ref.governGoal!({
+                          objective: goalAfterPrompt.objective,
+                          trigger: "checkpoint",
+                          recentWork: entry.ref.goalRecentWork?.() ?? "",
+                          ...(previous ? { previous } : {}),
+                        }),
+                    }
+                  : {}),
                 beforePrompt: async (note) => {
                   console.error(
                     `[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`,

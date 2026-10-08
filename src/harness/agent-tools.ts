@@ -21,7 +21,15 @@ import { redactSecrets } from "./redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
-import { createGoalRecord, goalFloorMeter, goalReport, type GoalRecord, type GoalVerifier } from "./goal.ts";
+import {
+  applyGovernorVerdict,
+  createGoalRecord,
+  goalFloorMeter,
+  goalReport,
+  GOAL_STEP_BACK_PROMPT,
+  type GoalGovernor,
+  type GoalRecord,
+} from "./goal.ts";
 import {
   toolLabelOf,
   toolResultProvenance,
@@ -99,7 +107,9 @@ export interface ToolContextRef {
   goalRound?: number;
 
   goalMeter?: import("./grind.ts").GrindMeter;
-  verifyGoal?: GoalVerifier;
+  governGoal?: GoalGovernor;
+  /** The agent's recent work for the governor, newest last. */
+  goalRecentWork?: () => string;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string) => boolean;
 }
@@ -4001,7 +4011,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "minMs 1200000; never subtract time already spent). Do this even when the task looks hard, slow or impossible: " +
       "the user asked for the effort, so create the goal and spend it rather than explaining why you will stop. Once registered the harness enforces it: trying to end a reply while the goal " +
       "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
-      'when the work is verifiably done, request completion (goal action update "complete"); a fresh verifier decides. ' +
+      'when the work is verifiably done, request completion (goal action update "complete"); a fresh governor decides. ' +
       "Fails if an unfinished goal exists.",
     parameters: Type.Object({
       objective: Type.String({
@@ -4086,7 +4096,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       'Request completion of the goal. Set to "complete" only when the objective has actually been achieved and no ' +
       "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
-      "you are stopping work. An independent fresh-context verifier reads only the objective, your note, and any " +
+      "you are stopping work. An independent fresh-context governor reads the objective, your recent work, your note, and any " +
       "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
       "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
       'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
@@ -4100,7 +4110,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       files: Type.Optional(
         Type.Array(Type.String(), {
           maxItems: GOAL_EVIDENCE_FILES,
-          description: "Workspace paths of the deliverables; the verifier reads them directly.",
+          description: "Workspace paths of the deliverables; the governor reads them directly.",
         }),
       ),
     }),
@@ -4137,6 +4147,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         goal.status = "active";
         goal.updatedAt = goal.activeSince = Date.now();
+        delete goal.pauseReason;
+        delete goal.governor;
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
@@ -4168,30 +4180,44 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
       }
       const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal))].join("\n");
-      const verdict = ref.verifyGoal
-        ? await ref.verifyGoal(goal.objective, evidence).catch((e: unknown) => ({
-            complete: false,
-            reasons: `the verifier failed (${errMessage(e)}); request completion again`,
-          }))
-        : { complete: false, reasons: "no independent verifier is available on this runtime; keep working" };
-      if (!verdict.complete) {
-        goal.verifierFeedback = verdict.reasons;
-        goal.updatedAt = Date.now();
+      const verdict = ref.governGoal
+        ? await ref
+            .governGoal({
+              objective: goal.objective,
+              trigger: "completion",
+              recentWork: ref.goalRecentWork?.() ?? "",
+              evidence,
+              ...(goal.governor ? { previous: goal.governor } : {}),
+            })
+            .catch((e: unknown) => ({
+              verdict: "continue" as const,
+              reasons: `the governor failed (${errMessage(e)}); request completion again`,
+            }))
+        : {
+            verdict: "continue" as const,
+            reasons: "no independent governor is available on this runtime; keep working",
+          };
+      if (verdict.verdict !== "complete") {
+        const applied = applyGovernorVerdict(goal, verdict);
+        let message = `The governor did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`;
+        if (applied.verdict === "step_back") message += `\n${GOAL_STEP_BACK_PROMPT}`;
+        if (applied.verdict === "pause")
+          message = `The governor paused the goal because it needs the user: ${verdict.reasons}\nStop working on it. End your reply with one short message to the user saying where things stand and exactly what you need; their reply resumes the goal.`;
         return recordCoreAuthoredResult(
           callId,
-          { tool: "goal", action: "update", error: "verifier_rejected", goal },
-          text(`The verifier did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`),
-          true,
+          { tool: "goal", action: "update", error: `governor_${applied.verdict}`, goal },
+          text(message),
+          applied.verdict !== "pause",
         );
       }
-      delete goal.verifierFeedback;
+      delete goal.governor;
       goal.status = "complete";
       goal.updatedAt = Date.now();
       goal.completionNote = p.note;
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "update", goal },
-        text(`The verifier accepted completion; the goal is complete. Report the outcome (and evidence) to the user.`),
+        text(`The governor accepted completion; the goal is complete. Report the outcome (and evidence) to the user.`),
       );
     },
   });
