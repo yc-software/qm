@@ -345,6 +345,9 @@ class FakeCore implements SlackCoreClient {
   async getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
     return this.agentRequests.get(requestId) ?? null;
   }
+  async getAgentRequestRun(): Promise<null> {
+    return null;
+  }
   async takeAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
     const record = this.agentRequests.get(requestId) ?? null;
     this.agentRequests.delete(requestId);

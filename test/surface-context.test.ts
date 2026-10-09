@@ -9,6 +9,7 @@ import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { orgId as configOrgId } from "../src/config.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -72,7 +73,7 @@ describe("surface-context pulls", async () => {
         signingSecret: SECRET,
       }),
     );
-    server = createServer(built.app, { signingSecret: SECRET });
+    server = createServer(built.app, { signingSecret: SECRET, config: built.config });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     await built.app.upsertDirectory([
@@ -364,5 +365,51 @@ describe("surface-context pulls", async () => {
     const done = await built.app.getContextRequest(r.id);
     assert.equal((done as any)?.query?.viewerToken, undefined, "a fulfilled row still carries no token");
     await built.app.deleteContextRequest(r.id);
+  });
+  it("ask-agent reports a sent handoff only after the Slack side confirms it", async () => {
+    const token = await cap({ surface: "slack", runId: "run-ask-1", liveActor: true });
+    const asking = post(
+      "/v1/ask-agent",
+      { person: "<@U2>", task: "republish the page" },
+      { "x-agent-capability": token },
+    );
+    const query = await fulfillNext(() => ({
+      messages: [],
+      handoff: { requestId: "h1", target: "Carol's personal agent" },
+    }));
+    assert.deepEqual(query.askAgent, { runId: "run-ask-1", targetUserId: "U2", task: "republish the page" });
+    const res = await asking;
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+    assert.equal(body.ok, true);
+    assert.match(body.message, /Carol's personal agent[\s\S]*Nothing has run yet/);
+  });
+
+  it("ask-agent passes a Slack refusal back as a failure instead of claiming success", async () => {
+    const token = await cap({ surface: "slack", runId: "run-ask-2", liveActor: true });
+    const asking = post("/v1/ask-agent", { person: "U2", task: "check it" }, { "x-agent-capability": token });
+    await fulfillNext(() => ({ error: "couldn't open a DM to Carol" }));
+    const res = await asking;
+    assert.equal(res.status, 409);
+    assert.equal(((await res.json()) as any).message, "couldn't open a DM to Carol");
+  });
+
+  it("ask-agent is refused outside a live Slack turn and in Open conversations", async () => {
+    const outside = await post("/v1/ask-agent", { person: "<@U2>", task: "x" }, { "x-agent-capability": await cap() });
+    assert.equal(outside.status, 409);
+    const org = scopeId("org", configOrgId());
+    await built.config.setSharingPosture(org, "open");
+    try {
+      const open = await post(
+        "/v1/ask-agent",
+        { person: "<@U2>", task: "x" },
+        { "x-agent-capability": await cap({ surface: "slack", runId: "run-ask-3" }) },
+      );
+      assert.equal(open.status, 409);
+      assert.equal(((await open.json()) as any).error, "open_posture");
+    } finally {
+      await built.config.clearSharingPosture(org);
+    }
+    assert.equal((await built.app.pendingContextRequests("slack")).length, 0);
   });
 });

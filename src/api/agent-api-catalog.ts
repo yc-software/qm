@@ -461,6 +461,18 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: onPath("POST", "/v1/ask-agent"),
+    when: (view) => view.claims.surface === "slack" && !view.claims.externalSlack,
+    routes: [
+      {
+        method: "POST",
+        path: "/v1/ask-agent",
+        summary:
+          'ask a person in this Slack channel to let their personal agent do a task that needs their private setup — body {person:"<@U123>", task}; they get a DM to approve and the result posts back in this thread. ok:true means the request was sent, not that it ran. Unavailable in DMs, group DMs, external channels, and Open conversations, where you use the requester\'s own access directly',
+      },
+    ],
+  },
+  {
     match: (m, p) =>
       (m === "GET" && p === "/v1/deployments") ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+$/.test(p)) ||

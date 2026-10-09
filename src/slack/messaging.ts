@@ -1,17 +1,12 @@
 import { extractPrivateContinuation } from "./external-access.ts";
 import {
   type ActorAssertion,
-  type AgentRequestDirective,
   type ReactionDirective,
-  AGENT_REQUEST_INSTRUCTION,
   MAX_REACTIONS_PER_TURN,
-  REACTION_INSTRUCTION,
   SLACK_TEXT_LIMIT,
   applyReactions,
   botIdentityArgs,
-  extractAgentRequests,
   extractReactions,
-  stripAgentRequestDirectives,
   stripReactionDirectives,
 } from "./lib.ts";
 
@@ -53,26 +48,13 @@ export async function tryUpdateSlackMessage(
   }
 }
 
-export function cleanAgentReplyForSlack(text: string): {
-  text: string;
-  reactions: ReactionDirective[];
-  agentRequests: AgentRequestDirective[];
-} {
-  const extractedReactions = extractReactions(text);
-  const extractedRequests = extractAgentRequests(extractedReactions.text);
-  return {
-    text: extractPrivateContinuation(extractedRequests.text).text,
-    reactions: extractedReactions.reactions,
-    agentRequests: extractedRequests.requests,
-  };
-}
-
-export function slackSurfaceInstructions(kind: SlackConversationKind): string {
-  return kind === "dm" ? REACTION_INSTRUCTION : `${REACTION_INSTRUCTION}\n\n${AGENT_REQUEST_INSTRUCTION}`;
+export function cleanAgentReplyForSlack(text: string): { text: string; reactions: ReactionDirective[] } {
+  const extracted = extractReactions(text);
+  return { text: extractPrivateContinuation(extracted.text).text, reactions: extracted.reactions };
 }
 
 export function stripSlackDirectives(text: string): string {
-  return extractPrivateContinuation(stripAgentRequestDirectives(stripReactionDirectives(text))).text;
+  return extractPrivateContinuation(stripReactionDirectives(text)).text;
 }
 
 export async function applyAndLogReactions(

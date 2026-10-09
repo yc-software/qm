@@ -17,6 +17,7 @@ import {
 import { type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
+import type { AgentHandoffs } from "./agent-requests.ts";
 import {
   type ConversationSerializer,
   RECENT_HISTORY_LIMIT,
@@ -25,6 +26,7 @@ import {
 } from "./conversation-view.ts";
 
 export function createSurfaceContextFulfiller(deps: {
+  handoffs?: Pick<AgentHandoffs, "askFromRun">;
   rateLimitNotice?: SlackRateLimitNotice;
   core: SlackCoreClient;
   directory: Directory;
@@ -218,6 +220,10 @@ export function createSurfaceContextFulfiller(deps: {
         return await post({ messages: [] });
       }
       if (q.openGroup) return await post(await openGroupDm(client, q.openGroup.participants ?? []));
+      if (q.askAgent) {
+        if (!deps.handoffs) return await post({ error: "personal-agent handoffs aren't available here" });
+        return await post({ messages: [], ...(await deps.handoffs.askFromRun(client, q.askAgent)) });
+      }
       if (typeof q.searchAll === "string" && q.searchAll) {
         return fulfillLiveSearch(
           q.searchAll,

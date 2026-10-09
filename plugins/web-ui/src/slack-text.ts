@@ -68,23 +68,7 @@ export function slackWireToPlain(text: string): string {
 
 const REACTION_DIRECTIVE = /\[\[react:[^\]]*\]\]/gi;
 const TRAILING_OPEN_REACTION = /\[\[react:[^\]]*$/i;
-const AGENT_REQUEST_DIRECTIVE = /\[\[ask-agent:[^|\]]{0,400}\|[\s\S]*?\]\]/gi;
-const AGENT_REQUEST_OPENER = /\[\[ask-agent:/gi;
-
-function stripLeftoverAgentRequests(text: string): string {
-  let out = "";
-  let cursor = 0;
-  AGENT_REQUEST_OPENER.lastIndex = 0;
-  for (let m = AGENT_REQUEST_OPENER.exec(text); m; m = AGENT_REQUEST_OPENER.exec(text)) {
-    out += text.slice(cursor, m.index);
-    const close = text.indexOf("]]", m.index + m[0].length);
-    if (close < 0) return out;
-    cursor = close + 2;
-    AGENT_REQUEST_OPENER.lastIndex = cursor;
-  }
-  return out + text.slice(cursor);
-}
-const ANY_DIRECTIVE = /\[\[(?:react|ask-agent):/i;
+const ANY_DIRECTIVE = /\[\[react:/i;
 const CODE_REGION = /```[\s\S]*?```|`[^`\n]*`/g;
 const CODE_PLACEHOLDER = /\u0000CODE(\d+)\u0000/g;
 
@@ -92,9 +76,7 @@ export function stripSlackDirectives(text: string): string {
   if (!text || !ANY_DIRECTIVE.test(text)) return text;
   const code: string[] = [];
   const masked = text.replace(CODE_REGION, (m) => `\u0000CODE${code.push(m) - 1}\u0000`);
-  const stripped = stripLeftoverAgentRequests(
-    masked.replace(REACTION_DIRECTIVE, "").replace(TRAILING_OPEN_REACTION, "").replace(AGENT_REQUEST_DIRECTIVE, ""),
-  );
+  const stripped = masked.replace(REACTION_DIRECTIVE, "").replace(TRAILING_OPEN_REACTION, "");
   if (stripped === masked) return text;
   return stripped
     .replace(CODE_PLACEHOLDER, (_m, i: string) => code[Number(i)] ?? "")

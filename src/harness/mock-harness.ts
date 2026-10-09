@@ -379,12 +379,6 @@ export function createMockHarness(): Harness {
           reply = `wallclock:${turn.turnWallClockMs ?? 0}`;
         } else if (command0 === "!surfacename") {
           reply = `surface:${turn.surfaceName ?? "none"}`;
-        } else if (command0.startsWith("!askagent ")) {
-          const rest = command0.slice("!askagent ".length).trim();
-          const sp = rest.indexOf(" ");
-          const target = sp === -1 ? rest : rest.slice(0, sp);
-          const task = sp === -1 ? "help with this request" : rest.slice(sp + 1).trim();
-          reply = `I'll ask their personal agent.\n\n[[ask-agent: ${target} | ${task}]]`;
         } else if (command0.startsWith("!think ")) {
           await turn.emit({
             type: "thinking",

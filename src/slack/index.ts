@@ -364,7 +364,6 @@ export async function startSlackPlugin(
     directory,
     mirror,
     serializer,
-    approvals,
     ackEmoji,
     ackEmojiCandidates: ackEmojiOverride,
     ids,
@@ -425,6 +424,7 @@ export async function startSlackPlugin(
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({
+    handoffs: approvals.handoffs,
     historyLimit: cfg.historyLimit,
     rateLimitNotice,
     historyClient,

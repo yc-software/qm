@@ -181,14 +181,15 @@ the tokens, core simply runs without Slack.
   approval (`pending_approval`) or _finished with a reply but skipped_ the gated command
   (collect-mode `ok` + `pendingApprovals`, what the real Pi harness does) — in the latter case
   the buttons are posted alongside the reply. Clicking re-runs the turn with the command approved.
-- **Channel agents can ask personal agents.** If a channel task needs a member's personal setup
-  (their env, browser login, resident CLI, connected app, or private files), the channel agent can
-  ask that person's personal agent instead of pretending the shared context has the resource. The
+- **Channel agents can ask personal agents.** If a task in an Isolated internal channel needs a
+  member's personal setup (their env, browser login, resident CLI, connected app, or private files),
+  the channel agent calls `POST /v1/ask-agent`, which returns only once the request was sent. In Open
+  conversations the agent uses the requester's own access directly instead. The
   request appears in the original thread as `#channel agent → Name's personal agent`, and the target
   person gets a DM with **Run with my setup** / **Decline** buttons. If they approve, the plugin runs
   a normal DM-scoped turn as that user and posts the result back to the thread as
   `Name's personal agent → #channel agent`. The target must already be an internal participant in
-  the channel conversation. In `HARNESS=mock`, use `!askagent <@USERID> task` to test the full flow.
+  the channel conversation.
 - In an **externally-shared (Slack Connect) channel**, or any channel/mpim whose audience
   includes a **guest or external member**, it stays silent in-channel and replies privately
   (ephemeral) — and uploads no file there — internal-only (spec §9). Group DMs (mpim) aren't
@@ -264,7 +265,6 @@ your per-dev name + tokens live only in your local app and your gitignored `.env
 | channel `thread_ts` (root)                                                                                       | `threadRef` = `ch:<channel>:<root>` (one session per thread)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `TurnResult.reply`                                                                                               | posted in-thread; unprompted `refused` (`security_quarantine` included) → silent, addressed `refused` → requester-only (ephemeral in channels) except addressed `security_quarantine` → fixed in-thread acknowledgement; `pending_approval` (or `ok` + `pendingApprovals`, collect-mode) → Block Kit approval buttons                                                                                                                                                                                                                                                  |
 | Block Kit approval button (`block_actions`)                                                                      | `POST /v1/turns` with `approval` (`once` / `session` / `always` / deny)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `[[ask-agent: <@U…> \| task]]` in a channel reply                                                                | Slack strips the directive, DMs that user for consent, then runs `POST /v1/turns` as a DM-scoped personal-agent turn and posts the result back to the original thread                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Pending `/v1/surface-context` request (hanging long-poll, source-authed)                                         | The agent's mid-turn context pull: core resolved the target (current conversation via the capability's opaque destination, or a directory-resolved public channel) and parked the request; the plugin enforces visibility (public, bot-member, not externally shared — or the current conversation itself, even private), fetches history with `before` paging + `match` filtering, and POSTs the messages back (`buildContextWindow`). The default injected window is small (`MAX_RECENT_MESSAGES`, env `SLACK_RECENT_MESSAGES`); context beyond it is pull, not push |
 
 ## Notes / next

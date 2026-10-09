@@ -613,6 +613,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     recordResult(callId, summary, ret, isError, sourceScopeId, false, undefined, { provenance: "external", source });
 
   const EXECUTE_TIMEOUT_GUIDANCE =
+    "Commands may run under a POSIX sh such as dash, not bash: wrap bash-only syntax like ${var/a/b} or arrays in bash -c. " +
     `Each command has a wall-clock timeout (default ${execTimeoutSec}s, max ${execCeilingSec}s) — set \`timeout_seconds\` ` +
     "higher for builds/installs/tsc/test runs that legitimately take minutes, or lower for " +
     "commands you expect to be quick so a hang frees the machine fast. For work that " +

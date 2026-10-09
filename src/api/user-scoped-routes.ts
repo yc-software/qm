@@ -118,6 +118,7 @@ const USER_SCOPED: Rule[] = [
   pat("GET", "/v1/approvals/pending"),
   pat("GET", "/v1/directory/resolve"),
   pat("POST", "/v1/reach"),
+  pat("POST", "/v1/ask-agent"),
   pat("POST", "/v1/share"),
   pat("POST", "/v1/environments"),
   pat("POST", "/v1/environments/attach"),

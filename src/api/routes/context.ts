@@ -1,4 +1,4 @@
-import type { SurfaceContextQuery, SurfaceContextResult } from "../../types.ts";
+import { scopeId, type SurfaceContextQuery, type SurfaceContextResult } from "../../types.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { sendJson } from "../http.ts";
@@ -201,6 +201,62 @@ function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
   });
 }
 
+const SLACK_USER_ID = /^<?@?([UW][A-Z0-9]+)(?:\|[^>]*)?>?$/;
+
+async function askAgent(ctx: ApiCtx): Promise<void> {
+  const { res, app, deps, body, capability } = ctx;
+  if (!capability) {
+    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+  }
+  const b = isObj(body) ? body : {};
+  const targetUserId = typeof b.person === "string" ? SLACK_USER_ID.exec(b.person.trim())?.[1] : undefined;
+  const task = typeof b.task === "string" ? b.task.trim() : "";
+  if (!targetUserId || !task) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: 'person (their Slack id, e.g. "<@U123>") and task (what their personal agent should do) are required',
+    });
+  }
+  if (capability.surface !== "slack" || !capability.runId || capability.externalSlack) {
+    return sendJson(res, 409, {
+      error: "unavailable",
+      message: "asking a personal agent works only during a live turn in an internal Slack channel",
+    });
+  }
+  if (
+    (await deps.config?.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) ===
+    "open"
+  ) {
+    return sendJson(res, 409, {
+      error: "open_posture",
+      message:
+        "this conversation is Open for the person you're helping: do the work yourself with their own access instead of handing it off",
+    });
+  }
+  const request = await app.createContextRequest("slack", {
+    count: 1,
+    askAgent: { runId: capability.runId, targetUserId, task: task.slice(0, 4000) },
+  });
+  const outcome = await awaitContextOutcome(app, request.id, { waitMs: FULFILL_WAIT_MS, pollMs: FULFILL_POLL_MS });
+  if (outcome.status === "done" && outcome.result.handoff) {
+    return sendJson(res, 200, {
+      ok: true,
+      requestId: outcome.result.handoff.requestId,
+      message: `Sent the request to ${outcome.result.handoff.target} for approval and posted its status in this thread. Nothing has run yet; the result posts here only if they approve.`,
+    });
+  }
+  if (outcome.status === "timeout") {
+    return sendJson(res, 504, {
+      error: "timeout",
+      message: "Slack didn't confirm the request; it may not have been sent",
+    });
+  }
+  return sendJson(res, 409, {
+    error: "not_sent",
+    message: outcome.status === "failed" && outcome.error ? outcome.error : "the request was not sent",
+  });
+}
+
 async function listPendingContextRequests(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const source = url.searchParams.get("source") ?? "slack";
@@ -231,6 +287,11 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
       : undefined;
   const g = isObj(b.group) ? b.group : undefined;
   const group = g && typeof g.groupId === "string" && g.groupId ? { groupId: g.groupId } : undefined;
+  const h = isObj(b.handoff) ? b.handoff : undefined;
+  const handoff =
+    h && typeof h.requestId === "string" && typeof h.target === "string"
+      ? { requestId: h.requestId, target: h.target }
+      : undefined;
   const outcome =
     typeof b.error === "string"
       ? { error: b.error }
@@ -242,6 +303,7 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
             ...(typeof b.note === "string" ? { note: b.note } : {}),
             ...(file ? { file } : {}),
             ...(group ? { group } : {}),
+            ...(handoff ? { handoff } : {}),
           } satisfies SurfaceContextResult,
         };
   const ok = await app.fulfillContextRequest(id, outcome);
@@ -255,6 +317,7 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
 export const contextRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/surface-context", auth: "either", handle: createSurfaceContextRequest },
   { method: "POST", path: "/v1/surface-file", auth: "either", handle: createSurfaceFileRequest },
+  { method: "POST", path: "/v1/ask-agent", auth: "either", handle: askAgent },
   { method: "GET", path: "/v1/surface-context/pending", auth: "source", handle: listPendingContextRequests },
   { method: "POST", path: "/v1/surface-context/:id/result", auth: "source", handle: fulfillContextRequest },
 ];

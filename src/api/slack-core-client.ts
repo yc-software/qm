@@ -38,7 +38,7 @@ import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { MetricsSink } from "../admin/metrics-sink.ts";
-import type { RunStore } from "../runs/run-store.ts";
+import type { Run, RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
 import type { TaskStore, TaskStatus } from "../tasks/task-store.ts";
@@ -132,6 +132,7 @@ export interface SlackCoreClient {
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   putAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<void>;
   getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null>;
+  getAgentRequestRun(runId: string): Promise<Pick<Run, "request"> | null>;
   takeAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null>;
   agentRequestForApproval(approvalRequestId: string): Promise<SlackAgentRequestContext | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
@@ -509,6 +510,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     ...createAgentRequestStore(deps.agentRequests),
+    async getAgentRequestRun(runId) {
+      const run = await deps.runs.get(runId);
+      return run && !isTerminal(run.status) ? { request: run.request } : null;
+    },
 
     async pushDirectory(body) {
       if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
