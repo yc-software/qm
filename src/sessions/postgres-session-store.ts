@@ -225,17 +225,33 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     `(${col}.payload IS NULL OR ${col}.payload NOT LIKE '%"overheard":true%')`;
   const userTurn = (col: string): string => `${col}.type = 'user' AND ${notOverheard(col)}`;
   const lastActivityExpr = (col: string): string => `COALESCE(${col}.last_activity, ${col}.created_at)`;
+  const participantWindowBounds = (entry: string, participant: string) =>
+    [
+      [
+        `(${participant}.valid_from_seq IS NOT NULL AND ${entry}.seq >= ${participant}.valid_from_seq)`,
+        `(${participant}.valid_from_seq IS NULL AND ${entry}.created_at >= ${participant}.valid_from)`,
+      ],
+      [
+        `(${participant}.valid_to_seq IS NOT NULL AND ${entry}.seq < ${participant}.valid_to_seq)`,
+        `(${participant}.valid_to_seq IS NULL AND ${participant}.valid_to IS NOT NULL AND ${entry}.created_at < ${participant}.valid_to)`,
+        `(${participant}.valid_to_seq IS NULL AND ${participant}.valid_to IS NULL)`,
+      ],
+    ] as const;
   const withinParticipantWindow = (entry: string, participant: string): string =>
-    `(((${participant}.valid_from_seq IS NOT NULL AND ${entry}.seq >= ${participant}.valid_from_seq)
-       OR (${participant}.valid_from_seq IS NULL AND ${entry}.created_at >= ${participant}.valid_from))
-      AND ((${participant}.valid_to_seq IS NOT NULL AND ${entry}.seq < ${participant}.valid_to_seq)
-       OR (${participant}.valid_to_seq IS NULL AND (${participant}.valid_to IS NULL OR ${entry}.created_at < ${participant}.valid_to))))`;
+    participantWindowBounds(entry, participant)
+      .map((bounds) => `(${bounds.join(" OR ")})`)
+      .join(" AND ");
+  const [fromBounds, toBounds] = participantWindowBounds("x", "p");
+  const participantPresenceSql = fromBounds
+    .flatMap((from) =>
+      toBounds.map((to) => `SELECT 1 FROM session_entries x WHERE x.session_id = s.id AND ${from} AND ${to}`),
+    )
+    .join(" UNION ALL ");
   const participantSessionsSql = (extraWhere: string): string =>
     `SELECT s.*, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
             COALESCE((SELECT MAX(e.created_at) FROM session_entries e
                        WHERE e.session_id = s.id AND e.type = 'user'), s.created_at) AS user_last_activity,
-            EXISTS (SELECT 1 FROM session_entries x WHERE x.session_id = s.id
-                      AND ${withinParticipantWindow("x", "p")}) AS has_entries
+            EXISTS (${participantPresenceSql}) AS has_entries
        FROM sessions s
        JOIN participants p ON p.session_id = s.id
       WHERE p.principal_id = $1${extraWhere}`;

@@ -75,6 +75,76 @@ test("pg session store: getForParticipant returns exactly the row listByParticip
   await assertParticipantSessionParity(createPostgresSessionStore(URL!), `pg-parity-${randomUUID()}`);
 });
 
+test("pg participant presence checks seek into the visible history window", { skip }, async (t) => {
+  const store = createPostgresSessionStore(URL!);
+  const owner = `window-${randomUUID()}`;
+  const session = await store.getOrCreateByThread(owner, "channel", scopeId("channel", owner));
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  try {
+    await raw.query(
+      `INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at)
+       SELECT $1, n, NULL, 'user', '{"text":"window fixture"}', $2, n * 10
+         FROM generate_series(0, 3999) n`,
+      [session.id, session.scopeId],
+    );
+    await store.addParticipant(session.id, owner);
+    const captured: { text: string; values: unknown[] }[] = [];
+    const execute = pg.Client.prototype.query;
+    t.mock.method(pg.Client.prototype, "query", function (this: InstanceType<typeof pg.Client>, ...args: unknown[]) {
+      const config = args[0] as { text?: string; values?: unknown[] } | string;
+      const text = typeof config === "string" ? config : config.text;
+      if (text?.includes("AS has_entries")) {
+        captured.push({ text, values: typeof config === "string" ? (args[1] as unknown[]) : (config.values ?? []) });
+      }
+      return Reflect.apply(execute, this, args);
+    });
+    await store.listByParticipant(owner);
+    await store.getForParticipant(session.id, owner);
+    t.mock.restoreAll();
+    assert.equal(captured.length, 2);
+
+    const windows = [
+      { fromSeq: 4000, toSeq: null, from: 0, to: null, visible: [] },
+      { fromSeq: 0, toSeq: 1, from: 40000, to: 40000, visible: [0] },
+      { fromSeq: null, toSeq: null, from: 40000, to: null, visible: [] },
+      { fromSeq: null, toSeq: null, from: 0, to: 10, visible: [0] },
+      { fromSeq: 3998, toSeq: null, from: 40000, to: 39990, visible: [3998] },
+      { fromSeq: null, toSeq: 2, from: 10, to: 0, visible: [1] },
+      { fromSeq: 2, toSeq: 2, from: 0, to: null, visible: [] },
+    ];
+    type Plan = { "Relation Name"?: string; "Rows Removed by Filter"?: number; Plans?: Plan[] };
+    const rejectedEntries = (plan: Plan): number =>
+      (plan["Relation Name"] === "session_entries" ? (plan["Rows Removed by Filter"] ?? 0) : 0) +
+      (plan.Plans ?? []).reduce((sum, child) => sum + rejectedEntries(child), 0);
+    for (const window of windows) {
+      await raw.query(
+        `UPDATE participants SET valid_from_seq=$3, valid_to_seq=$4, valid_from=$5, valid_to=$6
+          WHERE session_id=$1 AND principal_id=$2`,
+        [session.id, owner, window.fromSeq, window.toSeq, window.from, window.to],
+      );
+      assert.deepEqual(
+        (await store.visibleEntries(session.id, owner)).map((entry) => entry.seq),
+        window.visible,
+      );
+      assert.equal((await store.listByParticipant(owner))[0]!.hasEntries, window.visible.length > 0);
+      assert.equal((await store.getForParticipant(session.id, owner))!.hasEntries, window.visible.length > 0);
+      if (window.fromSeq === null ? window.toSeq !== null : window.toSeq === null && window.to !== null) continue;
+      for (const query of captured) {
+        const result = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query.text}`, query.values);
+        const rejected = rejectedEntries(result.rows[0]["QUERY PLAN"][0].Plan);
+        assert.ok(
+          rejected < 32,
+          `presence check rejected ${rejected} historical entries for ${JSON.stringify(window)}`,
+        );
+      }
+    }
+  } finally {
+    t.mock.restoreAll();
+    await raw.end();
+  }
+});
+
 test("pg participant activity uses the latest user entry, including overheard entries", { skip }, async () => {
   let at = 1_000;
   const store = createPostgresSessionStore(URL!, { now: () => at });
