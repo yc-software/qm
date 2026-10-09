@@ -2,10 +2,7 @@ import { html, nothing, render } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import { EMOJI_ROWS, type EmojiRow } from "./emoji-data";
-import { filterEmoji } from "./emoji-picker";
-
-const normalize = (name: string): string => name.toLowerCase().replaceAll("-", "_");
-const names = new Map(EMOJI_ROWS.flatMap((row) => [row.n, ...(row.a ?? [])].map((name) => [normalize(name), row])));
+import { filterEmoji, rowForName } from "./emoji-picker";
 
 export function emojiToken(
   value: string,
@@ -30,15 +27,16 @@ class EmojiCompletion extends AsyncDirective {
   private active = 0;
   private id = `emoji-${crypto.randomUUID()}`;
 
-  render() {
+  render(_value: string) {
     return nothing;
   }
 
-  override update(part: ElementPart) {
+  override update(part: ElementPart, [value]: [string]) {
     if (!this.input) {
       this.input = part.element as HTMLTextAreaElement;
       this.listen();
     }
+    if (this.token && value !== this.input.value) this.close();
     return nothing;
   }
 
@@ -68,30 +66,49 @@ class EmojiCompletion extends AsyncDirective {
     this.token = emojiToken(this.input.value, this.input.selectionStart);
     if (!this.token) return;
     if (this.token.complete) {
-      const row = names.get(normalize(this.token.query));
-      if (row && (event as InputEvent).inputType === "insertText") this.insert(row, false);
+      const row = rowForName(this.token.query);
+      if (row && (event as InputEvent).inputType === "insertText") {
+        const value = this.input.value;
+        const caret = this.input.selectionStart;
+        setTimeout(() => {
+          if (this.isConnected && this.input.value === value && this.input.selectionStart === caret) this.insert(row);
+        });
+      }
       return;
     }
     if (this.token.query.length < 2) return;
-    const query = normalize(this.token.query);
+    const query = this.token.query;
     this.matches = filterEmoji(EMOJI_ROWS, query).slice(0, 8);
-    const exact = names.get(query);
+    const exact = rowForName(query);
     if (exact) this.matches = [exact, ...this.matches.filter((row) => row !== exact)].slice(0, 8);
     this.active = 0;
     if (this.matches.length) this.draw();
   };
 
-  private insert(row: EmojiRow, notify = true) {
-    const token = this.token;
-    if (!token) return;
+  private insert(row: EmojiRow) {
+    if (!this.current()) return;
+    const token = this.token!;
     this.close();
     this.input.setSelectionRange(token.start, token.end);
     if (this.input.ownerDocument.execCommand?.("insertText", false, row.c)) return;
     this.input.setRangeText(row.c, token.start, token.end, "end");
-    if (notify)
-      this.input.dispatchEvent(
-        new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: row.c }),
-      );
+    this.input.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: row.c }),
+    );
+  }
+
+  private current(): boolean {
+    const token = this.token;
+    if (!token) return false;
+    if (
+      this.input.selectionStart !== token.end ||
+      this.input.selectionEnd !== token.end ||
+      this.input.value.slice(token.start, token.end) !== `:${token.query}${token.complete ? ":" : ""}`
+    ) {
+      this.close();
+      return false;
+    }
+    return true;
   }
 
   private draw() {
@@ -127,7 +144,11 @@ class EmojiCompletion extends AsyncDirective {
   }
 
   private onKeydown = (event: KeyboardEvent) => {
-    if (event.isComposing || event.keyCode === 229 || !this.popup) return;
+    if (event.isComposing || event.keyCode === 229 || !this.popup || !this.current()) return;
+    if (event.ctrlKey || event.metaKey) {
+      this.close();
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopImmediatePropagation();

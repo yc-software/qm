@@ -659,7 +659,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             : html`
                 <textarea
                   class="composer-input"
-                  ${emojiCompletion()}
+                  ${emojiCompletion(composerState.draft)}
                   dir="auto"
                   rows="1"
                   placeholder=${placeholder}
@@ -844,7 +844,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             ? html` <div class="queued-chip queued-editing" role="listitem">
                 <textarea
                   class="queued-edit-input"
-                  ${emojiCompletion()}
+                  ${emojiCompletion(queuedEdit.text)}
                   aria-label="Edit queued message"
                   rows="3"
                   .value=${live(queuedEdit.text)}

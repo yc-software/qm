@@ -35,7 +35,7 @@ import type { ComposerSubmission } from "./composer";
 import { api, ApiError, putUiState } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
 import { createInboxEventCoalescer } from "./inbox-coalesce";
-import { charForName, ensureEmojiIndex } from "./emoji-picker";
+import { charForName } from "./emoji-picker";
 import type { DensityTier } from "./density";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { appState, can } from "./shell-state";
@@ -310,7 +310,6 @@ let emojiIndexRequested = false;
 function ensureEmojiChips(): void {
   if (emojiIndexRequested) return;
   emojiIndexRequested = true;
-  void ensureEmojiIndex().then(() => drawAll());
 }
 
 interface InboxSurface {
