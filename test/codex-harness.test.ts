@@ -2202,3 +2202,95 @@ test("Codex skips the stopped reply when shutdown cancels the turn, leaving it o
   );
   assert.equal(turnAtSeq(entries, entries[0]!.seq)?.answer, undefined);
 });
+
+function twoChatCodexBinary(dir: string): string {
+  const path = join(dir, "two-chat-codex");
+  writeFileSync(
+    path,
+    `#!/usr/bin/env node
+const readline = require("node:readline");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+let starts = 0;
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: ++starts === 1 ? "a" : "b" } } });
+  if (msg.method !== "turn/start") return msg.id === undefined ? undefined : send({ id: msg.id, result: {} });
+  const threadId = msg.params.threadId;
+  send({ id: msg.id, result: { turn: { id: threadId, status: "inProgress", items: [] } } });
+  const collab = (tool, status, receiverThreadIds, agentsStates) => ({ type: "collabAgentToolCall", id: tool, tool, status, receiverThreadIds, prompt: "child", agentsStates });
+  if (threadId === "a") {
+    send({ method: "item/started", params: { threadId, item: collab("spawnAgent", "inProgress", [], {}) } });
+    send({ method: "item/completed", params: { threadId, item: collab("spawnAgent", "completed", ["a-child"], { "a-child": { status: "running" } }) } });
+    send({ method: "item/completed", params: { threadId: "a-child", item: { type: "agentMessage", id: "c", text: "CHILD", phase: "final_answer" } } });
+    send({ method: "item/completed", params: { threadId, item: collab("wait", "completed", ["a-child"], { "a-child": { status: "completed", message: "CHILD" } }) } });
+  }
+  const text = threadId.toUpperCase() + "-OK";
+  send({ method: "item/completed", params: { threadId, item: { type: "agentMessage", id: "m", text, phase: "final_answer" } } });
+  send({ method: "turn/completed", params: { threadId, turn: { id: threadId, status: "completed", items: [] } } });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+for (const holdChild of [false, true])
+  test(
+    `a stuck ${holdChild ? "subagent" : "parent"} transcript write in one Codex chat does not block another chat`,
+    { timeout: 5000 },
+    async (t) => {
+      const dir = mkdtempSync(join(tmpdir(), "qm-codex-isolation-"));
+      const tasks = createMemoryTaskStore();
+      const create = tasks.create.bind(tasks);
+      tasks.create = async (task) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return create(task);
+      };
+      const harness = createCodexHarness({ binaryPath: twoChatCodexBinary(dir), env: testHarnessEnv(dir), tasks });
+      const release = Promise.withResolvers<void>();
+      const held = Promise.withResolvers<void>();
+      t.after(async () => {
+        release.resolve();
+        await harness.turns.close?.();
+        rmSync(dir, { recursive: true, force: true });
+      });
+      const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+      const events: string[] = [];
+      const makeTurn = (id: string): HarnessTurnInput => ({
+        session: { id } as Session,
+        input: id,
+        systemPrompt: "be concise",
+        history: [],
+        tools: {} as HarnessTurnInput["tools"],
+        scopeLabel: scope,
+        orgScopeId: scope,
+        emit: async (entry) => {
+          events.push(`${id}:${entry.type}`);
+          return { ...entry, sessionId: id, seq: 1, createdAt: Date.now() } as SessionEntry;
+        },
+        tape: async (row) => {
+          const text = String((row.payload as { text?: unknown }).text);
+          events.push(`${id}:tape:${text}`);
+          if (text === (holdChild ? "CHILD" : "A-OK")) {
+            held.resolve();
+            await release.promise;
+          }
+        },
+        recordModelCall: () => {},
+      });
+      const first = harness.turns.runTurn(makeTurn("a"));
+      await held.promise;
+      const timeout = new Promise((resolve) => setTimeout(resolve, 2_000, { reply: "blocked" }));
+      assert.equal(
+        ((await Promise.race([harness.turns.runTurn(makeTurn("b")), timeout])) as { reply: string }).reply,
+        "B-OK",
+      );
+      release.resolve();
+      assert.match((await first).reply, /A-OK/);
+      assert.deepEqual(
+        events.filter((event) => ["a:tool_call", "a:tape:CHILD", "a:tape:A-OK", "a:assistant"].includes(event)),
+        ["a:tool_call", "a:tape:CHILD", "a:tape:A-OK", "a:assistant"],
+      );
+    },
+  );

@@ -52,6 +52,7 @@ export interface CodexAppServerOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   onNotification(method: string, params: unknown): void | Promise<void>;
+  notificationQueue?(method: string, params: unknown): string;
   onRequest(method: string, params: unknown): Promise<unknown>;
 }
 
@@ -66,7 +67,7 @@ export class CodexAppServer {
   private readonly cancelledRequestIds = new Set<JsonRpcId>();
   private writeTail = Promise.resolve();
   private eventTail = Promise.resolve();
-  private notificationTail = Promise.resolve();
+  private readonly notificationTails = new Map<string, Promise<void>>();
   private stderr = "";
   private closed = false;
   private closeError: Error | null = null;
@@ -232,9 +233,14 @@ export class CodexAppServer {
     if (!message.method) return;
     const method = message.method;
     if (message.id === undefined) {
-      this.notificationTail = this.notificationTail
+      const queue = this.options.notificationQueue?.(method, message.params) ?? "";
+      const tail = (this.notificationTails.get(queue) ?? Promise.resolve())
         .then(() => this.options.onNotification(method, message.params))
         .catch((error) => this.failTransport(error));
+      this.notificationTails.set(queue, tail);
+      void tail.then(() => {
+        if (this.notificationTails.get(queue) === tail) this.notificationTails.delete(queue);
+      });
       return;
     }
     void this.respond(message.id, method, message.params).catch((error) => this.failTransport(error));

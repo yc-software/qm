@@ -278,3 +278,46 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   assert.deepEqual(await parentCompleted.promise, { started: true });
   assert.deepEqual(notifications, ["child/started", "parent/completed"]);
 });
+
+test("a held notification only queues later notifications for the same chat", { timeout: 3000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-notification-chats-"));
+  const binary = join(dir, "codex");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
+require("node:readline").createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  for (const [threadId, n] of [["a", 1], ["b", 1], ["a", 2], ["b", 2]]) send({ method: "event", params: { threadId, n } });
+  send({ id: message.id, result: "ok" });
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  const release = Promise.withResolvers<void>();
+  const delivered = Promise.withResolvers<void>();
+  const seen: string[] = [];
+  const server = new CodexAppServer({
+    binaryPath: binary,
+    cwd: dir,
+    notificationQueue: (_method, params) => (params as { threadId: string }).threadId,
+    onNotification: async (_method, params) => {
+      const { threadId, n } = params as { threadId: string; n: number };
+      seen.push(`${threadId}${n}`);
+      if (threadId === "a" && n === 1) await release.promise;
+      if (threadId === "b" && n === 2) delivered.resolve();
+    },
+    onRequest: async () => ({}),
+  });
+  t.after(async () => {
+    release.resolve();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(await server.request("go", {}, AbortSignal.timeout(1000)), "ok");
+  await delivered.promise;
+  assert.deepEqual(seen, ["a1", "b1", "b2"]);
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen, ["a1", "b1", "b2", "a2"]);
+});
