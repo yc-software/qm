@@ -39,6 +39,12 @@ async function rig() {
   const opened = await forTurn(parent).open({ task: "dig in", name: "Digger" });
   assert.ok(opened.ok);
   const child = (await sessions.get(opened.sessionId))!;
+  const { run } = await runs.enqueue({
+    sessionId: parent.threadRef,
+    request: { actor, conversation, origin: { kind: "direct" }, text: "dig in" } as OrchestratorInput,
+  });
+  const claimed = await runs.claimById(run.id, "worker", 30_000);
+  await runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "on it" });
   return { sessions, runs, mailbox, deliveries, parent, child: forTurn(child), childId: child.id };
 }
 

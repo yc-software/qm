@@ -40,6 +40,19 @@ function classify(d: Delivery): Disposition {
   return "settle";
 }
 
+function systemNote(d: Delivery): Record<string, unknown> | undefined {
+  const note = d.destination.webTranscript;
+  if (note?.kind === "turn_failure")
+    return {
+      kind: "turn_failure",
+      message: d.text,
+      deliveryKey: d.idempotencyKey,
+      ...(note.runId ? { runId: note.runId } : {}),
+    };
+  if (note?.kind === "subagent_update") return { ...note, text: d.text, deliveryKey: d.idempotencyKey };
+  return undefined;
+}
+
 export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebTranscriptSessions): DeliveryStore {
   const recorded = new Set<string>();
   const remember = (key: string): void => {
@@ -60,31 +73,18 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
       const scopeLabel = session.scopeId;
       const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
       const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
-      const update = note?.kind === "subagent_update" ? note : undefined;
-      const entry = failure
-        ? {
-            type: "system" as const,
-            payload: {
-              kind: "turn_failure",
-              message: d.text,
-              deliveryKey: d.idempotencyKey,
-              ...(failure.runId ? { runId: failure.runId } : {}),
-            },
-          }
-        : update
-          ? {
-              type: "system" as const,
-              payload: { ...update, text: d.text, deliveryKey: d.idempotencyKey },
-            }
-          : {
-              type: "assistant" as const,
-              payload: { text: d.text, deliveryKey: d.idempotencyKey, ...(via ? { via } : {}) },
-            };
+      const system = systemNote(d);
+      const entry = system
+        ? { type: "system" as const, payload: system }
+        : {
+            type: "assistant" as const,
+            payload: { text: d.text, deliveryKey: d.idempotencyKey, ...(via ? { via } : {}) },
+          };
       await appendEntryOutsideTurn(
         sessions,
         lease,
         { ...entry, scopeLabel },
-        failure || update
+        system
           ? undefined
           : (appended) =>
               messageTag(
