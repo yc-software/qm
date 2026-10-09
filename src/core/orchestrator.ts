@@ -59,8 +59,6 @@ import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monit
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
 import { credentialHandle, renderKeychainManifest, type PublicServiceCredential } from "../credentials/keychain.ts";
-import { deviceFlowCredOwner, registerLoginPaths } from "../credentials/device-flow-persist.ts";
-import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { DeviceFlowCutoverMode } from "../credentials/device-flow-cutover.ts";
 import {
   configuredConnectorProviders,
@@ -1488,7 +1486,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         cutoverModes.set(service, policy?.mode ?? "legacy");
       }
       const cutoverModeOf = (service: string): DeviceFlowCutoverMode => cutoverModes.get(service) ?? "legacy";
-      const quarantinedServices = credentialServices.filter((service) => cutoverModeOf(service) === "ephemeral_only");
       const credentialCutoverServices = credentialServices.filter((service) => cutoverModeOf(service) !== "legacy");
       const openSpeakerKeychain =
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
@@ -2062,10 +2059,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scratchBox,
         ownerAuthBox,
         ownerAuthCommand,
-        captureLogins,
-        prepareCredentialExecution,
-        captureSnapshot,
-        completeCapture,
         scopedCommand,
         provision,
         provisionScratch,
@@ -2091,20 +2084,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        isolateOwnerKeychain,
         openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
         openResourceAccess:
           !external &&
           (liveAuthorTurn || (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true)),
         ownerAuthAvailable,
-        credentialTools,
-        credentialServices,
         credentialCutoverServices,
-        quarantinedServices,
-        cutoverModeOf,
         visibleSkillsForTurn,
         emitGapWork,
-        perf,
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
@@ -2616,10 +2603,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? createBackgroundBroker({
                 sandbox: deps.sandbox,
                 registry: deps.processes,
-                credentialExecutionLock: deps.advisoryLock,
-                prepareStart: prepareCredentialExecution,
-                captureSnapshot,
-                completed: completeCapture,
                 provisionSandbox: provisionResource,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
@@ -2836,9 +2819,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           auditLog: deps.auditLog,
           createdBy: actor.id,
           commandCredentials,
-          credentialExecutionLock: deps.advisoryLock,
-          prepareCredentialExecution,
-          captureExecutionLogins: captureLogins,
           resolveCommandCredentials: async (handles) => {
             const refreshed = new Map<string, CommandCredential>();
             const identities = new Map<string, string>();
@@ -2887,27 +2867,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
-          ...(external || strictReadOnly || !deps.keychain
-            ? {}
-            : {
-                registerLogin: async (service: string, paths: readonly CredentialPathSpec[]) =>
-                  registerLoginPaths({
-                    sandbox: deps.sandbox,
-                    handle: await provision(),
-                    keychain: deps.keychain!,
-                    ownerId: deviceFlowCredOwner(memoryScopeId, actor.id),
-                    service,
-                    paths: [...paths],
-                    onAnomaly: (svc, detail) =>
-                      deps.errors?.record({
-                        category: "keychain",
-                        code: "device_flow_capture_skipped",
-                        message: `register_login ${svc}: ${detail}`,
-                        scopeLabel: scopeId,
-                        sessionId: session.id,
-                      }),
-                  }),
-              }),
           memory: context.memory,
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedRecords: captureDependencies() }),
           memoryScopeId,
@@ -4383,7 +4342,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const tail = async (): Promise<void> => {
           try {
-            await captureLogins();
             if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
               await generateAndStoreTitle(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
             }

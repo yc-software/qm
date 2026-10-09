@@ -11,7 +11,6 @@ import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
-import type { CredentialPathSpec } from "./resident-paths.ts";
 import { envKey } from "./connector-token.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
@@ -103,7 +102,6 @@ export interface KeychainCredential {
   envKey?: string;
   target?: string;
   targets?: string[];
-  capturePaths?: CredentialPathSpec[];
   host?: string;
   accountLabel?: string;
   fields?: CredentialFieldMeta[];
@@ -310,10 +308,7 @@ interface SaveCredentialInput {
   files?: CredentialFile[];
   host?: string;
   accountLabel?: string;
-  capturePaths?: CredentialPathSpec[];
   origin?: string;
-  expectedOrigin?: string;
-  expectedFingerprint?: string | null;
   expiresAt?: number;
 }
 
@@ -376,8 +371,6 @@ interface MaterializedFileCred {
 
 export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
 
-export const DEVICE_FLOW_ORIGIN = "device-flow-auto-capture";
-
 export class KeychainError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -398,12 +391,6 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
-  setCapturePaths(
-    ownerId: string,
-    service: string,
-    capturePaths: CredentialPathSpec[],
-    expectedOrigin: string,
-  ): Promise<boolean>;
   listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
   /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
@@ -457,7 +444,7 @@ export function credentialHandle(credentialId: string): string {
   return `kc_${credentialId.slice(0, 12)}`;
 }
 
-export function fileCredentialFingerprint(files: CredentialFile[]): string {
+function fileCredentialFingerprint(files: CredentialFile[]): string {
   return fingerprintOf(JSON.stringify(files.map((f) => ({ ...f, path: homeRelativePath(f.path) }))));
 }
 
@@ -906,7 +893,6 @@ export function createKeychain(deps: {
     const ownerId = canonicalPerson(input.ownerId);
     const id = credId(ownerId, service, slot);
     const buildRec = (prior?: KeychainCredential | null): KeychainCredential => {
-      const carriedCapturePaths = input.capturePaths ?? prior?.capturePaths;
       return {
         id,
         ownerId,
@@ -916,7 +902,6 @@ export function createKeychain(deps: {
         ...(envKey ? { envKey } : {}),
         ...(fieldsMeta ? { fields: fieldsMeta } : {}),
         ...(targets ? { targets } : {}),
-        ...(carriedCapturePaths ? { capturePaths: carriedCapturePaths } : {}),
         ...(input.host ? { host: input.host } : {}),
         ...(input.accountLabel ? { accountLabel: input.accountLabel } : {}),
         secretEnc: encryptSecret(secret, deps.key),
@@ -927,57 +912,9 @@ export function createKeychain(deps: {
         updatedAt: t,
       };
     };
-    if (input.expectedFingerprint !== undefined) {
-      if (!deps.creds.update || !deps.creds.insertIfAbsent)
-        throw new Error("credential store does not support atomic capture saves");
-      if (input.expectedFingerprint === null) {
-        const fresh = buildRec();
-        if (await deps.creds.insertIfAbsent(id, fresh)) return toMeta(fresh);
-        throw new KeychainError(409, "Credential was created during login");
-      }
-      const updated = await deps.creds.update(id, (prior) => {
-        if (prior.fingerprint !== input.expectedFingerprint || prior.kind !== "file")
-          throw new KeychainError(409, "Credential changed during login");
-        const merged = new Map(decryptToFiles(prior).files.map((file) => [file.path, file]));
-        for (const file of files ?? []) merged.set(file.path, file);
-        const refreshed = [...merged.values()].sort((a, b) => a.path.localeCompare(b.path));
-        const encoded = JSON.stringify(refreshed);
-        return {
-          ...prior,
-          targets: refreshed.map((file) => file.path),
-          secretEnc: encryptSecret(encoded, deps.key),
-          fingerprint: fingerprintOf(encoded),
-          updatedAt: t,
-        };
-      });
-      if (!updated) throw new KeychainError(410, "Credential was removed during login");
-      return toMeta(updated);
-    }
-    const expectedOrigin =
-      input.expectedOrigin ?? (input.origin === DEVICE_FLOW_ORIGIN ? DEVICE_FLOW_ORIGIN : undefined);
-    if (expectedOrigin === undefined) {
-      const prior = await deps.creds.get(id);
-      const rec = buildRec(prior);
-      await deps.creds.put(id, rec);
-      return toMeta(rec);
-    }
-    if (!deps.creds.update || !deps.creds.insertIfAbsent)
-      throw new Error("credential store does not support atomic origin-guarded saves");
-    const guarded = (prior: KeychainCredential): KeychainCredential => {
-      if (prior.origin !== expectedOrigin)
-        throw new KeychainError(
-          409,
-          `a ${prior.origin ?? "manually saved"} credential for ${service} already exists — not overwritten`,
-        );
-      return buildRec(prior);
-    };
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const updated = await deps.creds.update(id, guarded);
-      if (updated) return toMeta(updated);
-      const fresh = buildRec();
-      if (await deps.creds.insertIfAbsent(id, fresh)) return toMeta(fresh);
-    }
-    throw new KeychainError(503, `credential for ${service} is being written concurrently — retry`);
+    const rec = buildRec(await deps.creds.get(id));
+    await deps.creds.put(id, rec);
+    return toMeta(rec);
   }
 
   async function materializeConnectorEnv(
@@ -1208,17 +1145,6 @@ export function createKeychain(deps: {
         (c) => !c.managed && c.kind !== "broker",
         toMeta,
       );
-    },
-
-    async setCapturePaths(ownerId, service, capturePaths, expectedOrigin) {
-      const id = credId(ownerId, service, "file");
-      if (!deps.creds.update) throw new Error("credential store does not support atomic capture-path updates");
-      const updated = await deps.creds.update(id, (rec) => {
-        if (rec.origin !== expectedOrigin)
-          throw new KeychainError(409, `credential for ${service} was not created by a login capture — not updated`);
-        return { ...rec, capturePaths, updatedAt: now() };
-      });
-      return updated !== null;
     },
 
     async getCredential(id) {
@@ -1760,8 +1686,8 @@ export interface KeychainManifestInput {
 
 const SAVE_HINT =
   "Saving logins (the owner's own DM only). ALWAYS save a token-style login to the keychain right after it succeeds — " +
-  "device-flow file logins (gh, glab, gcloud, aws, ~/.netrc) are captured automatically, but other logins on this " +
-  "computer alone are not durable, and only keychain entries can be granted to other conversations. " +
+  "save device-flow and other CLI file logins with the `interactive-login` skill. Logins left on this computer are " +
+  "not durable, and only keychain entries can be granted to other conversations. " +
   'Token-style: `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" ' +
   CAPABILITY_CURL_AUTH +
   ' -H \'content-type: application/json\' -d \'{"service":"github","secret":"<token>","envKey":"GITHUB_TOKEN","accountLabel":"<who the service says they are>","expiresAt":<ms epoch, if the service reports one>}\'` — ' +

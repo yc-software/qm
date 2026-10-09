@@ -1,7 +1,6 @@
 import { posix } from "node:path";
 import { shq } from "../util/shell.ts";
 import { pathUnder } from "../util/paths.ts";
-import { homeRelativePath } from "./paths.ts";
 import {
   BASE_EPHEMERAL_CRED_LINKS,
   DISPLACED_DIR_REL,
@@ -11,7 +10,6 @@ import {
 
 export {
   BASE_EPHEMERAL_CRED_LINKS,
-  CREDENTIAL_PATH_RE,
   DISPLACED_DIR_REL,
   builtInCredentialPaths,
   type CredentialPathSpec,
@@ -37,30 +35,6 @@ export function credentialServiceForPath(path: string): string | undefined {
   if (normalized.startsWith(".config/")) return normalized.split("/")[1] || undefined;
   const first = normalized.split("/")[0] ?? "";
   return first.startsWith(".") && first.length > 1 ? first.slice(1) : undefined;
-}
-
-export function captureRootForTarget(target: string): CredentialPathSpec | undefined {
-  let normalized: string;
-  try {
-    normalized = homeRelativePath(target);
-  } catch {
-    return undefined;
-  }
-  if (!credentialServiceForPath(normalized)) return undefined;
-  const segments = normalized.split("/");
-  if (normalized.startsWith(".config/") && segments.length > 2)
-    return { path: `.config/${segments[1]}`, kind: "directory" };
-  return { path: normalized, kind: "file" };
-}
-
-export function configCredentialDirs(): string[] {
-  return BASE_EPHEMERAL_CRED_LINKS.filter((l) => l.rel.startsWith(".config/")).map((l) => l.rel);
-}
-
-const SERVICE_ALIASES: Readonly<Record<string, readonly string[]>> = { glab: ["glab-cli"] };
-
-export function expandServiceAliases(services: readonly string[]): string[] {
-  return [...new Set(services.flatMap((s) => [s, ...(SERVICE_ALIASES[s] ?? [])]))];
 }
 
 export function displacedPruneGlobs(): string[] {

@@ -93,7 +93,7 @@ for (const b of backends()) {
   });
 }
 
-const PG_URL = process.env.DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+const PG_URL = process.env.TEST_DATABASE_URL;
 test("[postgres] honors the registry contract (durable across a restart)", { skip: !PG_URL }, async () => {
   const reg = createPostgresProcessRegistry(PG_URL!);
   const scope = `pg-test-${Date.now()}`;
@@ -104,7 +104,6 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
       kind: "dev-server",
       command: "npm run dev",
       purpose: "Preview app server",
-      credentialCapture: { ownerId: "U1", fingerprints: { aws: "version-before-login" } },
       ttlMs: 60_000,
     });
     assert.equal(rec.status, "running");
@@ -116,9 +115,6 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
     assert.equal(live[0]!.processId, id(1));
     assert.equal(typeof live[0]!.expiresAt, "number");
     assert.equal(live[0]!.purpose, "Preview app server");
-    assert.deepEqual(live[0]!.credentialCapture, { ownerId: "U1", fingerprints: { aws: "version-before-login" } });
-    await reg2.finishCredentialCapture(id(1));
-    assert.equal((await reg.get(id(1)))?.credentialCapture, undefined);
 
     await reg2.register({ processId: id(2), scopeId: scope, kind: "build", command: "y", ttlMs: -1 });
     assert.equal(
@@ -152,23 +148,4 @@ test("registry preserves purpose without replacing the command and accepts legac
     assert.equal((await registry.get(row.processId))?.purpose, purpose);
     assert.equal((await registry.get(row.processId))?.command, "bg: node server.js");
   }
-});
-
-test("credential captures are selected by sandbox across initiating scopes", async () => {
-  const registry = createMemoryProcessRegistry();
-  const snapshot = { ownerId: "owner", fingerprints: {} };
-  await registry.register({
-    processId: "cross-scope",
-    sandboxId: "selected",
-    scopeId: "channel:source",
-    kind: "background",
-    command: "login",
-    ttlMs: 1,
-    credentialCapture: snapshot,
-  });
-  await registry.markStatus("cross-scope", "exited");
-  assert.equal((await registry.listCredentialCaptures("selected", "personal:owner"))[0]?.processId, "cross-scope");
-  assert.equal((await registry.listCredentialCaptures("other", "channel:source")).length, 0);
-  await registry.finishCredentialCapture("cross-scope");
-  assert.equal((await registry.listCredentialCaptures("selected", "personal:owner")).length, 0);
 });

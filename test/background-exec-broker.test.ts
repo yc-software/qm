@@ -504,31 +504,3 @@ test("start requires a purpose before launching, and persists a trimmed, redacte
   assert.equal(starts.length, 1, "labels must not alter command-based reattachment");
   assert.equal((await registry.get(result.processId))?.purpose, row?.purpose);
 });
-
-test("background login capture survives broker reconstruction and completes only once", async () => {
-  const fake = fakeSandbox();
-  const registry = createMemoryProcessRegistry();
-  const snapshot = { ownerId: "owner", fingerprints: { aws: "original-version" } };
-  let captures = 0;
-  const deps = {
-    sandbox: fake.sandbox,
-    registry,
-    scopeId: SCOPE,
-    pollMs: 1,
-    captureSnapshot: async () => snapshot,
-    completed: async (_handle: SandboxHandle, captured: { ownerId: string; fingerprints: Record<string, string> }) => {
-      assert.deepEqual(captured, snapshot);
-      captures++;
-    },
-  };
-  const started = await createBackgroundBroker(deps).start(handle, "aws sso login", "login");
-  assert.deepEqual((await registry.get(started.processId))?.credentialCapture, snapshot);
-  assert.equal(captures, 0);
-  fake.finish(started.processId);
-  const resumed = createBackgroundBroker(deps);
-  await resumed.poll(handle, started.processId);
-  await resumed.poll(handle, started.processId);
-  await resumed.stop(handle, started.processId);
-  assert.equal(captures, 1);
-  assert.equal((await registry.get(started.processId))?.credentialCapture, undefined);
-});

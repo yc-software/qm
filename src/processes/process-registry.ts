@@ -10,11 +10,6 @@ export function isDeclaredKind(kind: string): kind is ProcessKind {
 
 export type ProcessStatus = "running" | "exited" | "reaped";
 
-export interface CredentialCaptureSnapshot {
-  ownerId: string;
-  fingerprints: Record<string, string>;
-}
-
 export interface ProcessRecord {
   processId: string;
   scopeId: string;
@@ -22,7 +17,6 @@ export interface ProcessRecord {
   kind: ProcessKind;
   command: string;
   purpose?: string;
-  credentialCapture?: CredentialCaptureSnapshot;
   startedAt: number;
   expiresAt: number;
   status: ProcessStatus;
@@ -37,7 +31,6 @@ interface NewProcessRecord {
   kind: ProcessKind;
   command: string;
   purpose?: string;
-  credentialCapture?: CredentialCaptureSnapshot;
   ttlMs: number;
   sessionRef?: string;
   runId?: string;
@@ -47,10 +40,8 @@ export interface ProcessRegistry {
   register(rec: NewProcessRecord): Promise<ProcessRecord>;
   get(processId: string): Promise<ProcessRecord | null>;
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
-  listCredentialCaptures(sandboxId: string | undefined, scopeId: string): Promise<ProcessRecord[]>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
-  finishCredentialCapture(processId: string): Promise<void>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   listExpired(now?: number): Promise<ProcessRecord[]>;
   delete(processId: string): Promise<void>;
@@ -66,7 +57,6 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
     kind: rec.kind,
     command: rec.command,
     ...(rec.purpose ? { purpose: rec.purpose } : {}),
-    ...(rec.credentialCapture ? { credentialCapture: rec.credentialCapture } : {}),
     startedAt: now,
     expiresAt: now + rec.ttlMs,
     status: "running",
@@ -90,13 +80,6 @@ export function createMemoryProcessRegistry(): ProcessRegistry {
     async listByScope(scopeId) {
       return [...rows.values()].filter((r) => r.scopeId === scopeId).map((r) => ({ ...r }));
     },
-    async listCredentialCaptures(sandboxId, scopeId) {
-      return [...rows.values()]
-        .filter(
-          (row) => row.credentialCapture && (row.sandboxId ? row.sandboxId === sandboxId : row.scopeId === scopeId),
-        )
-        .map((row) => ({ ...row }));
-    },
     async liveByScope(scopeId, now = Date.now()) {
       return [...rows.values()]
         .filter((r) => r.scopeId === scopeId && r.status === "running" && r.expiresAt > now)
@@ -104,10 +87,6 @@ export function createMemoryProcessRegistry(): ProcessRegistry {
     },
     async listLive(now = Date.now()) {
       return [...rows.values()].filter((r) => r.status === "running" && r.expiresAt > now).map((r) => ({ ...r }));
-    },
-    async finishCredentialCapture(processId) {
-      const row = rows.get(processId);
-      if (row) delete row.credentialCapture;
     },
     async markStatus(processId, status) {
       const row = rows.get(processId);
@@ -137,7 +116,6 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
     status: r.status as ProcessStatus,
     ...(r.session_ref ? { sessionRef: r.session_ref as string } : {}),
     ...(r.run_id ? { runId: r.run_id as string } : {}),
-    ...(r.credential_capture ? { credentialCapture: r.credential_capture as CredentialCaptureSnapshot } : {}),
   };
 }
 
@@ -163,17 +141,11 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"],
   };
   pg.registerMigration(purposeMigration);
-  const credentialMigration = {
-    id: "processes/registry/0004",
-    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_capture JSONB"],
-  };
-  pg.registerMigration(credentialMigration);
   let ready: Promise<void> | undefined;
   const q: typeof pg.q = async (...args) => {
     ready ??= pg
       .migrate(migration)
       .then(() => pg.migrate(purposeMigration))
-      .then(() => pg.migrate(credentialMigration))
       .catch((error) => {
         ready = undefined;
         throw error;
@@ -185,8 +157,8 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async register(rec) {
       const row = newRecord(rec, Date.now());
       await q(
-        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose, credential_capture)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           row.processId,
           row.scopeId,
@@ -199,7 +171,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.runId ?? null,
           row.sandboxId ?? null,
           row.purpose ?? null,
-          row.credentialCapture ? JSON.stringify(row.credentialCapture) : null,
         ],
       );
       return row;
@@ -211,14 +182,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async listByScope(scopeId) {
       return (await q("SELECT * FROM process_sessions WHERE scope_id = $1", [scopeId])).map(pgRowToRecord);
     },
-    async listCredentialCaptures(sandboxId, scopeId) {
-      return (
-        await q(
-          "SELECT * FROM process_sessions WHERE credential_capture IS NOT NULL AND (sandbox_id = $1 OR (sandbox_id IS NULL AND scope_id = $2))",
-          [sandboxId ?? null, scopeId],
-        )
-      ).map(pgRowToRecord);
-    },
     async liveByScope(scopeId, now = Date.now()) {
       const rows = await q(
         "SELECT * FROM process_sessions WHERE scope_id = $1 AND status = 'running' AND expires_at > $2",
@@ -229,9 +192,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async listLive(now = Date.now()) {
       const rows = await q("SELECT * FROM process_sessions WHERE status = 'running' AND expires_at > $1", [now]);
       return rows.map(pgRowToRecord);
-    },
-    async finishCredentialCapture(processId) {
-      await q("UPDATE process_sessions SET credential_capture = NULL WHERE process_id = $1", [processId]);
     },
     async markStatus(processId, status) {
       const updated = await q("UPDATE process_sessions SET status = $1 WHERE process_id = $2 RETURNING process_id", [

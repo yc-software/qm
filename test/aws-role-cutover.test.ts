@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
-import { DEVICE_FLOW_ORIGIN } from "../src/credentials/device-flow-persist.ts";
+const DEVICE_FLOW_ORIGIN = "device-flow-auto-capture";
 import { scopeId } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -157,7 +157,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     ownerKeychainUnion: true,
   });
   assert.equal(owner.status, "ok", owner.reason);
-  assert.equal(owner.reply, "selected|file_BOB|unset");
+  assert.equal(owner.reply, "selected||unset");
   assert.equal(
     ff.names().some((n) => n.includes("scratch")),
     false,
@@ -178,19 +178,16 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     "selected broker credentials replace ambient owner env and never carry a core API token",
   );
 
-  const unpoisoned = await built.app.turn({
-    surface: "cron",
-    actor: bob,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:unpoisoned" },
-    text: "!owner cat ~/.config/acmecorp/auth.json",
-    triggered: true,
-    ownerKeychainUnion: true,
-  });
-  assert.equal(unpoisoned.reply, "file_BOB", "owner-box mutations never capture back into Bob's durable keychain");
+  const unpoisoned = (await built.keychain!.materializeOwnFiles("BOB")).find((record) => record.service === "acmecorp");
+  assert.equal(
+    Buffer.from(unpoisoned!.files[0]!.contentBase64, "base64").toString(),
+    "file_BOB",
+    "owner-box mutations never capture back into Bob's durable keychain",
+  );
   assert.deepEqual(await built.keychain!.grantsForScope(room), []);
   const ownerAudit = await built.auditLog.events();
   assert.ok(
-    ownerAudit.some((event) => event.action === "keychain.materialize" && event.resource.includes("owner-auth box")),
+    ownerAudit.some((event) => event.action === "keychain.materialize" && event.resource.endsWith("(command)")),
   );
   assert.equal(
     ownerAudit.some((event) => event.action === "credential.materialize"),
@@ -208,8 +205,8 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   assert.equal(scoped.status, "ok", scoped.reason);
   assert.equal(
     scoped.reply,
-    "unset|unset|absent|found",
-    "prefer-isolated keeps resident ACMECLI as a live fallback without placing Bob's private credentials on the room",
+    "unset|unset|absent|absent",
+    "no saved login is placed on the room unless a command requests it",
   );
 
   const poisoned = await built.app.turn({
@@ -246,70 +243,19 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     false,
   );
 
-  await built.deviceFlowCutover.set(room, "acmecli", "legacy", "rollback@example.com");
-  const rollback = await built.app.turn({
-    surface: "slack",
-    actor: alice,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:rollback" },
-    text: "!run cat ~/.acmecli/session.json",
-  });
+  const roomLogin = (await built.keychain!.materializeOwnFiles(room)).find((record) => record.service === "acmecli");
   assert.equal(
-    rollback.reply,
+    Buffer.from(roomLogin!.files[0]!.contentBase64, "base64").toString(),
     "legacy_room_acmecli",
-    "prefer-mode mutations never poison the encrypted rollback input",
-  );
-  const rollbackComputer = await built.sandbox.provision([{ scopeId: room, mountPath: "/", mode: "rw" }]);
-  assert.equal(
-    await built.deviceFlowCutover.residentResetGeneration(room, "acmecli", rollbackComputer.resourceId),
-    null,
-    "rollback reset is consumed after one verified restore",
+    "room mutations never poison the encrypted record",
   );
 
   await built.deviceFlowCutover.set(room, "acmecli", "ephemeral_only", "security@example.com");
-  const requarantined = await built.app.turn({
-    surface: "slack",
-    actor: alice,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:requarantine" },
-    text: "!run test -e ~/.acmecli/session.json && echo found || echo absent",
-  });
-  assert.equal(
-    requarantined.reply,
-    "absent",
-    "ephemeral-only removes already-materialized legacy files without deleting the stored record",
-  );
   const acmecliUsage = await built.credentialUsage.list({ slug: "acmecli" });
   assert.equal(
     acmecliUsage.some((row) => row.status === "ephemeral_vended"),
     true,
   );
-  const legacyUsage = await built.credentialUsage.list({ slug: "keychain:acmecli" });
-  assert.ok(
-    legacyUsage.some((row) => row.status === "legacy_retained"),
-    "prefer-isolated records that resident fallback remains present",
-  );
-
-  const realMaterializeOwnFiles = built.keychain!.materializeOwnFiles.bind(built.keychain!);
-  built.keychain!.materializeOwnFiles = async () => {
-    throw new Error("owner file materialization failed");
-  };
-  await assert.rejects(
-    built.app.turn({
-      surface: "cron",
-      actor: bob,
-      conversation: { ...conversation, threadRef: "ch:C-owner-auth:init-failure" },
-      text: "!owner true",
-      triggered: true,
-      ownerKeychainUnion: true,
-    }),
-    /owner file materialization failed/,
-  );
-  built.keychain!.materializeOwnFiles = realMaterializeOwnFiles;
-  assert.equal(
-    ff.names().some((n) => n.includes("scratch")),
-    false,
-    "failed owner-box initialization destroys its pending body",
-  );
-
   const realTeardown = built.sandbox.teardown.bind(built.sandbox);
   let ownerDestroyAttempts = 0;
   built.sandbox.teardown = async (handle, opts) => {
@@ -367,11 +313,6 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     undefined,
     "long-lived owner env credentials never enter machine configuration",
   );
-  assert.equal(
-    (await built.sandbox.run(stranded, "test ! -e ~/.config/acmecorp/auth.json")).code,
-    0,
-    "owner files are scrubbed before remote deletion is attempted",
-  );
   await realTeardown(stranded, { destroy: true });
 
   const realRun = built.sandbox.run.bind(built.sandbox);
@@ -398,7 +339,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   );
 });
 
-test("cutover policy retains legacy files only in prefer-ephemeral mode", async () => {
+test("cutover policy never restores legacy files into the computer", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "dfp-acmecli-fallback-")),
@@ -444,9 +385,9 @@ test("cutover policy retains legacy files only in prefer-ephemeral mode", async 
     surface: "slack",
     actor,
     conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:prefer" },
-    text: "!run cat ~/.acmecli/session.json",
+    text: "!run test -e ~/.acmecli/session.json && echo found || echo absent",
   });
-  assert.equal(fallback.reply, "legacy_ok");
+  assert.equal(fallback.reply, "absent");
   await assert.rejects(
     built.app.turn({
       surface: "slack",
@@ -462,7 +403,7 @@ test("cutover policy retains legacy files only in prefer-ephemeral mode", async 
     surface: "slack",
     actor,
     conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:only" },
-    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli && echo found || echo absent)"',
+    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli/session.json && echo found || echo absent)"',
   });
   assert.equal(closed.reply, "unset|absent");
   await assert.rejects(
@@ -537,16 +478,16 @@ test("a nonlegacy policy never places brokered STS on a shared room", async () =
     surface: "slack",
     actor,
     conversation: { ...conversation, threadRef: "ch:C-acmecli-flag-off:prefer" },
-    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(cat ~/.acmecli/session.json)"',
+    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli/session.json && echo found || echo absent)"',
   });
-  assert.equal(prefer.reply, "unset|legacy_ok");
+  assert.equal(prefer.reply, "unset|absent");
 
   await built.deviceFlowCutover.set(room, "acmecli", "ephemeral_only", "security@example.com");
   const only = await built.app.turn({
     surface: "slack",
     actor,
     conversation: { ...conversation, threadRef: "ch:C-acmecli-flag-off:only" },
-    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli && echo found || echo absent)"',
+    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli/session.json && echo found || echo absent)"',
   });
   assert.equal(only.reply, "unset|absent");
 });

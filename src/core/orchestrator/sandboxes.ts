@@ -1,20 +1,11 @@
-import { clearExecutionFiles } from "../../credentials/execute-files.ts";
-import type { CredentialCaptureSnapshot } from "../../processes/process-registry.ts";
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
-import { personalScope, parseScopeId } from "../../types.ts";
+import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import type { SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
-import {
-  completeLoginCapture,
-  clearStoredLoginFiles,
-  deviceFlowCredOwner,
-  removeDeviceFlowLogins,
-} from "../../credentials/device-flow-persist.ts";
-import type { DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import {
   materializeSkillTree as laySkillTree,
   packRoot,
@@ -48,18 +39,12 @@ export interface TurnSandboxContext {
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
-  isolateOwnerKeychain: boolean;
   openSpeakerKeychain?: boolean;
   openResourceAccess?: boolean;
   ownerAuthAvailable: boolean;
-  credentialTools: readonly import("../../deployment/load-layer.ts").LayerCredentialTool[];
-  credentialServices: string[];
   credentialCutoverServices: string[];
-  quarantinedServices: string[];
-  cutoverModeOf: (service: string) => DeviceFlowCutoverMode;
   visibleSkillsForTurn: () => Promise<SkillResolution[]>;
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
-  perf: { credsMs: number };
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -77,11 +62,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     connectorEnv,
     egressTokenForTurn,
     egressTokenForPolicy,
-    isolateOwnerKeychain,
     openSpeakerKeychain,
     openResourceAccess,
     ownerAuthAvailable,
-    credentialTools,
     credentialCutoverServices,
     visibleSkillsForTurn,
     emitGapWork,
@@ -171,22 +154,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
     throw new AggregateError(errors, "Disposable sandbox destruction failed");
   };
-  const scrubOwnerAuthHandle = async (handle: SandboxHandle): Promise<void> => {
-    if (!deps.keychain || !isolateOwnerKeychain) return;
-    const services = (await deps.keychain.listByOwner(actor.id))
-      .filter((record) => record.kind === "file")
-      .map((record) => record.service);
-    if (!services.length) return;
-    await removeDeviceFlowLogins({
-      sandbox: deps.sandbox,
-      handle,
-      keychain: deps.keychain,
-      ownerId: actor.id,
-      services,
-      allOrigins: true,
-      canonicalRoots: credentialTools.filter((tool) => services.includes(tool.service)).flatMap((tool) => tool.roots),
-    });
-  };
   let sandboxStatusSeq = 2_000_000;
   const onSandboxStatus =
     input.runId && deps.runActivity
@@ -202,107 +169,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
             .catch(swallowAs("orchestrator: sandbox status append", undefined));
         }
       : undefined;
-  const loginCaptureHandles = new Map<string, { handle: SandboxHandle; ownerId: string }>();
-  const trackLoginCapture = (handle: SandboxHandle, ownerId: string) => {
-    loginCaptureHandles.set(`${handle.backend}:${handle.id}`, { handle, ownerId });
-  };
-  const captureSnapshots = new Map<string, CredentialCaptureSnapshot>();
-  const captureSnapshot = async (handle: SandboxHandle): Promise<CredentialCaptureSnapshot | undefined> => {
-    if (!deps.keychain || input.externalSlack) return;
-    const tracked = loginCaptureHandles.get(`${handle.backend}:${handle.id}`);
-    if (!tracked) return;
-    const snapshot = {
-      ownerId: tracked.ownerId,
-      fingerprints: Object.fromEntries(
-        (await deps.keychain.listByOwner(tracked.ownerId))
-          .filter((record) => record.kind === "file")
-          .map((record) => [record.service, record.fingerprint]),
-      ),
-    };
-    captureSnapshots.set(`${handle.backend}:${handle.id}`, snapshot);
-    return snapshot;
-  };
-  const prepareCredentialExecution = async (handle: SandboxHandle): Promise<void> => {
-    if (!deps.keychain) return;
-    const tracked = loginCaptureHandles.get(`${handle.backend}:${handle.id}`);
-    const targetScope = handle.scopeId ?? memoryScopeId;
-    const parsedScope = parseScopeId(targetScope);
-    await clearExecutionFiles(deps.sandbox, handle);
-    if (await hasLiveProcesses(handle, memoryScopeId)) {
-      throw new Error(
-        "A background process is still running on this computer; poll or stop it, or use a separate scratch or owner computer for this operation",
-      );
-    }
-    if (deps.processes && supportsProcessSessions(deps.sandbox)) {
-      const pending = await deps.processes.listCredentialCaptures(handle.resourceId, handle.scopeId ?? memoryScopeId);
-      for (const record of pending) {
-        if (!(await completeCapture(handle, record.credentialCapture!))) continue;
-        await deps.processes.finishCredentialCapture(record.processId);
-        await deps.processes.markStatus(record.processId, "exited");
-      }
-    }
-    await clearStoredLoginFiles({
-      sandbox: deps.sandbox,
-      handle,
-      keychain: deps.keychain,
-      ownerId: tracked?.ownerId ?? (parsedScope.kind === "personal" ? parsedScope.ref : targetScope),
-      credentialPaths: deps.deploymentLayer?.credentialPaths,
-    });
-    await captureSnapshot(handle);
-  };
-  const completeCapture = async (handle: SandboxHandle, snapshot: CredentialCaptureSnapshot): Promise<boolean> => {
-    if (!deps.keychain || (await hasLiveProcesses(handle, memoryScopeId))) return false;
-    await completeLoginCapture({
-      sandbox: deps.sandbox,
-      handle,
-      keychain: deps.keychain,
-      snapshot,
-      excludeServices: credentialCutoverServices,
-      credentialPaths: deps.deploymentLayer?.credentialPaths,
-      onAnomaly: (service, detail) =>
-        deps.errors?.record({
-          category: "keychain",
-          code: "device_flow_capture_skipped",
-          message: `${service}: ${detail}`,
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        }),
-    });
-    await captureSnapshot(handle);
-    return true;
-  };
-  const captureLogins = async (selected?: SandboxHandle): Promise<void> => {
-    if (input.externalSlack || !deps.keychain) return;
-    for (const { handle } of loginCaptureHandles.values()) {
-      if (selected && (handle.id !== selected.id || handle.backend !== selected.backend)) continue;
-      const capture = async () => {
-        if (await hasLiveProcesses(handle, memoryScopeId)) return;
-        const snapshot = captureSnapshots.get(`${handle.backend}:${handle.id}`);
-        if (!snapshot) return;
-        try {
-          await completeCapture(handle, snapshot);
-        } catch (error) {
-          deps.errors?.record(
-            {
-              category: "keychain",
-              code: "device_flow_capture_failed",
-              message: errMessage(error),
-              scopeLabel: scopeId,
-              sessionId: session.id,
-            },
-            error,
-          );
-          if (selected) throw error;
-        }
-      };
-      if (selected || !deps.advisoryLock) await capture();
-      else
-        await deps.advisoryLock.withLock(
-          `credential-execution:${handle.backend}:${handle.resourceId ?? handle.id}`,
-          capture,
-        );
-    }
-  };
   const resourceHandles = new Map<string, SandboxHandle>();
   const resourcePolicy = new Map<string, string>();
   const resourcePendingHandles = new Map<string, SandboxHandle>();
@@ -372,7 +238,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     }
     box.handle = handle;
-    trackLoginCapture(handle, deviceFlowCredOwner(memoryScopeId, actor.id));
     return handle;
   };
   const skillsRoot = `${turnFilesDir}/${SKILLS_DIR}`;
@@ -513,8 +378,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       if (!crossScope) {
         await prepareTurnFiles(handle);
       }
-      if (!crossScope || credentialScopeId)
-        trackLoginCapture(handle, deviceFlowCredOwner(resource.ownerScopeId, actor.id));
       resourceHandles.set(id, handle);
       resourcePolicy.set(id, policyKey);
       resourcePendingHandles.delete(id);
@@ -546,7 +409,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         },
       );
       scratchBox.provisionMs = Date.now() - provisionStart;
-      trackLoginCapture(handle, deviceFlowCredOwner(memoryScopeId, actor.id));
       scratchBox.handle = handle;
       scratchReadyAt = Date.now();
       recordScratchLifecycle("provision_ready", handle);
@@ -586,7 +448,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           );
           ownerAuthBox.pending = handle;
           ownerAuthBox.provisionMs = Date.now() - provisionStart;
-          trackLoginCapture(handle, actor.id);
           ownerAuthBox.handle = handle;
           return handle;
         })().catch(async (err) => {
@@ -595,18 +456,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           const pendingHandle = ownerAuthBox.pending;
           if (pendingHandle) {
             try {
-              await scrubOwnerAuthHandle(pendingHandle).catch((scrubErr) => {
-                deps.errors?.record(
-                  {
-                    category: "sandbox",
-                    code: "owner_auth_scrub_failed",
-                    message: errMessage(scrubErr),
-                    scopeLabel: scopeId,
-                    sessionId: session.id,
-                  },
-                  scrubErr,
-                );
-              });
               await destroyEphemeralHandle(pendingHandle);
               if (ownerAuthBox.pending === pendingHandle) ownerAuthBox.pending = null;
             } catch (cleanupErr) {
@@ -679,12 +528,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     );
   };
   const hasLiveProcesses = async (handle: SandboxHandle, fallbackScope: ScopeId): Promise<boolean> => {
-    if (supportsProcessSessions(deps.sandbox)) {
-      return (await deps.sandbox.listProcesses(handle)).some((process) => process.status.state !== "exited");
-    }
     if (!deps.processes) return false;
-    return (await deps.processes.listByScope(handle.scopeId ?? fallbackScope)).some(
-      (process) => process.status === "running" && (!process.sandboxId || process.sandboxId === handle.resourceId),
+    if (!handle.resourceId) return (await deps.processes.liveByScope(fallbackScope)).length > 0;
+    return (await deps.processes.listLive()).some(
+      (process) =>
+        process.sandboxId === handle.resourceId ||
+        (!process.sandboxId && process.scopeId === (handle.scopeId ?? fallbackScope)),
     );
   };
   const reclaimBox = async (): Promise<void> => {
@@ -718,18 +567,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const ownerHandle = ownerAuthBox.handle ?? ownerAuthBox.pending;
     if (ownerHandle) {
       try {
-        await scrubOwnerAuthHandle(ownerHandle).catch((scrubErr) => {
-          deps.errors?.record(
-            {
-              category: "sandbox",
-              code: "owner_auth_scrub_failed",
-              message: errMessage(scrubErr),
-              scopeLabel: scopeId,
-              sessionId: session.id,
-            },
-            scrubErr,
-          );
-        });
         await destroyEphemeralHandle(ownerHandle);
         ownerAuthBox.handle = null;
         ownerAuthBox.pending = null;
@@ -841,10 +678,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     scratchBox,
     ownerAuthBox,
     ownerAuthCommand,
-    captureLogins,
-    prepareCredentialExecution,
-    captureSnapshot,
-    completeCapture,
     scopedCommand,
     provision,
     provisionScratch,

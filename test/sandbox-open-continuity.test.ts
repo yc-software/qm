@@ -107,7 +107,6 @@ function fixture(
       deviceFlowCutover: {
         listServices: async () => ["custom-login"],
         resolvePolicy: async () => ({ mode: state.cutoverMode }),
-        residentResetGeneration: async () => null,
       },
       keychain: {
         listByOwner: async () => [
@@ -220,9 +219,9 @@ test("Open shared requests execute on the owner's personal machine without movin
   assert.equal(f.provisions.length, 1);
   assert.equal(JSON.stringify(f.provisions).includes("synthetic-room"), false);
   assert.deepEqual(f.writes, []);
-  assert.deepEqual(f.credentialOwners, ["alice"]);
+  assert.deepEqual(f.credentialOwners, []);
   assert.equal(f.runs.at(-1)?.env?.OWN_SECRET, undefined);
-  assert.ok(f.restored.some((bytes) => Buffer.from(bytes).includes("synthetic-own-file")));
+  assert.deepEqual(f.restored, []);
   assert.equal(JSON.stringify(f.provisions).includes("team:private"), false);
   const skill = await f.tools.skill("room-tool", { sandboxId: "personal-box" });
   assert.match(skill.content ?? "", /synthetic-room-skill/);
@@ -365,18 +364,6 @@ test("cross-target egress policies narrow both provider policy and minted proxy 
     allowedHosts: ["new.example.test"],
     deniedHosts: ["source-denied.test"],
   });
-});
-
-test("cached personal access reapplies device-flow quarantine without injecting environment credentials", async () => {
-  const f = fixture();
-  const first = await f.turn.provisionResource("personal-box");
-  const firstRestores = f.restored.length;
-  f.state.cutoverMode = "ephemeral_only";
-  const second = await f.turn.provisionResource("personal-box");
-  assert.equal(second, first);
-  assert.ok(f.commands.some((command) => command.includes("rm -rf -- '.custom-login/token'")));
-  assert.equal(f.restored.length, firstRestores);
-  assert.equal(second.env, undefined);
 });
 
 test("cross-scope teardown preserves live jobs regardless of which conversation started them", async () => {

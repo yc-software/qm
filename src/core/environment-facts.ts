@@ -48,8 +48,7 @@ export function renderResidentLoginsBlock(
   const lines = [
     "## Your logins",
     "Native logins on your computer (resident — each tool authenticates with its own; checked recently):",
-    "Logins survive machine replacement automatically: the platform keeps an encrypted copy core-side and restores it onto a fresh machine; they are never written into workspace backups.",
-    "To (re)log in, start the login command as a background process using the available process controls. A device-flow login prints a URL/code then waits for the person to approve. Relay the URL/code, then watch or poll the process until it exits; never kill it mid-flight. Capture into your keychain is automatic.",
+    "These exist only on this computer and are never saved automatically. To (re)log in durably, follow the `interactive-login` skill: it saves the login to your keychain, and commands use it through execute.credentials.",
   ];
   for (const c of present.sort((a, b) => a.id.localeCompare(b.id))) {
     if (record.connectors[c.id] === "active") {

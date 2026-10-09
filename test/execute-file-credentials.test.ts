@@ -1,4 +1,3 @@
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
@@ -226,164 +225,39 @@ test("a use grant permits AWS token rotation but cannot poison the owner's confi
   if (saved.kind === "file") assert.equal(saved.files.length, 1);
 });
 
-test("uncredentialed access removes files left by an interrupted execution", async (t) => {
+test("an execution sweeps only stale credential directories", async (t) => {
   const f = await fixture(t);
-  const interrupted = await prepareExecutionFiles(f.sandbox, f.handle, [
-    { files: files("orphan"), save: async () => {} },
-  ]);
-  await access(`${interrupted.env.HOME}/.aws/sso/cache/session.json`);
-  const ctx = f.context({ credentialExecutionLock: createMemoryAdvisoryLock() });
-  await ctx.execute("true");
-  await assert.rejects(access(interrupted.env.HOME!));
-  assert.equal(f.resolutions(), 0);
+  const stale = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("stale"), save: async () => {} }]);
+  const live = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("live"), save: async () => {} }]);
+  const staleDir = stale.env.HOME!.replace(/\/home$/, "");
+  await f.sandbox.run(f.handle, `touch -d '2 hours ago' ${staleDir}`);
+  await f.context().execute("true", { credentials: ["aws"] });
+  await assert.rejects(access(stale.env.HOME!));
+  await access(`${live.env.HOME}/.aws/sso/cache/session.json`);
+  await live.finish();
 });
 
-test("a concurrent file read waits for credential execution and cannot read its temporary files", async (t) => {
+test("concurrent executions keep their own credential directories", async (t) => {
   const f = await fixture(t);
   const entered = Promise.withResolvers<string>();
   const release = Promise.withResolvers<void>();
   const sandbox = {
     ...f.sandbox,
     async run(handle: SandboxHandle, command: string, opts: Parameters<Sandbox["run"]>[2]) {
-      if (command === "credential-hold") {
+      if (command.startsWith("credential-hold")) {
         entered.resolve(handle.env!.HOME!);
         await release.promise;
-        return { stdout: "", stderr: "", code: 0, timedOut: false };
       }
       return f.sandbox.run(handle, command, opts);
     },
   };
-  const ctx = f.context({ sandbox, credentialExecutionLock: createMemoryAdvisoryLock() });
-  const command = ctx.execute("credential-hold", { credentials: ["aws"] });
+  const ctx = f.context({ sandbox });
+  const held = ctx.execute("credential-hold 2>/dev/null; cat ~/.aws/sso/cache/session.json", { credentials: ["aws"] });
   const home = await entered.promise;
-  let finished = false;
-  const reading = ctx.read(`${home}/.aws/sso/cache/session.json`).then((result) => {
-    finished = true;
-    return result;
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(finished, false);
+  assert.equal((await ctx.execute("echo unrelated")).stdout.trim(), "unrelated");
+  await ctx.execute("true", { credentials: ["aws"] });
+  await access(`${home}/.aws/sso/cache/session.json`);
   release.resolve();
-  await command;
-  assert.equal((await reading).content, null);
-});
-
-test("a new login uses the same capture path as a saved credential", async (t) => {
-  const f = await fixture(t);
-  let saved: CredentialFile[] = [];
-  const execution = await prepareExecutionFiles(f.sandbox, f.handle, [
-    {
-      files: [],
-      roots: [{ path: ".config/custom-cli", kind: "directory" }],
-      save: async (files) => {
-        saved = files;
-      },
-    },
-  ]);
-  const result = await f.sandbox.run(
-    { ...f.handle, env: execution.env },
-    'mkdir -p "$HOME/.config/custom-cli"; printf fresh-login > "$HOME/.config/custom-cli/token"; printf ignored > "$HOME/unrelated"',
-  );
-  assert.equal(result.code, 0, result.stderr);
-  await writeFile(join(execution.env.HOME!, "unrelated-large"), Buffer.alloc(9 * 1024 * 1024));
-  await execution.finish();
-  assert.deepEqual(
-    saved.map((file) => file.path),
-    [".config/custom-cli/token"],
-  );
-  assert.equal(Buffer.from(saved[0]!.contentBase64, "base64").toString(), "fresh-login");
-  await assert.rejects(access(execution.env.HOME!));
-});
-
-test("overlapping login and refresh lifetimes capture and clean separate directories", async (t) => {
-  const f = await fixture(t);
-  let loginFiles: CredentialFile[] = [];
-  let refreshFiles: CredentialFile[] = [];
-  const login = await prepareExecutionFiles(f.sandbox, f.handle, [
-    {
-      files: [],
-      roots: [{ path: ".aws", kind: "directory" }],
-      save: async (files) => {
-        loginFiles = files;
-      },
-    },
-  ]);
-  const refresh = await prepareExecutionFiles(f.sandbox, f.handle, [
-    {
-      files: files("original"),
-      save: async (files) => {
-        refreshFiles = files;
-      },
-    },
-  ]);
-  assert.notEqual(login.env.HOME, refresh.env.HOME);
-  await writeFile(join(f.handle.rootDir, "workspace-file"), "workspace-preserved");
-  const result = await f.sandbox.run(
-    { ...f.handle, env: login.env },
-    'mkdir -p "$HOME/.aws/sso/cache"; printf new-login > "$HOME/.aws/sso/cache/session.json"; cat workspace-file',
-  );
-  assert.equal(result.code, 0, result.stderr);
-  assert.equal(result.stdout, "workspace-preserved");
-  await login.finish();
-  await access(`${refresh.env.HOME}/.aws/sso/cache/session.json`);
-  const updated = await f.sandbox.run(
-    { ...f.handle, env: refresh.env },
-    'printf rotated > "$HOME/.aws/sso/cache/session.json"',
-  );
-  assert.equal(updated.code, 0, updated.stderr);
-  await refresh.finish();
-  assert.equal(Buffer.from(loginFiles[0]!.contentBase64, "base64").toString(), "new-login");
-  assert.equal(Buffer.from(refreshFiles[0]!.contentBase64, "base64").toString(), "rotated");
-  await assert.rejects(access(login.env.HOME!));
-  await assert.rejects(access(refresh.env.HOME!));
-});
-
-test("fresh login capture rejects overlapping or invalid roots before staging", async (t) => {
-  const f = await fixture(t);
-  const credential = { files: [], roots: [{ path: ".aws", kind: "directory" as const }], save: async () => {} };
-  await assert.rejects(prepareExecutionFiles(f.sandbox, f.handle, [credential, credential]), /overlapping/);
-  await assert.rejects(
-    prepareExecutionFiles(f.sandbox, f.handle, [{ ...credential, roots: [{ path: "../escape", kind: "directory" }] }]),
-    /home-relative/,
-  );
-  await assert.rejects(prepareExecutionFiles(f.sandbox, f.handle, [{ ...credential, roots: [] }]), /at least one root/);
-  assert.equal(f.commands.length, 0);
-});
-
-test("an abandoned fresh login does not save an empty credential", async (t) => {
-  const f = await fixture(t);
-  let saves = 0;
-  const execution = await prepareExecutionFiles(f.sandbox, f.handle, [
-    {
-      files: [],
-      roots: [{ path: ".aws", kind: "directory" }],
-      save: async () => {
-        saves++;
-      },
-    },
-  ]);
-  await execution.finish();
-  assert.equal(saves, 0);
-  await assert.rejects(access(execution.env.HOME!));
-});
-
-test("fresh capture does not traverse a symlinked parent of its declared root", async (t) => {
-  const f = await fixture(t);
-  let saves = 0;
-  await mkdir(join(f.handle.rootDir, "custom-cli"));
-  await writeFile(join(f.handle.rootDir, "custom-cli", "token"), "not-from-login");
-  const execution = await prepareExecutionFiles(f.sandbox, f.handle, [
-    {
-      files: [],
-      roots: [{ path: ".config/custom-cli", kind: "directory" }],
-      save: async () => {
-        saves++;
-      },
-    },
-  ]);
-  const result = await f.sandbox.run({ ...f.handle, env: execution.env }, 'ln -s "$PWD" "$HOME/.config"');
-  assert.equal(result.code, 0, result.stderr);
-  await execution.finish();
-  assert.equal(saves, 0);
-  assert.equal(await readFile(join(f.handle.rootDir, "custom-cli", "token"), "utf8"), "not-from-login");
+  assert.equal((await held).stdout, "original");
+  await assert.rejects(access(home));
 });

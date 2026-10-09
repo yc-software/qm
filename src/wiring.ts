@@ -1,4 +1,3 @@
-import { completeLoginCapture } from "./credentials/device-flow-persist.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
@@ -271,7 +270,6 @@ import { createConnectorStatusCache, type ConnectorStatusRecord } from "./creden
 import {
   createDeviceFlowCutoverStore,
   type DeviceFlowCutoverPolicy,
-  type DeviceFlowCutoverReset,
   type DeviceFlowCutoverStore,
 } from "./credentials/device-flow-cutover.ts";
 import {
@@ -707,9 +705,7 @@ export function buildApp(
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
   const livenessCache = createLivenessCache(artifactMap<ScopeLivenessRecord>("credential_liveness"));
-  const deviceFlowCutover = createDeviceFlowCutoverStore(artifactMap<DeviceFlowCutoverPolicy>("device_flow_cutover"), {
-    resets: artifactMap<DeviceFlowCutoverReset>("device_flow_cutover_resets"),
-  });
+  const deviceFlowCutover = createDeviceFlowCutoverStore(artifactMap<DeviceFlowCutoverPolicy>("device_flow_cutover"));
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
   const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
   const slackInstallation = createSlackInstallationStore(
@@ -2537,44 +2533,6 @@ export function buildApp(
           sessions,
           leaderLease,
           heartbeatMs: config.monitorHeartbeatMs,
-          onProcessExit: keychain
-            ? async (handle, monitor) => {
-                const process = await processes.get(monitor.processId);
-                if (!process?.credentialCapture) return;
-                const credentialScope = (handle.scopeId ?? process.scopeId) as ScopeId;
-                const services = await deviceFlowCutover.listServices(credentialScope);
-                const excluded: string[] = [];
-                for (const service of services) {
-                  if ((await deviceFlowCutover.resolvePolicy(credentialScope, service))?.mode !== "legacy")
-                    excluded.push(service);
-                }
-                await advisoryLock.withLock(
-                  `credential-execution:${handle.backend}:${handle.resourceId ?? handle.id}`,
-                  async () => {
-                    const current = await processes.get(monitor.processId);
-                    if (!current?.credentialCapture) return;
-                    if ((await sandbox.listProcesses(handle)).some((process) => process.status.state !== "exited"))
-                      return;
-                    await completeLoginCapture({
-                      sandbox,
-                      handle,
-                      keychain,
-                      snapshot: current.credentialCapture,
-                      credentialPaths: deploymentLayer.credentialPaths,
-                      excludeServices: excluded,
-                      onAnomaly: (service, detail) =>
-                        errors.record({
-                          category: "keychain",
-                          code: "device_flow_capture_skipped",
-                          message: `${service}: ${detail}`,
-                          scopeLabel: monitor.ownerScopeId,
-                        }),
-                    });
-                    await processes.finishCredentialCapture(monitor.processId);
-                  },
-                );
-              }
-            : undefined,
         })
       : null;
   const skillSyncEngine = createSkillSyncEngine({

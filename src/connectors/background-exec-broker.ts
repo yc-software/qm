@@ -1,6 +1,5 @@
-import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { ProcessSandbox, ProcessState, SandboxHandle } from "../sandbox/sandbox.ts";
-import type { ProcessRegistry, ProcessStatus, CredentialCaptureSnapshot } from "../processes/process-registry.ts";
+import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess, processIsGone } from "../sandbox/process-poll.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
@@ -10,10 +9,6 @@ export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
   registry: ProcessRegistry;
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
-  credentialExecutionLock?: AdvisoryLock;
-  prepareStart?: (handle: SandboxHandle) => Promise<void>;
-  captureSnapshot?: (handle: SandboxHandle) => Promise<CredentialCaptureSnapshot | undefined>;
-  completed?: (handle: SandboxHandle, snapshot: CredentialCaptureSnapshot) => Promise<boolean | void>;
   scopeId: string;
   sessionRef?: string;
   ttlMs?: number;
@@ -90,15 +85,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
-  const complete = async (handle: SandboxHandle, processId: string) => {
-    const record = await deps.registry.get(processId);
-    if (record?.credentialCapture) {
-      if ((await deps.completed?.(handle, record.credentialCapture)) !== false)
-        await deps.registry.finishCredentialCapture(processId);
-    }
-    await deps.registry.markStatus(processId, "exited");
-  };
-  const broker: BackgroundExecBroker = {
+  return {
     async handleFor(processId) {
       const rec = await deps.registry.get(processId);
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") throw new Error("no such background job");
@@ -134,7 +121,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             waitMs: 0,
           });
           if (read.status.state === "exited") {
-            await complete(handle, existingProcessId);
+            await deps.registry.markStatus(existingProcessId, "exited");
             processId = null;
           }
         } catch (error) {
@@ -150,21 +137,16 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           maxBytes: DEFAULT_MAX_BYTES,
           waitMs: 0,
         });
-        if (read.status.state === "exited") {
-          await complete(handle, processId);
-        }
+        if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
         return { processId, output: read.chunks, cursor: read.cursor, status: read.status, reattached: true };
       }
 
-      await deps.prepareStart?.(handle);
-      const credentialCapture = await deps.captureSnapshot?.(handle);
       const register = async (id: string): Promise<void> => {
         await deps.registry.register({
           processId: id,
           scopeId: deps.scopeId,
           ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
           kind: "background",
-          ...(credentialCapture ? { credentialCapture } : {}),
           command: redacted,
           purpose,
           ttlMs: ttl,
@@ -180,9 +162,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       }
 
       const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, { deadlineMs: POLL_MS });
-      if (status.state === "exited") {
-        await complete(handle, processId);
-      }
+      if (status.state === "exited") await deps.registry.markStatus(processId, "exited");
       return { processId, output, cursor, status, reattached: false };
     },
 
@@ -200,9 +180,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         maxBytes: opts?.maxBytes ?? DEFAULT_MAX_BYTES,
         waitMs: opts?.waitMs ?? 0,
       });
-      if (read.status.state === "exited") {
-        await complete(handle, processId);
-      }
+      if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
       return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 
@@ -217,9 +195,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       }
       await deps.sandbox.writeStdin(handle, processId, data);
       const read = await deps.sandbox.readProcess(handle, processId, { sinceCursor: 0, maxBytes: 1, waitMs: 0 });
-      if (read.status.state === "exited") {
-        await complete(handle, processId);
-      }
+      if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
       return { processId, bytes: data.length, status: read.status };
     },
 
@@ -238,9 +214,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         await deps.sandbox.signalProcess(handle, processId, "KILL");
         status = await awaitProcessExit(deps.sandbox, handle, processId, killGraceMs);
       }
-      if (status.state === "exited") {
-        await complete(handle, processId);
-      }
+      if (status.state === "exited") await deps.registry.markStatus(processId, "exited");
       return { processId, status, stopped: status.state === "exited" };
     },
 
@@ -256,29 +230,5 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           startedAt: r.startedAt,
         }));
     },
-  };
-  const exclusive = <T>(
-    handle: SandboxHandle,
-    operation: (selected: SandboxHandle) => Promise<T>,
-    processId?: string,
-  ): Promise<T> => {
-    const run = async () => {
-      const selected = processId ? ((await broker.handleFor?.(processId)) ?? handle) : handle;
-      return deps.credentialExecutionLock
-        ? deps.credentialExecutionLock.withLock(
-            `credential-execution:${selected.backend}:${selected.resourceId ?? selected.id}`,
-            () => operation(selected),
-          )
-        : operation(selected);
-    };
-    return run();
-  };
-  return {
-    ...broker,
-    start: (handle, command, purpose, ttl) =>
-      exclusive(handle, (selected) => broker.start(selected, command, purpose, ttl)),
-    poll: (handle, id, opts) => exclusive(handle, (selected) => broker.poll(selected, id, opts), id),
-    write: (handle, id, data) => exclusive(handle, (selected) => broker.write(selected, id, data), id),
-    stop: (handle, id, signal) => exclusive(handle, (selected) => broker.stop(selected, id, signal), id),
   };
 }

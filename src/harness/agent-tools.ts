@@ -1837,8 +1837,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "URL/code from the returned output and relay it to the user, then `watch` (or `poll`) until the " +
       "command exits — that's when the login is done. If a prompt needs an answer typed in, use " +
       "action=send_input. Never run a login with `execute` (it blocks the whole turn) and never `stop`/kill a " +
-      "login mid-flight — that throws away the pending approval and wedges it. The platform captures the " +
-      "resulting credential into your keychain automatically; you don't save anything yourself.",
+      "login mid-flight — that throws away the pending approval and wedges it. Nothing is saved " +
+      "automatically: follow the `interactive-login` skill, which runs the login under a private HOME and saves it " +
+      "to the keychain afterward.",
     parameters: Type.Object({
       action: Type.Union(
         [
@@ -3913,60 +3914,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const registerLogin = defineTool({
-    name: "register_login",
-    label: "register_login",
-    description:
-      "After you complete a browser/device-code login for a CLI whose files are NOT already backed up automatically " +
-      "(the common ones — gh, glab, gcloud, aws, ssh — already are), call this so the login survives this machine being " +
-      'rebuilt. Pass the service name and the file(s) or directory it wrote under $HOME (e.g. { service: "kaggle", ' +
-      'paths: [{ path: ".kaggle/kaggle.json", kind: "file" }] }). The paths are captured immediately and re-captured on ' +
-      "future turns so token rotations are kept current. Only paths under $HOME, disjoint from the built-in credential " +
-      "paths, are accepted. A restored file is byte-faithful, but some providers invalidate sessions server-side " +
-      "(npm login tokens expire in hours) — treat the CLI's own auth check as the truth after a rebuild.",
-    parameters: Type.Object({
-      service: Type.String(),
-      paths: Type.Array(
-        Type.Object({
-          path: Type.String(),
-          kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
-        }),
-        { minItems: 1 },
-      ),
-    }),
-    async execute(callId, params: { service: string; paths: { path: string; kind: "file" | "directory" }[] }) {
-      const tc = ref.current;
-      await recordCall(callId, { tool: "register_login", service: params.service, paths: params.paths });
-      if (!tc?.registerLogin) {
-        return recordResult(
-          callId,
-          { tool: "register_login", unavailable: true },
-          text("[error] register_login is unavailable on this turn (no writable computer)"),
-          true,
-        );
-      }
-      try {
-        const result = await tc.registerLogin(params.service, params.paths);
-        return recordResult(
-          callId,
-          { tool: "register_login", ...result },
-          text(
-            result.captured
-              ? `Registered ${result.service} and captured its login — it will survive a machine rebuild.`
-              : `Registered ${result.service}. Nothing was captured yet; complete the login, then it is captured automatically next turn.`,
-          ),
-        );
-      } catch (error) {
-        return recordResult(
-          callId,
-          { tool: "register_login", failed: true, reason: errMessage(error) },
-          text(`[error] ${errMessage(error)}`),
-          true,
-        );
-      }
-    },
-  });
-
   const GOAL_EVIDENCE_FILES = 5;
   const GOAL_EVIDENCE_FILE_CHARS = 20_000;
   async function goalEvidenceFiles(
@@ -4371,7 +4318,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...(!opts?.sandboxResources && !delegateWork ? [background] : []),
     ...(opts?.sessionTools === false ? [] : [subagentTool, ...(sidebarSessions ? [sessionTool] : [])]),
     sandbox,
-    registerLogin,
     ...(controlTools
       ? [
           resourceTool("cron", {
