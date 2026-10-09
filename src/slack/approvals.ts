@@ -504,9 +504,11 @@ export function createApprovals(deps: {
         const post = (args: Parameters<typeof postWithVerify>[1], suffix: string) =>
           postWithVerify(client, args, `agent-request:${requestId}:${suffix}`, { verifyFirst: true, verifyOldest });
         const status = await post(
-          slackReplyArgs(ctx.channel, agentRequestStatusText(pendingCtx, "waiting"), ctx.replyThreadTs, {
-            threadOnly: ctx.threadOnly,
-          }),
+          {
+            ...slackReplyArgs(ctx.channel, agentRequestStatusText(pendingCtx, "waiting"), ctx.replyThreadTs, {
+              threadOnly: ctx.threadOnly,
+            }),
+          },
           "status",
         );
         if (status?.ts) pendingCtx.originStatusTs = String(status.ts);
