@@ -249,6 +249,21 @@ test("create checkpoint posts to the session checkpoint route and returns the re
   assert.equal(service.checkpoints(s.sessionId).length, 0);
 });
 
+test("rollback rewinds the same session onto a new sandbox without resuming it first", async () => {
+  const s = await session("qm-rollback");
+  const captured = await s.createCheckpoint("qm teardown");
+  const previousSandbox = s.sandboxId;
+  await s.pause();
+  assert.equal((await client.info(s.sessionId)).state, "paused");
+  const restored = await client.rollback(s.sessionId, captured.checkpointId);
+  assert.equal(restored.sessionId, s.sessionId);
+  assert.notEqual(restored.sandboxId, previousSandbox);
+  assert.equal(restored.state, "ready");
+  assert.equal((await client.info(s.sessionId)).sandboxId, restored.sandboxId);
+  assert.equal(service.checkpoints(s.sessionId).length, 1);
+  await assert.rejects(() => client.rollback(s.sessionId, "missing"), /404|no such checkpoint/);
+});
+
 test("connect resumes a paused session before handing it back", async () => {
   const s = await session("qm-paused");
   await s.pause();
