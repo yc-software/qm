@@ -284,8 +284,7 @@ export function sharedManifest(handles: readonly GrantedHandle[]): string {
   }
   const noun = total === 1 ? "file" : "files";
   return (
-    `${total} ${noun} shared with you — read a path below to fetch that file on demand, ` +
-    `then attach it to a message to pass it on (name its path in the surface \`post\` action's \`files\`):\n${shown.join("\n")}`
+    `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${shown.join("\n")}`
   );
 }
 
