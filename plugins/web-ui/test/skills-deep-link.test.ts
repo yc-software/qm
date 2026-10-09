@@ -15,16 +15,16 @@ function bodyOf(name: string): string {
 
 test("skill rows link to dedicated detail routes instead of expanding inline", () => {
   const row = bodyOf("skillVariant");
-  assert.match(row, /class="skill-variant-main"/);
+  assert.match(row, /class="list-row skill-row/);
   assert.match(row, /deepLinkPath\(UI_BASE, "skills", null, null, s\.id \?\? null\)/);
   assert.match(row, /openSkill\(s, \{ push: true \}\)/);
   assert.doesNotMatch(row, /<details|<summary|skillMeta|skill-variant-meta/);
-  assert.match(row, /<code class="skill-variant-name" dir="auto">\/\$\{s\.name\}<\/code>/);
-  assert.match(row, /<span class="skill-variant-description"/);
-  assert.match(css, /\.skill-variant-main::after \{\s*position: absolute;\s*inset: 0;/);
-  assert.match(css, /\.skill-variant-state \{\s*position: relative;\s*z-index: 1;/);
-  assert.match(css, /\.skill-variant-main \{[\s\S]*grid-template-columns: minmax\(110px, 0\.34fr\) minmax\(0, 1fr\)/);
-  assert.doesNotMatch(bodyOf("skillGroup"), /skill-group-head|skill-group-name|skill-precedence/);
+  assert.match(row, /<span class="list-row-title" dir="auto">\/\$\{s\.name\}<\/span>/);
+  assert.match(row, /class="skill-row-description"/);
+  assert.doesNotMatch(row, /<button|skill-edit-trigger|skill-archive-trigger/);
+  assert.doesNotMatch(source, /skill-registry-controls|Filter skills by scope|Filter skills by source/);
+  assert.match(css, /\.skill-row \.list-row-title \{\s*flex: 0 0 210px;/);
+  assert.match(source, /groups: rows/);
 });
 
 test("skill details have a back link and resource fields", () => {

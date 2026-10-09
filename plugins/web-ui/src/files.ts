@@ -11,7 +11,6 @@ import {
   FileText,
   FileVideo,
   Presentation,
-  Search,
   Upload,
   type IconNode,
 } from "lucide";
@@ -22,7 +21,7 @@ import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./co
 import { appState } from "./shell";
 import { fileListNeedsAllPages } from "./file-list";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
-import { listRowsTpl } from "./list-page";
+import { groupListRows, listPageTpl } from "./list-page";
 import { isTouch } from "./viewport";
 
 interface FileItem {
@@ -45,6 +44,7 @@ let fileRows: FileRow[] = [];
 let filesNotice = "";
 let filesScope: string | null = null;
 let filesQuery = "";
+let filesGrouped = true;
 let filesType: "all" | "image" | "document" | "other" = "all";
 let filesOwnership: "all" | "owned" | "shared" = "all";
 let filesDragActive = false;
@@ -92,18 +92,6 @@ function fileVisual(f: FileItem): { glyph: IconNode; kind: FileVisualKind } {
   return { glyph: File, kind: "generic" };
 }
 
-function groupFilesByScope(files: FileRow[]): Array<{ scope: string | null; files: FileRow[] }> {
-  const groups = new Map<string, { scope: string | null; files: FileRow[] }>();
-  for (const file of files) {
-    const scope = fileScope(file);
-    const key = scope ?? "";
-    const group = groups.get(key) ?? { scope, files: [] };
-    group.files.push(file);
-    groups.set(key, group);
-  }
-  return [...groups.values()];
-}
-
 function selectControl(
   label: string,
   value: string,
@@ -138,7 +126,7 @@ function drawFiles(loading = false): void {
     appState.mainEl.replaceChildren(filesHost);
   }
   const visible = visibleFiles();
-  const groups = groupFilesByScope(visible);
+
   const filtered = Boolean(filesScope || filesQuery.trim() || filesType !== "all" || filesOwnership !== "all");
   let dropLabel = isTouch() ? "Choose files to upload" : "Drop files here or choose files";
   if (filesDragActive) dropLabel = "Drop files";
@@ -149,79 +137,80 @@ function drawFiles(loading = false): void {
   render(
     html`
       ${scopedViewTopbar("files", drawFiles)}
-      <div class="list-page-head">
-        <h1 class="pane-title">Files</h1>
-        <label class="list-search"
-          >${icon(Search, 16)}<span class="sr-only">Search files</span
-          ><input
-            type="search"
-            aria-label="Search files"
-            placeholder="Search file names and types…"
-            .value=${filesQuery}
-            @input=${(e: Event) => {
-              filesQuery = (e.currentTarget as HTMLInputElement).value;
-              drawFiles();
-              void loadAllFiles();
-            }}
-        /></label>
-      </div>
-      <div class="list-toolbar">
-        ${selectControl(
-          "Ownership",
-          filesOwnership,
-          [
-            ["all", "All files"],
-            ["owned", "Yours"],
-            ["shared", "Shared"],
-          ],
-          (v) => {
-            filesOwnership = v as typeof filesOwnership;
+      ${listPageTpl({
+        title: "Files",
+        grouping: {
+          value: filesGrouped,
+          onChange: (value) => {
+            filesGrouped = value;
+            drawFiles();
+          },
+        },
+        search: {
+          value: filesQuery,
+          placeholder: "Search file names and types…",
+          onInput: (value) => {
+            filesQuery = value;
             drawFiles();
             void loadAllFiles();
           },
-        )}
-        ${selectControl(
-          "Type",
-          filesType,
-          [
-            ["all", "All types"],
-            ["image", "Images"],
-            ["document", "Documents"],
-            ["other", "Other"],
-          ],
-          (v) => {
-            filesType = v as typeof filesType;
-            drawFiles();
-            void loadAllFiles();
-          },
-        )}
-      </div>
-      ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}
-      <button
-        class="file-drop ${filesDragActive ? "dragging" : ""}"
-        type="button"
-        ?disabled=${filesUploading}
-        @click=${pickFiles}
-        @dragenter=${onFileDrag}
-        @dragover=${onFileDrag}
-        @dragleave=${onFileDragLeave}
-        @drop=${onFileDrop}
-      >
-        ${icon(Upload, 16)}<span>${dropLabel}</span>
-      </button>
-      ${
-        visible.length
-          ? html`<div class="file-groups">
-              ${groups.map(
-                (group) =>
-                  html`<section class="file-scope-group">
-                    <h2>${scopeTitle(group.scope)}</h2>
-                    ${listRowsTpl(group.files.map(fileRow), "file-list")}
-                  </section>`,
-              )}
-            </div>`
-          : html`<div class="empty compact">${filtered ? "No files match these filters." : "No files yet."}</div>`
-      }
+        },
+        filters: html`
+          <div class="list-toolbar">
+            ${selectControl(
+              "Ownership",
+              filesOwnership,
+              [
+                ["all", "All files"],
+                ["owned", "Yours"],
+                ["shared", "Shared"],
+              ],
+              (v) => {
+                filesOwnership = v as typeof filesOwnership;
+                drawFiles();
+                void loadAllFiles();
+              },
+            )}
+            ${selectControl(
+              "Type",
+              filesType,
+              [
+                ["all", "All types"],
+                ["image", "Images"],
+                ["document", "Documents"],
+                ["other", "Other"],
+              ],
+              (v) => {
+                filesType = v as typeof filesType;
+                drawFiles();
+                void loadAllFiles();
+              },
+            )}
+          </div>
+          ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}
+          <button
+            class="file-drop ${filesDragActive ? "dragging" : ""}"
+            type="button"
+            ?disabled=${filesUploading}
+            @click=${pickFiles}
+            @dragenter=${onFileDrag}
+            @dragover=${onFileDrag}
+            @dragleave=${onFileDragLeave}
+            @drop=${onFileDrop}
+          >
+            ${icon(Upload, 16)}<span>${dropLabel}</span>
+          </button>
+        `,
+        rows: visible.map(fileRow),
+        groups: groupListRows(
+          visible,
+          (file) => fileScope(file) ?? "",
+          (file) => scopeTitle(fileScope(file)),
+          fileRow,
+          (file) => file.createdAt,
+        ),
+        empty: filtered ? "No files match these filters." : "No files yet.",
+      })}
       ${filesNextCursor ? html`<div class="list-footer"><button class="btn" type="button" ?disabled=${filesLoadingMore} @click=${() => void loadMoreFiles()}>${filesLoadingMore ? "Loading…" : "Load more"}</button></div>` : nothing}
     `,
     filesHost,

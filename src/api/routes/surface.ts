@@ -825,6 +825,9 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
       shadowed: r.shadowed.length > 0,
       status: r.skill.status,
       version: r.skill.version,
+      lastUsedAt: r.skill.lastUsedAt,
+      updatedAt: r.skill.updatedAt,
+      createdAt: r.skill.createdAt,
       source: r.skill.pack ? "pack" : "native",
       pack: r.skill.pack,
       assetCount: r.skill.manifest.files?.length ?? 0,
@@ -846,7 +849,9 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   if (
     !skill ||
     (!(await app.canManageSkill(skill, principalId)) &&
-      !(await app.listVisibleSkills(principalId)).some((row) => row.skill?.id === skill.id))
+      !(await app.listVisibleSkills(principalId)).some(
+        (row) => row.skill?.id === skill.id || row.shadowed.some((variant) => variant.id === skill.id),
+      ))
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }

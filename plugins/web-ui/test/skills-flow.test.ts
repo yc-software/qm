@@ -164,7 +164,7 @@ test("archive uses a modal dialog with an impact description and managed focus",
     /role="dialog"\s+aria-modal="true"\s+aria-labelledby="skill-archive-title"\s+aria-describedby="skill-archive-impact"/,
   );
   assert.match(source, /trapDialogFocus\(event, closeArchiveDialog\)/);
-  assert.match(source, /restoreDialogFocus\(target, \(\) => fallback\)/);
+  assert.match(source, /restoreDialogFocus\(target, \(\) => fallback \?\? null\)/);
   assert.match(source, /focusDialogCancel\(skillsPageHost\)/);
   assert.match(
     source,
