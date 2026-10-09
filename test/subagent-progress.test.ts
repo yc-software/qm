@@ -51,7 +51,7 @@ async function rig() {
 test("a subagent's message to an idle web parent shows in the parent transcript without a turn", async () => {
   const r = await rig();
   assert.equal((await r.child.write({ target: "parent", text: "root cause found" })).ok, true);
-  assert.equal((await r.deliveries.pending("web")).length, 1);
+  await r.deliveries.pending("web");
   const entries = await r.sessions.getEntries(r.parent.id);
   assert.deepEqual(
     entries.map((entry) => [

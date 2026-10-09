@@ -1866,10 +1866,6 @@ button.subagent-chip:hover {
 }
 .subagent-update-text {
   flex-basis: 100%;
-  font-size: var(--font-13);
-  color: var(--foreground);
-  padding-left: 8px;
-  border-left: 2px solid var(--border);
 }
 .subagent-mail-note {
   font-size: var(--font-13);

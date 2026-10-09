@@ -190,6 +190,8 @@ import { liveTurnThreadRef } from "./working-dot";
 import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, latestGoal } from "./goal-strip";
 import {
   ackKey,
+  lastUpdateLabel,
+  lastUpdates,
   peekLines,
   subagentRows,
   subagentSummary,
@@ -2574,20 +2576,7 @@ export function createChatSurface(
     failed: "failed",
   };
 
-  function lastUpdateLabel(row: SubagentRow, now: number): string {
-    if (row.state !== "working") return "";
-    const at = Math.max(
-      0,
-      ...(chatState.agent?.state.messages ?? []).map((m) => {
-        const mail = (m as { subagentMail?: SubagentMailRef }).subagentMail;
-        const ts = (m as { timestamp?: number }).timestamp ?? 0;
-        return mail?.kind === "update" && mail.sessionId === row.session.id && ts >= row.startedAt ? ts : 0;
-      }),
-    );
-    return at ? ` · last update ${goalElapsedLabel(at, now)} ago` : " · no updates yet";
-  }
-
-  function subagentRowTpl(row: SubagentRow): TemplateResult {
+  function subagentRowTpl(row: SubagentRow, updates: ReadonlyMap<string, number>): TemplateResult {
     const now = Date.now();
     const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
     const peeking = subagentUi.peekId === row.session.id;
@@ -2608,7 +2597,7 @@ export function createChatSurface(
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
         <span class="subagent-row-title" dir="auto">${title}</span>
         <span class="subagent-row-meta"
-          >${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}${lastUpdateLabel(row, now)}</span
+          >${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}${lastUpdateLabel(row, updates, now)}</span
         >
       </button>
       ${
@@ -2655,6 +2644,7 @@ export function createChatSurface(
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
     syncWorkTicker();
     if (!rows.length) return nothing;
+    const updates = lastUpdates(chatState.agent?.state.messages ?? []);
     const single = rows.length === 1;
     const expanded = single || subagentUi.expanded || rows.some((row) => row.state === "waiting");
     const failed = rows.some((row) => row.state === "failed");
@@ -2677,7 +2667,7 @@ export function createChatSurface(
                 <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
               </button>`
         }
-        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(subagentRowTpl)}</div>` : nothing}
+        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map((row) => subagentRowTpl(row, updates))}</div>` : nothing}
       </section>
     `;
   }
