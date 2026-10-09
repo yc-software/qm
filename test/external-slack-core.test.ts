@@ -231,8 +231,21 @@ test("external policy changes invalidate retained requests while untouched works
     externalSlack: undefined,
     conversation: { ...req.conversation, channelRef: "C1", threadRef: "C1:old" },
   };
-  assert.equal(externalSlackRequestAllowed(legacy, externalSlackPolicies), false);
-  assert.equal(externalSlackRequestAllowed({ ...legacy, surface: "web" }, externalSlackPolicies, true), false);
+  assert.equal(externalSlackRequestAllowed(legacy, externalSlackPolicies), true);
+  assert.equal(
+    externalSlackRequestAllowed(
+      { ...legacy, slackSource: { accountId: "batch", teamId: "T1", userId: "U1" } },
+      externalSlackPolicies,
+    ),
+    false,
+  );
+  assert.equal(
+    externalSlackRequestAllowed(
+      { ...legacy, conversation: { ...legacy.conversation, threadRef: req.conversation.threadRef } },
+      externalSlackPolicies,
+    ),
+    false,
+  );
   assert.equal(
     externalSlackRequestAllowed(
       { ...legacy, slackSource: { accountId: "staff", teamId: "STAFF", userId: "U1" } },

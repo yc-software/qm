@@ -515,14 +515,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
-      if (
-        !externalSlackRequestAllowed(
-          { ...input, surface: input.surface ?? "" },
-          deps.externalSlackPolicies,
-          Object.keys(deps.externalSlackPolicies ?? {}).length > 0 &&
-            (await deps.sessions.getByThread(input.conversation.threadRef))?.surface === "slack",
-        )
-      )
+      if (!externalSlackRequestAllowed(input, deps.externalSlackPolicies))
         return { status: "refused", reason: "Slack workspace access changed; start a fresh request in Slack." };
       const external = input.externalSlack !== undefined;
       if (external && input.swarm) return { status: "refused", reason: "External Slack cannot delegate to a swarm." };

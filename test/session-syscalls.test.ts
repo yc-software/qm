@@ -1663,8 +1663,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const { externalSlackNamespace } = await import("../src/slack/external-access.ts");
   const access = { companyDomains: ["partner.example"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["search"] };
   const policies = { ext: access };
-  const admitted = (request: OrchestratorInput) =>
-    externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
+  const admitted = (request: OrchestratorInput) => externalSlackRequestAllowed(request, policies);
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const factory = createSessionSyscalls({
