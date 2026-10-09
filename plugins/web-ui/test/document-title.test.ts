@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
-import { activeSessionForDocumentTitle, documentTitle, PRODUCT_TITLE } from "../src/document-title.ts";
+import { activeSessionForDocumentTitle, documentTitle } from "../src/document-title.ts";
+
+const PRODUCT_TITLE = "QM · Web";
 
 const index = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 
@@ -13,13 +15,12 @@ test("page titles retain the static product title", () => {
   assert.equal(documentTitle(), PRODUCT_TITLE);
 });
 
-test("views keep the org-branded title the server rendered (#2108)", async () => {
+test("titles keep the org's brand after client updates (#2108)", () => {
   const saved = globalThis.document;
-  globalThis.document = new JSDOM("<title>Acme · Web</title>").window.document;
+  globalThis.document = new JSDOM('<meta name="brand-self-label" content="Acme">').window.document;
   try {
-    const branded = new URL("../src/document-title.ts?branded", import.meta.url).href;
-    const { documentTitle: brandedTitle } = (await import(branded)) as typeof import("../src/document-title.ts");
-    assert.equal(brandedTitle("chats"), "Chats · Acme · Web");
+    assert.equal(documentTitle(), "Acme · Web");
+    assert.equal(documentTitle("chats"), "Chats · Acme · Web");
   } finally {
     globalThis.document = saved;
   }

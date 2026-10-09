@@ -11,8 +11,14 @@ interface ActiveConversation {
   threadRef: string | null;
 }
 
-// The server renders the org-branded title (#2108); views prefix it instead of rebuilding it.
-export const PRODUCT_TITLE = (typeof document !== "undefined" && document.title) || "QM · Web";
+/** Shared with the server's branded <title>, so the tab title has one format (#2108). */
+export const TITLE_SUFFIX = "· Web";
+
+/** The org's brand, from the meta tag the server stamps; the client's only source for it. */
+export function brandName(): string {
+  if (typeof document === "undefined") return "QM";
+  return document.querySelector<HTMLMetaElement>('meta[name="brand-self-label"]')?.content || "QM";
+}
 
 const VIEW_TITLES: Record<View, string> = {
   chats: "Chats",
@@ -33,7 +39,7 @@ const VIEW_TITLES: Record<View, string> = {
 export function documentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): string {
   const title =
     view === "chats" && conversationOpen ? conversationTitle?.trim() || "New chat" : view && VIEW_TITLES[view];
-  return title ? `${title} · ${PRODUCT_TITLE}` : PRODUCT_TITLE;
+  return `${title ? `${title} · ` : ""}${brandName()} ${TITLE_SUFFIX}`;
 }
 
 export function updateDocumentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): void {

@@ -41,6 +41,7 @@ import {
   PORTAL_IDENTITY_SECRET,
   portFromEnv,
 } from "../../chassis/src/env.ts";
+import { TITLE_SUFFIX } from "../src/document-title.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 const PORT = portFromEnv(8096);
@@ -122,7 +123,7 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
 
 async function brandIndexHtml(html: string): Promise<string> {
   const branding = await brandingCache.forRender();
-  return injectBranding(html, branding, { titleSuffix: "· Web" });
+  return injectBranding(html, branding, { titleSuffix: TITLE_SUFFIX });
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
