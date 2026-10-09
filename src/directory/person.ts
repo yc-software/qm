@@ -20,7 +20,7 @@ export function normalizeHandle(id: string | null | undefined): string {
 export function principalOf(id: string): string {
   const key = normalizeHandle(id);
   if (!key) return id;
-  return resolver?.principalOf(key) ?? key;
+  return resolver?.principalOf(key) ?? id;
 }
 
 /**

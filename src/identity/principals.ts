@@ -361,7 +361,7 @@ export function createPrincipalGraph(
         await refresh(true);
         if (!principals.has(principalId)) throw new IdentityLinkError(404, `no principal ${principalId}`);
         const wanted = new Set(emails.map((e) => e.trim().toLowerCase()).filter((e) => e.includes("@")));
-        for (const row of [...identities.values()])
+        for (const row of Array.from(identities.values()))
           if (
             row.provider === "email" &&
             row.principalId === principalId &&
@@ -377,7 +377,7 @@ export function createPrincipalGraph(
           if (prior?.principalId === principalId) continue;
           await write({ ...blank(address, address), principalId, linkedBy, updatedAt: Date.now() });
         }
-        for (const row of [...identities.values()])
+        for (const row of Array.from(identities.values()))
           if (row.provider !== "email" && !row.principalId && row.email && wanted.has(row.email))
             await autoLinkLocked(`${row.externalId}`, row.email);
       });
