@@ -259,6 +259,79 @@ test("resolvePrincipal allowedEmails permits only the seeded verified addresses"
   );
 });
 
+test("resolvePrincipal unions broker rules without widening retained external OIDC rules", async () => {
+  const brokerRule = {
+    claim: "email" as const,
+    allowedEmails: ["admin@gmail.com"],
+    allowedEmailDomain: "example.com",
+    requireCoreAdmission: true,
+  };
+  for (const email of ["admin@gmail.com", "member@example.com"]) {
+    assert.deepEqual(
+      await resolvePrincipal(
+        brokerRule,
+        { sub: "g", claims: {}, userinfo: { email, email_verified: true } },
+        async () => ({ allowed: true }),
+      ),
+      { sub: email },
+    );
+  }
+  await assert.rejects(
+    resolvePrincipal(
+      brokerRule,
+      { sub: "g", claims: {}, userinfo: { email: "other@gmail.com", email_verified: true } },
+      async () => ({ allowed: false }),
+    ),
+    /permitted email list/,
+  );
+  await assert.rejects(
+    resolvePrincipal(
+      brokerRule,
+      { sub: "g", claims: {}, userinfo: { email: "member@example.com", email_verified: false } },
+      async () => ({ allowed: true }),
+    ),
+    /not verified/,
+  );
+
+  const externalRule = {
+    claim: "email" as const,
+    allowedEmails: ["admin@example.com", "former@gmail.com"],
+    allowedEmailDomain: "example.com",
+  };
+  assert.deepEqual(
+    await resolvePrincipal(externalRule, {
+      sub: "g",
+      claims: {},
+      userinfo: { email: "admin@example.com", email_verified: true, hd: "example.com" },
+    }),
+    { sub: "admin@example.com" },
+  );
+  await assert.rejects(
+    resolvePrincipal(externalRule, {
+      sub: "g",
+      claims: {},
+      userinfo: { email: "former@gmail.com", email_verified: true },
+    }),
+    /permitted domain/,
+  );
+  await assert.rejects(
+    resolvePrincipal(externalRule, {
+      sub: "g",
+      claims: {},
+      userinfo: { email: "member@example.com", email_verified: true },
+    }),
+    /permitted email list/,
+  );
+  await assert.rejects(
+    resolvePrincipal(externalRule, {
+      sub: "g",
+      claims: {},
+      userinfo: { email: "admin@example.com", email_verified: true, hd: "evil.com" },
+    }),
+    /permitted domain/,
+  );
+});
+
 test("resolvePrincipal admits an invited external address that the env rules reject", async () => {
   const rule = { claim: "email" as const, allowedEmailDomain: "example.com", allowedEmails: ["admin@example.com"] };
   const asked: string[] = [];
