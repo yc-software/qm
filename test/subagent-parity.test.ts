@@ -19,7 +19,7 @@ import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { defineHarness } from "../src/harness/harness.ts";
 import { harnessToolOptions } from "../src/harness/harness-shared.ts";
-import { createAgentTools, SUBAGENT_TOOL_EXCEPTIONS, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
+import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -44,25 +44,11 @@ type Turn = {
 
 const actor: Principal = { id: "U1", type: "internal" };
 const scope = scopeId("personal", "U1");
-const exceptions = Object.keys(SUBAGENT_TOOL_EXCEPTIONS) as (keyof AgentToolsOptions)[];
-
-function noSandbox(): Sandbox {
-  const unreached = () => {
-    throw new Error("these turns never touch a computer");
-  };
-  return {
-    profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
-    provision: unreached as never,
-    run: unreached as never,
-    readFile: unreached as never,
-    writeFile: unreached as never,
-    writeFileBytes: unreached as never,
-    readFileBytes: unreached as never,
-    listDir: unreached as never,
-    removeDir: unreached as never,
-    teardown: unreached as never,
-  };
-}
+const SUBAGENT_EXCEPTIONS = {
+  surfaceTools: "a subagent's result returns to its parent, which owns posting to the conversation",
+  delegateWork: "a subagent is the delegate, so it does the work instead of delegating again",
+} satisfies Partial<Record<keyof AgentToolsOptions, string>>;
+const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)[];
 
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
   const sessions = createMemorySessionStore();
@@ -142,7 +128,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     runs,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox: noSandbox(),
+    sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
@@ -207,11 +193,11 @@ for (const [surface, flags] of [
   ["web", ["persistent_subagents"]],
   ["slack", ["responsive_spine"]],
 ] as const) {
-  test(`a ${surface} subagent can do what its parent could, except SUBAGENT_TOOL_EXCEPTIONS`, async () => {
+  test(`a ${surface} subagent can do what its parent could, except SUBAGENT_EXCEPTIONS`, async () => {
     const w = await world([...flags], script);
     const { parent, child } = await w.parentTurn(surface, `${surface}:U1:parity`);
     const omit = (options: AgentToolsOptions) =>
-      Object.fromEntries(Object.entries(options).filter(([key]) => !(key in SUBAGENT_TOOL_EXCEPTIONS)));
+      Object.fromEntries(Object.entries(options).filter(([key]) => !(key in SUBAGENT_EXCEPTIONS)));
     assert.deepEqual(omit(child.options), omit(parent.options));
     const asParent = { ...child.options, ...Object.fromEntries(exceptions.map((key) => [key, parent.options[key]])) };
     assert.deepEqual(
