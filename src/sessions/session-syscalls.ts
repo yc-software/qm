@@ -1035,7 +1035,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
   deliveries?: Pick<DeliveryStore, "enqueue">;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
@@ -1200,37 +1199,29 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
-  if (
-    requiresDelegation(
-      { ...prepared, surfaceTools: meta.surfaceTools },
-      (await deps.delegationEnabled?.(prepared.actor.id)) === true,
-    )
-  ) {
-    const dedupKey = `subagent-return:${run.id}`;
-    const existing = await deps.runs.getByDedupKey(dedupKey);
-    const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
-    if (!unread) {
-      if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
-      return true;
-    }
-    if (existing && (existing.status === "done" || existing.status === "failed")) return true;
-    if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return false;
-    const wake =
-      "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
-    await deps.runs.enqueue({
-      sessionId: parent.threadRef,
-      dedupKey,
-      request: {
-        ...prepared,
-        surfaceTools: true,
-        ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
-        origin: { ...prepared.origin, kind: "automation", screenData: wake },
-        text: wake,
-        displayText: "Delegated task completed",
-      },
-      maxAttempts: deps.maxAttempts,
-    });
-    return false;
+  const dedupKey = `subagent-return:${run.id}`;
+  const existing = await deps.runs.getByDedupKey(dedupKey);
+  const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
+  if (!unread) {
+    if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
+    return true;
   }
-  return true;
+  if (existing && (existing.status === "done" || existing.status === "failed")) return true;
+  if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return false;
+  const wake =
+    "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
+  await deps.runs.enqueue({
+    sessionId: parent.threadRef,
+    dedupKey,
+    request: {
+      ...prepared,
+      surfaceTools: prepared.surface !== "web" && !isSubagentThreadRef(parent.threadRef),
+      ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
+      origin: { ...prepared.origin, kind: "automation", screenData: wake },
+      text: wake,
+      displayText: "Delegated task completed",
+    },
+    maxAttempts: deps.maxAttempts,
+  });
+  return false;
 }

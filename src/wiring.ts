@@ -2277,7 +2277,6 @@ export function buildApp(
             maxAttempts,
             mailbox: sessionMailbox,
             prepareRequest: prepareSessionRequest,
-            delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
             deliveries,
             signals: runSignals,
           },
