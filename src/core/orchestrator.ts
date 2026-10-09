@@ -1380,8 +1380,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const delegatedTask =
         automatedTurn && !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      const titleText = input.displayText?.trim() || input.text;
+      let fallbackTitleWrite: Promise<void> | undefined;
       const assignSessionTitle = () => {
-        const titleText = input.displayText?.trim() || input.text;
         const untitledUserTurn =
           !session.title &&
           !input.approval &&
@@ -1397,8 +1398,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             state: "metadata",
             at: Date.now(),
           });
-        void deps.sessions
-          .updateTitle(session.id, fallbackTitle)
+        fallbackTitleWrite = deps.sessions.updateTitle(session.id, fallbackTitle);
+        void fallbackTitleWrite
           .then(announce)
           .then(async () => {
             if (!deps.harness.models.generateTitle) return;
