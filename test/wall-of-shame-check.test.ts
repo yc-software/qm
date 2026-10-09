@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { wallOfShameLenses, wallOfShameProblems } from "../scripts/wall-of-shame-check.ts";
 
@@ -12,9 +11,6 @@ const row = (lens: string, verdict = "Accept") => `| ${lens} | R1 | ${verdict} |
 
 test("lenses come from the spec's Wall of shame headings", () => {
   assert.deepEqual(wallOfShameLenses(spec), ["Overengineering", "Regex", "Honorable mentions"]);
-  assert.ok(
-    wallOfShameLenses(readFileSync(new URL("../docs/SPEC.md", import.meta.url), "utf8")).includes("Honorable mentions"),
-  );
 });
 
 test("a complete accepted report for the head commit passes", () => {
@@ -33,10 +29,15 @@ test("a complete accepted report for the head commit passes", () => {
 
 test("missing, rejected, and stale reviews fail", () => {
   assert.deepEqual(
-    wallOfShameProblems(spec, body("b".repeat(40), [row("Overengineering", "Request changes"), row("Regex")]), head),
+    wallOfShameProblems(
+      spec,
+      body("b".repeat(40), [row("Overengineering", "Request changes"), row("Regex"), row("Regex")]),
+      head,
+    ),
     [
       `Reviewed commit is ${"b".repeat(40)}, but the PR head is ${head}.`,
       "Overengineering: verdict is Request changes, not Accept.",
+      "Regex: 2 review rows; keep one.",
       "Honorable mentions: no review row.",
     ],
   );

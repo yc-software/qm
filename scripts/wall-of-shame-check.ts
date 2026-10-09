@@ -24,23 +24,22 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string)
   const reviewed = report.find((line) => line.startsWith("Reviewed commit:"))?.split("`")[1];
   if (reviewed !== headSha)
     problems.push(`Reviewed commit is ${reviewed ?? "missing"}, but the PR head is ${headSha}.`);
-  const rows = new Map(
-    report
-      .filter((line) => line.trim().startsWith("|"))
-      .map((line) =>
-        line
-          .split("|")
-          .slice(1, -1)
-          .map((cell) => cell.replaceAll("*", "").trim()),
-      )
-      .map((cells) => [cells[0], cells] as const),
-  );
+  const rows = report
+    .filter((line) => line.trim().startsWith("|"))
+    .map((line) =>
+      line
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => cell.replaceAll("*", "").trim()),
+    );
   for (const lens of wallOfShameLenses(spec)) {
-    const [, reviewer, verdict, score, assessment] = rows.get(lens) ?? [];
+    const matches = rows.filter((cells) => cells[0] === lens);
+    if (matches.length > 1) problems.push(`${lens}: ${matches.length} review rows; keep one.`);
+    const [, reviewer, verdict, score, assessment] = matches[0] ?? [];
     if (!verdict) problems.push(`${lens}: no review row.`);
     else if (verdict.toLowerCase() !== "accept") problems.push(`${lens}: verdict is ${verdict}, not Accept.`);
     if (verdict && !reviewer) problems.push(`${lens}: reviewer missing.`);
-    if (verdict && !/^\d{1,3}\/100$/.test(score ?? "")) problems.push(`${lens}: score missing (expected N/100).`);
+    if (verdict && !/^(100|\d{1,2})\/100$/.test(score ?? "")) problems.push(`${lens}: score missing (expected N/100).`);
     if (verdict && !assessment) problems.push(`${lens}: assessment missing.`);
   }
   return problems;
