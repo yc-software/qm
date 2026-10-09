@@ -305,13 +305,6 @@ function showArchiveToast(item: InboxItem): void {
   schedule();
 }
 
-let emojiIndexRequested = false;
-
-function ensureEmojiChips(): void {
-  if (emojiIndexRequested) return;
-  emojiIndexRequested = true;
-}
-
 interface InboxSurface {
   host: HTMLElement;
   viewId: string;
@@ -1438,7 +1431,6 @@ export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothin
 }
 
 function reactionChipTpl(name: string): TemplateResult {
-  ensureEmojiChips();
   const char = charForName(name);
   return html`<span class="inbox-reaction-chip" title=${`:${name}:`}>${char ?? `:${name}:`}</span>`;
 }
