@@ -54,21 +54,14 @@ test("a subagent's message to an idle web parent shows in the parent transcript 
   assert.equal((await r.deliveries.pending("web")).length, 1);
   const entries = await r.sessions.getEntries(r.parent.id);
   assert.deepEqual(
-    entries.map((entry) => [entry.type, (entry.payload as { kind?: string; text?: string }).kind, (entry.payload as { text?: string }).text]),
+    entries.map((entry) => [
+      entry.type,
+      (entry.payload as { kind?: string; text?: string }).kind,
+      (entry.payload as { text?: string }).text,
+    ]),
     [["system", "subagent_update", "root cause found"]],
   );
   assert.equal((entries[0]!.payload as { sessionId?: string }).sessionId, r.childId);
   assert.equal((await r.runs.inFlightForThread(r.parent.threadRef)).length, 0);
-  assert.equal((await r.mailbox.pending(r.parent.id)).length, 1);
-});
-
-test("a busy parent gets the message through its running turn only", async () => {
-  const r = await rig();
-  await r.runs.enqueue({
-    sessionId: r.parent.threadRef,
-    request: { actor, conversation, origin: { kind: "direct" }, text: "working" } as OrchestratorInput,
-  });
-  assert.equal((await r.child.write({ target: "parent", text: "halfway" })).ok, true);
-  assert.equal((await r.deliveries.pending("web")).length, 0);
   assert.equal((await r.mailbox.pending(r.parent.id)).length, 1);
 });

@@ -838,12 +838,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
-                if (
-                  deps.deliveries &&
-                  binding.session.parentSessionId === target.id &&
-                  target.threadRef.startsWith("web:") &&
-                  !(await deps.runs.inFlightForThread(target.threadRef)).length
-                )
+                if (deps.deliveries && binding.session.parentSessionId === target.id && target.surface === "web")
                   await deps.deliveries.enqueue({
                     destination: {
                       type: "web",
