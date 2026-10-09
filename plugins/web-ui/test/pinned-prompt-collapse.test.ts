@@ -407,7 +407,7 @@ test("the condensed strip keeps the resting line layout, with a scroll-driven he
   );
   const rest =
     css.match(
-      /\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/,
+      /\.message-stack \.user-row\.latest-prompt:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/,
     )?.[0] ?? "";
   assert.match(rest, /-webkit-line-clamp: 6/);
   assert.doesNotMatch(rest, /max-height|transition/);

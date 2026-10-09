@@ -84,7 +84,10 @@ test("backgroundStart routes a denied command to CommandDenied BEFORE the broker
       rules: [{ pattern: "rm\\s+-rf", decision: "deny", reason: "destructive" }],
     }),
   });
-  await assert.rejects(ctx.backgroundStart("rm -rf /"), (e) => e instanceof CommandDenied);
+  await assert.rejects(
+    ctx.backgroundStart("rm -rf /", { purpose: "Run background tests" }),
+    (e) => e instanceof CommandDenied,
+  );
   assert.equal(calls.start, 0, "the broker must not be reached for a denied command");
 });
 
@@ -97,7 +100,10 @@ test("backgroundStart routes a require_approval command to NeedsApproval BEFORE 
       rules: [{ pattern: "deploy prod", decision: "require_approval", reason: "prod" }],
     }),
   });
-  await assert.rejects(ctx.backgroundStart("deploy prod"), (e) => e instanceof NeedsApproval);
+  await assert.rejects(
+    ctx.backgroundStart("deploy prod", { purpose: "Run background tests" }),
+    (e) => e instanceof NeedsApproval,
+  );
   assert.equal(calls.start, 0);
 });
 
@@ -111,7 +117,7 @@ test("an already-approved require_approval command DOES reach the broker", async
       rules: [{ pattern: "deploy prod", decision: "require_approval", reason: "prod" }],
     }),
   });
-  await ctx.backgroundStart("deploy prod");
+  await ctx.backgroundStart("deploy prod", { purpose: "Run background tests" });
   assert.equal(calls.start, 1);
 });
 
@@ -120,10 +126,14 @@ test("ledger replay: a start result is CACHED — a crash-replay returns the sam
   const { broker, calls } = recordingBroker();
   const run = "run-1";
 
-  const first = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test");
+  const first = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test", {
+    purpose: "Run background tests",
+  });
   assert.equal(calls.start, 1);
 
-  const replay = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test");
+  const replay = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test", {
+    purpose: "Run background tests",
+  });
   assert.equal(calls.start, 1, "no second startProcess on replay");
   assert.deepEqual(replay, first);
 });
@@ -174,7 +184,7 @@ test("callIndex advances on every once() — a non-cached poll between two cache
   const run = "run-5";
 
   const ctx1 = ctxFor({ backgroundBroker: broker, ledger, runId: run });
-  await ctx1.backgroundStart("npm test");
+  await ctx1.backgroundStart("npm test", { purpose: "Run background tests" });
   setPollState("running");
   await ctx1.backgroundPoll("p-1");
   setPollState("exited");
@@ -184,7 +194,7 @@ test("callIndex advances on every once() — a non-cached poll between two cache
 
   setPollState("exited");
   const ctx2 = ctxFor({ backgroundBroker: broker, ledger, runId: run });
-  await ctx2.backgroundStart("npm test");
+  await ctx2.backgroundStart("npm test", { purpose: "Run background tests" });
   await ctx2.backgroundPoll("p-1");
   await ctx2.backgroundPoll("p-1");
   assert.equal(calls.start, 1, "start stayed cached across replay (deterministic key)");
@@ -195,7 +205,7 @@ test("off-Fly degradation: with NO broker the four mutating methods throw the 'u
   const ctx = ctxFor({});
   const guidance = /isn't available.*execute/s;
 
-  await assert.rejects(ctx.backgroundStart("npm test"), guidance);
+  await assert.rejects(ctx.backgroundStart("npm test", { purpose: "Run background tests" }), guidance);
   await assert.rejects(ctx.backgroundPoll("p-1"), guidance);
   await assert.rejects(ctx.backgroundStop("p-1"), guidance);
   await assert.rejects(ctx.backgroundWrite("p-1", "ABCD-1234\n"), guidance);

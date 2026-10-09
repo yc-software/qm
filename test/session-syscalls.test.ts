@@ -147,6 +147,21 @@ for (const explicit of [
   });
 }
 
+test("empty writes name the action and field the caller used", async () => {
+  const r = await rig();
+  const opened = await r.syscallsFor(r.room).open({ task: "work" });
+  assert.ok(opened.ok);
+  const followup = await r.syscallsFor(r.room).write({ followup: true, target: opened.sessionId });
+  assert.ok(!followup.ok);
+  assert.match(followup.message, /^followup_task requires `task`/);
+  const message = await r.syscallsFor(r.room).write({ target: opened.sessionId, text: "  " });
+  assert.ok(!message.ok);
+  assert.match(message.message, /^send_message requires `text`/);
+  const self = await r.syscallsFor(r.room).write({ target: r.room.id, text: "hi" });
+  assert.ok(!self.ok);
+  assert.match(self.message, /cannot message itself/);
+});
+
 test("followup tasks cannot turn an ordinary session into a child", async () => {
   const r = await rig();
   const ordinary = await r.sessions.getOrCreateByThread("web:ordinary", "dm", scope, undefined, "web");
@@ -639,7 +654,7 @@ test("writes revalidate access even while a target is running", async () => {
   assert.deepEqual(await r.signals.takePending(run!.id), []);
 });
 
-test("completion cannot expand the finished run's audience during roster refresh", async () => {
+test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "private research" });
   assert.ok(opened.ok);
@@ -647,24 +662,52 @@ test("completion cannot expand the finished run's audience during roster refresh
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
   await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "private result" });
-  await assert.rejects(
-    deliverSubagentMail(
-      {
-        mailbox: r.mailbox,
-        sessions: r.sessions,
-        runs: r.runs,
-        maxAttempts: 3,
-        prepareRequest: async (request) => ({
-          ...request,
-          conversation: { ...request.conversation, audience: [actor, { id: "new-member", type: "internal" }] },
-        }),
-      },
-      (await r.runs.get(run!.id))!,
-    ),
-    /audience/,
-  );
+  let expanded = true;
+  let attempts = 0;
+  const recover = async () => {
+    for (const pending of await r.runs.pendingReturns()) {
+      attempts++;
+      try {
+        if (
+          await deliverSubagentMail(
+            {
+              mailbox: r.mailbox,
+              sessions: r.sessions,
+              runs: r.runs,
+              maxAttempts: 3,
+              prepareRequest: async (request) => ({
+                ...request,
+                conversation: {
+                  ...request.conversation,
+                  audience: expanded ? [actor, { id: "new-member", type: "internal" }] : [actor],
+                },
+              }),
+            },
+            pending,
+          )
+        )
+          await r.runs.markReturned(pending.id);
+      } catch (error) {
+        await r.runs.deferReturn(pending.id, 60_000);
+        throw error;
+      }
+    }
+  };
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  await assert.rejects(recover(), /audience/);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
-  assert.equal((await r.runs.pendingReturns()).length, 1);
+  assert.deepEqual(await r.mailbox.pending(r.room.id), []);
+  expanded = false;
+  for (let i = 0; i < 59; i++) {
+    t.mock.timers.tick(1_000);
+    await recover();
+  }
+  assert.equal(attempts, 1);
+  t.mock.timers.tick(1_000);
+  await recover();
+  assert.equal(attempts, 2);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+  assert.deepEqual(await r.runs.pendingReturns(), []);
 });
 
 test("private session replies stay read-only, queue behind running work, and do not return to a parent", async () => {
@@ -1614,3 +1657,200 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("children of a Slack group turn keep its source so external-workspace policy admits them", async () => {
+  const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
+  const { externalSlackNamespace } = await import("../src/slack/external-access.ts");
+  const access = { companyDomains: ["partner.example"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["search"] };
+  const policies = { ext: access };
+  const admitted = (request: OrchestratorInput) =>
+    externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
+  const sessions = createMemorySessionStore();
+  const { runs } = createMemoryRunStore();
+  const factory = createSessionSyscalls({
+    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
+    sessions,
+    runs,
+    signals: createMemoryRunSignalStore(),
+    maxAttempts: 3,
+  });
+  const cases = [
+    {
+      threadRef: "slack:group:G1",
+      request: { slackSource: { accountId: "staff", teamId: "T1", userId: "U1" } },
+    },
+    {
+      threadRef: `${externalSlackNamespace("T2", access)}:C2`,
+      request: { externalSlack: { accountId: "ext", teamId: "T2", userId: "U1", ...access } },
+    },
+  ];
+  for (const c of cases) {
+    const group: Conversation = { kind: "group", threadRef: c.threadRef, channelRef: c.threadRef, audience: [actor] };
+    const room = await sessions.getOrCreateByThread(c.threadRef, "group", scope, undefined, "slack");
+    await sessions.addParticipant(room.id, actor.id);
+    const syscalls = factory.forTurn({
+      session: room,
+      scopeId: scope,
+      request: { surface: "slack", conversation: group, actor, ...c.request },
+    });
+    const opened = await syscalls.open({ task: "look into it" });
+    assert.ok(opened.ok);
+    const child = await freshSession(sessions, opened.sessionId);
+    const [run] = await runs.inFlightForThread(child.threadRef);
+    assert.ok(admitted(run!.request));
+    assert.deepEqual(run!.request.externalSlack, "externalSlack" in c.request ? c.request.externalSlack : undefined);
+    const followed = await syscalls.write({ target: child.id, text: "more", followup: true });
+    assert.ok(followed.ok, JSON.stringify(followed));
+    const latest = (await runs.inFlightForThread(child.threadRef)).at(-1)!;
+    assert.ok(admitted(latest.request));
+    assert.deepEqual(latest.request.externalSlack, run!.request.externalSlack);
+  }
+});
+
+test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
+  const sessions = createMemorySessionStore();
+  const { runs } = createMemoryRunStore();
+  const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
+  const room = await sessions.getOrCreateByThread("web:U1:room", "dm", scope, undefined, "web");
+  await sessions.updateTitle(room.id, "room");
+  const peer = await sessions.getOrCreateByThread("web:U1:peer", "dm", scope, undefined, "web");
+  await sessions.updateTitle(peer.id, "peer");
+  const archived = await sessions.getOrCreateByThread("web:U1:old", "dm", scope, undefined, "web");
+  const elsewhere = await sessions.getOrCreateByThread("web:U1:other", "channel", scopeId("channel", "C9"));
+  for (const s of [room, peer, archived, elsewhere]) await sessions.addParticipant(s.id, actor.id);
+  const guest: Principal = { id: "G1", type: "guest", displayName: "Guest" };
+  await sessions.addParticipant(room.id, guest.id);
+  const factory = createSessionSyscalls({
+    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
+    sessions,
+    runs,
+    signals: createMemoryRunSignalStore(),
+    maxAttempts: 3,
+    conversations: {
+      list: async () => [
+        (await sessions.get(room.id))!,
+        (await sessions.get(peer.id))!,
+        { ...(await sessions.get(archived.id))!, archived: true },
+        (await sessions.get(elsewhere.id))!,
+        {
+          ...(await sessions.get(peer.id))!,
+          id: "child",
+          threadRef: "agent:main:subagent:x",
+          parentSessionId: room.id,
+        },
+      ],
+      start: async (_actorId, input) => {
+        started.push(input);
+        return { session: { ...(await sessions.get(peer.id))!, id: "made", title: "made" } };
+      },
+    },
+  });
+  const forTurn = (
+    liveTurn: boolean,
+    opts: { readOnly?: boolean; audience?: Principal[]; surface?: string; memory?: string } = {},
+  ) =>
+    factory.forTurn({
+      session: room,
+      scopeId: scope,
+      liveTurn,
+      ...(opts.memory ? { memoryContext: { audience: opts.memory } } : {}),
+      request: {
+        surface: opts.surface ?? "web",
+        conversation: { kind: "dm", threadRef: room.threadRef, audience: opts.audience ?? [actor] },
+        actor,
+        origin: { kind: "human" },
+        ...(opts.readOnly ? { readOnly: true } : {}),
+      } as Parameters<typeof factory.forTurn>[0]["request"],
+    });
+  const live = forTurn(true);
+  const listed = await live.list!();
+  assert.ok(listed.ok);
+  assert.deepEqual(listed.sessions.map((s) => [s.title, s.current]).sort(), [
+    ["peer", false],
+    ["room", true],
+  ]);
+  const shared = await forTurn(false, { audience: [actor, guest] }).list!();
+  assert.ok(shared.ok);
+  assert.deepEqual(
+    shared.sessions.map((s) => s.title),
+    ["room"],
+  );
+  assert.deepEqual(await live.start!({ fork: false }), {
+    ok: false,
+    message: "new requires `text`: the new session's first message.",
+  });
+  assert.equal((await live.start!({ fork: false, text: "hello", title: "fresh" })).ok, true);
+  assert.equal((await live.start!({ fork: true })).ok, true);
+  assert.deepEqual(started, [
+    { scopeId: scope, text: "hello", title: "fresh" },
+    { scopeId: scope, forkOf: room.id },
+  ]);
+  const child = await sessions.getOrCreateByThread("agent:main:subagent:w", "dm", scope, undefined, "web");
+  await sessions.updateTitle(child.id, "worker");
+  await sessions.addParticipant(child.id, actor.id);
+  await sessions.setParentSession(child.id, room.id);
+  for (const out of [
+    await live.read({ peer: true, target: child.id }),
+    await live.write({ peer: true, target: child.id, text: "hi" }),
+  ])
+    assert.deepEqual(out, {
+      ok: false,
+      message: '"worker" is a subagent, not a session — use the subagents tool for it.',
+    });
+  const fromChild = factory.forTurn({
+    session: child,
+    scopeId: scope,
+    liveTurn: true,
+    request: {
+      surface: "web",
+      conversation: { kind: "dm", threadRef: child.threadRef, audience: [actor] },
+      actor,
+      origin: { kind: "human" },
+    } as Parameters<typeof factory.forTurn>[0]["request"],
+  });
+  for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })]) assert.equal(out.ok, false);
+  const unshareable =
+    "this conversation's earlier history was shared with a different audience, so it can't be forked from here.";
+  const checkpoint = async (audience: string, throughSeq: number) => {
+    const { lease } = await sessions.acquireLease(room.id);
+    assert.ok(lease);
+    await sessions.append(lease, {
+      type: "user",
+      scopeLabel: scope,
+      payload: { text: "hi", memoryContext: { kind: "memory_context", snapshot: { audience }, throughSeq } },
+    });
+    await sessions.releaseLease(lease);
+  };
+  assert.deepEqual(await forTurn(true, { memory: "before" }).start!({ fork: true }), {
+    ok: false,
+    message: unshareable,
+  });
+  await checkpoint("before", 0);
+  assert.deepEqual(await forTurn(true, { memory: "before" }).start!({ fork: true }), {
+    ok: false,
+    message: unshareable,
+  });
+  await checkpoint("before", -1);
+  const sameAudience = forTurn(true, { memory: "before" });
+  assert.equal((await sameAudience.start!({ fork: true })).ok, true);
+  const listedTitles = await sameAudience.list!();
+  assert.ok(listedTitles.ok);
+  assert.ok(listedTitles.sessions.some((s) => s.title === "room"));
+  const newAudience = forTurn(true, { memory: "after" });
+  assert.deepEqual(await newAudience.start!({ fork: true }), { ok: false, message: unshareable });
+  const hidden = await newAudience.list!();
+  assert.ok(hidden.ok);
+  assert.ok(hidden.sessions.some((s) => s.title === "room"));
+  const slack = forTurn(true, { surface: "slack" });
+  for (const out of [
+    await slack.list!(),
+    await slack.start!({ fork: true }),
+    await slack.read({ peer: true, target: peer.id }),
+  ])
+    assert.deepEqual(out, { ok: false, message: "sessions are a web UI feature and aren't available here." });
+  for (const blocked of [forTurn(false), forTurn(true, { readOnly: true })]) {
+    const out = await blocked.start!({ fork: true });
+    assert.equal(out.ok, false);
+  }
+  assert.equal(started.length, 3);
+});

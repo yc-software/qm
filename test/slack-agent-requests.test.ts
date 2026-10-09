@@ -535,6 +535,9 @@ test("run-backed handoffs reject another destination, DM source, expired run and
       f.run.request.surface = "web";
     },
     (f: ReturnType<typeof runDispatchFixture>) => {
+      (f.run.request as Record<string, unknown>).externalSlack = { serviceCredentials: [] };
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
       f.run.request.conversation.audience = [];
     },
     (f: ReturnType<typeof runDispatchFixture>) => {

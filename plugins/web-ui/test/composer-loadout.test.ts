@@ -198,23 +198,23 @@ test("the model catalog falls back from unavailable saved harnesses using only c
 test("harness effort choices exclude unsupported settings and label extra high clearly", () => {
   assert.deepEqual(
     effortLevelsForHarness("pi").map(({ value }) => value),
-    ["low", "medium", "high", "xhigh", "max", "ultracode"],
+    ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"],
   );
   assert.deepEqual(
     effortLevelsForHarness("claude").map(({ value }) => value),
-    ["low", "medium", "high", "xhigh", "max"],
+    ["auto", "low", "medium", "high", "xhigh", "max"],
   );
   assert.deepEqual(
     effortLevelsForHarness("codex").map(({ value }) => value),
-    ["low", "medium", "high", "xhigh"],
+    ["auto", "low", "medium", "high", "xhigh"],
   );
   for (const harnessId of ["pi", "claude", "codex"])
     assert.equal(effortLevelsForHarness(harnessId).find(({ value }) => value === "xhigh")?.label, "Extra high");
   for (const harnessId of ["opencode", "mock", "unknown"])
-    assert.deepEqual(effortLevelsForHarness(harnessId), [{ value: "auto", label: "Legacy default" }]);
+    assert.deepEqual(effortLevelsForHarness(harnessId), [{ value: "auto", label: "Default" }]);
 });
 
-test("native reasoning choices require model and harness metadata while legacy settings survive", () => {
+test("native reasoning choices require model and harness metadata and always offer Default", () => {
   const model = {
     ...option("pi:one").model,
     effortLevelsByHarness: {
@@ -223,26 +223,31 @@ test("native reasoning choices require model and harness metadata while legacy s
     },
   };
   assert.deepEqual(effortLevelsForHarness("pi", model), [
+    { value: "auto", label: "Default" },
     { value: "adaptive", label: "Auto" },
     { value: "default", label: "Provider default" },
     { value: "low", label: "Low" },
     { value: "high", label: "High" },
   ]);
-  assert.equal(effortLevelsForHarness("pi", model, "auto")[0]?.label, "Legacy default");
   for (const harness of ["claude", "codex"])
-    assert.ok(
-      effortLevelsForHarness(harness, model, "adaptive").every(
-        ({ value }) => value !== "adaptive" && value !== "default",
-      ),
-    );
-  for (const selected of ["auto", "adaptive", "default"])
-    assert.ok(
-      effortLevelsForHarness("pi", option("pi:one").model, selected).every(
-        ({ value }) => value !== "adaptive" && value !== "default",
-      ),
-    );
+    assert.ok(effortLevelsForHarness(harness, model).every(({ value }) => value !== "adaptive" && value !== "default"));
+  assert.ok(
+    effortLevelsForHarness("pi", option("pi:one").model).every(
+      ({ value }) => value !== "adaptive" && value !== "default",
+    ),
+  );
   const withoutEfforts = { ...model, effortLevelsByHarness: { pi: [] } };
-  assert.deepEqual(effortLevelsForHarness("pi", withoutEfforts), [{ value: "auto", label: "Legacy default" }]);
+  assert.deepEqual(effortLevelsForHarness("pi", withoutEfforts), [{ value: "auto", label: "Default" }]);
   const saved = [entry("pi:one", "adaptive"), entry("pi:two", "default"), entry("pi:three", "auto")];
   assert.deepEqual(parseLoadout(JSON.stringify(saved)), saved);
+});
+
+test("Astra speed variants share a preset and preserve a saved tier", () => {
+  const base = option("pi:gpt-6-astra");
+  const ultra = option("pi:gpt-6-astra-ultrafast");
+  const saved = entry(ultra.value, "high");
+  assert.deepEqual(modelLoadoutOptions([ultra, base], [], "pi"), [base]);
+  assert.deepEqual(modelLoadoutOptions([base, ultra], [saved], "pi"), [ultra]);
+  assert.deepEqual(modelLoadoutOptions([ultra], [], "pi"), [ultra]);
+  assert.deepEqual(upsertLoadout([entry(base.value)], saved), [saved]);
 });

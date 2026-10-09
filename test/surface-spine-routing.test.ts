@@ -458,15 +458,15 @@ test("first action is `post` (speaking deliberately) → the opening text is NOT
   }
 });
 
-test("addressed + stay_silent → no nudge (explicit decline is accepted)", async () => {
+test("addressed + finish_silently → no nudge (explicit decline is accepted)", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
-    const res = await built.app.turn({ ...mention("!staysilent no comment", "C-decline", "700.2"), async: false });
-    assert.equal(res.status, "silent", "an explicit stay_silent ends the turn silently");
+    const res = await built.app.turn({ ...mention("!finish-silent", "C-decline", "700.2"), async: false });
+    assert.equal(res.status, "silent", "an explicit finish_silently ends the turn silently");
     await sleep(300);
     const all = (await built.deliveries.pending("slack")) as any[];
-    assert.equal(all.filter((d) => d.text === "nudged reply").length, 0, "stay_silent suppresses the nudge");
+    assert.equal(all.length, 0, "finish_silently suppresses the nudge and closing reply");
   } finally {
     await built.runtime.stop();
   }
@@ -626,6 +626,41 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
       /^<wake/,
       "a thread-follow keeps the raw-text path (wake envelope deferred to a follow-up)",
     );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+for (const command of ["!finish-silent-approval", "!finish-silent-paused"]) {
+  test(`surface silence preserves pending approval: ${command}`, async () => {
+    const built = freshApp();
+    const result = await built.app.turn({ ...mention(command, "C-approval", command), async: false });
+    assert.equal(result.status, "pending_approval");
+    assert.equal(result.pendingApprovals?.length, 1);
+    assert.equal((await built.deliveries.pending("slack")).length, 0);
+  });
+}
+
+test("a shared web project turn answers with its final text, not surface tools", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const project = await built.app.createProject("U1", "Launch");
+    assert.ok(project);
+    const ref = project.scopeId.slice("group:".length);
+    const result = await built.app.turn({
+      surface: "web",
+      actor,
+      conversation: { kind: "group", threadRef: `web:U1:${crypto.randomUUID()}`, channelRef: ref, audience: [actor] },
+      text: "hello project",
+      liveActor: true,
+    });
+    assert.equal(result.status, "ok", result.reason);
+    assert.ok(result.reply, "the final text is the reply");
+    const run = (await built.runs.list()).find((r) => r.request.text === "hello project");
+    assert.ok(run);
+    assert.notEqual(run.request.surfaceTools, true, "web project turns do not get the Slack surface-tools protocol");
+    assert.equal(((await built.deliveries.pending("slack")) as unknown[]).length, 0);
   } finally {
     await built.runtime.stop();
   }

@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
@@ -344,6 +345,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     backend: "local-docker",
     writablePersistence: "resident_disk",
     processSessions: true,
+    parksOnTeardown: true,
     egressEnforcement: "none",
     spec: {
       os: `Debian 12 (bookworm), glibc — local Docker container on a ${arch()} host`,
@@ -431,7 +433,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("local-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },

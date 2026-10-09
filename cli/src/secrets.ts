@@ -469,6 +469,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Email addresses allowed to sign in; the portal enforces the same list the broker does.",
   },
   {
+    name: "AUTH_PASSWORD_USERS",
+    service: "auth",
+    required: false,
+    description:
+      "Optional <email>:<scrypt-hash> entries that may sign in with a password while email or an identity provider is still being set up; each address must also be allowed to sign in.",
+  },
+  {
     name: "AUTH_EMAIL_FROM",
     service: "auth",
     required: false,
@@ -534,11 +541,7 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
       config.env.core?.SANDBOX_BACKEND ??
       config.sandbox?.backend ??
       targetEnvDefault(config, "core", "SANDBOX_BACKEND");
-    if (backend?.trim() === condition.backend) return true;
-    const scopes: unknown = JSON.parse(config.env.core?.SANDBOX_SCOPE_BACKENDS || "{}");
-    if (!scopes || typeof scopes !== "object" || Array.isArray(scopes))
-      throw new Error("SANDBOX_SCOPE_BACKENDS must be an object");
-    return Object.values(scopes).some((value) => typeof value === "string" && value.trim() === condition.backend);
+    return backend?.trim() === condition.backend;
   }
   if (condition.kind === "service-enabled") return config.services.includes(condition.service);
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
@@ -768,8 +771,7 @@ function requiresOtherEmailTransport(config: QmConfig, condition: SecretConditio
 
 function conditionClause(condition: SecretCondition): string {
   if (condition.kind === "background-work-control") return "aws.backgroundWorkControl is enabled";
-  if (condition.kind === "sandbox-backend")
-    return `SANDBOX_BACKEND or SANDBOX_SCOPE_BACKENDS selects ${condition.backend}`;
+  if (condition.kind === "sandbox-backend") return `SANDBOX_BACKEND selects ${condition.backend}`;
   if (condition.kind === "service-enabled") return `the ${condition.service} service is enabled`;
   if (condition.kind === "service-absent") return `the ${condition.service} service is not enabled`;
   if (condition.kind === "all") return condition.conditions.map(conditionClause).join(" and ");

@@ -46,7 +46,7 @@
     "sandbox:local:build": "bash scripts/local-sandbox-build.sh",
     "sandbox:porter:build": "docker build --platform linux/amd64 -t \"${PORTER_SANDBOX_IMAGE:?Set PORTER_SANDBOX_IMAGE to the registry tag to publish}\" porter && docker push \"$PORTER_SANDBOX_IMAGE\"",
     "deploy:porter-runner-image": "docker build --platform linux/amd64 -t \"${PORTER_DEPLOY_RUNNER_IMAGE:?Set PORTER_DEPLOY_RUNNER_IMAGE to the registry tag to publish}\" -f deploy/porter-runner/Dockerfile . && docker push \"$PORTER_DEPLOY_RUNNER_IMAGE\"",
-    "test:pg": "node --test --test-concurrency=1 test/postgres-swarms.test.ts test/postgres-store.test.ts test/postgres-grant-store.test.ts test/postgres-admin-grants.test.ts test/postgres-file-artifact-store.test.ts test/postgres-file-upload-store.test.ts test/postgres-directory-store.test.ts test/postgres-map.test.ts test/postgres-background-ownership.test.ts test/postgres-resource-search.test.ts test/deploy-store-pg.test.ts test/postgres-cron-fires.test.ts test/postgres-migration-adoption.test.ts test/postgres-migrations.test.ts test/postgres-migration-startup.test.ts test/cron-queue.test.ts test/postgres-metrics-sink.test.ts test/postgres-error-log.test.ts test/postgres-audit-log.test.ts test/postgres-budget.test.ts test/postgres-rate-limiter.test.ts test/postgres-credential-usage-sink.test.ts test/postgres-config-store.test.ts test/postgres-delivery-store.test.ts test/postgres-replay-dedupe.test.ts test/postgres-broker-sessions.test.ts test/postgres-egress-audit-sink.test.ts test/postgres-memory-service.test.ts test/run-signal-store.test.ts test/postgres-listener.test.ts test/postgres-run-activity-store.test.ts test/leader-lease.test.ts test/advisory-lock.test.ts test/loop-ingress-pg.test.ts test/persistence-init-retry.test.ts test/migrate-principals.test.ts test/postgres-surface-cache.test.ts test/slack-mirror-fidelity.test.ts test/postgres-instance-registry.test.ts test/run-retry-delay.test.ts test/postgres-run-stream.test.ts test/migrate-main.test.ts",
+    "test:pg": "node scripts/run-pg-tests.mjs test/batch-paths.test.ts test/session-append-many.test.ts test/cron-queue.test.ts test/postgres-migration-startup.test.ts test/postgres-swarms.test.ts test/postgres-store.test.ts test/postgres-instance-registry.test.ts test/readiness.test.ts test/postgres-grant-store.test.ts test/postgres-admin-grants.test.ts test/postgres-file-artifact-store.test.ts test/postgres-file-upload-store.test.ts test/postgres-directory-store.test.ts test/postgres-map.test.ts test/postgres-background-ownership.test.ts test/postgres-resource-search.test.ts test/deploy-store-pg.test.ts test/postgres-cron-fires.test.ts test/postgres-migration-adoption.test.ts test/postgres-migrations.test.ts test/postgres-metrics-sink.test.ts test/postgres-error-log.test.ts test/postgres-audit-log.test.ts test/postgres-app-page-views.test.ts test/postgres-budget.test.ts test/postgres-rate-limiter.test.ts test/postgres-credential-usage-sink.test.ts test/postgres-config-store.test.ts test/postgres-delivery-store.test.ts test/postgres-replay-dedupe.test.ts test/postgres-broker-sessions.test.ts test/postgres-egress-audit-sink.test.ts test/postgres-memory-service.test.ts test/run-signal-store.test.ts test/postgres-listener.test.ts test/postgres-run-activity-store.test.ts test/leader-lease.test.ts test/advisory-lock.test.ts test/loop-ingress-pg.test.ts test/persistence-init-retry.test.ts test/migrate-principals.test.ts test/postgres-surface-cache.test.ts test/slack-mirror-fidelity.test.ts test/run-retry-delay.test.ts test/postgres-run-stream.test.ts test/migrate-main.test.ts",
     "livetest": "node scripts/api-livetest.ts",
     "bench:memory": "node --env-file-if-exists=.env scripts/memory-bench.ts",
     "prepare": "node .husky/install.mjs",
@@ -58,7 +58,9 @@
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
     "lint:knip": "knip",
-    "migrate:transcript-tape": "node scripts/migrate-transcript-tape.ts"
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
+    "migrate:transcript-tape": "node scripts/migrate-transcript-tape.ts",
+    "build:app-annotations": "node scripts/build-app-devbar.mjs"
   },
   "lint-staged": {
     "*": "prettier --write --ignore-unknown"
@@ -73,10 +75,10 @@
     "@aws-sdk/client-sts": "^3.1075.0",
     "@aws-sdk/credential-provider-node": "^3.972.70",
     "@aws-sdk/s3-request-presigner": "^3.1061.0",
-    "@earendil-works/pi-ai": "0.82.0",
-    "@earendil-works/pi-coding-agent": "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.3/earendil-works-pi-coding-agent-0.82.0-qm-security.3.tgz",
+    "@earendil-works/pi-ai": "https://github.com/yc-software/qm/releases/download/vendored-pi-ai-0.82.0-qm.1/earendil-works-pi-ai-0.82.0-qm.1.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.6/earendil-works-pi-coding-agent-0.82.0-qm-security.6.tgz",
     "@fly/sprites": "0.2.3",
-    "@openai/codex": "0.154.0",
+    "@openai/codex": "0.156.1",
     "@opencode-ai/plugin": "1.18.31",
     "@opencode-ai/sdk": "1.18.31",
     "@sentry/node": "10.75.0",
@@ -88,7 +90,7 @@
     "croner": "^10.0.1",
     "e2b": "^2.51.0",
     "emoji-datasource": "^16.0.0",
-    "fastify": "^5.12.1",
+    "fastify": "^5.12.5",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
     "modal": "^0.10.1",
@@ -104,27 +106,30 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.10",
-    "hono": "4.13.5",
+    "hono": "4.13.9",
     "@fastify/ajv-compiler": {
-      "fast-uri": "3.1.7"
+      "fast-uri": "3.1.8"
     },
     "ajv": {
-      "fast-uri": "3.1.7"
+      "fast-uri": "3.1.8"
     },
-    "brace-expansion": "^5.0.9",
+    "brace-expansion": "^5.0.12",
     "fast-json-stringify": {
-      "fast-uri": "4.1.4"
+      "fast-uri": "4.1.5"
     },
-    "undici": "8.9.0",
-    "protobufjs": "7.6.5"
+    "undici": "8.10.2",
+    "ip-address": "10.7.2",
+    "protobufjs": "7.6.5",
+    "@earendil-works/pi-ai": "$@earendil-works/pi-ai"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
     "@types/tar-stream": "^3.1.4",
     "@yc-software/qm": "file:./cli",
+    "devbar.sh": "1.1.0",
     "esbuild": "0.28.1",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",

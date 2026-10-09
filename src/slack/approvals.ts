@@ -120,6 +120,7 @@ export interface Approvals {
 }
 
 export function createApprovals(deps: {
+  externalAccess?: boolean;
   core: SlackCoreClient;
   flow: TurnFlow;
   directory: Directory;
@@ -134,6 +135,8 @@ export function createApprovals(deps: {
   }
 
   async function runTurn(body: CoreTurnBody, hooks: { onQueued?: (runId: string) => void } = {}): Promise<TurnOutcome> {
+    if (deps.externalAccess && body.conversation.kind !== "dm")
+      throw new Error("Continue this request privately instead of resuming a shared approval.");
     let runId: string | undefined;
     const result = await flow.callCore(body, {
       ...hooks,
@@ -381,6 +384,7 @@ export function createApprovals(deps: {
     const { request } = run;
     if (
       request.surface !== "slack" ||
+      request.externalSlack ||
       request.conversation.kind === "dm" ||
       request.conversation.channelRef !== channel ||
       request.deliveryTarget !== encodeDeliveryTarget(channel, threadTs)
@@ -833,7 +837,7 @@ export function createApprovals(deps: {
         const cleanedContinuation = cleanAgentReplyForSlack(result.reply ?? "");
         const replyBody = stripAckPrefix(cleanedContinuation.text, ctx.ackedFirstBlock);
         const { reactions, agentRequests } = cleanedContinuation;
-        const actionableAgentRequests = ctx.threadOnly ? agentRequests : [];
+        const actionableAgentRequests = !ctx.turn.externalSlack && ctx.threadOnly ? agentRequests : [];
         let reply = result.stopped ? "Stopped." : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length || actionableAgentRequests.length) reply = "Done.";
@@ -948,6 +952,7 @@ export function createApprovals(deps: {
 
   async function handleAgentRequestAction({ ack, body, action, client }: ActionArgs): Promise<void> {
     await ack();
+    if (deps.externalAccess) return;
     const parsed = parseBlockAction(action, AGENT_REQUEST_ACTION_IDS);
     if (!parsed) return;
     const { actionId, value: requestId } = parsed;

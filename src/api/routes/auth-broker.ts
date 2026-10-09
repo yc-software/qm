@@ -1,3 +1,4 @@
+import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { AdminError } from "../../admin/admin-service.ts";
@@ -58,14 +59,17 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   if (!validEmail(email)) return sendJson(res, 400, { error: "bad_request", message: "email required" });
   if (!deps.identity) return sendJson(res, 200, { allowed: false });
   await deps.identity.refresh();
-  const member = deps.identity.externalMember(email);
-  const allowed =
-    member !== undefined && externalMemberActive(member) && deps.identity.classify(email).type === "internal";
-  if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member.expiresAt });
   if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
+  const member = deps.identity.externalMember(email);
+  const configured =
+    deps.emailAuthPrincipals?.includes(email) ||
+    Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
+  const allowed =
+    deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
+  if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
   const grants = (await deps.acl?.list()) ?? [];
   const deployments = await app.listDeployments();
-  const appOnly = deployments.some(
+  const granted = deployments.filter(
     (d) =>
       d.status !== "archived" &&
       grants.some(
@@ -76,6 +80,10 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
           g.permission === "read",
       ),
   );
+  const allowedOwners = await Promise.all(
+    granted.map((d) => externalAppSharingAllowed(deps.featureFlags, d.ownerScopeId)),
+  );
+  const appOnly = allowedOwners.some(Boolean);
   return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });
 }
 

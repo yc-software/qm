@@ -11,6 +11,7 @@ import {
 interface CreateMonitorInput extends CreateTriggerInput {
   processId: string;
   command: string;
+  purpose?: string;
   threadRef: string;
   instructions?: string;
   pattern?: string;
@@ -49,6 +50,7 @@ export function createMonitorStore(backing: DurableMap<Monitor> = createMemoryMa
         ...buildTriggerBase(input, randomUUID(), Date.now()),
         processId: input.processId,
         command: input.command,
+        ...(input.purpose ? { purpose: input.purpose } : {}),
         threadRef: input.threadRef,
         ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
         ...(input.pattern !== undefined ? { pattern: input.pattern } : {}),

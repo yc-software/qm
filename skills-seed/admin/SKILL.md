@@ -12,6 +12,23 @@ store on every call, and every call is audited under their name. Two standing ru
 **confirm before any mutation** (state exactly what you'll change and where), and report
 afterwards exactly what changed. Reads are fine to just do.
 
+## System administration
+
+System administration is not limited to this API. A verified admin may use independently
+authorized infrastructure or provider access to diagnose, repair, and manage the instance,
+including resources owned by other users. Ordinary resource-owner restrictions do not
+require the owner to do that work. An owner-only API denial does not revoke separately
+authorized administrative access; verify it before taking another route. Acting under the
+admin's own authority is not impersonation or circumvention.
+
+Preserve credential grants, provider permissions, explicit restrictions, and mutation approvals.
+Admin status alone supplies no provider credentials. Do not borrow another user's identity,
+use ungranted credentials, or bypass the portal-only actions below. Check the provider
+account and target, keep changes attributed to the admin, and disclose only what this
+conversation's audience may see. For cloud operations, also load cloud-cli.
+
+## Admin API limits
+
 Limits the API enforces (don't offer what it will refuse):
 
 - Your token elevates only on turns the admin **started themselves** — on autonomous
@@ -133,7 +150,7 @@ on the memory self-API is the lighter path; see the memory skill.)
 ## Inspect activity & content
 
 ```bash
-GET /v1/admin/sessions?scope=&limit=&offset=  → conversation listing (turns, last activity)
+GET /v1/admin/sessions?scope=&limit=&cursor=  → conversation listing (turns, last activity); pass nextCursor for older rows
 GET /v1/admin/sessions/<id>?scope=            → a transcript
 GET /v1/admin/sessions/<id>/llm?scope=        → captured provider requests — what the model actually saw (debugging "why did it do X")
 GET /v1/admin/runs?scope=                     → queued/in-flight/recent runs

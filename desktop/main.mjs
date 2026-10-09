@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogin, loginCallback } from "./login.mjs";
+import { tabStep } from "./shortcuts.mjs";
 import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "./url.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -180,6 +181,12 @@ async function showInstance(url) {
     page.webContents.on("will-navigate", navigate);
     page.webContents.on("will-redirect", navigate);
     page.webContents.on("will-attach-webview", (event) => event.preventDefault());
+    page.webContents.on("before-input-event", (event, input) => {
+      const step = tabStep(input);
+      if (!step) return;
+      event.preventDefault();
+      page.webContents.send("qm:cycle-tab", step);
+    });
     page.webContents.setWindowOpenHandler(({ url: destination }) => {
       if (!active()) return { action: "deny" };
       if (browserLoginUrl(destination, origin)) signIn(destination);

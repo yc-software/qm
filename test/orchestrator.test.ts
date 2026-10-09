@@ -1,21 +1,17 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp as buildAppRaw } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
-import {
-  verifyCapabilityToken,
-  EGRESS_PROXY_AUD,
-  CAPABILITY_TTL_MS,
-  SANDBOX_CAPABILITY_TTL_MS,
-} from "../src/auth/capability-token.ts";
+import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { egressClaimAllowingControlPlane } from "../src/core/orchestrator.ts";
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
@@ -30,6 +26,43 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
+const noDefaultSandbox = new WeakSet<object>();
+function requestScope(req: TurnRequest): string | null {
+  const c = req.conversation;
+  if (c.kind === "dm") return `personal:${req.actor.externalId}`;
+  if ((c.kind === "channel" || c.kind === "group") && c.channelRef) return `${c.kind}:${c.channelRef}`;
+  return null;
+}
+async function selectComputer(built: ReturnType<typeof buildAppRaw>, actorId: string, scope: ScopeId) {
+  const asSpeaker = built.sandboxResources.forTurn({ actorId, scopeId: scope, isCurrent: async () => true });
+  const computer = await asSpeaker.create(actorId, scope, built.sandboxResources.defaultBackend());
+  await asSpeaker.setDefault(actorId, scope, computer.id);
+  return computer;
+}
+function buildApp(...args: Parameters<typeof buildAppRaw>): ReturnType<typeof buildAppRaw> {
+  const built = buildAppRaw(...args);
+  const ready = new Map<string, Promise<void>>();
+  const ensure = (actorId: string, scope: string) => {
+    let p = ready.get(scope);
+    if (!p) {
+      p = (async () => {
+        if (noDefaultSandbox.has(built)) return;
+        if (await built.sandboxResources.resolve(scope as ScopeId)) return;
+        await selectComputer(built, actorId, scope as ScopeId);
+      })();
+      ready.set(scope, p);
+    }
+    return p;
+  };
+  const turn = built.app.turn.bind(built.app);
+  built.app.turn = async (req, ...rest) => {
+    const scope = requestScope(req);
+    if (scope) await ensure(req.actor.externalId, scope);
+    return turn(req, ...rest);
+  };
+  return built;
+}
 
 function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecurityScreener) {
   const config = testConfig({
@@ -1013,7 +1046,7 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
     "claude-opus-5",
     "with no override the browse model follows the deployment base model",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "anthropic", "the runner is told which client to build");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
   built.config.setBrowseMaxSteps("org:default-org", 120);
   built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
@@ -1022,12 +1055,12 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
   assert.equal(
     captured?.env?.BROWSE_LAB_MODEL,
-    "claude-sonnet-4-6",
-    "the configured browse model rides the provision env",
+    "claude-opus-5",
+    "legacy browse-only overrides cannot replace the default model",
   );
 });
 
-test("a stored browse model that no longer resolves falls back to the base model instead of stranding browse", async () => {
+test("a legacy browse-only model cannot strand managed default-model browsing", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     orgId: "acme",
@@ -1051,7 +1084,7 @@ test("a stored browse model that no longer resolves falls back to the base model
     "claude-opus-5",
     "the unresolvable override is ignored in favour of the base model, not propagated",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "anthropic");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
 });
 
 test("browse follows a live org base model change, not the process-start default", async () => {
@@ -1081,10 +1114,10 @@ test("browse follows a live org base model change, not the process-start default
     "gpt-5.6-sol",
     "an admin changing the org base model moves browse too, without a restart",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "openai");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
 });
 
-test("an OpenAI deployment tells the browse runner to build an OpenAI client", async () => {
+test("an OpenAI deployment provisions managed browser access without its provider key", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     orgId: "acme",
@@ -1104,7 +1137,11 @@ test("an OpenAI deployment tells the browse runner to build an OpenAI client", a
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:oa1" } }));
   assert.equal(res.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MODEL, "gpt-5.6-sol");
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "openai", "never hardcoded to anthropic");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "core selects the provider");
+  assert.ok(!Object.values(captured?.env ?? {}).includes("openai-org-key"));
+  const claims = await verifyCapabilityToken(captured!.env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims?.browserModel, "gpt-5.6-sol");
+  assert.equal(claims?.browserAccount, "company");
 });
 
 test("turn timezone rides the prompt and control-plane capability token", async () => {
@@ -1125,6 +1162,18 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   assert.equal(res.status, "ok");
   const claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.timezone, "America/New_York");
+  assert.equal(claims!.surface, "test");
+
+  const slackThread = { kind: "dm" as const, threadRef: "dm:U1:slack-wake" };
+  await app.turn(dm("!run echo slack", { surface: "slack", conversation: slackThread }));
+  captured = undefined;
+  await app.turn(dm("!run echo wake", { surface: "monitor", conversation: slackThread }));
+  const wake = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(wake!.surface, "slack", "a wake in a Slack thread keeps the conversation's surface");
+  captured = undefined;
+  await app.turn(dm("!run echo web", { surface: "web", conversation: slackThread }));
+  const web = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(web!.surface, "web", "a live web UI turn is a web turn even in a Slack-labelled conversation");
 
   const prompt = await app.turn(
     dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:tz-prompt" }, timezone: "America/New_York" }),
@@ -1140,39 +1189,58 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   assert.equal(invalidClaims!.timezone, undefined, "invalid surface timezones are omitted from the token");
 });
 
-test("sandbox-facing turn tokens carry the long sandbox TTL, not the hour-long capability TTL", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
-    signingSecret: "test-secret",
-    apiBaseUrl: "https://core.example.com",
-  });
-  const { app, sandbox } = buildApp(config);
-  let captured: ProvisionOptions | undefined;
-  const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
-    captured = opts;
-    return realProvision(layers, opts);
-  };
-
-  const before = Date.now();
-  const res = await app.turn(dm("!run echo ttl", { conversation: { kind: "dm", threadRef: "dm:U1:ttl" } }));
-  assert.equal(res.status, "ok");
-  const tokens = {
-    AGENT_API_TOKEN: captured!.env!.AGENT_API_TOKEN!,
-    AGENT_OAUTH_CONSENT_TOKEN: captured!.env!.AGENT_OAUTH_CONSENT_TOKEN!,
-    egressToken: captured!.egressToken!,
-  };
-  for (const [name, token] of Object.entries(tokens)) {
-    const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
-    assert.ok(claims, `${name} verifies`);
-    assert.ok(claims.exp > before + CAPABILITY_TTL_MS, `${name} outlives the hour-long TTL`);
-    assert.ok(claims.exp <= Date.now() + SANDBOX_CAPABILITY_TTL_MS, `${name} is capped at the sandbox TTL`);
-    assert.ok(
-      await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, before + 9 * 3_600_000),
-      `${name} still verifies nine hours in`,
+for (const hours of [undefined, "72", "0", "none"]) {
+  test(`sandbox-facing turn tokens honor deployment TTL ${hours ?? "default"}`, async () => {
+    const ttl = loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: hours }).sandboxCapabilityTtlMs;
+    const { app, sandbox, serviceCreds, acl } = freshApp({
+      signingSecret: "test-secret",
+      apiBaseUrl: "https://core.example.com",
+      sandboxCapabilityTtlMs: ttl,
+    });
+    await serviceCreds.setServiceCredential("org:default-org", {
+      slug: "test-service",
+      name: "Test service",
+      secret: "synthetic",
+      host: "api.example.com",
+    });
+    await grantCred(acl, "org:default-org", "test-service");
+    let captured: ProvisionOptions | undefined;
+    let executed: Record<string, string> | undefined;
+    const provision = sandbox.provision.bind(sandbox);
+    sandbox.provision = (layers, opts) => {
+      captured = opts;
+      return provision(layers, opts);
+    };
+    const run = sandbox.run.bind(sandbox);
+    sandbox.run = (handle, command, opts) => {
+      if (command === "echo ttl") executed = handle.env;
+      return run(handle, command, opts);
+    };
+    const before = Date.now();
+    const res = await app.turn(
+      dm(`!execute ${JSON.stringify({ command: "echo ttl", credentials: ["service_test-service"] })}`),
     );
-  }
-});
+    assert.equal(res.status, "ok", res.reason);
+    const tokens = {
+      AGENT_API_TOKEN: captured!.env!.AGENT_API_TOKEN!,
+      AGENT_OAUTH_CONSENT_TOKEN: captured!.env!.AGENT_OAUTH_CONSENT_TOKEN!,
+      AGENT_CREDENTIAL_TOKEN: executed!.AGENT_CREDENTIAL_TOKEN!,
+      egressToken: captured!.egressToken!,
+    };
+    for (const [name, token] of Object.entries(tokens)) {
+      const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+      assert.ok(claims, `${name} verifies`);
+      if (ttl === 0) {
+        assert.equal(claims.exp, 0);
+        assert.ok(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, Number.MAX_SAFE_INTEGER));
+      } else {
+        assert.ok(claims.exp >= before + ttl && claims.exp <= Date.now() + ttl, name);
+        assert.ok(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, claims.exp - 1));
+        assert.equal(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, claims.exp), null);
+      }
+    }
+  });
+}
 
 test("unattended grants enter capability claims only on non-live turns", async () => {
   const config = testConfig({
@@ -1364,6 +1432,10 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     adminTurn({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:t2" } }),
   );
   assert.match(adminPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.match(adminPrompt.reply ?? "", /System administration is not limited to the admin dashboard/);
+  assert.match(adminPrompt.reply ?? "", /including resources owned by other users/);
+  assert.match(adminPrompt.reply ?? "", /Ordinary resource-owner restrictions do not by themselves prohibit/);
+  assert.match(adminPrompt.reply ?? "", /admin grant changes and impersonation are portal-only/);
   assert.match(
     adminPrompt.reply ?? "",
     /private-content reads require a DM or an Open conversation on a live admin turn/,
@@ -1380,7 +1452,7 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
   assert.equal(userClaims!.memory!.orgWrite, undefined, "a non-admin turn must not carry org write");
 
   const userPrompt = await app.turn(dm("!sysprompt"));
-  assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
   assert.match(userPrompt.reply ?? "", /v1\/apis/, "every turn learns the discoverable self-API surface");
 });
 
@@ -1419,7 +1491,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     conversation: { kind: "dm", threadRef: "dm:admin-alice:auto2" },
     text: "!sysprompt",
   });
-  assert.doesNotMatch(autoPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.doesNotMatch(autoPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
 
   captured = undefined;
   assert.equal(
@@ -1458,6 +1530,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     unprompted: true,
   });
   assert.match(threadPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.match(threadPrompt.reply ?? "", /System administration is not limited to the admin dashboard/);
 
   assert.equal(
     claims!.liveActor,
@@ -1691,7 +1764,9 @@ test("turn-private transfer files are removed after staging", async () => {
 });
 
 test("a later turn removes same-conversation and expired transfer files", async () => {
-  const { app, sandbox } = freshApp();
+  const built = freshApp();
+  const { app, sandbox } = built;
+  await selectComputer(built, "U1", scopeId("personal", "U1"));
   const handle = await sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
   const sessionDir = `${TURN_FILES_DIR}/${hashId(["dm:U1:t1"], 24)}`;
   await sandbox.writeFile(handle, `${sessionDir}/abandoned/inbox/stale.bin`, "stale");
@@ -2120,7 +2195,20 @@ test("priorTurns are routed to the harness as structured roled turns (PR3)", asy
 });
 
 test("overheard messages are imported ONCE into the durable log, author-labeled, and handed to the harness", async () => {
-  const { app } = freshApp();
+  const { app, sessions } = freshApp();
+  const entryBatches: number[] = [];
+  const tapeBatches: number[] = [];
+  const appendMany = sessions.appendMany.bind(sessions);
+  const appendTapeMany = sessions.appendTapeMany.bind(sessions);
+  sessions.appendMany = async (lease, entries) => {
+    if (entries.some((entry) => (entry.payload as { overheard?: boolean })?.overheard))
+      entryBatches.push(entries.length);
+    return appendMany(lease, entries);
+  };
+  sessions.appendTapeMany = async (lease, records) => {
+    if (records.some((record) => record.meta?.overheard)) tapeBatches.push(records.length);
+    return appendTapeMany(lease, records);
+  };
   const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
     entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
 
@@ -2169,6 +2257,8 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
     ["100.001", "100.002", "100.003", "100.004"],
     "append-only: each message recorded exactly once",
   );
+  assert.deepEqual(entryBatches, [3, 1]);
+  assert.deepEqual(tapeBatches, [3, 1]);
 });
 
 test("a message answered on one turn is not re-imported as overheard on the next (full-stack dedupe)", async () => {
@@ -2957,58 +3047,11 @@ test("Auto screens only the external event envelope and records classifier usage
   assert.ok(built.modelGateway.audit().some((rec) => rec.model === "mock-security"));
 });
 
-test("proxy shadow telemetry correlates its verdict with the authoritative model without enforcing it", async () => {
-  const calls: Array<{ metadata?: Readonly<Record<string, unknown>>; requestId?: string }> = [];
-  const screener: SecurityScreener = {
-    provider: "example-screen",
-    shadow: true,
-    async classify(input) {
-      calls.push({ metadata: input.metadata, requestId: input.requestId });
-      return {
-        verdict: { decision: "strict", reason: "example-screen:system_compromise" },
-        score: 0.95,
-        threshold: 0.7,
-        outcome: "system_compromise",
-      };
-    },
-  };
-  const built = freshApp({}, screener);
-  const result = await built.app.turn(
-    dm("!run printf shadow-ok", {
-      surface: "webhook",
-      triggered: true,
-      securityScreenData: "ordinary external event",
-    }),
-  );
-  assert.equal(result.status, "ok", "the authoritative model remains in control during shadow evaluation");
-  assert.match(result.reply ?? "", /shadow-ok/);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  const events = await built.auditLog.events();
-  const classification = events.find((event) => event.action === "security_screen.classify");
-  const comparison = events.find((event) => event.action === "security_screen.shadow_evaluation");
-  assert.ok(classification?.detail);
-  assert.ok(comparison?.detail);
-  const classified = JSON.parse(classification.detail) as { requestId: string };
-  const compared = JSON.parse(comparison.detail) as { requestId: string; authoritative: string; shadow: string };
-  assert.equal(compared.requestId, classified.requestId);
-  assert.deepEqual(
-    { authoritative: compared.authoritative, shadow: compared.shadow },
-    { authoritative: "auto", shadow: "strict" },
-  );
-  assert.equal(comparison.status, "disagree");
-  assert.equal(classification.resource, "example-screen");
-  assert.equal(comparison.resource, "example-screen");
-  assert.equal(calls[0]?.requestId, compared.requestId);
-  assert.deepEqual(calls[0]?.metadata, { surface: "webhook", origin: "automation" });
-});
-
 test("an enforced proxy outage fails open and audits the configured provider", async () => {
   const built = freshApp(
     {},
     {
       provider: "example-screen",
-      shadow: false,
       async classify() {
         throw new Error("proxy unavailable");
       },
@@ -3296,7 +3339,6 @@ test("a late proxy verdict after the deadline is never audited as authoritative"
     { securityScreenTimeoutMs: 5 },
     {
       provider: "example-screen",
-      shadow: false,
       async classify(input) {
         signal = input.signal;
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -3845,7 +3887,8 @@ test("environments: an unattached scope provisions through its own scope (today'
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
   });
-  const { app, sandbox } = buildApp(config);
+  const built = buildApp(config);
+  const { app, sandbox } = built;
   const realProvision = sandbox.provision.bind(sandbox);
   let rwScope: string | undefined;
   sandbox.provision = (layers, opts) => {
@@ -3857,6 +3900,7 @@ test("environments: an unattached scope provisions through its own scope (today'
   assert.equal(before.status, "ok");
   assert.equal(rwScope, scopeId("personal", "U1"), "no attachment ⇒ provision through the scope itself");
 
+  await selectComputer(built, "U-shared", scopeId("personal", "U-shared"));
   const env = await app.createEnvironment({ scopeId: scopeId("personal", "U-shared"), name: "prod", actorId: "U1" });
   await app.attachScope({ scopeId: scopeId("personal", "U1"), environmentId: env.id, actorId: "U1" });
 
@@ -4056,6 +4100,25 @@ test("repeated terminal failures keep failing loudly — history is never rewrit
   );
 });
 
+test("an exhausted model budget refuses the turn with a plain explanation instead of failing or retrying", async () => {
+  const { app, runs, errors } = freshApp();
+  const t1 = await app.turn(dm("hello"));
+  assert.equal(t1.status, "ok");
+
+  const refused = await app.turn(dm("!over-budget", { idempotencyKey: "over-budget-1" }));
+  assert.equal(refused.status, "refused");
+  assert.equal(refused.refusalKind, "model_budget");
+  assert.equal(refused.reason, MODEL_BUDGET_TEXT);
+  assert.equal(await runs.activeForThread("dm:U1:t1"), null, "nothing is requeued to hit the same limit again");
+
+  const found = await app.getSession(t1.sessionId!);
+  const failures = found!.entries.filter((e) => turnFailure(e));
+  assert.equal(failures.length, 1, "the explanation survives a reload");
+  assert.equal(turnFailure(failures[0]!)!.message, MODEL_BUDGET_TEXT);
+  const logged = (await errors.list()).find((e) => e.category === "turn" && e.code === "model_budget");
+  assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
+});
+
 test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async () => {
   const { app, runs, errors } = freshApp();
   const t1 = await app.turn(dm("hello"));
@@ -4197,7 +4260,9 @@ test("Auto screens oversize external output in chunks, so an injection buried pa
 });
 
 test("activated resource defaults preserve an existing computer and stop eager provisioning after unset", async () => {
-  const built = freshApp({ sandboxResourcesEnabled: true, eagerProvisionEnabled: true });
+  const built = freshApp({ eagerProvisionEnabled: true });
+  noDefaultSandbox.add(built);
+  await selectComputer(built, "U1", scopeId("personal", "U1"));
   await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
   await built.sandboxResources.initialize();
   const boxes = spyProvisioning(built.sandbox);
@@ -4218,7 +4283,7 @@ test("activated resource defaults preserve an existing computer and stop eager p
 });
 
 test("default screening does not invoke a model for inbound data or tool results", async () => {
-  const built = freshApp({ securityScreenBackend: loadConfig({}).securityScreenBackend });
+  const built = freshApp({ securityScreen: loadConfig({}).securityScreen });
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (layers, options) => {
@@ -4262,6 +4327,7 @@ for (const combined of [true, false]) {
   test(`turn cleanup retains recent and malformed paths and removes stale files (combined=${combined})`, async () => {
     const built = freshApp();
     if (!combined) built.sandbox.removeDirAndList = undefined;
+    await selectComputer(built, "U1", scopeId("personal", "U1"));
     const handle = await built.sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
     const old = `.agent-turn/owner/${(Date.now() - 48 * 3600_000).toString(36)}-nonce/file`;
     const recent = `.agent-turn/owner/${Date.now().toString(36)}-nonce/file`;
@@ -4347,10 +4413,9 @@ test("public text phases persist with exact stream offsets in session history an
   assert.equal(view?.partial, "Checking.\n\nAll clear.");
 });
 
-function fixtureScreen(shadow = false): SecurityScreener {
+function fixtureScreen(): SecurityScreener {
   return {
     provider: "fixture-screen",
-    shadow,
     async classify(input) {
       return {
         score: 1,
@@ -4363,8 +4428,8 @@ function fixtureScreen(shadow = false): SecurityScreener {
   };
 }
 
-test("deployment screening quarantines dangerous-posture tool output with once-only release", async () => {
-  const built = freshApp({ securityPosture: "dangerous", securityScreenAllPostures: true }, fixtureScreen());
+test("enforced screening quarantines auto-posture tool output with once-only release", async () => {
+  const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
   const cmd = "!screened-run printf SCREENING_FIXTURE_BLOCK";
   const first = await built.app.turn(dm(cmd));
   assert.equal(first.status, "ok");
@@ -4392,8 +4457,8 @@ test("deployment screening quarantines dangerous-posture tool output with once-o
   assert.equal(denied.status, "refused");
 });
 
-test("deployment screening flags dangerous-posture inbound data before model execution", async () => {
-  const built = freshApp({ securityPosture: "dangerous", securityScreenAllPostures: true }, fixtureScreen());
+test("enforced screening flags strict-posture inbound data before model execution", async () => {
+  const built = freshApp({ securityPosture: "strict" }, fixtureScreen());
   const request = dm("summarize the event", {
     surface: "webhook",
     triggered: true,
@@ -4409,21 +4474,12 @@ test("deployment screening flags dangerous-posture inbound data before model exe
   assert.equal(approved.status, "ok");
 });
 
-test("deployment screening retains proxy shadow behavior under dangerous posture", async () => {
-  const built = freshApp({ securityPosture: "dangerous", securityScreenAllPostures: true }, fixtureScreen(true));
-  const result = await built.app.turn(dm("!screened-run printf SCREENING_FIXTURE_BLOCK"));
-  assert.match(result.reply ?? "", /SCREENING_FIXTURE_BLOCK/);
-  assert.equal(result.pendingApprovals?.length ?? 0, 0);
-  assert.ok((await built.auditLog.events()).some((event) => event.action === "security_screen.shadow_evaluation"));
-});
-
 for (const failure of ["error", "timeout"] as const) {
   test(`deployment screening preserves marked fail-open on proxy ${failure}`, async () => {
     const built = freshApp(
-      { securityPosture: "dangerous", securityScreenAllPostures: true, securityScreenTimeoutMs: 10 },
+      { securityPosture: "auto", securityScreenTimeoutMs: 10 },
       {
         provider: "fixture-screen",
-        shadow: false,
         async classify() {
           if (failure === "timeout") await new Promise((resolve) => setTimeout(resolve, 50));
           throw new Error("fixture unavailable");
@@ -4446,24 +4502,58 @@ for (const failure of ["error", "timeout"] as const) {
   });
 }
 
-for (const securityScreenAllPostures of [false, true]) {
-  test(`dangerous posture screening opt-in=${securityScreenAllPostures} preserves automatic tools`, async () => {
-    let screens = 0;
-    const fixture = fixtureScreen();
-    const built = freshApp(
-      { securityPosture: "dangerous", securityScreenAllPostures },
-      {
-        ...fixture,
-        async classify(input) {
-          screens++;
-          return fixture.classify(input);
-        },
-      },
+async function screenEvent(built: ReturnType<typeof freshApp>, status: string) {
+  for (let i = 0; i < 50; i++) {
+    const event = (await built.auditLog.events()).find(
+      (entry) => entry.action === "security_screen.classify" && entry.status === status,
     );
-    const result = await built.app.turn(dm("!screened-run printf fixture-allowed"));
-    assert.equal(result.status, "ok");
-    assert.equal(result.reply, "fixture-allowed");
-    assert.equal(result.pendingApprovals?.length ?? 0, 0);
-    assert.equal(screens, securityScreenAllPostures ? 1 : 0);
+    if (event) return event;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`no ${status} screen verdict`);
+}
+
+test("observe screening never waits on a hung classifier", async () => {
+  const built = freshApp(
+    { securityPosture: "auto", securityScreen: "observe" },
+    { provider: "fixture-screen", classify: () => new Promise(() => {}) },
+  );
+  const started = Date.now();
+  const inbound = await built.app.turn(
+    dm("summarize the event", { surface: "webhook", triggered: true, securityScreenData: "ordinary fixture data" }),
+  );
+  const tool = await built.app.turn(dm("!screened-run printf observe-ok"));
+  assert.equal(inbound.status, "ok");
+  assert.equal(tool.reply, "observe-ok");
+  assert.ok(Date.now() - started < 5_000);
+});
+
+for (const [securityPosture, securityScreen] of [
+  ["dangerous", "observe"],
+  ["auto", "observe"],
+  ["strict", "observe"],
+  ["dangerous", "enforce"],
+] as const) {
+  test(`${securityScreen} screening under ${securityPosture} posture records would-block verdicts without quarantine`, async () => {
+    const built = freshApp({ securityPosture, securityScreen }, fixtureScreen());
+    const inbound = await built.app.turn(
+      dm("summarize the event", { surface: "webhook", triggered: true, securityScreenData: "SCREENING_FIXTURE_BLOCK" }),
+    );
+    assert.equal(inbound.status, "ok");
+    const detail = JSON.parse((await screenEvent(built, "would_block")).detail!) as Record<string, unknown>;
+    assert.equal(detail.hook, "user_input");
+    assert.equal(detail.surface, "webhook");
+    assert.deepEqual(detail.sources, ["webhook"]);
+    assert.equal(typeof detail.thread, "string");
+    assert.doesNotMatch(JSON.stringify(detail), /SCREENING_FIXTURE_BLOCK/);
+    if (securityPosture !== "strict") {
+      const tool = await built.app.turn(dm("!screened-run printf SCREENING_FIXTURE_BLOCK"));
+      assert.match(tool.reply ?? "", /SCREENING_FIXTURE_BLOCK/);
+      assert.equal(tool.pendingApprovals?.length ?? 0, 0);
+    }
+    const events = await built.auditLog.events();
+    assert.ok(!events.some((event) => event.status === "block" || event.action.startsWith("security_posture.")));
+    const prompts = JSON.stringify(await built.sessions.listLlmRequests(inbound.sessionId!));
+    assert.doesNotMatch(prompts, /NOT security-screened/);
   });
 }

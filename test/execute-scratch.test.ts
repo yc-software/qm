@@ -1,3 +1,4 @@
+import { SandboxProvisionCleanupError, cleanupFailedProvision } from "../src/sandbox/sandbox.ts";
 import { execFileSync } from "node:child_process";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
@@ -86,7 +87,14 @@ const schemaRequired = (tool: ReturnType<typeof createAgentTools>[number]): stri
 test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "credentials"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "sandbox_id",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+    "retrySafe",
+  ]);
   assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
   await call(execute, { command: "echo hi" });
   assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
@@ -104,6 +112,7 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
     "credentials",
     "scope",
     "durable",
+    "retrySafe",
   ]);
 
   await call(execute, { command: "echo hi" });
@@ -161,19 +170,24 @@ test("flag ON: the description advertises the routing policy truthfully", () => 
   const [execute] = createAgentTools({ current: tc }, { scratchExec: true });
   const desc = (execute as unknown as { description: string }).description;
   assert.match(desc, /"scoped" \(DEFAULT\)/);
-  assert.match(desc, /Prefer it for heavy self-contained work/);
-  assert.match(desc, /NO logins, NO credentials/);
-  assert.match(desc, /NOTHING persists/);
-  assert.match(desc, /re-run it with scope:"scoped"/);
+  assert.match(desc, /Use it for self-contained commands and API work/);
+  assert.match(desc, /only credentials explicitly requested/);
+  assert.doesNotMatch(JSON.stringify(execute), /credential-free|blank, instant/);
+  assert.match(desc, /including Files/);
+  assert.match(desc, /local files are discarded after the turn/);
+  assert.match(desc, /Use scope:"scoped" when you need existing workspace files/);
   assert.doesNotMatch((legacy as unknown as { description: string }).description, /scratch/i);
 });
 
-function freshApp(extra: Partial<Config> = {}) {
+async function freshApp(extra: Partial<Config> = {}) {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-scratch-")),
     ...extra,
   });
-  return buildApp(config);
+  const built = buildApp(config);
+  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "scoped");
+  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  return built;
 }
 
 const dm = (text: string): TurnRequest => ({
@@ -183,8 +197,8 @@ const dm = (text: string): TurnRequest => ({
   text,
 });
 
-test("a scratch turn runs on a separate volumeless box with NO capability tokens in its env", async () => {
-  const { app } = freshApp({ signingSecret: "s3cret", apiBaseUrl: "https://core.test" });
+test("a scratch turn runs on a separate volumeless box with scoped capability tokens", async () => {
+  const { app } = await freshApp({ signingSecret: "s3cret", apiBaseUrl: "https://core.test" });
 
   const scoped = await app.turn(dm("!run printenv AGENT_API_TOKEN"));
   assert.equal(scoped.status, "ok");
@@ -195,10 +209,10 @@ test("a scratch turn runs on a separate volumeless box with NO capability tokens
 
   const scratch = await app.turn(dm("!scratch printenv AGENT_API_TOKEN"));
   assert.equal(scratch.status, "ok");
-  assert.equal(scratch.reply, "(exit 1)", "the scratch box is credential-free — no capability token");
+  assert.equal(scratch.reply, "<redacted:credential>", "scoped capability tokens are usable but masked in output");
 
   assert.ok(
-    fakeSprites.names().some((n) => n.startsWith("qm-personal-u1-")),
+    fakeSprites.names().some((n) => n.startsWith("qm-sandbox-")),
     "the scoped box is the scope's durable sprite",
   );
   assert.ok(
@@ -212,7 +226,7 @@ test("a scratch turn runs on a separate volumeless box with NO capability tokens
 });
 
 test("nothing on the scratch box survives the turn", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const first = await app.turn(dm('!scratch sh -c "echo leak > leak.txt && cat leak.txt"'));
   assert.equal(first.reply, "leak");
   const second = await app.turn(dm('!scratch sh -c "cat leak.txt 2>/dev/null; echo clean"'));
@@ -220,7 +234,7 @@ test("nothing on the scratch box survives the turn", async () => {
 });
 
 test("a deliverable has to live on the scoped computer — the scratch box can't be attached from", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const made = await app.turn(dm('!scratch sh -c "printf hello > from-scratch.txt && echo made"'));
   assert.equal(made.reply, "made");
   const res = await app.turn(dm("!attach from-scratch.txt"));
@@ -229,7 +243,7 @@ test("a deliverable has to live on the scoped computer — the scratch box can't
 });
 
 test("a scratch-only turn still reclaims its box (reset + suspend) when the turn ends", async () => {
-  const { app, sandbox } = freshApp();
+  const { app, sandbox } = await freshApp();
   let toreDown = 0;
   const realTeardown = sandbox.teardown.bind(sandbox);
   sandbox.teardown = async (handle, opts) => {
@@ -265,7 +279,7 @@ test("execute exposes only requested keychain environment values to one command"
   assert.equal(scopedHandle.env, undefined, "command credentials never mutate SandboxHandle");
 });
 
-test("execute rejects unavailable, conflicting, and scratch credential requests", async () => {
+test("execute rejects unavailable, conflicting, and reached credential requests", async () => {
   const { ctx } = routingCtx({
     commandCredentials: [
       { handle: "kc_one12345678", env: [{ key: "TOKEN", value: "one" }] },
@@ -279,89 +293,25 @@ test("execute rejects unavailable, conflicting, and scratch credential requests"
     /conflicting environment key/,
   );
   await assert.rejects(
-    ctx.execute("true", { scratch: true, credentials: ["kc_one12345678"] }),
-    /scoped or owner computer/,
+    ctx.execute("true", { reachTarget: "#other", credentials: ["kc_one12345678"] }),
+    /scoped, scratch, or owner computers/,
   );
 });
 
 test("execute schema lists exact command credential handles", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc }, { commandCredentialHandles: ["kc_github12345"] });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "credentials"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "sandbox_id",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+    "retrySafe",
+  ]);
 
   await call(execute, { command: "gh api user", credentials: ["kc_github12345"] });
   assert.deepEqual(seen.at(-1)?.opts, { credentials: ["kc_github12345"] });
-});
-
-test("migrateComputer gates on approval, validates the target, bounds the copy, and settles routing", async () => {
-  const migrated: Array<{ scope: string; to: string; reason?: string; opts?: unknown }> = [];
-  const audited: string[] = [];
-  let invalidated = 0;
-  const runner = {
-    migrateScope: async (scope: string, to: string, reason?: string, opts?: unknown) => {
-      migrated.push({ scope, to, ...(reason ? { reason } : {}), opts });
-      return {
-        scopeId: scope,
-        from: "e2b",
-        to,
-        resynced: false,
-        capabilitiesLost: [],
-        bytes: 1,
-        sha: "shashasha1234",
-        sourceFiles: 1,
-      };
-    },
-    listRoutes: async () => [],
-    availableBackends: () => ["e2b", "modal"],
-    defaultBackend: "e2b",
-  };
-  const base = {
-    sandboxMigration: runner as never,
-    migrateSettleMs: 0,
-    invalidateProvision: () => {
-      invalidated++;
-    },
-    auditLog: { record: (e: { action: string }) => audited.push(e.action) } as never,
-  };
-
-  const unapproved = routingCtx(base);
-  await assert.rejects(unapproved.ctx.migrateComputer("modal"), (e: Error) => e.name === "NeedsApproval");
-
-  const { ctx } = routingCtx({ ...base, authorizeCommand: (c: string) => c === 'computer:"migrate" to:"modal"' });
-  await assert.rejects(ctx.migrateComputer("sprites"), /not an available backend here.*e2b, modal/);
-  const moved = await ctx.migrateComputer("modal");
-  assert.deepEqual(moved, { from: "e2b", to: "modal" });
-  assert.deepEqual(migrated, [
-    { scope: scopeId("personal", "U1"), to: "modal", reason: "agent-requested", opts: { copyTimeoutSec: 1800 } },
-  ]);
-  assert.equal(invalidated, 1, "the turn's provision memo is cleared so the next command lands on the new box");
-  assert.deepEqual(audited, ["sandbox_routes.migrate"]);
-});
-
-test("migrateComputer rewords the operator-only force refusal and audits failures", async () => {
-  const audited: string[] = [];
-  const runner = {
-    migrateScope: async () => {
-      throw new Error("cannot migrate to sprites: it has no process sessions. Migrate with force to accept the loss.");
-    },
-    listRoutes: async () => [],
-    availableBackends: () => ["e2b", "sprites"],
-    defaultBackend: "e2b",
-  };
-  const { ctx } = routingCtx({
-    sandboxMigration: runner as never,
-    migrateSettleMs: 0,
-    authorizeCommand: () => true,
-    auditLog: { record: (e: { action: string }) => audited.push(e.action) } as never,
-  });
-  await assert.rejects(ctx.migrateComputer("sprites"), /An operator can force this from the admin console\./);
-  await assert.rejects(ctx.migrateComputer("sprites"), (e: Error) => !/Migrate with force/.test(e.message));
-  assert.deepEqual(audited, ["sandbox_routes.migrate_failed", "sandbox_routes.migrate_failed"]);
-});
-
-test("migrateComputer without a wired runner fails loudly", async () => {
-  const { ctx } = routingCtx({ authorizeCommand: () => true });
-  await assert.rejects(ctx.migrateComputer("modal"), /not available on this deployment/);
 });
 
 test("execute masks credential output before model delivery, screening, and transcript logging", async () => {
@@ -530,3 +480,218 @@ test("scoped command wrappers preserve selected AWS credentials and clear unsele
   );
   assert.equal(result.stdout, "passed");
 });
+
+test("scratch credentials are selected per command and masked before returning", async () => {
+  const environments: Array<Record<string, string> | undefined> = [];
+  const { ctx } = routingCtx({
+    provisionScratch: async () => ({ ...scratchHandle, env: { AGENT_API_TOKEN: "scope-capability" } }),
+    commandCredentials: [
+      { handle: "selected", env: [{ key: "TOKEN", value: "selected-secret" }] },
+      { handle: "unselected", env: [{ key: "OTHER_TOKEN", value: "other-secret" }] },
+      { handle: "owner", scope: "owner", env: [{ key: "OWNER_TOKEN", value: "owner-secret" }] },
+    ],
+    sandbox: {
+      async run(handle: SandboxHandle) {
+        environments.push(handle.env);
+        return { stdout: Object.values(handle.env ?? {}).join(" "), stderr: "", code: 0, timedOut: false };
+      },
+    } as unknown as Sandbox,
+  });
+  const result = await ctx.execute("env", { scratch: true, credentials: ["selected"] });
+  assert.equal(result.stdout, "<redacted:credential> <redacted:credential>");
+  assert.equal(environments[0]?.TOKEN, "selected-secret");
+  assert.equal(environments[0]?.OTHER_TOKEN, undefined);
+  await ctx.execute("env", { scratch: true });
+  assert.equal(environments[1]?.TOKEN, undefined);
+  await assert.rejects(ctx.execute("env", { scratch: true, credentials: ["owner"] }), /requires scope:owner/);
+});
+
+function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
+  const events: import("../src/audit/audit-log.ts").AuditEvent[] = [];
+  const errors: unknown[] = [];
+  const boxes = createTurnSandboxes({
+    deps: {
+      sandbox,
+      auditLog: { record: (event: import("../src/audit/audit-log.ts").AuditEvent) => events.push(event) },
+      errors: { record: (...args: unknown[]) => errors.push(args) },
+    },
+    input: { runId: "run-1" },
+    actor: { id: "U1" },
+    session: { id: "session-1" },
+    transferId,
+    scopeId: scopeId("channel", "C1"),
+    memoryScopeId: scopeId("channel", "C1"),
+    connectorEnv: { AGENT_API_TOKEN: "scope-capability" },
+    credentialCutoverServices: [],
+    resolution: {
+      layers: [
+        { scopeId: scopeId("channel", "C1"), mode: "rw", mountPath: "" },
+        { scopeId: scopeId("org", "global"), mode: "ro", mountPath: "global" },
+      ],
+    },
+  } as unknown as TurnSandboxContext);
+  return { boxes, events, errors };
+}
+
+test("scratch provisioning is singleflight within a turn and isolated across turns", async () => {
+  const provisions: Parameters<Sandbox["provision"]>[] = [];
+  const releases: Parameters<Sandbox["teardown"]>[] = [];
+  const sandbox: Partial<Sandbox> = {
+    async provision(...args) {
+      provisions.push(args);
+      await Promise.resolve();
+      return { ...scratchHandle, id: args[1]!.scratch!.key, backend: "local" };
+    },
+    async teardown(...args) {
+      releases.push(args);
+    },
+  };
+  const first = turnBoxes(sandbox);
+  const second = turnBoxes(sandbox, "turn-b");
+  const [a, b, c] = await Promise.all([
+    first.boxes.provisionScratch(),
+    first.boxes.provisionScratch(),
+    second.boxes.provisionScratch(),
+  ]);
+  assert.equal(a, b);
+  assert.notEqual(a.id, c.id);
+  assert.equal(provisions.length, 2);
+  for (const [layers, opts] of provisions) {
+    assert.deepEqual(
+      layers.map((layer) => layer.mountPath),
+      ["global"],
+    );
+    assert.deepEqual(opts?.env, { AGENT_API_TOKEN: "scope-capability" });
+  }
+  await first.boxes.reclaimBox();
+  await second.boxes.reclaimBox();
+  assert.equal(releases.length, 2);
+  assert.ok(releases.every(([, opts]) => opts?.destroy === true));
+  assert.deepEqual(
+    first.events.map((event) => event.action),
+    ["sandbox.scratch.provision_started", "sandbox.scratch.provision_ready", "sandbox.scratch.released"],
+  );
+  assert.equal(new Set(first.events.map((event) => event.resource)).size, 1);
+  const detail = JSON.parse(first.events.at(-1)!.detail!);
+  assert.equal(detail.runId, "run-1");
+  assert.equal(detail.sessionId, "session-1");
+  assert.equal(detail.sandboxId, a.id);
+  assert.equal(detail.backend, "local");
+  assert.ok(detail.cleanupMs >= 0);
+  assert.ok(!JSON.stringify(first.events).includes("scope-capability"));
+});
+
+test("reclaim waits for in-flight scratch creation before destroying its handle", async () => {
+  const ready = Promise.withResolvers<SandboxHandle>();
+  const destroyed: string[] = [];
+  const { boxes } = turnBoxes({
+    provision: () => ready.promise,
+    async teardown(handle) {
+      destroyed.push(handle.id);
+    },
+  });
+  const provision = boxes.provisionScratch();
+  const reclaim = boxes.reclaimBox();
+  ready.resolve(scratchHandle);
+  await Promise.all([provision, reclaim]);
+  assert.deepEqual(destroyed, [scratchHandle.id]);
+  assert.equal(boxes.scratchBox.handle, null);
+});
+
+test("scratch destruction failures keep their cause and retain the handle for retry", async () => {
+  let attempts = 0;
+  let fail = true;
+  const { boxes, events, errors } = turnBoxes({
+    async provision() {
+      return scratchHandle;
+    },
+    async teardown() {
+      attempts++;
+      if (fail) throw new Error(`teardown-boom-${attempts}`);
+    },
+  });
+  await boxes.provisionScratch();
+  await assert.rejects(boxes.reclaimBox(), (error: Error) => {
+    assert.equal(error.message, "Disposable sandbox destruction failed");
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(
+      error.errors.map((attempt: Error) => attempt.message),
+      ["teardown-boom-1", "teardown-boom-2", "teardown-boom-3"],
+    );
+    return true;
+  });
+  assert.equal(attempts, 3);
+  assert.equal(boxes.scratchBox.handle, scratchHandle);
+  assert.equal(events.filter((event) => event.action === "sandbox.scratch.release_failed").length, 1);
+  assert.equal(events.filter((event) => event.action === "sandbox.scratch.released").length, 0);
+  assert.equal(
+    JSON.parse(events.find((event) => event.action === "sandbox.scratch.release_failed")!.detail!).error,
+    "Disposable sandbox destruction failed <- Error: teardown-boom-1 <- Error: teardown-boom-2 <- Error: teardown-boom-3",
+  );
+  assert.equal(errors.length, 1);
+  fail = false;
+  await boxes.reclaimBox();
+  assert.equal(boxes.scratchBox.handle, null);
+});
+
+test("failed scratch provisioning is audited with its error and can retry", async () => {
+  let attempts = 0;
+  const { boxes, events } = turnBoxes({
+    async provision() {
+      if (attempts++ === 0) throw new Error("provision-boom");
+      return scratchHandle;
+    },
+    async teardown() {},
+  });
+  await assert.rejects(boxes.provisionScratch(), /provision-boom/);
+  await boxes.provisionScratch();
+  await boxes.reclaimBox();
+  assert.deepEqual(
+    events.map((event) => event.action),
+    [
+      "sandbox.scratch.provision_started",
+      "sandbox.scratch.provision_failed",
+      "sandbox.scratch.provision_started",
+      "sandbox.scratch.provision_ready",
+      "sandbox.scratch.released",
+    ],
+  );
+  assert.equal(JSON.parse(events[1]!.detail!).error, "provision-boom");
+});
+
+for (const recovers of [true, false]) {
+  test(`failed scratch initialization keeps both errors and the cleanup identity; recovery=${recovers}`, async () => {
+    let destroys = 0;
+    const partial = { ...scratchHandle, backend: "local", env: { TOKEN: "token" } };
+    const sandbox: Partial<Sandbox> = {
+      async provision() {
+        const failure = new Error("initialization failed");
+        await cleanupFailedProvision({ teardown: sandbox.teardown! }, partial, failure);
+        throw failure;
+      },
+      async teardown(handle, opts) {
+        assert.equal(handle.id, partial.id);
+        assert.equal(opts?.destroy, true);
+        if (destroys++ === 0 || !recovers) throw new Error("teardown-boom");
+      },
+    };
+    const { boxes, events } = turnBoxes(sandbox);
+    await assert.rejects(boxes.provisionScratch(), (error: Error) => {
+      assert.ok(error instanceof SandboxProvisionCleanupError);
+      assert.equal(error.handle.id, partial.id);
+      assert.match(error.message, /initialization failed/);
+      assert.equal((error.cause as Error).message, "teardown-boom");
+      return true;
+    });
+    await assert.rejects(boxes.provisionScratch(), /cleanup is still pending/);
+    assert.equal(boxes.scratchBox.handle, null);
+    assert.equal(boxes.scratchBox.pending?.id, partial.id);
+    if (recovers) await boxes.reclaimBox();
+    else await assert.rejects(boxes.reclaimBox(), /Disposable sandbox destruction failed/);
+    const failure = events.find((event) => event.action === "sandbox.scratch.provision_failed")!;
+    assert.equal(JSON.parse(failure.detail!).sandboxId, partial.id);
+    assert.equal(JSON.parse(failure.detail!).backend, "local");
+    assert.equal(events.at(-1)?.action, `sandbox.scratch.${recovers ? "released" : "release_failed"}`);
+    assert.equal(boxes.scratchBox.pending === null, recovers);
+  });
+}

@@ -42,8 +42,8 @@ for (const [label, glyph] of [
     render(view(), host);
     const after = button.querySelector("svg")!;
     assert.equal(host.querySelector("button"), button);
-    assert.notEqual(after, before);
-    assert.equal(before.isConnected, false);
+    assert.equal(after, before);
+    assert.equal(before.isConnected, true);
     assert.equal(dom.window.getComputedStyle(after).pointerEvents, "none");
     for (const child of after.children) assert.equal(dom.window.getComputedStyle(child).pointerEvents, "none");
     assert.notEqual(dom.window.getComputedStyle(button).pointerEvents, "none");

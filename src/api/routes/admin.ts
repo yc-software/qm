@@ -21,7 +21,7 @@ import {
   putAdminCronRuntime,
 } from "./admin/artifacts.ts";
 import { getAdminMemory, listMemoryScopes, putAdminMemory } from "./admin/memory.ts";
-import { listSandboxRoutes, migrateSandboxScope, manageSandboxResources } from "./admin/sandbox.ts";
+import { manageSandboxResources } from "./admin/sandbox.ts";
 import {
   createAdminGrant,
   getUserDetail,
@@ -151,8 +151,6 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "PUT", path: "/v1/admin/memory", auth: "either", handle: putAdminMemory },
   { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
   { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
-  { method: "GET", path: "/v1/admin/sandbox-routes", auth: "either", handle: listSandboxRoutes },
-  { method: "POST", path: "/v1/admin/sandbox-routes/:scopeId/migrate", auth: "either", handle: migrateSandboxScope },
   { method: "GET", path: "/v1/admin/users", auth: "either", handle: listUsers },
   { method: "GET", path: "/v1/admin/directory", auth: "either", handle: searchDirectory },
   { method: "GET", path: "/v1/admin/keychain", auth: "either", handle: listKeychainStatus },

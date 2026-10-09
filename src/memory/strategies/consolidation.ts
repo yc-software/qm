@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { type MemoryRecords } from "../records.ts";
 import type { ScopeId } from "../../types.ts";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import type { MemoryService } from "../memory-service.ts";
@@ -5,23 +7,6 @@ import { createKeyedQueue } from "../../util/async.ts";
 import { bulletText, captureDate, dateStr, isBullet } from "../notebook.ts";
 
 export const DEFAULT_CONSOLIDATE_AFTER = 10;
-
-const MARKER_PREFIX = "<!-- consolidated:";
-
-export function consolidationMarker(at: number): string {
-  return `${MARKER_PREFIX} ${dateStr(at)} -->`;
-}
-
-function isMarker(line: string): boolean {
-  return line.trim().startsWith(MARKER_PREFIX);
-}
-
-export function bulletsBelowMarker(body: string): number {
-  const lines = body.split("\n");
-  let lastMarker = -1;
-  for (let i = 0; i < lines.length; i++) if (isMarker(lines[i]!)) lastMarker = i;
-  return lines.slice(lastMarker + 1).filter(isBullet).length;
-}
 
 export const MEMORY_CONSOLIDATION_PROMPT = [
   "You consolidate an agent's long-term memory notebook. The input is a numbered list",
@@ -83,40 +68,30 @@ function formatBullet(text: string, date: string): string {
   return captureDate(text) ? `- ${text}` : `- (${date}) ${text}`;
 }
 
-export function applyConsolidationActions(body: string, actions: ConsolidationAction[], at: number): string {
-  const today = dateStr(at);
+function applyRecordActions(records: MemoryRecords["records"], actions: ConsolidationAction[], at: number) {
   const updates = new Map<number, string>();
   const deletes = new Set<number>();
-  const adds: string[] = [];
-  for (const a of actions) {
-    if (a.kind === "update") updates.set(a.index, a.text);
-    else if (a.kind === "delete") deletes.add(a.index);
-    else adds.push(a.text);
+  const added: MemoryRecords["records"] = [];
+  for (const action of actions) {
+    if (action.kind === "update") updates.set(action.index, action.text);
+    else if (action.kind === "delete") deletes.add(action.index);
+    else if (records[0]) added.push({ ...records[0], id: randomUUID(), text: formatBullet(action.text, dateStr(at)) });
   }
-
-  const out: string[] = [];
-  let n = 0;
-  for (const line of body.split("\n")) {
-    if (isMarker(line)) {
-      if (out[out.length - 1]?.trim() === "") out.pop();
-      continue;
-    }
-    if (!isBullet(line)) {
-      out.push(line);
-      continue;
-    }
-    n++;
-    if (deletes.has(n)) continue;
-    const updated = updates.get(n);
-    out.push(updated !== undefined ? formatBullet(updated, captureDate(bulletText(line)) ?? today) : line);
-  }
-  for (const text of adds) out.push(formatBullet(text, today));
-
-  const trimmed = out
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s+$/, "");
-  return `${trimmed}\n\n${consolidationMarker(at)}`;
+  return [
+    ...records.flatMap((record, index) => {
+      if (deletes.has(index + 1)) return [];
+      const text = updates.get(index + 1);
+      return [
+        {
+          ...record,
+          ...(text === undefined
+            ? {}
+            : { text: formatBullet(text, captureDate(bulletText(record.text)) ?? dateStr(at)) }),
+        },
+      ];
+    }),
+    ...added,
+  ];
 }
 
 export interface Consolidator {
@@ -129,48 +104,65 @@ export function createConsolidator(deps: {
   memory: MemoryService;
   afterN?: number;
   now?: () => number;
-  log?: (msg: string) => void;
 }): Consolidator | undefined {
   const afterN = deps.afterN ?? DEFAULT_CONSOLIDATE_AFTER;
   if (afterN <= 0) return undefined;
   const now = deps.now ?? Date.now;
-  const log = deps.log ?? ((msg: string) => console.error(msg));
-  const degraded = new Set<ScopeId>();
   async function maintain(scopeId: ScopeId): Promise<void> {
-    if (degraded.has(scopeId) || !deps.harness.oneShot) return;
-    const guarded = deps.memory.readHead && deps.memory.replaceIfRevision;
-    const head = guarded ? await deps.memory.readHead!(scopeId) : undefined;
-    const body = head?.content ?? (await deps.memory.read(scopeId));
-    const bullets = body.split("\n").filter(isBullet);
-    if (!bullets.length) return;
-
-    const numbered = bullets.map((l, i) => `${i + 1}. ${bulletText(l)}`).join("\n");
-    let out: string | undefined;
-    try {
-      out = await deps.harness.oneShot(MEMORY_CONSOLIDATION_PROMPT, numbered);
-    } catch {
-      out = "";
-    }
+    if (!deps.harness.oneShot || !deps.memory.replaceRecordsIfRevision) return;
+    const head = await deps.memory.readHead?.(scopeId);
+    if (!head?.records?.records.some((record) => isBullet(record.text))) return;
     const at = now();
-    const next = applyConsolidationActions(body, parseConsolidationActions(out ?? ""), at);
-    if (head) {
-      await deps.memory.replaceIfRevision!(scopeId, next, head.revision, "system");
+    const classify = async (records: MemoryRecords["records"]) => {
+      const numbered = records.map((record, index) => `${index + 1}. ${bulletText(record.text)}`).join("\n");
+      const out = await deps.harness.oneShot!(MEMORY_CONSOLIDATION_PROMPT, numbered).catch(() => "");
+      return parseConsolidationActions(out ?? "");
+    };
+    {
+      const groups = new Map<string, MemoryRecords["records"]>();
+      for (const record of head.records.records.filter((record) => isBullet(record.text))) {
+        const key = JSON.stringify([
+          record.sensitivity,
+          record.sourceUnknown,
+          record.sources.map((source) => [source.scopeId, source.sessionId ?? ""]).sort(),
+        ]);
+        const group = groups.get(key) ?? [];
+        group.push(record);
+        groups.set(key, group);
+      }
+      const revised = new Map<string, MemoryRecords["records"][number]>();
+      const added: MemoryRecords["records"] = [];
+      const existing = new Set(head.records.records.map((record) => record.id));
+      for (const group of groups.values()) {
+        for (const record of applyRecordActions(group, await classify(group), at)) {
+          if (existing.has(record.id)) revised.set(record.id, record);
+          else added.push(record);
+        }
+      }
+      const records = head.records.records.flatMap((record) => {
+        if (!isBullet(record.text)) return [record];
+        return revised.has(record.id) ? [revised.get(record.id)!] : [];
+      });
+      records.push(...added);
+      await deps.memory.replaceRecordsIfRevision(
+        scopeId,
+        { ...head.records, records, capturesSinceConsolidation: 0 },
+        head.revision,
+        "system",
+      );
       return;
-    }
-    await deps.memory.replace(scopeId, next, "system");
-
-    const after = await deps.memory.read(scopeId);
-    if (after.replace(/\s+$/, "") !== next.replace(/\s+$/, "")) {
-      degraded.add(scopeId);
-      log(`[memory] store for ${scopeId} does not support rewrite; consolidation disabled (capture-only)`);
     }
   }
 
   return {
     maintain,
     async maybeMaintain(scopeId) {
-      if (degraded.has(scopeId)) return;
-      if (bulletsBelowMarker(await deps.memory.read(scopeId)) >= afterN) await maintain(scopeId);
+      const head = await deps.memory.readHead?.(scopeId);
+      if (!head?.records) return;
+      const count =
+        head.records.capturesSinceConsolidation ??
+        head.records.records.filter((record) => isBullet(record.text)).length;
+      if (count >= afterN) await maintain(scopeId);
     },
   };
 }

@@ -1,6 +1,6 @@
+import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
-import { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +17,7 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
@@ -55,6 +56,12 @@ test("provision runs commands with env and cwd", async () => {
   assert.equal(r.code, 0);
   assert.match(r.stdout, /workspace/);
   assert.match(r.stdout, /VAR=v1/);
+});
+
+test("two cores provisioning the same stopped computer create one sandbox", async () => {
+  const advisoryLock = createMemoryAdvisoryLock();
+  await Promise.all([make({ advisoryLock }).provision(layers), make({ advisoryLock }).provision(layers)]);
+  assert.equal(fake.createdCount(scopeName()), 1);
 });
 
 test("an already-aborted signal never executes a command", async () => {
@@ -302,26 +309,6 @@ test("a failing snapshot store fails the fallback provision instead of cold-star
   flaky.failReads(false);
   const b = await s.provision(layers);
   assert.equal(await s.readFile(b, "precious.txt"), "irreplaceable\n", "snapshot survives the outage");
-});
-
-test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets the scope's sandbox", async () => {
-  const { makeTar } = await import("../src/sandbox/tar.ts");
-  const blobs = createMemoryBlobTransferStore();
-  const s = make({ blobTransfer: blobs, capabilitySecret: "blob-secret", apiBaseUrl: "http://core.internal:8080" });
-
-  const a = await s.provision(layers);
-  await s.writeFile(a, "old.txt", "stale sprite-era sandbox\n");
-  await s.teardown(a, { keepWarm: true });
-
-  const tar = await makeTar([{ path: "migrated.txt", data: Buffer.from("came from sprites\n") }]);
-  const { blobId } = await blobs.put(Readable.from([Buffer.from(tar)]));
-  assert.ok(s.adoptHomeSnapshot);
-  await s.adoptHomeSnapshot!(scope, blobId);
-
-  const b = await s.provision(layers);
-  const migrated = await s.run(b, "cat ~/migrated.txt");
-  assert.equal(migrated.stdout, "came from sprites\n", "hydrates from the adopted snapshot");
-  assert.notEqual((await s.run(b, "cat ~/old.txt")).code, 0, "the pre-adopt sandbox was discarded, not reused");
 });
 
 test("blob staging is advertised only when the channel is actually wired", async () => {
@@ -700,4 +687,65 @@ test("repeated destroy teardown never targets an unrelated default scope", async
   await backend.teardown(handle, { destroy: true });
   assert.deepEqual(await store.get("default"), defaultRecord);
   assert.equal(await store.get(scope), null);
+});
+
+test("forced scratch destruction surfaces failure and retries the same live session", async () => {
+  let kills = 0;
+  const client = {
+    ...fake.client,
+    async create(opts: Parameters<typeof fake.client.create>[0]) {
+      const session = await fake.client.create(opts);
+      return {
+        ...session,
+        async kill() {
+          if (kills++ === 0) throw new Error("transient delete failure");
+          await session.kill();
+        },
+      };
+    },
+  };
+  const box = make({ client });
+  const handle = await box.provision(layers, { scratch: { key: "destroy-retry" } });
+  await assert.rejects(box.teardown(handle, { destroy: true }), /transient delete failure/);
+  await box.teardown(handle, { destroy: true });
+  assert.equal(kills, 2);
+});
+
+test("released scratch handles cannot recreate a persistent sandbox", async () => {
+  const handle = await sandbox.provision(layers, { scratch: { key: "released-handle" } });
+  await sandbox.teardown(handle, { destroy: true });
+  await assert.rejects(sandbox.run(handle, "true"), /handle has been released/);
+});
+
+test("failed scratch preparation retains the live session when rollback fails", async () => {
+  let kills = 0;
+  const box = make({
+    client: {
+      ...fake.client,
+      async create(opts: Parameters<typeof fake.client.create>[0]) {
+        const session = await fake.client.create(opts);
+        return {
+          ...session,
+          async runCommand() {
+            throw new Error("preparation failed");
+          },
+          async kill() {
+            if (kills++ === 0) throw new Error("kill-boom");
+            await session.kill();
+          },
+        };
+      },
+    },
+  });
+  let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
+  await assert.rejects(box.provision(layers, { scratch: { key: "failed-preparation" } }), (error: Error) => {
+    assert.ok(error instanceof SandboxProvisionCleanupError);
+    pending = error.handle;
+    assert.equal((error.cause as Error).message, "kill-boom");
+    assert.match(error.message, /preparation failed/);
+    return true;
+  });
+  assert.ok(pending);
+  await box.teardown(pending, { destroy: true });
+  assert.equal(kills, 2);
 });

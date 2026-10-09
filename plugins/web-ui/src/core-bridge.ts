@@ -1,4 +1,4 @@
-import { reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
+import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { EventType } from "@tanstack/ai/client";
@@ -15,6 +15,7 @@ import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
 import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabilities.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
+import { messageEntrySeqs } from "./message-link.ts";
 
 const BASE_URL = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
 
@@ -139,9 +140,11 @@ export interface CoreSession {
   lastActivityAt?: number;
   working?: boolean;
   awaitingInput?: boolean;
+  lastTurnFailed?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
+  goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
   parentSessionId?: string;
@@ -209,7 +212,7 @@ export async function loadInheritedTranscript(
 }
 
 export interface SessionBackgroundView {
-  jobs: Array<{ processId: string; command: string; startedAt: number; expiresAt: number }>;
+  jobs: Array<{ processId: string; command: string; purpose?: string; startedAt: number; expiresAt: number }>;
   watches: Array<{
     id: string;
     processId: string;
@@ -220,7 +223,12 @@ export interface SessionBackgroundView {
     expiresAt: number;
     lastFiredAt?: number;
   }>;
-  crons: Array<{ id: string; title?: string; nextFireAt?: number }>;
+  crons: Array<{
+    id: string;
+    title?: string;
+    nextFireAt?: number;
+    lastFire?: { firedAt: number; status?: string };
+  }>;
 }
 
 export interface SessionBackgroundOutput {
@@ -295,26 +303,33 @@ export async function forkSession(
   });
 }
 
-export function forkCutSeq(entries: SessionEntry[], userOrdinal: number, isUserMessage: boolean): number | undefined {
-  const seqs = forkableUserSeqs(entries);
-  if (isUserMessage) return seqs[userOrdinal - 1];
-  const nextUser = seqs[userOrdinal];
-  return nextUser !== undefined ? nextUser - 1 : undefined;
-}
-
-function forkableUserSeqs(entries: SessionEntry[]): number[] {
-  const seqs: number[] = [];
-  for (const e of entries) {
-    if (e.type !== "user" || e.seq === undefined) continue;
-    const p = e.payload as { text?: string; attachments?: unknown[]; hidden?: boolean } | null;
-    if (p?.hidden) continue;
-    if ((p?.text ?? "") || (p?.attachments?.length ?? 0)) seqs.push(e.seq);
+export function forkCutSeq(
+  entries: SessionEntry[],
+  messages: readonly unknown[],
+  index: number,
+  floorSeq = -1,
+): number | undefined {
+  const isUser = (message: unknown): boolean => {
+    const m = message as { role?: string; opener?: boolean; resumeAnchor?: boolean } | undefined;
+    return (m?.role === "user" || m?.role === "user-with-attachments") && !m.opener && !m.resumeAnchor;
+  };
+  let base = floorSeq;
+  let unsaved = 0;
+  for (let i = index; i >= 0; i--) {
+    const seqs = messageEntrySeqs(messages[i]);
+    if (seqs.length) {
+      base = Math.max(...seqs);
+      break;
+    }
+    if (isUser(messages[i])) unsaved++;
   }
-  return seqs;
-}
-
-export function userMessagesBefore(entries: SessionEntry[], anchorSeq: number): number {
-  return forkableUserSeqs(entries).filter((seq) => seq < anchorSeq).length;
+  if (isUser(messages[index]) && !unsaved) return base;
+  const later = entries.flatMap((entry) =>
+    entry.type === "user" && entry.seq !== undefined && entry.seq > base && userEntryMessage(entry) ? [entry.seq] : [],
+  );
+  if (isUser(messages[index])) return later[unsaved - 1];
+  const nextUser = later[unsaved];
+  return nextUser !== undefined ? nextUser - 1 : entries.at(-1)?.seq;
 }
 
 export const TAIL_TURNS = 25;
@@ -347,8 +362,20 @@ export async function fetchTranscript(
   return api<TranscriptPage>(`/api/sessions/${encodeURIComponent(id)}${suffix}`);
 }
 
+const resolvedCredentialApprovals = new Set<string>();
+
+export function unresolvedApprovals(approvals: PendingApproval[]): PendingApproval[] {
+  const pending = approvals.filter((approval) => !resolvedCredentialApprovals.has(approval.requestId));
+  return pending.length === approvals.length ? approvals : pending;
+}
+
 export function fetchSessionApprovals(id: string): Promise<{ approvals: PendingApproval[] } | null> {
-  return api<{ approvals: PendingApproval[] }>(`/api/sessions/${encodeURIComponent(id)}/approvals`).catch(() => null);
+  return api<{ approvals: PendingApproval[] }>(`/api/sessions/${encodeURIComponent(id)}/approvals`)
+    .then((result) => ({ approvals: unresolvedApprovals(result.approvals) }))
+    .catch((error: unknown) => {
+      reportHandledError("web:approvals_fetch", error);
+      return null;
+    });
 }
 
 export async function fetchEntry(sessionId: string, seq: number): Promise<SessionEntry> {
@@ -396,7 +423,15 @@ export interface SessionEntry {
 export interface ToolActivity {
   seq: number;
   parentSeq: number | null;
-  type: "tool_call" | "tool_result" | "approval_request" | "approval_resolved" | "thinking" | "text" | "text_start";
+  type:
+    | "tool_call"
+    | "tool_result"
+    | "approval_request"
+    | "approval_resolved"
+    | "thinking"
+    | "text"
+    | "text_start"
+    | "user";
   payload: unknown;
   createdAt: number;
   truncated?: boolean;
@@ -446,6 +481,7 @@ export type AssistantWork = AssistantMessage & {
   work?: WorkBlock;
   deliveredFiles?: DeliveredFile[];
   retryableSend?: boolean;
+  interruptedRunId?: string;
   sendBlocked?: "pending_approval";
   sendFailed?: "attachments";
   droppedAttachmentIds?: string[];
@@ -498,6 +534,19 @@ export interface QueuedRun {
 
 export function runIsTerminal(run: Pick<RunPoll, "status" | "result" | "replyComplete">): boolean {
   return run.status === "done" || run.status === "failed" || run.result != null || run.replyComplete === true;
+}
+
+export function hasRecordedRunReply(entries: SessionEntry[], runId: string): boolean {
+  let matchesRun = false;
+  for (const entry of entries) {
+    const payload = entry.payload as { runId?: string; steered?: boolean } | null;
+    if (entry.type === "user") {
+      if (!payload?.steered || payload.runId !== undefined) matchesRun = payload?.runId === runId;
+    } else if (matchesRun && entry.type === "assistant") {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resumeAnchor(): AgentMessage {
@@ -714,7 +763,12 @@ export function fetchUiState(key: string): Promise<UiStateRecord> {
   return api<UiStateRecord>(`/api/ui-state?key=${encodeURIComponent(key)}`);
 }
 
-export function putUiState(key: string, value: unknown, updatedAt: number, init?: RequestInit): Promise<unknown> {
+export function putUiState(
+  key: string,
+  value: unknown,
+  updatedAt: number,
+  init?: RequestInit,
+): Promise<{ ok: boolean; updatedAt: number }> {
   return api("/api/ui-state", { method: "PUT", body: JSON.stringify({ key, value, updatedAt }), ...init });
 }
 
@@ -947,11 +1001,29 @@ export function makeRunResumeStreamFn(
   return fn as unknown as StreamFn;
 }
 
-export async function resolveApproval(decision: ApprovalDecision): Promise<string> {
+export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
+  if (decision.requestId.startsWith("keychain:")) {
+    if (resolvedCredentialApprovals.has(decision.requestId)) return "";
+    const id = decision.requestId.slice("keychain:".length);
+    let choice = "deny";
+    if (decision.approved) choice = decision.scope === "always" ? "standing" : "once";
+    const result = await api<{ ask: { status: string } }>(`/api/keychain/approvals/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ decision: choice }),
+    });
+    if (!["approved", "declined", "expired"].includes(result.ask?.status))
+      throw new Error("The credential request is still pending. Please try again.");
+    resolvedCredentialApprovals.add(decision.requestId);
+    return "";
+  }
   const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
     method: "POST",
     body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+  }).catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
   });
+  if (!submit) return null;
   if (!submit.runId) throw new Error("Could not continue after the approval.");
   return submit.runId;
 }
@@ -962,6 +1034,10 @@ export async function runApprovalTurn(
   onWork: WorkObserver | undefined,
   slot?: RunSlot,
 ): Promise<void> {
+  if (decision.requestId.startsWith("keychain:")) {
+    await resolveApproval(decision);
+    return;
+  }
   const stream = createAssistantMessageEventStream();
   await driveApproval(stream, agent.state.model, decision, onWork, slot);
   const outcome = await stream.result();
@@ -1289,6 +1365,8 @@ function parseActivity(raw: unknown): ToolActivity[] {
     const a = item as Partial<ToolActivity> | null;
     if (!a || typeof a.seq !== "number" || typeof a.type !== "string" || !ACTIVITY_TYPES.has(a.type)) continue;
     if (a.type === "thinking" && !isRenderableThinking(a.payload)) continue;
+    if (a.type === "user" && !(a.payload as { steered?: boolean; hidden?: boolean } | null)?.steered) continue;
+    if (a.type === "user" && (a.payload as { hidden?: boolean } | null)?.hidden) continue;
     out.push({
       seq: a.seq,
       parentSeq: a.parentSeq ?? null,
@@ -1393,6 +1471,10 @@ export async function pollRun(
   signal?: AbortSignal,
   notify?: () => void,
 ): Promise<void> {
+  const failIdle = (): void => {
+    (partial as AssistantWork).interruptedRunId = runId;
+    fail(stream, partial, "Timed out waiting for the agent to respond.");
+  };
   let consecutiveFailures = 0;
   for (;;) {
     if (signal?.aborted) return abortStream(stream, partial);
@@ -1407,8 +1489,7 @@ export async function pollRun(
       if (signal?.aborted) return abortStream(stream, partial);
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) return fail(stream, partial, e.message);
       consecutiveFailures++;
-      if (now() - st.lastProgressAt > RUN_IDLE_MS)
-        return fail(stream, partial, "Timed out waiting for the agent to respond.");
+      if (now() - st.lastProgressAt > RUN_IDLE_MS) return failIdle();
       await sleep(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), POLL_RETRY_MAX_MS));
       continue;
     }
@@ -1417,8 +1498,7 @@ export async function pollRun(
     else st.staleSince = undefined;
     if (run.alive === true || (st.staleSince !== undefined && now() - st.staleSince < STALE_GRACE_MS))
       st.lastProgressAt = now();
-    if (now() - st.lastProgressAt > RUN_IDLE_MS)
-      return fail(stream, partial, "Timed out waiting for the agent to respond.");
+    if (now() - st.lastProgressAt > RUN_IDLE_MS) return failIdle();
     await sleep(POLL_MS);
   }
 }
@@ -1632,6 +1712,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 const ACTIVITY_TYPES = new Set<string>([
+  "user",
   "tool_call",
   "tool_result",
   "approval_request",
@@ -1794,6 +1875,59 @@ function userEntryText(payload: unknown): string | null {
   return display.trim() ? display : null;
 }
 
+export function userEntryMessage(
+  entry: Pick<SessionEntry, "payload" | "seq" | "createdAt">,
+): HistoryUserMessage | null {
+  const payload = entry.payload as {
+    text?: string;
+    hidden?: boolean;
+    runId?: string;
+    steered?: boolean;
+    name?: string;
+    ts?: string;
+    attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
+  } | null;
+  if (payload?.hidden) return null;
+  const text = userEntryText(payload) ?? "";
+  const attachments = payload?.attachments ?? [];
+  if (!text && !attachments.length) return null;
+  const mail = subagentMailOf(payload);
+  return {
+    role: "user",
+    ...(typeof payload?.runId === "string" ? { runId: payload.runId } : {}),
+    ...(entry.seq !== undefined ? { entrySeq: entry.seq } : {}),
+    content: text,
+    timestamp: entry.createdAt,
+    ...(mail ? { subagentMail: mail } : {}),
+    ...(payload?.steered ? { steered: true } : {}),
+    ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
+    ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),
+    ...(attachments.length
+      ? {
+          attachments: attachments.map((a, i) => ({
+            id: a.artifactId ?? `${entry.seq ?? entry.createdAt}:${i}`,
+            type: a.mimetype?.startsWith("image/") ? ("image" as const) : ("document" as const),
+            fileName: a.name ?? "file",
+            mimeType: a.mimetype ?? "application/octet-stream",
+            ...(typeof a.sizeBytes === "number" ? { size: a.sizeBytes } : {}),
+            ...(a.artifactId ? { artifactId: a.artifactId } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
+export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock): void {
+  const recorded = new Set(messages.map((message) => (message as { entrySeq?: number }).entrySeq));
+  for (const activity of work.activity) {
+    if (activity.type !== "user" || recorded.has(activity.seq)) continue;
+    const message = userEntryMessage(activity);
+    if (!message?.steered) continue;
+    messages.push(message as AgentMessage);
+    recorded.add(activity.seq);
+  }
+}
+
 export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): AgentMessage[] {
   const out: AgentMessage[] = [];
   const userByTs = new Map<string, HistoryUserMessage>();
@@ -1916,7 +2050,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       }
       continue;
     }
-    if (ACTIVITY_TYPES.has(e.type)) {
+    if (e.type !== "user" && ACTIVITY_TYPES.has(e.type)) {
       const activity: ToolActivity = {
         seq: e.seq ?? out.length,
         parentSeq: e.parentSeq ?? null,
@@ -1966,31 +2100,17 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
         spillHeldPosts();
         flushWork("", e.createdAt);
       }
-      const atts = payload?.attachments ?? [];
-      const userText = userEntryText(e.payload) ?? text;
-      if (text || atts.length) {
-        const mail = subagentMailOf(e.payload);
-        const msg: HistoryUserMessage = {
-          role: "user",
-          ...(typeof payload?.runId === "string" ? { runId: payload.runId } : {}),
-          ...(e.seq !== undefined ? { entrySeq: e.seq } : {}),
-          content: userText,
-          timestamp: e.createdAt,
-          ...(mail ? { subagentMail: mail } : {}),
-          ...(payload?.steered ? { steered: true } : {}),
-          ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
-          ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),
-        };
+      const msg = userEntryMessage(e);
+      if (msg) {
         if (msg.ts) userByTs.set(msg.ts, msg);
-        if (atts.length) {
-          msg.attachments = atts.map((a, i) => ({
-            id: a.artifactId ?? `${e.seq ?? e.createdAt}:${i}`,
-            type: a.mimetype?.startsWith("image/") ? "image" : "document",
-            fileName: a.name ?? "file",
-            mimeType: a.mimetype ?? "application/octet-stream",
-            ...(typeof a.sizeBytes === "number" ? { size: a.sizeBytes } : {}),
-            ...(a.artifactId ? { artifactId: a.artifactId } : {}),
-          }));
+        if (msg.steered) {
+          pending.push({
+            seq: e.seq ?? out.length,
+            parentSeq: e.parentSeq ?? null,
+            type: "user",
+            payload: e.payload,
+            createdAt: e.createdAt,
+          });
         }
         out.push(msg as AgentMessage);
       }
@@ -2060,6 +2180,7 @@ export function attachPendingApprovals(
   approvals: PendingApproval[],
   model?: Model<Api>,
 ): void {
+  approvals = unresolvedApprovals(approvals);
   if (!approvals.length) return;
 
   const turnForCommand = (command: string): AssistantWork | undefined => {

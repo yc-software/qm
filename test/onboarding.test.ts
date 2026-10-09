@@ -219,8 +219,9 @@ test("completed and dismissed onboarding do not recount or rewrite history", asy
   for (const status of ["completed", "dismissed"] as const) {
     const content = setOnboardingStatus("Keep this.", status, "2026-09-17");
     await memory.replace(scope, content);
+    const before = await memory.readHead!(scope);
     assert.equal(await resolveOnboardingStatus(memory, noCounting, scope), status);
-    assert.equal(await memory.read(scope), content);
+    assert.deepEqual(await memory.readHead!(scope), before);
   }
 });
 

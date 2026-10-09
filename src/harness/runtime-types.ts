@@ -10,10 +10,12 @@ export interface RuntimeRequest {
   lifetime?: "task" | "scope";
 }
 
-export interface RuntimeHandoff {
+interface RuntimeHandoff {
   choice: RuntimeChoice;
   lifetime: "task" | "scope";
 }
+
+export type HarnessHandoff = RuntimeHandoff | { context: "recent" };
 
 export type RuntimeResult =
   | { ok: false; error: string; message?: string; candidates?: string[] }

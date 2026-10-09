@@ -1,0 +1,20 @@
+{{- $core := .Values.services.core }}
+{{- if and $core.enabled $core.persistence.enabled (not $core.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "qm.fullname" . }}-core-data
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if ne $core.persistence.storageClass nil }}
+  storageClassName: {{ $core.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $core.persistence.size | quote }}
+{{- end }}

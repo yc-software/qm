@@ -38,6 +38,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   members?: Principal[];
   unattendedGrants?: string[];
   loopId?: string;
+  sessionRef?: string;
 }
 
 export interface CronPatch {
@@ -53,6 +54,7 @@ export interface CronPatch {
   runAs?: Cron["runAs"];
   ownerResourcesRequireOpen?: boolean;
   unattendedGrants?: string[];
+  sessionRef?: string | null;
 }
 
 export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
@@ -87,6 +89,16 @@ export interface CronStore {
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
   due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
+}
+
+export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
+  if (!cron.enabled || cron.archived) return false;
+  const oneShot = cron.schedule.cron === undefined && cron.schedule.everyMs === undefined;
+  return !(oneShot && cron.lastFiredAt !== undefined);
+}
+
+export function cronTiedTo(cron: Pick<Cron, "destination" | "sessionRef">, threadRef: string): boolean {
+  return cron.destination?.target === threadRef || cron.sessionRef === threadRef;
 }
 
 export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean {
@@ -140,6 +152,7 @@ export function createCronStore(
         ...(input.members ? { members: input.members } : {}),
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
         ...(input.loopId ? { loopId: input.loopId } : {}),
+        ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
       }));
     },
@@ -167,6 +180,7 @@ export function createCronStore(
       if (patch.runAs !== undefined) fields.runAs = patch.runAs;
       if (patch.ownerResourcesRequireOpen === true) fields.ownerResourcesRequireOpen = true;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
+      if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
       return backing.merge(id, fields);
     },
     delete: (id) => backing.delete(id),

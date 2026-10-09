@@ -136,7 +136,7 @@ export function createMessagingMethods(
   const identityMembers = async (): Promise<DirectoryMember[]> => {
     const [externals, participants] = await Promise.all([
       deps.identity.listExternalMembers(),
-      deps.sessions?.listParticipants() ?? [],
+      deps.sessions?.distinctParticipants() ?? [],
     ]);
     const candidates: DirectoryMember[] = [
       ...(deps.emailAuthMembers ?? []),
@@ -144,8 +144,8 @@ export function createMessagingMethods(
         .filter((member) => externalMemberActive(member))
         .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
       ...participants
-        .filter((w) => deps.identity.classify(w.principalId).type === "internal")
-        .map((w) => ({ principalId: w.principalId, displayName: w.principalId, type: "internal" as const })),
+        .filter((principalId) => deps.identity.classify(principalId).type === "internal")
+        .map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
     ];
     const byKey = new Map<string, DirectoryMember>();
     for (const member of candidates) {
@@ -478,13 +478,14 @@ export function createMessagingMethods(
       }
       return true;
     },
-    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations) {
+    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations, partial) {
       const applied = await deps.directory.replaceChannels(
         channels,
         channelMembers,
         syncedAt,
         channelRosterIds,
         revocations,
+        partial,
       );
       await h.syncLinkedProjectRosters();
       return applied;

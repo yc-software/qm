@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { deriveKey, seal, openSession, type SessionClaims } from "../src/session.ts";
 
 const claimed = new Set<string>();
@@ -151,7 +151,7 @@ test("mintBucketOf keys IPv4 per address and IPv6 per /64", () => {
   assert.equal(mintBucketOf("fe80::1%en0"), "fe80:0:0:0::/64");
 });
 
-test("boot refuses playground configurations that leak or brick", () => {
+test("boot refuses playground configurations that leak or brick", async () => {
   const command = "import('./src/index.ts').then(m => m.bootChecks())";
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -166,8 +166,12 @@ test("boot refuses playground configurations that leak or brick", () => {
   delete baseEnv.PORTAL_PLAYGROUND_MINTS_PER_IP;
   delete baseEnv.PORTAL_PLAYGROUND_MINT_WINDOW_S;
   const boot = (env: NodeJS.ProcessEnv) =>
-    spawnSync(process.execPath, ["--input-type=module", "-e", command], { cwd: process.cwd(), env, encoding: "utf8" });
-  assert.equal(boot(baseEnv).status, 0);
+    new Promise<{ status: number | null; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", command], { cwd: process.cwd(), env });
+      let stderr = "";
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+      child.on("error", reject).on("close", (status) => resolve({ status, stderr }));
+    });
   const bad: Array<[NodeJS.ProcessEnv, RegExp]> = [
     [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "0" }, /between 1 and 64/],
     [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "65" }, /between 1 and 64/],
@@ -181,11 +185,12 @@ test("boot refuses playground configurations that leak or brick", () => {
     ],
     [{ PORTAL_DEPLOYMENTS_ENABLED: "1" }, /PORTAL_DEPLOYMENTS_ENABLED unset/],
   ];
-  for (const [extra, pattern] of bad) {
-    const r = boot({ ...baseEnv, ...extra });
-    assert.notEqual(r.status, 0, `expected boot failure for ${JSON.stringify(extra)}`);
-    assert.match(r.stderr, pattern);
-  }
+  const [ok, ...refused] = await Promise.all([baseEnv, ...bad.map(([extra]) => ({ ...baseEnv, ...extra }))].map(boot));
+  assert.equal(ok!.status, 0);
+  bad.forEach(([extra, pattern], i) => {
+    assert.notEqual(refused[i]!.status, 0, `expected boot failure for ${JSON.stringify(extra)}`);
+    assert.match(refused[i]!.stderr, pattern);
+  });
 });
 
 test("mints beyond the per-IP budget are refused, and refusal sets no cookie", async () => {

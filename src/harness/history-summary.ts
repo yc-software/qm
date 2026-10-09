@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { compactTranscript, validateCompactSummary } from "./context-compaction.ts";
+import { providerTurnError } from "./provider-error.ts";
 
 type StreamFn = NonNullable<Parameters<typeof generateSummary>[9]>;
 
@@ -42,6 +43,7 @@ export async function summarizeHistory(
     async (summaryModel, context, options) => {
       const stream = await streamFn(summaryModel, context, options);
       const result = await stream.result();
+      if (result.stopReason === "error") throw providerTurnError(result);
       if (result.stopReason !== "stop") {
         throw new Error(
           `Compaction did not complete (${result.stopReason}): ${result.errorMessage ?? "incomplete summary"}`,

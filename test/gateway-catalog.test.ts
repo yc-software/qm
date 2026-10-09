@@ -167,13 +167,21 @@ test("legacy routes work without discovery support, then discovery adds models a
   assert.deepEqual(f.catalog.transport.models, {});
 });
 
-test("discovery outage hides stale models; later successful refresh recovers", async () => {
-  const f = fixture();
+test("a transient discovery blip keeps last known routes; a prolonged outage hides them", async () => {
+  const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
   await f.catalog.refresh();
+  const native = resolveModel("claude-opus-5")!;
   f.tick();
   f.status(503);
   await f.catalog.refresh();
+  assert.ok(resolveModel("gateway/vendor/new-model"));
+  assert.ok(modelGatewayRequest(f.catalog.transport, native));
+  for (let i = 0; i < 3; i++) {
+    f.tick();
+    await f.catalog.refresh();
+  }
   assert.equal(resolveModel("gateway/vendor/new-model"), undefined);
+  assert.throws(() => modelGatewayRequest(f.catalog.transport, native), /unavailable/);
   f.tick();
   f.status(200);
   f.metadata([group("new")]);
@@ -310,4 +318,23 @@ test("gateway document support uses provider metadata rather than vision alone",
   assert.equal(nativeDocumentFormat(resolveModel("gateway/google-docs")!, pdf), "chat");
   for (const id of ["unknown-docs", "mixed-docs"])
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
+});
+
+test("gateway models send session-affinity headers on every API", async () => {
+  const f = fixture([
+    group("chat-model"),
+    group("anthropic-model", { providers: ["anthropic"] }),
+    group("openai-model", { providers: ["openai"] }),
+  ]);
+  await f.catalog.refresh();
+  const apis = new Set<string>();
+  for (const id of ["chat-model", "anthropic-model", "openai-model"]) {
+    const model = resolveModel(`gateway/${id}`)!;
+    apis.add(model.api);
+    assert.equal(
+      (model.compat as { sendSessionAffinityHeaders?: boolean } | undefined)?.sendSessionAffinityHeaders,
+      true,
+    );
+  }
+  assert.deepEqual([...apis].sort(), ["anthropic-messages", "openai-completions", "openai-responses"]);
 });

@@ -56,7 +56,7 @@ function router(harness: Harness): Harness {
 }
 
 async function emitGoalCreate(turn: HarnessTurnInput, objective: string) {
-  const goal = createGoalRecord({ objective, source: "tool" });
+  const goal = createGoalRecord({ objective });
   await turn.emit({ type: "tool_call", payload: { tool: "goal", action: "create", callId: "c1" }, scopeLabel: scope });
   await turn.emit({
     type: "tool_result",
@@ -144,7 +144,7 @@ test("turns without a goal pass through untouched", async () => {
 
 test("an open goal from an earlier turn is picked up from history", async () => {
   const emitted: SessionEntry[] = [];
-  const prior = createGoalRecord({ objective: "carried over", source: "tool" });
+  const prior = createGoalRecord({ objective: "carried over" });
   const history = [
     { type: "system", payload: { kind: "goal", goal: prior }, sessionId: "s1", seq: 0, parentSeq: null, createdAt: 1 },
   ] as SessionEntry[];
@@ -159,17 +159,16 @@ test("an open goal from an earlier turn is picked up from history", async () => 
   assert.equal(result.reply, "now done");
 });
 
-test("rounds without progress are waived after the stall limit and the waiver reaches the reply", async () => {
+test("rounds without progress never waive the goal; only a user stop ends it", async () => {
   const emitted: SessionEntry[] = [];
   const { harness, calls } = fakeAdapter(async (turn, round) => {
     if (round === 0) await emitGoalCreate(turn, "spin forever");
-    return { reply: `round ${round}` };
+    return round === 20 ? { reply: "stopped", stopped: true, stoppedByUser: true } : { reply: `round ${round}` };
   });
   const result = await router(harness).turns.runTurn(stubTurn(emitted));
-  assert.equal(calls.length, 5);
-  assert.match(result.reply, /\[goal waived: no progress after 5 continuation rounds — still active\]/);
-  const kinds = emitted.slice(-2).map((entry) => entry.type);
-  assert.deepEqual(kinds, ["system", "assistant"]);
+  assert.equal(calls.length, 21);
+  assert.doesNotMatch(result.reply, /waived/);
+  assert.equal(latestGoalRecord(emitted)?.status, "paused");
 });
 
 for (const harnessId of ["codex", "claude", "opencode"] as const) {

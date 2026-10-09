@@ -4,6 +4,7 @@ const NON_SECRET_ENV_KEYS = new Set([
   "AWS_DEFAULT_REGION",
   "BROWSE_LAB_MAX_STEPS",
   "BROWSE_LAB_MODEL",
+  "BROWSE_LAB_BASE_URL",
   "BROWSE_LAB_MODEL_PROVIDER",
   "PYTHONUNBUFFERED",
   "NO_PROXY",
@@ -32,7 +33,16 @@ export function createSecretValueMasker(env: Record<string, string> | undefined)
   };
 }
 
-export class MaskedExecutionError extends Error {}
+export class MaskedExecutionError extends Error {
+  readonly code: unknown;
+
+  constructor(original: unknown, mask: (text: string) => string, message: string) {
+    super(message);
+    this.name = original instanceof Error ? original.name : "Error";
+    this.code = (original as { code?: unknown } | null)?.code;
+    if (original instanceof Error && original.stack) this.stack = mask(original.stack);
+  }
+}
 
 export function createExactSecretValueMasker(values: Iterable<string>): (text: string) => string {
   const secrets = [...new Set(values)].filter(Boolean).sort((a, b) => b.length - a.length);

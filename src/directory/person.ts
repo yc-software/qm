@@ -1,3 +1,5 @@
+import { swallowAs } from "../util/errors.ts";
+
 export interface PrincipalLinkResolver {
   canonical(key: string): string | undefined;
   aliases(key: string): readonly string[];
@@ -59,7 +61,10 @@ export async function samePersonInDirectory(
 ): Promise<boolean> {
   if (samePerson(a, b)) return true;
   if (!personKey(a) || !personKey(b)) return false;
-  const [ma, mb] = await Promise.all([directory.get(a).catch(() => null), directory.get(b).catch(() => null)]);
+  const [ma, mb] = await Promise.all([
+    directory.get(a).catch(swallowAs("samePerson: directory lookup", null)),
+    directory.get(b).catch(swallowAs("samePerson: directory lookup", null)),
+  ]);
   const bKeys = personKeys(mb, b);
   for (const key of personKeys(ma, a)) if (bKeys.has(key)) return true;
   return false;
@@ -69,7 +74,7 @@ export async function samePersonMatcher(
   directory: { get(principalId: string): Promise<RosterPerson | null> },
   actorId: string,
 ): Promise<(id: string) => Promise<boolean>> {
-  const row = await directory.get(actorId).catch(() => null);
+  const row = await directory.get(actorId).catch(swallowAs("directory lookup", null));
   const keys = personKeys(row, actorId);
   return async (id) => {
     if (keys.has(personKey(id))) return true;

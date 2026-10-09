@@ -214,7 +214,7 @@ test("the `memory` tool params expose NO scope field — the model cannot redire
   const memoryTool = createAgentTools({ current: null }).find((t) => t.name === "memory");
   assert.ok(memoryTool);
   const props = (memoryTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
-  assert.deepEqual(Object.keys(props).sort(), ["action", "content", "facts", "limit", "query"]);
+  assert.deepEqual(Object.keys(props).sort(), ["action", "content", "facts", "limit", "query", "retrySafe"]);
   assert.equal("scope" in props, false);
 });
 
@@ -279,4 +279,18 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
     `[${personal}] (2026-05-31) deploys happen on Fridays`,
     `[${org}] (2026-05-31) deploys are frozen in December`,
   ]);
+});
+
+test("explicit capture uses the conversation origin rather than the notebook destination", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memory-origin-")));
+  const memory = createMemoryService(workspace);
+  const capture = memory.capture;
+  let context: Parameters<typeof capture>[4];
+  memory.capture = async (scope, facts, at, author, metadata) => {
+    context = metadata;
+    return capture(scope, facts, at, author, metadata);
+  };
+  const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", workspace, memory });
+  assert.equal(await tool.memoryRemember(["synthetic fact"]), 1);
+  assert.equal(context?.conversationScopeId, "group:origin");
 });

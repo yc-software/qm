@@ -211,14 +211,21 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
+      const shutdown = deps.shutdown?.();
+      if (shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
       const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
       if (claimed) {
-        const result = processRun(
-          { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
-          claimed,
-        );
-        if (claimed.id === runId) return withAdminLink(await result);
-        await result.catch((error: unknown) => swallow("inline predecessor run failed", error));
+        try {
+          const result = await processRun(
+            { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
+            claimed,
+            { shutdown },
+          );
+          if (claimed.id === runId && !shutdown?.aborted) return withAdminLink(result);
+        } catch (error) {
+          if (claimed.id === runId && !shutdown?.aborted) throw error;
+          swallow("inline run did not complete", error);
+        }
         continue;
       }
       const remaining = deadline - performance.now();
@@ -284,10 +291,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   async function sessionsForViewer(principalId: string): Promise<Session[]> {
     const sessions = await deps.sessions.listByParticipant(principalId);
-    const allowed = await Promise.all(
-      sessions.map((session) => managedProjectMembership(session.scopeId, principalId)),
+    const allowed = new Map(
+      await Promise.all(
+        [...new Set(sessions.map((session) => session.scopeId))].map(
+          async (scope) => [scope, await managedProjectMembership(scope, principalId)] as const,
+        ),
+      ),
     );
-    return sessions.filter((_session, index) => allowed[index] !== false);
+    return sessions.filter((session) => allowed.get(session.scopeId) !== false);
   }
 
   async function sessionForViewer(sessionId: string, principalId: string): Promise<Session | null> {

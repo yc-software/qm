@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compileApproval, parseSkillFrontmatter, parseToolDescriptor } from "../src/sandbox-layer.ts";
+import { parseSkillFrontmatter } from "../src/sandbox-layer.ts";
+import { builtInCredentialPaths } from "../src/credential-paths.ts";
+import { compileApproval, parseToolDescriptor } from "../src/tool-descriptor.ts";
 import * as canonical from "../../src/deployment/deployment-layer.ts";
 import { parseSeedSkillFrontmatter } from "../../src/skills/frontmatter.ts";
 
@@ -312,7 +314,29 @@ test("drift-lock: cli skill parser matches the core seed parser's output", () =>
   }
 });
 
-test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment schema", () => {
+test("core and the CLI share one parser", () => {
+  assert.equal(canonical.parseToolDescriptor, parseToolDescriptor);
+  assert.equal(canonical.compileApproval, compileApproval);
+});
+
+test("the CLI rejects the reserved .agent-displaced directory and uses the derived built-in paths", () => {
+  for (const path of [".agent-displaced", ".agent-displaced/x"]) {
+    assert.throws(
+      () => P({ id: "x", auth: { check: "a", reauth: "b", credentialPaths: [credentialDirectory(path)] } }),
+      /is reserved/,
+    );
+  }
+  for (const base of builtInCredentialPaths()) {
+    assert.doesNotThrow(() => P({ id: "x", auth: { check: "a", reauth: "b", credentialPaths: [base] } }));
+    const wrongKind = base.kind === "file" ? credentialDirectory(base.path) : credentialFile(base.path);
+    assert.throws(
+      () => P({ id: "x", auth: { check: "a", reauth: "b", credentialPaths: [wrongKind] } }),
+      /overlaps the built-in credential path/,
+    );
+  }
+});
+
+test("parser accepts and rejects a fixed corpus", () => {
   const valid = [
     { id: "ex" },
     { id: "my-tool", label: "L", advertise: "a", egress: ["h"], install: { binary: "b" } },
@@ -358,11 +382,7 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
     },
   ];
   for (const v of valid) {
-    assert.deepEqual(
-      parseToolDescriptor(JSON.stringify(v), "t.json"),
-      canonical.parseToolDescriptor(JSON.stringify(v), "t.json"),
-      `valid descriptor parsed differently: ${JSON.stringify(v)}`,
-    );
+    assert.doesNotThrow(() => parseToolDescriptor(JSON.stringify(v), "t.json"), JSON.stringify(v));
   }
   const invalid = [
     '{"id":"x","auth":{"check":"a","reauth":"b","broker":{}}}',
@@ -396,29 +416,23 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
     JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b" + "a".repeat(300) }] }),
   ];
   for (const raw of invalid) {
-    const cliErr = (() => {
-      try {
-        parseToolDescriptor(raw, "t.json");
-        return null;
-      } catch (e) {
-        return (e as Error).message;
-      }
-    })();
-    const canErr = (() => {
-      try {
-        canonical.parseToolDescriptor(raw, "t.json");
-        return null;
-      } catch (e) {
-        return (e as Error).message;
-      }
-    })();
-    assert.ok(cliErr !== null && canErr !== null, `both should reject: ${raw}`);
-    assert.equal(cliErr, canErr, `error message drift on: ${raw}`);
+    assert.throws(() => parseToolDescriptor(raw, "t.json"), Error, `should reject: ${raw}`);
   }
-  assert.deepEqual(compileApproval("t", { command: "a b" }), canonical.compileApproval("t", { command: "a b" }));
+  const cred = (path: string, kind = "file") =>
+    JSON.stringify({ id: "x", auth: { check: "a", reauth: "b", credentialPaths: [{ path, kind }] } });
+  const pinned: Array<[string, RegExp]> = [
+    [cred(".agent-displaced/x"), /is reserved/],
+    [cred(".ssh/id_rsa"), /overlaps the built-in credential path ".ssh"/],
+    [cred("a//b"), /must be a \$HOME-relative path with no traversal/],
+    [cred("workspace", "directory"), /must start with a dotfile/],
+    [JSON.stringify({ id: "x", approvals: [{ pattern: "(" }] }), /is not a valid regex/],
+    ["not json", /is not valid JSON/],
+    ['{"id":"x","approvals":[{}]}', /needs a "command" or a "pattern"/],
+  ];
+  for (const [raw, message] of pinned) assert.throws(() => parseToolDescriptor(raw, "t.json"), message, raw);
 });
 
-test("install.files: shape-checked, mode defaulted by destination, and byte-identical to the canonical parser", () => {
+test("install.files: shape-checked and mode defaulted by destination", () => {
   const raw = {
     id: "t",
     install: {
@@ -437,7 +451,6 @@ test("install.files: shape-checked, mode defaulted by destination, and byte-iden
       { from: "lib.mjs", to: "/usr/local/lib/t/lib.mjs", mode: "0600" },
     ],
   });
-  assert.deepEqual(parsed, canonical.parseToolDescriptor(JSON.stringify(raw), "t.json"));
   for (const [files, message] of [
     [{}, /must be an array/],
     [["t"], /must be an object/],
@@ -460,9 +473,5 @@ test("install.files: shape-checked, mode defaulted by destination, and byte-iden
     ],
   ] as const) {
     assert.throws(() => P({ id: "t", install: { files } }), message);
-    assert.throws(
-      () => canonical.parseToolDescriptor(JSON.stringify({ id: "t", install: { files } }), "t.json"),
-      message,
-    );
   }
 });

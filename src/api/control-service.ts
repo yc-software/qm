@@ -44,6 +44,7 @@ export interface CronCreateRequest {
   runAs?: "owner" | "scopeFloor" | "scopeShared";
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
+  session?: boolean;
 }
 
 export type CronCreateResult =
@@ -82,7 +83,7 @@ export interface WebhookCreateRequest {
 
 export type WebhookCreateResult =
   | { ok: true; webhook: Webhook; url: string; secret?: string }
-  | { ok: false; code: "bad_request" | "unknown_destination" | "webhook_create_failed"; message: string };
+  | { ok: false; code: "bad_request" | "forbidden" | "unknown_destination" | "webhook_create_failed"; message: string };
 
 export interface CronPatchRequest {
   runtime?: Cron["runtime"];
@@ -95,6 +96,7 @@ export interface CronPatchRequest {
   unfurlLinks?: boolean;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
   unattendedGrants?: string[];
+  session?: boolean;
 }
 
 export interface CronRunsRequest {
@@ -108,7 +110,7 @@ export interface CronRunsResult {
 }
 
 export const CRON_PATCH_NOTHING_TO_CHANGE =
-  "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, runAs, or unattendedGrants";
+  "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, runAs, unattendedGrants, or session";
 
 export const CRON_FIRE_NOTE_MAX_CHARS = 400;
 
@@ -172,6 +174,7 @@ export interface ControlService {
   writeSoul(
     content: string,
     claims: CapabilityClaims,
+    expectedVersion?: number,
   ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied">>;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
@@ -227,8 +230,16 @@ function hasCronPatchField(req: CronPatchRequest): boolean {
     req.archived !== undefined ||
     req.unfurlLinks !== undefined ||
     req.runAs !== undefined ||
-    req.unattendedGrants !== undefined
+    req.unattendedGrants !== undefined ||
+    req.session !== undefined
   );
+}
+
+function liveSessionRef(
+  capability: Pick<CapabilityClaims, "threadRef" | "triggered" | "scopeId">,
+  cronScopeId: string,
+): string | undefined {
+  return capability.triggered || capability.scopeId !== cronScopeId ? undefined : capability.threadRef;
 }
 
 function cronPatchChanges(before: Cron, patch: CronPatch): boolean {
@@ -314,7 +325,16 @@ async function patchFromCronPatchRequest(
       message: "unfurlLinks can only be set on a cron with a delivery destination",
     };
   }
+  const sessionRef = req.session ? liveSessionRef(capability, before.ownerScopeId) : undefined;
+  if (req.session && !sessionRef) {
+    return {
+      ok: false,
+      code: "bad_request",
+      message: "session:true needs a live conversation in the cron's own scope to tie it to",
+    };
+  }
   return {
+    ...(req.session !== undefined && sessionRef !== before.sessionRef ? { sessionRef: sessionRef ?? null } : {}),
     ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
@@ -543,6 +563,8 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         ...(runAs === "scopeShared" && openShared ? { ownerResourcesRequireOpen: true } : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
       };
+      const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
+      if (sessionRef) input.sessionRef = sessionRef;
       try {
         const cron = await app.createCron(input);
         if (consentRecipient) {
@@ -643,6 +665,8 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         if (req.archived !== undefined) changeSummary.push(`archived=${req.archived}`);
         if (req.unfurlLinks !== undefined) changeSummary.push(`unfurlLinks=${req.unfurlLinks}`);
         if (patch.runAs !== undefined) changeSummary.push(`mode=${patch.runAs}`);
+        if (req.session !== undefined)
+          changeSummary.push(req.session ? "tied to a session" : "untied from its session");
         const detail: CronEditDetail =
           req.schedule !== undefined ? { schedule: withDefaultTimezone(req.schedule, capability) } : {};
         await notifyEdit(cron, capability, changeSummary, detail);
@@ -661,7 +685,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return {
           ok: false,
           code: "bad_request",
-          message: `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; longer state belongs in files on the workspace disk.`,
+          message: `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; publish longer state to this conversation's Files via the available Files API, verify success, and put the file ID in the note for GET /v1/files/:id/content. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
         };
       }
       if (echoesCronContextMarkers(flattened)) {
@@ -686,7 +710,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return {
           ok: false,
           code: "bad_request",
-          message: `cron ${id}'s fires don't read shift-change notes (it is loop-backed, one-shot, or runs a raw !run/!scratch task) — durable handoff state belongs in files on the cron's workspace disk`,
+          message: `cron ${id}'s fires don't read shift-change notes (it is loop-backed, one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files via the available Files API and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
         };
       }
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
@@ -785,6 +809,13 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
+      if (capability.triggered || !livePersonCapability(capability)) {
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "webhook registration requires a live turn started by its owner",
+        };
+      }
       const resolved = resolveCapabilityDestination(capability, req.destinationKey);
       if (!resolved.ok) {
         return {
@@ -862,10 +893,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       return { effectiveSoul, soul, soulVersion };
     },
 
-    async writeSoul(content, capability) {
+    async writeSoul(content, capability, expectedVersion) {
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: true,
+          expectedVersion,
         });
         return { ok: true, version };
       } catch (e) {

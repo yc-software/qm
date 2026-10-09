@@ -5,8 +5,24 @@ import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeI
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
-export const SANDBOX_CAPABILITY_TTL_MS = 48 * 60 * 60_000;
 export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
+const DEFAULT_SANDBOX_CAPABILITY_TTL_HOURS = 48;
+
+export function parseSandboxCapabilityTtlMs(value: string | undefined): number {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return DEFAULT_SANDBOX_CAPABILITY_TTL_HOURS * 3_600_000;
+  if (raw === "none" || raw === "0") return 0;
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours <= 0 || !Number.isSafeInteger(hours * 3_600_000))
+    throw new Error(
+      `SANDBOX_CAPABILITY_TTL_HOURS=${JSON.stringify(value)} must be a positive number of hours, or 0/none for no expiry.`,
+    );
+  return hours * 3_600_000;
+}
+
+export const SANDBOX_CAPABILITY_TTL_MS = parseSandboxCapabilityTtlMs(undefined);
+
+export const BROWSER_MODEL_AUD = "browser-model";
 
 export const CONTROL_PLANE_AUD = "control-plane";
 export const OAUTH_CONSENT_AUD = "oauth-consent";
@@ -23,7 +39,10 @@ interface BlobGrant {
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {
+  externalSlack?: true;
   actorId: string;
+  browserModel?: string;
+  browserAccount?: "company" | "personal" | "openai" | "anthropic";
   aud?: string;
   scopeId: ScopeId;
   scopeVersion?: string;
@@ -51,6 +70,7 @@ export interface CapabilityClaims {
   triggered?: boolean;
   grants?: string[];
   threadRef?: string;
+  surface?: string;
   exp: number;
 }
 
@@ -112,6 +132,13 @@ export async function verifyCapabilityToken(
   ) {
     return null;
   }
+  if (
+    claims.browserAccount !== undefined &&
+    !["company", "personal", "openai", "anthropic"].includes(claims.browserAccount)
+  )
+    return null;
+  if (claims.browserModel !== undefined && (typeof claims.browserModel !== "string" || !claims.browserModel))
+    return null;
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
@@ -136,7 +163,10 @@ export async function verifyCapabilityToken(
   if (claims.runLeaseToken !== undefined && (typeof claims.runLeaseToken !== "string" || !claims.runLeaseToken))
     return null;
   if (claims.deployment !== undefined && (typeof claims.deployment !== "string" || !claims.deployment)) return null;
-  if (now >= claims.exp) return null;
+  if (claims.exp === 0) {
+    if (![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, EGRESS_PROXY_AUD].includes(claims.aud ?? ""))
+      return null;
+  } else if (!Number.isSafeInteger(claims.exp) || now >= claims.exp) return null;
   return claims;
 }
 

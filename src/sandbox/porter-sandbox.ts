@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import { NotFoundError } from "porter-sandbox";
 import type { WorkspaceLayer } from "../types.ts";
@@ -333,7 +334,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("porter-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle, err);
         throw err;
       }
     },
@@ -435,9 +436,13 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
               if (e instanceof NotFoundError) return null;
               throw e;
             }));
-          if (!target) return;
+          if (!target) {
+            scratchSlugByName.delete(handle.id);
+            return;
+          }
           if (tdOpts?.destroy) await retirePorterBody(target, false);
           else await retirePorterBody(target, false).catch(swallowAs("porter-sandbox: scratch terminate", undefined));
+          scratchSlugByName.delete(handle.id);
         });
       }
       if (!tdOpts?.destroy) return;

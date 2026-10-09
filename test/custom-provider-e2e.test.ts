@@ -128,7 +128,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
         protocol: "openai",
         baseUrl: upstreamUrl,
         apiKey: "sk-qa-good",
-        models: [{ id: "qa-chat", name: "QA Chat", contextWindow: 64000, maxTokens: 4096 }],
+        models: [{ id: "qa-chat", name: "QA Chat", contextWindow: 64000, maxTokens: 4096, reasoning: true }],
       }),
     });
     assert.equal(r.status, 200);
@@ -147,6 +147,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     const model = resolveModel("qa-chat");
     assert.ok(model, "custom model resolves");
     assert.equal(model!.provider, "qa");
+    assert.equal(model!.reasoning, true);
     assert.equal((model as { baseUrl?: string }).baseUrl, upstreamUrl);
     assert.equal(modelSupportedByHarness("qa-chat", "pi"), true);
     assert.equal(modelSupportedByHarness("qa-chat", "opencode"), true);

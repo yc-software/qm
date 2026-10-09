@@ -6,11 +6,13 @@ import {
   errorAlreadyReported,
   failureCode,
   reportFailure,
+  swallow,
+  swallowAs,
   httpFailure,
   withRequestId,
 } from "../src/util/errors.ts";
 import { WorkAdmissionClosed } from "../src/util/admitted-work.ts";
-import { errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
+import { errDetail, errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
 import { runInNewContext } from "node:vm";
 
 test("errMessage keeps the cause chain that fetch failures hide behind their generic message", () => {
@@ -114,12 +116,38 @@ test("reportFailure logs every failure but marks only reportable ones as reporte
   reportFailure("scheduler: fire", boom);
   assert.equal(errorAlreadyReported(boom), true);
   reportFailure("worker: retry", "a string throw", "run=r1");
-  assert.deepEqual(logged, [
-    "[failed] scheduler: fire: stopped",
-    "[failed] scheduler: tick: This deployment is not accepting synchronous work",
-    "[failed] scheduler: fire: boom",
-    "[failed] worker: retry (run=r1): a string throw",
-  ]);
+  assert.deepEqual(
+    logged.map((line) => line.replace(/ \{stack: .*\}$/, "")),
+    [
+      "[failed] scheduler: fire: stopped",
+      "[failed] scheduler: tick: This deployment is not accepting synchronous work",
+      "[failed] scheduler: fire: boom",
+      "[failed] worker: retry (run=r1): a string throw",
+    ],
+  );
+  assert.match(logged[2]!, /\{stack: at .*errors\.test\.ts/);
+});
+
+test("swallow logs the cause chain, structured error fields and stack instead of only the message", (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  });
+  const slack = Object.assign(
+    new Error("An API error occurred: not_in_channel", { cause: new Error("socket hang up") }),
+    {
+      code: "slack_webapi_platform_error",
+      data: { error: "not_in_channel" },
+    },
+  );
+  swallow("slack: post", slack);
+  swallow("http", Object.assign(new Error("upstream failed"), { statusCode: 503 }));
+  assert.ok(logged[0]!.includes("code=slack_webapi_platform_error"));
+  assert.ok(logged[0]!.includes('data={"error":"not_in_channel"}'));
+  assert.ok(logged[0]!.includes("{stack: at "));
+  assert.ok(logged[1]!.includes("[statusCode=503]"));
+  assert.equal(swallowAs("lookup", false)(new Error("db down")), false);
+  assert.match(logged[2]!, /^\[swallowed\] lookup: db down \{stack: /);
 });
 
 test("httpFailure names the status, a clipped body, and the provider request id", async () => {
@@ -132,4 +160,49 @@ test("httpFailure names the status, a clipped body, and the provider request id"
     "lambda -> 429: throttled [request id aws-1]",
   );
   assert.equal(withRequestId("fine", new Headers()), "fine");
+});
+
+test("errDetail preserves browser frames, nested stacks and aggregate errors without cycles", () => {
+  const provision = new Error("provision");
+  provision.stack = "Error: provision\ninitialize@https://example.com/app.js:1:2";
+  const cleanup = new Error("cleanup", { cause: provision });
+  const error = new AggregateError([provision, cleanup], "both", { cause: cleanup });
+  provision.cause = error;
+  const detail = errDetail(error);
+  assert.ok(detail.includes("initialize@https://example.com/app.js:1:2"));
+  assert.ok(detail.includes("cleanup"));
+  assert.equal(detail.split("initialize@").length, 2);
+});
+
+test("error fields tolerate circular data, bigint, failing serializers and malformed aggregate errors", () => {
+  const body: Record<string, unknown> = { count: 1n };
+  body.self = body;
+  const error = Object.assign(new AggregateError([], "failure"), {
+    stderr: "failed",
+    body,
+    broken: {
+      toJSON() {
+        throw new Error("serializer failed");
+      },
+    },
+  });
+  Reflect.set(error, "errors", null);
+  const detail = errDetail(error);
+  assert.ok(detail.includes("stderr=failed"));
+  assert.ok(detail.includes('"count":"1"'));
+  assert.ok(detail.includes("[Circular]"));
+  assert.ok(detail.includes("broken=[Unserializable]"));
+  assert.equal(asError(body).cause, body);
+});
+
+test("field enumeration failures preserve the message and stack", () => {
+  const error = Object.assign(new Error("failure"), { cause: new Error("root") });
+  assert.ok(!errDetail(error).includes("cause="));
+  Object.defineProperty(error, "stack", { value: "Error: failure\n    at test.ts:1:1" });
+  const hostile = new Proxy(error, {
+    ownKeys() {
+      throw new Error("enumeration failed");
+    },
+  });
+  assert.equal(errDetail(hostile), errDetail(error));
 });

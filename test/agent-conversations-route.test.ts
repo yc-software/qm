@@ -6,6 +6,7 @@ import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest, type SessionStatus } from "../src/types.ts";
+import { startSession } from "../src/api/start-session.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -37,26 +38,15 @@ describe("agent conversations self-API", async () => {
       body: JSON.stringify(body),
     });
 
-  const spawnWithPortal = async (portalUrl: string | undefined, app: typeof built.app = built.app) => {
-    const configuredServer = createServer(app, { signingSecret: SECRET, ...(portalUrl ? { portalUrl } : {}) });
-    await new Promise<void>((resolve) => configuredServer.listen(0, resolve));
-    const configuredBase = `http://localhost:${(configuredServer.address() as AddressInfo).port}`;
-    try {
-      const response = await fetch(`${configuredBase}/v1/conversations`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-agent-capability": await capFor("U1") },
-        body: JSON.stringify({ text: "start from configured portal" }),
-      });
-      const text = await response.text();
-      return { status: response.status, text, body: JSON.parse(text) as { session: { id: string }; webUrl?: string } };
-    } finally {
-      await new Promise<void>((resolve) => configuredServer.close(() => resolve()));
-    }
-  };
-
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET, portalUrl: "https://portal.example/" });
+    server = createServer(built.app, {
+      signingSecret: SECRET,
+      portalUrl: "https://portal.example/",
+      sessions: built.sessions,
+      memory: built.memory,
+      config: built.config,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
@@ -82,7 +72,7 @@ describe("agent conversations self-API", async () => {
       assert.deepEqual(
         (
           (await list.json()) as { conversations: Array<{ id: string; status: SessionStatus | null }> }
-        ).conversations.find((s) => s.id === mineId)?.status,
+        ).conversations.find((s) => s.id === mineId)?.status ?? null,
         status,
       );
     }
@@ -108,156 +98,100 @@ describe("agent conversations self-API", async () => {
     assert.equal((await post(`/v1/conversations/${mineId}`, { status: null })).status, 401);
   });
 
-  it("spawns a fresh conversation with only the seed text", async () => {
-    const token = await capFor("U1");
-    const res = await post(
-      "/v1/conversations",
-      { text: "investigate the flaky test", title: "Flaky test hunt" },
-      token,
-    );
-    assert.equal(res.status, 202);
-    const body = (await res.json()) as {
-      session: { id: string; scopeId: string; threadRef: string; title?: string | null };
-      turn: { status: string; runId?: string };
-      webUrl?: string;
-    };
-    assert.notEqual(body.session.id, mineId);
-    assert.equal(body.session.scopeId, scopeId("personal", "U1"));
-    assert.equal(body.session.title, "Flaky test hunt");
-    assert.equal(body.webUrl, `https://portal.example/s/${body.session.id}`);
-    const list = await get("/v1/conversations", token);
-    const { conversations } = (await list.json()) as { conversations: Array<{ id: string }> };
-    assert.ok(
-      conversations.some((c) => c.id === body.session.id),
-      "the spawned session appears in the actor's list",
-    );
-    assert.equal(body.turn.status, "queued");
-    assert.ok(body.turn.runId, "the seed turn is queued as a run");
-    const run = await built.runs.get(body.turn.runId!);
-    assert.equal(run?.request.text, "investigate the flaky test");
-    assert.equal(run?.request.conversation.threadRef, body.session.threadRef, "the seed runs in the new session");
-    const read = await get(`/v1/conversations/${body.session.id}`, token);
-    assert.equal(read.status, 200);
-    const readBody = (await read.json()) as { entries: Array<{ payload: { text?: string } }> };
-    assert.ok(
-      !readBody.entries.some((e) => (e.payload.text ?? "").includes("plan the launch")),
-      "nothing from the spawning conversation leaks in",
-    );
-  });
-
-  it("preserves the public base prefix and encodes the returned session id", async () => {
-    const sessionId = "session /?#";
-    const app: typeof built.app = {
-      ...built.app,
-      spawnSession: async (...args) => {
-        const out = await built.app.spawnSession(...args);
-        return out ? { session: { ...out.session, id: sessionId } } : null;
+  it("refuses conversation status from Slack turns while other updates still apply", async () => {
+    const slack = await mintCapabilityToken(
+      {
+        actorId: "U1",
+        scopeId: scopeId("personal", "U1"),
+        aud: CONTROL_PLANE_AUD,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        liveActor: true,
+        surface: "slack",
       },
-    };
-    const result = await spawnWithPortal("https://portal.example/qm///", app);
-    assert.equal(result.status, 202);
-    assert.equal(result.body.session.id, sessionId);
-    assert.equal(result.body.webUrl, "https://portal.example/qm/s/session%20%2F%3F%23");
+      SECRET,
+    );
+    const before = (await built.app.getSessionForViewer(mineId, "U1"))?.session.status ?? null;
+    const refused = await post(`/v1/conversations/${mineId}`, { status: { emoji: "👍", text: "Cleared" } }, slack);
+    assert.equal(refused.status, 403);
+    assert.deepEqual((await built.app.getSessionForViewer(mineId, "U1"))?.session.status ?? null, before);
+    const renamed = await post(`/v1/conversations/${mineId}`, { title: "Launch plan" }, slack);
+    assert.equal(renamed.status, 200);
+    assert.equal(((await renamed.json()) as { conversation: { title: string } }).conversation.title, "Launch plan");
   });
 
-  it("omits webUrl without a safe configured public web URL", async () => {
-    const unsafe = [
-      undefined,
-      "portal.example",
-      "ftp://portal.example/qm",
-      "https://user:secret@portal.example/qm",
-      "https://portal.example/qm?tenant=one",
-      "https://portal.example/qm#conversation",
-    ];
-    for (const portalUrl of unsafe) {
-      const result = await spawnWithPortal(portalUrl);
-      assert.equal(result.status, 202);
-      assert.equal(result.body.webUrl, undefined);
-      assert.ok(!result.text.includes("secret"));
-    }
+  it("new sessions start clean with only the seed text", async () => {
+    const out = await startSession(built.app, built.sessions, "U1", {
+      scopeId: scopeId("personal", "U1"),
+      text: "investigate the flaky test",
+      title: "Flaky test hunt",
+    });
+    assert.ok("session" in out);
+    assert.notEqual(out.session.id, mineId);
+    assert.equal(out.session.title, "Flaky test hunt");
+    const [run] = await built.runs.inFlightForThread(out.session.threadRef);
+    assert.equal(run?.request.text, "investigate the flaky test");
+    assert.equal(run?.request.surface, "web");
+    const entries = await built.sessions.getEntries(out.session.id);
+    assert.ok(!entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
+    const listed = await built.app.listSessions("U1");
+    assert.ok(listed.some((s) => s.id === out.session.id));
   });
 
-  it("spawns a fresh channel conversation for a current member", async () => {
+  it("new sessions in a channel seed their turn on that channel", async () => {
     await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
     await built.app.upsertChannels(
       [{ channelId: "C1", name: "engineering", isPrivate: true }],
       [{ channelId: "C1", principalId: "U1" }],
     );
-    const res = await post(
-      "/v1/conversations",
-      { text: "investigate the channel deployment" },
-      await capFor("U1", scopeId("channel", "C1")),
-    );
-    assert.equal(res.status, 202);
-    const body = (await res.json()) as {
-      session: { scopeId: string };
-      turn: { status: string; runId?: string };
-    };
-    assert.equal(body.session.scopeId, scopeId("channel", "C1"));
-    assert.equal(body.turn.status, "queued");
-    assert.ok(body.turn.runId);
-    const run = await built.runs.get(body.turn.runId);
+    const out = await startSession(built.app, built.sessions, "U1", {
+      scopeId: scopeId("channel", "C1"),
+      text: "investigate the channel deployment",
+    });
+    assert.ok("session" in out);
+    assert.equal(out.session.scopeId, scopeId("channel", "C1"));
+    const [run] = await built.runs.inFlightForThread(out.session.threadRef);
     assert.equal(run?.request.conversation.channelRef, "C1");
   });
 
-  it("discards the spawned session when the seed turn is refused (roster race)", async () => {
-    const racedApp: typeof built.app = {
+  it("a refused seed discards a new session but reports a fork it left", async () => {
+    const raced: typeof built.app = {
       ...built.app,
       turn: async (req) =>
         (req as { spawned?: boolean }).spawned
-          ? { status: "refused", reason: "project membership changed; retry from the current project" }
+          ? { status: "refused", reason: "project membership changed" }
           : built.app.turn(req),
     };
-    const racedServer = createServer(racedApp, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => racedServer.listen(0, resolve));
-    const racedBase = `http://localhost:${(racedServer.address() as AddressInfo).port}`;
-    try {
-      const token = await capFor("U1");
-      const listIds = async () => {
-        const listed = await get("/v1/conversations", token);
-        const { conversations } = (await listed.json()) as { conversations: Array<{ id: string }> };
-        return conversations.map((c) => c.id).sort();
-      };
-      const before = await listIds();
-
-      const res = await fetch(`${racedBase}/v1/conversations`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-agent-capability": token },
-        body: JSON.stringify({ text: "seed that will be refused" }),
-      });
-      assert.equal(res.status, 409);
-      const body = (await res.json()) as { error: string; message: string };
-      assert.equal(body.error, "seed_turn_refused");
-      assert.match(body.message, /membership changed/);
-
-      assert.deepEqual(await listIds(), before, "no orphaned empty session survives the refused seed");
-    } finally {
-      await new Promise<void>((resolve) => racedServer.close(() => resolve()));
-    }
+    const ids = async () => (await built.app.listSessions("U1")).map((s) => s.id).sort();
+    const before = await ids();
+    assert.deepEqual(
+      await startSession(raced, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), text: "refused" }),
+      { error: "project membership changed" },
+    );
+    assert.deepEqual(await ids(), before);
+    const forked = await startSession(raced, built.sessions, "U1", {
+      scopeId: scopeId("personal", "U1"),
+      forkOf: mineId,
+      text: "refused",
+    });
+    assert.ok("session" in forked);
+    assert.equal(forked.refused, "project membership changed");
   });
 
-  it("spawn requires text and a capability", async () => {
-    assert.equal((await post("/v1/conversations", { text: "hi" })).status, 401);
-    assert.equal((await post("/v1/conversations", {}, await capFor("U1"))).status, 400);
-    assert.equal((await post("/v1/conversations", { text: "  " }, await capFor("U1"))).status, 400);
-  });
-
-  it("spawn refuses an unattended (automation) turn", async () => {
-    const token = await capFor("U1", scopeId("personal", "U1"), false);
-    const res = await post("/v1/conversations", { text: "cron trying to spawn" }, token);
-    assert.equal(res.status, 403);
-  });
-
-  it("spawn refuses a scope the actor doesn't own", async () => {
-    const token = await capFor("U1", scopeId("personal", "U2"));
-    assert.equal((await post("/v1/conversations", { text: "peek" }, token)).status, 404);
+  it("refuses a scope or fork source the actor can't use", async () => {
+    assert.ok(
+      "error" in
+        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U2"), text: "peek" })),
+    );
+    assert.ok(
+      "error" in
+        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), forkOf: theirsId })),
+    );
   });
 
   it("requires a capability token", async () => {
     assert.equal((await get("/v1/conversations")).status, 401);
     assert.equal((await get(`/v1/conversations/${mineId}`)).status, 401);
     assert.equal((await post(`/v1/conversations/${mineId}`, { archived: true })).status, 401);
-    assert.equal((await post(`/v1/conversations/${mineId}/fork`, {})).status, 401);
   });
 
   it("lists only the actor's own conversations", async () => {
@@ -292,7 +226,6 @@ describe("agent conversations self-API", async () => {
     const token = await capFor("U1");
     assert.equal((await get(`/v1/conversations/${theirsId}`, token)).status, 404);
     assert.equal((await post(`/v1/conversations/${theirsId}`, { archived: true }, token)).status, 404);
-    assert.equal((await post(`/v1/conversations/${theirsId}/fork`, {}, token)).status, 404);
   });
 
   it("reads and tail-pages one of the actor's own conversations", async () => {
@@ -322,24 +255,16 @@ describe("agent conversations self-API", async () => {
     assert.equal((await get(`/v1/conversations/${mineId}?sinceSeq=0`, token)).status, 400);
   });
 
-  it("forks one of the actor's own conversations", async () => {
-    const res = await post(`/v1/conversations/${mineId}/fork`, {}, await capFor("U1"));
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as { session: { id: string }; entries: Array<{ payload: { text?: string } }> };
-    assert.notEqual(body.session.id, mineId);
-    assert.ok(body.entries.some((entry) => entry.payload.text === "plan the launch"));
-    const mine = await built.app.listSessions("U1");
-    assert.ok(mine.some((session) => session.id === body.session.id));
-  });
-
-  it("allows forking under strict posture", async () => {
-    const scope = scopeId("personal", "U1");
-    await built.config.setSecurityPosture(scope, "strict");
-    try {
-      assert.equal((await post(`/v1/conversations/${mineId}/fork`, {}, await capFor("U1"))).status, 200);
-    } finally {
-      await built.config.setSecurityPosture(scope, "auto");
-    }
+  it("forks carry the source transcript into a new sidebar session", async () => {
+    const out = await startSession(built.app, built.sessions, "U1", {
+      scopeId: scopeId("personal", "U1"),
+      forkOf: mineId,
+    });
+    assert.ok("session" in out);
+    assert.notEqual(out.session.id, mineId);
+    const entries = await built.sessions.getEntries(out.session.id);
+    assert.ok(entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
+    assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
   });
 
   it("refuses to color a conversation the actor can't see", async () => {

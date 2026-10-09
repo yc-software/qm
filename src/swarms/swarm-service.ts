@@ -5,6 +5,7 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { RunStore } from "../runs/run-store.ts";
+import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -66,6 +67,7 @@ export interface SwarmService {
     id: string;
     self: SwarmMember;
     peers: SwarmMember[];
+    board?: Swarm["board"];
     backend: Swarm["backend"];
     settings: SwarmSettings;
     expiresAt: number;
@@ -74,6 +76,8 @@ export interface SwarmService {
   spawn(caller: SwarmCaller, input: SpawnInput): Promise<SwarmMember[]>;
   send(caller: SwarmCaller, input: MessageInput): Promise<SwarmMessage>;
   read(caller: SwarmCaller, options: { after?: number; replyTo?: string; waitMs?: number }): Promise<SwarmMessage[]>;
+  control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
+  enabledFor(actorId: string): Promise<boolean>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
 }
 
@@ -103,6 +107,32 @@ function jsonContext(value: unknown, max: number): unknown {
   const encoded = JSON.stringify(value);
   if (encoded === undefined || Buffer.byteLength(encoded) > max) throw new Error("invalid context");
   return JSON.parse(encoded) as unknown;
+}
+
+type SwarmControlState = "active" | "paused" | "stopped";
+
+const memberIndex = new WeakMap<SwarmMember[], Map<string, SwarmMember>>();
+
+function memberById(swarm: Swarm, id: string): SwarmMember | undefined {
+  let index = memberIndex.get(swarm.members);
+  if (!index || index.size !== swarm.members.length) {
+    index = new Map(swarm.members.map((member) => [member.id, member]));
+    memberIndex.set(swarm.members, index);
+  }
+  return index.get(id);
+}
+
+function controlState(swarm: Swarm, memberId: string): SwarmControlState {
+  let state: SwarmControlState = "active";
+  const seen = new Set<string>();
+  for (let id: string | undefined = memberId; id && !seen.has(id);) {
+    seen.add(id);
+    const member = memberById(swarm, id);
+    if (member?.control === "stopped") return "stopped";
+    if (member?.control === "paused") state = "paused";
+    id = member?.parentId;
+  }
+  return state;
 }
 
 function signature(value: unknown): string {
@@ -145,6 +175,7 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     finalAttempt: true,
     background: true,
     cancel: true,
+    shutdown: true,
     queueMs: true,
     runStartedAt: true,
   };
@@ -168,8 +199,11 @@ export function createSwarmService(deps: {
   sandboxes: SandboxResources;
   lock: AdvisoryLock;
   authorize(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
+  enabled?(actorId: string): Promise<boolean>;
+  signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
 }): SwarmService {
+  const enabledFor = deps.enabled ?? (async () => true);
   const { store, sessions, runs } = deps;
   const update = (auth: Authority, mutate: (swarm: Swarm) => void) => store.update(auth.rootId, mutate, auth.fence);
   const defaults = resolveSwarmSettings(deps.defaults);
@@ -248,6 +282,7 @@ export function createSwarmService(deps: {
     auth: Authority,
     settings: SwarmSettings,
     backend?: string,
+    forumSandboxId?: string,
   ): Promise<Swarm> {
     const runId = caller.kind === "agent" ? caller.claims.runId : caller.runId;
     const run = runId ? await runs.get(runId) : null;
@@ -264,7 +299,7 @@ export function createSwarmService(deps: {
     const source = run.request;
     const inventory = await deps.sandboxes.list(auth.actorId, session.scopeId);
     const selected = inventory.sandboxes.find((box) => box.id === inventory.defaultSandboxId);
-    const requested = backend ?? selected?.backend ?? deps.sandboxes.defaultBackend(session.scopeId);
+    const requested = backend ?? selected?.backend ?? deps.sandboxes.defaultBackend();
     const provider = inventory.providers.find((item) => item.name === requested);
     if (!provider || !provider.actions.includes("create") || !provider.actions.includes("retire"))
       throw new Error("sandbox backend must support creating and retiring workers");
@@ -300,6 +335,7 @@ export function createSwarmService(deps: {
       backend: provider.name,
       createdAt,
       expiresAt: createdAt + settings.lifetimeMs,
+      ...(forumSandboxId ? {} : { board: { sandboxId: randomUUID() } }),
       members: [
         {
           id: session.id,
@@ -334,9 +370,11 @@ export function createSwarmService(deps: {
     for (const message of swarm.messages) {
       for (const [recipientId, notification] of Object.entries(message.notifications)) {
         if (notification.state !== "pending") continue;
-        const recipient = swarm.members.find((member) => member.id === recipientId);
+        const recipient = memberById(swarm, recipientId);
         if (!recipient || recipient.state === "reserved") continue;
-        if (recipient.state === "failed" || Date.now() >= swarm.expiresAt) {
+        const control = controlState(swarm, recipient.id);
+        if (control === "paused") continue;
+        if (recipient.state === "failed" || control === "stopped" || Date.now() >= swarm.expiresAt) {
           await step(() =>
             store.update(swarm.id, (current) => {
               current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = { state: "failed" };
@@ -386,7 +424,7 @@ export function createSwarmService(deps: {
       };
       try {
         let swarm = await step(() => store.get(rootId));
-        if (!swarm) return;
+        if (!swarm || !(await step(() => enabledFor(swarm!.ownerId)))) return;
         if (phase === "delivery") {
           await deliver(swarm, step);
           return;
@@ -401,18 +439,24 @@ export function createSwarmService(deps: {
               }),
             );
             if (!member.sandboxId) throw new Error("missing sandbox reservation");
+            const provision = (name: string, id: string) => {
+              const provisionDeadline = Math.min(deadline, Date.now() + SWARM_LIMITS.provisionMs);
+              return step(
+                () => deps.sandboxes.create(swarm!.ownerId, swarm!.scopeId, swarm!.backend, name, id),
+                SWARM_LIMITS.provisionMs,
+              ).catch((error: unknown) => {
+                provisioningTimedOut = Date.now() >= provisionDeadline;
+                throw error;
+              });
+            };
             if (member.forumSandboxId) {
-              const forum = await step(() => deps.sandboxes.access(swarm!.ownerId, member.forumSandboxId!));
+              const forum =
+                member.forumSandboxId === swarm.board?.sandboxId
+                  ? await provision("Swarm board", member.forumSandboxId)
+                  : await step(() => deps.sandboxes.access(swarm!.ownerId, member.forumSandboxId!));
               if (forum.ownerScopeId !== swarm.scopeId) throw new Error("forum scope mismatch");
             }
-            const provisionDeadline = Math.min(deadline, Date.now() + SWARM_LIMITS.provisionMs);
-            await step(
-              () => deps.sandboxes.create(swarm!.ownerId, swarm!.scopeId, swarm!.backend, "Swarm worker", member.id),
-              SWARM_LIMITS.provisionMs,
-            ).catch((error: unknown) => {
-              provisioningTimedOut = Date.now() >= provisionDeadline;
-              throw error;
-            });
+            await provision("Swarm worker", member.id);
             const session = await step(() =>
               sessions.getOrCreateByThread(
                 member.threadRef,
@@ -534,6 +578,7 @@ export function createSwarmService(deps: {
         id: swarm.id,
         self: view(self),
         peers: swarm.members.map(view),
+        ...(swarm.board ? { board: swarm.board } : {}),
         backend: swarm.backend,
         settings: swarm.settings,
         expiresAt: swarm.expiresAt,
@@ -606,7 +651,9 @@ export function createSwarmService(deps: {
             depth: parent.depth + 1,
             context,
             sandboxId: id,
-            ...(input.forumSandboxId ? { forumSandboxId: input.forumSandboxId } : {}),
+            ...((input.forumSandboxId ?? swarm.board?.sandboxId)
+              ? { forumSandboxId: input.forumSandboxId ?? swarm.board!.sandboxId }
+              : {}),
             state: "reserved",
             attempts: 0,
           };
@@ -630,7 +677,7 @@ export function createSwarmService(deps: {
       let updated: Swarm;
       if (existing) updated = await update(auth, reserve);
       else {
-        const initial = await prepareInitialSwarm(caller, auth, settings, input.backend);
+        const initial = await prepareInitialSwarm(caller, auth, settings, input.backend, input.forumSandboxId);
         reserve(initial);
         updated = await store.create(initial, auth.fence);
         if (!updated.spawnRequests[key]) updated = await update(auth, reserve);
@@ -652,14 +699,17 @@ export function createSwarmService(deps: {
         if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
         return swarm.messages.find((message) => message.id === previous.messageId)!;
       }
-      const eligible: SwarmMember[] = [];
-      for (const member of swarm.members) {
-        if (member.state !== "ready" || !member.sessionId) continue;
-        const session = await sessions.get(member.sessionId);
-        const participants = await sessions.participantsOf(member.sessionId);
-        if (session?.scopeId === swarm.scopeId && rosterMatches(participants, swarm.participants))
-          eligible.push(member);
-      }
+      const checked = await Promise.all(
+        swarm.members.map(async (member) => {
+          if (member.state !== "ready" || !member.sessionId) return false;
+          const [session, participants] = await Promise.all([
+            sessions.get(member.sessionId),
+            sessions.participantsOf(member.sessionId),
+          ]);
+          return session?.scopeId === swarm.scopeId && rosterMatches(participants, swarm.participants);
+        }),
+      );
+      const eligible = swarm.members.filter((_, index) => checked[index]);
       const audience = resolveAudience(input.audience, eligible);
       const id = randomUUID();
       const updated = await update(auth, (swarm) => {
@@ -715,6 +765,42 @@ export function createSwarmService(deps: {
         ({ swarm } = await load(caller));
       }
     },
+    enabledFor,
+    async control(caller, input) {
+      const { auth, swarm } = await load(caller);
+      if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");
+      const target = swarm.members.find((member) => member.id === input.memberId);
+      if (!target) throw new Error("unknown swarm member");
+      if (target.id === swarm.id) throw new Error("the root session cannot be controlled");
+      if (caller.kind === "agent") {
+        let ancestor: string | undefined = target.id;
+        while (ancestor && ancestor !== auth.memberId)
+          ancestor = swarm.members.find((member) => member.id === ancestor)?.parentId;
+        if (!ancestor) throw new Error("agents may only control themselves or their descendants");
+      }
+      const updated = await update(auth, (current) => {
+        const member = current.members.find((peer) => peer.id === target.id)!;
+        if (member.control === "stopped") throw new Error("stopped workers cannot be resumed");
+        if (input.state === "active") delete member.control;
+        else member.control = input.state;
+      });
+      if (input.state === "stopped") {
+        const stopped = new Set(
+          updated.members.filter((m) => controlState(updated, m.id) === "stopped").map((m) => m.id),
+        );
+        const runIds = updated.messages.flatMap((message) =>
+          Object.entries(message.notifications).flatMap(([id, n]) => (stopped.has(id) && n.runId ? [n.runId] : [])),
+        );
+        await Promise.all(
+          runIds.map(async (runId) => {
+            if (await runs.withdraw(runId, { unstartedOnly: true }).catch(() => false)) return;
+            const run = await runs.get(runId);
+            if (run?.status === "running") await deps.signals?.send(runId, { kind: "abort" }).catch(() => false);
+          }),
+        );
+      }
+      return view(updated.members.find((member) => member.id === target.id)!);
+    },
     async binding(input) {
       const session = await sessions.getByThread(input.conversation.threadRef);
       if (!session) {
@@ -732,6 +818,7 @@ export function createSwarmService(deps: {
       const member = swarm.members.find((peer) => peer.id === identity.memberId);
       if (!member || member.state !== "ready" || member.sessionId !== session.id || session.scopeId !== swarm.scopeId)
         throw new NonRetryableTurnError("invalid swarm membership");
+      if (controlState(swarm, member.id) === "stopped") throw new NonRetryableTurnError("swarm worker stopped");
       if (!input.swarm) {
         if (
           !(await sessions.participantsOf(session.id)).includes(input.actor.id) ||

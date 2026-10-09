@@ -44,10 +44,14 @@ import {
   oneShotModelUtilities,
   oneShotRunner,
   tapeReplyCheckpoint,
+  recordSteerIntake,
+  recordStoppedReply,
+  type SteerIntake,
   type BridgedTool,
   type HarnessToolPlumbing,
+  withResumedToolCall,
 } from "./harness-shared.ts";
-import { reconstructMessagesFromHistory } from "./replay.ts";
+import { recordedMessageTimestamps, reconstructMessagesFromHistory } from "./replay.ts";
 import { countTokens } from "../util/tokens.ts";
 
 const OPENCODE_VERSION = "1.18.31";
@@ -109,6 +113,13 @@ type ActiveTurn = {
   history: unknown[];
   userSeq: number | null;
   captures: LlmCapture[];
+  steers: Array<{
+    text: string;
+    parts: unknown[];
+    intake: SteerIntake;
+    stamp?: Awaited<ReturnType<typeof recordSteerIntake>>;
+    messageId: string;
+  }>;
   model: string;
   seenText: Map<string, string>;
   seenTasks: Map<string, string>;
@@ -166,6 +177,21 @@ function equalSecret(actual: string, expected: string): boolean {
   const left = Buffer.from(actual);
   const right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+const OPENCODE_ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+let openCodeIdTime = 0;
+let openCodeIdCounter = 0;
+
+export function openCodeMessageId(now = Date.now()): string {
+  if (now !== openCodeIdTime) {
+    openCodeIdTime = now;
+    openCodeIdCounter = 0;
+  }
+  openCodeIdCounter++;
+  const ordered = (BigInt(now) * 4096n + BigInt(openCodeIdCounter)) & 0xffffffffffffn;
+  const suffix = Array.from(randomBytes(14), (byte) => OPENCODE_ID_ALPHABET[byte % 62]).join("");
+  return `msg_${ordered.toString(16).padStart(12, "0")}${suffix}`;
 }
 
 function sessionToken(secret: string, sessionId: string): string {
@@ -443,25 +469,28 @@ async function terminateProcess(proc: ChildProcess): Promise<void> {
   }
 }
 
-export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harness {
-  const active = new Map<string, ActiveTurn>();
+export function openCodeToolDefinitions(
+  opts: OpenCodeHarnessOptions,
+): Array<{ name: string; description: string; parameters: unknown }> {
   const definitionRef: ToolContextRef = { current: null };
   const definitionTools = [
+    ...bridgedTools(definitionRef, { ...harnessToolOptions(opts), surfaceName: "web" }),
     ...bridgedTools(definitionRef, harnessToolOptions(opts)),
     ...bridgedTools(definitionRef, { ...harnessToolOptions(opts), surfaceTools: false }),
   ];
-  const definitions = [
+  return [
     ...new Map(
       definitionTools.map((tool) => [
         bridgeToolName(tool.name),
-        {
-          name: bridgeToolName(tool.name),
-          description: tool.description,
-          parameters: tool.parameters,
-        },
+        { name: bridgeToolName(tool.name), description: tool.description, parameters: tool.parameters },
       ]),
     ).values(),
   ];
+}
+
+export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harness {
+  const active = new Map<string, ActiveTurn>();
+  const definitions = openCodeToolDefinitions(opts);
   const bridgeSecret = randomBytes(32).toString("base64url");
   const configuredModel = opts.modelId;
   const resolveModelId = (scope?: ScopeId) =>
@@ -475,6 +504,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
   const childState = (parent: ActiveTurn): ActiveTurn => ({
     ...parent,
     child: true,
+    steers: [],
     seenText: new Map(),
     seenTasks: new Map(),
     eventTail: Promise.resolve(),
@@ -608,6 +638,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             }
             if (sessionMatch[2] === "capture") {
               const request = JSON.parse((await body(req)).toString("utf8")) as Record<string, unknown>;
+              if (!state.child && Array.isArray(request.messages)) {
+                await state.eventTail;
+                for (const message of request.messages) {
+                  if (message.info?.role !== "user") continue;
+                  const id = message.info?.id;
+                  const steer = state.steers.find((steer) => !steer.stamp && steer.messageId === id);
+                  if (steer) {
+                    steer.stamp = await recordSteerIntake(state.turn, steer.intake);
+                  }
+                }
+              }
               const model = state.model;
               state.captures.push({
                 sessionId: requestedSessionId,
@@ -679,6 +720,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                   m.id,
                   {
                     name: m.name ?? m.id,
+                    reasoning: m.reasoning ?? false,
                     ...(m.contextWindow || m.maxTokens
                       ? {
                           limit: {
@@ -859,6 +901,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
     const tools = bridgedTools(ref, harnessToolOptions(opts, turn));
+    turn = await withResumedToolCall(turn, ref, tools);
     const userEntry = await turn.emit({
       type: "user",
       payload: {
@@ -880,6 +923,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       history: replayMessages(reconstructMessagesFromHistory(turn.history), sessionId, model),
       userSeq: userEntry.seq,
       captures: [],
+      steers: [],
       model: selectedModel,
       seenText: new Map(),
       seenTasks: new Map(),
@@ -934,11 +978,11 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       }
       return parts;
     };
-    const steeredTapeParts: Array<{ text: string; parts: unknown[] }> = [];
     const queueSignal = (
       text: string,
       images: HarnessTurnInput["images"] = [],
       documents: HarnessTurnInput["documents"] = [],
+      intake: SteerIntake,
     ): Promise<void> => {
       const pending = (async () => {
         const parts = [
@@ -950,9 +994,24 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             url: `data:${image.mimeType};base64,${image.dataBase64}`,
           })),
         ];
-        steeredTapeParts.push({ text, parts: [...parts] });
+        const steer = {
+          text,
+          parts: [...parts],
+          intake,
+          messageId: openCodeMessageId(),
+        };
         parts.push(...(await documentParts(documents)));
-        await rt.client.session.promptAsync({ path: { id: sessionId }, body: { model, agent: "qm", parts } });
+        state.steers.push(steer);
+        try {
+          await rt.client.session.promptAsync({
+            path: { id: sessionId },
+            body: { model, agent: "qm", parts, messageID: steer.messageId },
+          });
+        } catch (error) {
+          const index = state.steers.indexOf(steer);
+          if (index >= 0) state.steers.splice(index, 1);
+          throw error;
+        }
         await waitForSessionIdle(rt.client, sessionId, wallMs > 0 ? wallMs : OPENCODE_IDLE_WAIT_MS);
       })();
       queuedSignals.add(pending);
@@ -965,20 +1024,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             turn.runId,
             {
               onAbort: async () => abort(true),
-              onSteer: async (text, ts, request) => {
+              onSteer: async (text, ts, request, acknowledge) => {
+                if (ts && recordedMessageTimestamps(turn.history).has(ts)) return;
                 const prepared = await turn.prepareSteer?.(text, request);
                 const prompt = prepared?.text ?? text;
-                await turn.emit({
-                  type: "user",
-                  payload: {
-                    text,
-                    ...(ts ? { ts } : {}),
-                    steered: true,
-                    ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
-                  },
-                  scopeLabel: turn.scopeLabel,
+                await queueSignal(prompt, prepared?.images, prepared?.documents, {
+                  text,
+                  ts,
+                  attachments: prepared?.attachments,
+                  acknowledge,
                 });
-                await queueSignal(prompt, prepared?.images, prepared?.documents);
+                return false;
               },
             },
             { onError: (error) => swallow("opencode signal poll", error), drainOnStop: true },
@@ -1090,19 +1146,15 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           const isTrigger = role === "user" && !tapedTriggerUser;
           if (isTrigger) tapedTriggerUser = true;
           const steered =
-            role === "user"
-              ? steeredTapeParts.find((steer) =>
-                  (message.parts as Array<{ type?: string; text?: string }>).some(
-                    (part) => part.type === "text" && part.text === steer.text,
-                  ),
-                )
-              : undefined;
+            role === "user" ? state.steers.find((steer) => steer.messageId === message.info.id) : undefined;
+          if (steered && !steered.stamp) continue;
           const storedParts = isTrigger ? tapePromptParts : steered?.parts;
           await turn.tape({
             kind: "message",
             harness: "opencode",
             payload: stripDataUrls(storedParts ? { ...message, parts: storedParts } : message),
             scopeLabel: turn.scopeLabel,
+            ...steered?.stamp,
             ...(isTrigger
               ? {
                   entrySeq: userEntry.seq,
@@ -1117,18 +1169,18 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       }
       for (const thinking of reasoningFromParts(parts))
         await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
-      const reply = ref.runtimeHandoff ? "" : textFromParts(parts);
+      const reply = ref.runtimeHandoff || ref.silentRequested ? "" : textFromParts(parts);
+      const interrupted = state.stopped || turn.cancel?.aborted === true;
       if (reply) {
-        const finalEntry = await turn.emit({
-          type: "assistant",
-          payload: { text: reply, ...(state.stopped ? { stopped: true } : {}) },
-          scopeLabel: turn.scopeLabel,
-        });
-        await tapeReplyCheckpoint(turn, finalEntry);
+        const finalEntry = interrupted
+          ? await recordStoppedReply(turn, reply)
+          : await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+        if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
       }
       return {
         reply,
-        ...(state.stopped ? { stopped: true as const, stoppedByUser: true as const } : {}),
+        ...(interrupted ? { stopped: true as const } : {}),
+        ...(state.stopped ? { stoppedByUser: true as const } : {}),
         ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
         ...(ref.silentRequested ? { silent: true } : {}),
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),

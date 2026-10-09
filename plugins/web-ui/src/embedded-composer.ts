@@ -92,7 +92,6 @@ class EmbeddedComposer extends AsyncDirective {
       @drop=${(event: DragEvent) => void ctx.composer.onDrop(event, this.agent!)}
     >
       ${ctx.composer.composerForm(this.agent!)}
-      <small class="inbox-runtime-note">Uses the company model account</small>
     </div>`;
   }
 

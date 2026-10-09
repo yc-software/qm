@@ -39,9 +39,10 @@ export function openProvider(item: any = null) {
     protocol: item?.protocol || "openai",
     url: item?.baseUrl || "",
     key: "",
+    modelSpecs: item?.models || [],
     models: item
       ? item.models
-          .map((m: any) => [m.id, m.name, m.contextWindow, m.maxTokens].filter((x) => x != null).join(" | "))
+          .map((m: any) => [m.id, m.name, m.contextWindow, m.maxTokens, m.reasoning].map((x) => x ?? "").join(" | "))
           .join("\n")
       : "",
     validate: true,
@@ -69,12 +70,15 @@ export function providerBody() {
     .map((l: string) => l.trim())
     .filter(Boolean)
     .map((l: string) => {
-      const [id, name, contextWindow, maxTokens] = l.split("|").map((p) => p.trim());
+      const [id, name, contextWindow, maxTokens, reasoning] = l.split("|").map((p) => p.trim());
+      const capability = reasoning === "true" || reasoning === "false" ? reasoning === "true" : reasoning || undefined;
       return {
+        ...d.modelSpecs?.find((model: any) => model.id === id),
         id,
-        ...(name ? { name } : {}),
-        ...(contextWindow ? { contextWindow: Number(contextWindow) } : {}),
-        ...(maxTokens ? { maxTokens: Number(maxTokens) } : {}),
+        name: name || undefined,
+        contextWindow: contextWindow ? Number(contextWindow) : undefined,
+        maxTokens: maxTokens ? Number(maxTokens) : undefined,
+        reasoning: capability,
       };
     });
   return {
@@ -257,13 +261,14 @@ function template() {
             placeholder="Write-only; blank on edit keeps the stored key"
         /></label>
         <label class="custom-provider-models"
-          >Models <span class="label-detail">one per line: id | name | context | max tokens</span
+          >Models
+          <span class="label-detail">one per line: id | name | context | max tokens | reasoning (true/false)</span
           ><textarea
             id="custom-provider-models"
             .value=${provider.draft.models || ""}
             @input=${(e: Event) => changeProvider("models", (e.target as HTMLInputElement).value)}
             rows="4"
-            placeholder="deepseek-chat | DeepSeek V3.2 | 128000 | 8192"
+            placeholder="deepseek-chat | DeepSeek V3.2 | 128000 | 8192 | true"
           ></textarea>
         </label>
         <label class="inline custom-provider-validation"

@@ -140,7 +140,13 @@ export class SpendView {
     const series = this.data.series || [];
     const org = this.data.org || {};
     this.paint(
-      html`${card(
+      html`${
+        this.data.asOf == null
+          ? null
+          : html`<p class="subline">
+              Totals as of ${new Date(this.data.asOf).toLocaleString()}. Updated every minute.
+            </p>`
+      }${card(
         "Spend over time",
         series.length
           ? `${this.data.window?.from ?? ""} to ${this.data.window?.to ?? ""} (UTC, ${this.data.window?.bucket ?? "day"} buckets) · ${s.plural(org.calls || 0, "model call")}`

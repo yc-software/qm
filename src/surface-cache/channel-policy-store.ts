@@ -60,8 +60,14 @@ export interface ChannelPolicyStore {
   get(container: string): Promise<ChannelPolicy | null>;
   set(
     container: string,
-    orders: string,
-    opts?: { setBy?: string; bots?: Record<string, BotPolicy>; sessionId?: string; ambientEnabled?: boolean | null },
+    orders: string | undefined,
+    opts?: {
+      setBy?: string;
+      bots?: Record<string, BotPolicy>;
+      sessionId?: string;
+      ambientEnabled?: boolean | null;
+      expectedOrders?: string;
+    },
   ): Promise<ChannelPolicy>;
   history(container: string, limit?: number): Promise<ChannelPolicyRevision[]>;
   list(): Promise<ChannelPolicy[]>;
@@ -120,30 +126,42 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
       const now = Date.now();
       const rows = await q(
         `WITH up AS (
+          ${
+            opts?.expectedOrders !== undefined
+              ? `UPDATE channel_policy SET orders = COALESCE($3, channel_policy.orders),
+                 bots = COALESCE($4::jsonb, channel_policy.bots),
+                 ambient_enabled = CASE WHEN $9 THEN $8::boolean ELSE channel_policy.ambient_enabled END,
+                 set_by = $5, updated_at = $6
+               WHERE org_id = $1 AND container = $2 AND orders = $10
+               RETURNING *`
+              : `
            INSERT INTO channel_policy(org_id, container, orders, bots, ambient_enabled, set_by, updated_at)
-           VALUES ($1,$2,$3,COALESCE($4::jsonb,'{}'::jsonb),CASE WHEN $9 THEN $8::boolean END,$5,$6)
-           ON CONFLICT (org_id, container) DO UPDATE SET orders = EXCLUDED.orders,
+           VALUES ($1,$2,COALESCE($3,''),COALESCE($4::jsonb,'{}'::jsonb),CASE WHEN $9 THEN $8::boolean END,$5,$6)
+           ON CONFLICT (org_id, container) DO UPDATE SET orders = COALESCE($3, channel_policy.orders),
              bots = COALESCE($4::jsonb, channel_policy.bots),
              ambient_enabled = CASE WHEN $9 THEN $8::boolean ELSE channel_policy.ambient_enabled END,
              set_by = EXCLUDED.set_by, updated_at = EXCLUDED.updated_at
-           RETURNING *
+           RETURNING *`
+          }
          ), hist AS (
            INSERT INTO channel_policy_history(org_id, container, orders, bots, ambient_enabled, set_by, session_id, created_at)
-           SELECT $1, $2, $3, up.bots, up.ambient_enabled, $5, $7, $6 FROM up
+           SELECT $1, $2, up.orders, up.bots, up.ambient_enabled, $5, $7, $6 FROM up
          )
          SELECT * FROM up`,
         [
           orgId,
           container,
-          orders,
+          orders ?? null,
           opts?.bots ? JSON.stringify(opts.bots) : null,
           opts?.setBy ?? null,
           now,
           opts?.sessionId ?? null,
           opts?.ambientEnabled ?? null,
           opts?.ambientEnabled !== undefined,
+          ...(opts?.expectedOrders !== undefined ? [opts.expectedOrders] : []),
         ],
       );
+      if (!rows.length) throw new Error("Channel guidance changed; read it and retry the edit.");
       return row(rows[0]!);
     },
     async history(container, limit = HISTORY_DEFAULT_LIMIT) {
@@ -170,12 +188,14 @@ export function createMemoryChannelPolicyStore(): ChannelPolicyStore {
     },
     async set(container, orders, opts) {
       const existing = policies.get(container);
+      if (opts?.expectedOrders !== undefined && existing?.orders !== opts.expectedOrders)
+        throw new Error("Channel guidance changed; read it and retry the edit.");
       const now = Date.now();
       const ambientEnabled =
         opts?.ambientEnabled === undefined ? existing?.ambientEnabled : (opts.ambientEnabled ?? undefined);
       const p: ChannelPolicy = {
         container,
-        orders,
+        orders: orders ?? existing?.orders ?? "",
         bots: opts?.bots ?? existing?.bots ?? {},
         ...(ambientEnabled !== undefined ? { ambientEnabled } : {}),
         ...(opts?.setBy ? { setBy: opts.setBy } : {}),
@@ -184,7 +204,7 @@ export function createMemoryChannelPolicyStore(): ChannelPolicyStore {
       policies.set(container, p);
       history.push({
         container,
-        orders,
+        orders: p.orders,
         bots: p.bots,
         ...(p.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
         ...(opts?.setBy ? { setBy: opts.setBy } : {}),

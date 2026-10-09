@@ -8,15 +8,35 @@ export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalReco
   return `command-approval:${id}:${record.createdAt ?? 0}`;
 }
 
+export function approvalDeliveryRecipient(actor: { externalId?: string } | undefined): string | undefined {
+  const id = actor?.externalId;
+  return id && !id.startsWith("system:") ? id : undefined;
+}
+
+function dmThreadTs(request: NonNullable<PendingApprovalRecord["request"]>): string | undefined {
+  if (request.conversation?.kind !== "dm" || !request.deliveryTarget) return undefined;
+  const [channel, threadTs] = request.deliveryTarget.split(":");
+  return channel?.startsWith("D") && threadTs ? threadTs : undefined;
+}
+
 export function createApprovalStore(
   backing: DurableMap<PendingApprovalRecord>,
   deliveries: Pick<DeliveryStore, "enqueue">,
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
     if (record.request?.surface !== "slack") return;
-    const actorId = record.request.actor.externalId;
+    const actorId = approvalDeliveryRecipient(record.request.actor);
+    if (!actorId) return;
+    const threadTs = dmThreadTs(record.request);
     await deliveries.enqueue({
-      destination: { ...principalDestination(actorId, actorId), commandApprovalId: id },
+      destination: {
+        ...principalDestination(actorId, actorId),
+        commandApprovalId: id,
+        ...(threadTs ? { threadTs } : {}),
+        ...(record.request.slackSource
+          ? { slackAccountId: record.request.slackSource.accountId, slackTeamId: record.request.slackSource.teamId }
+          : {}),
+      },
       text: `Approval needed: ${record.summary ?? record.command}`,
       idempotencyKey: approvalDeliveryKey(id, record),
     });

@@ -20,7 +20,7 @@ function dm(text: string, thread: string): TurnRequest {
 }
 
 test("background output selects the recorded private resource and fails closed when it is unavailable", async () => {
-  const built = buildApp(testConfig({ sandboxResourcesEnabled: true }));
+  const built = buildApp(testConfig({}));
   try {
     const root = await built.app.turn(dm("Start", "resource-output"));
     const resource = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Worker");
@@ -118,13 +118,14 @@ test("sessionBackground spells the badge out for the viewer — and stays invisi
   const r = await app.turn(dm("start the job", thread));
   const sessionId = r.sessionId!;
 
-  await processes!.register(registryRow("p-1", thread));
+  await processes!.register({ ...registryRow("p-1", thread), purpose: "Preview app server" });
   await monitors.create(watchInput(thread, { pattern: "error|FAILED", instructions: "summarize failures" }));
 
   const view = await app.sessionBackground(sessionId, "U1");
   assert.equal(view?.jobs.length, 1);
   assert.equal(view?.jobs[0]?.processId, "p-1");
   assert.equal(view?.jobs[0]?.command, "sleep 600");
+  assert.equal(view?.jobs[0]?.purpose, "Preview app server");
   assert.ok((view?.jobs[0]?.expiresAt ?? 0) > Date.now(), "jobs carry their TTL deadline");
   assert.equal(view?.watches.length, 1);
   assert.equal(view?.watches[0]?.pattern, "error|FAILED");

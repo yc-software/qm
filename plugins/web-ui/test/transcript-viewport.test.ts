@@ -6,8 +6,7 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 
 test("only an actually stuck prompt gets elevation", () => {
-  const normal =
-    css.match(/\.message-stack \.user-row:not\(:has\(~ \.user-row\)\) > \.user-bubble \{[^}]*\}/)?.[0] ?? "";
+  const normal = css.match(/\.message-stack \.user-row\.latest-prompt > \.user-bubble \{[^}]*\}/)?.[0] ?? "";
   assert.doesNotMatch(normal, /box-shadow: var/);
   assert.match(css, /\.user-row\.stuck > \.user-bubble/);
 });
@@ -225,6 +224,83 @@ test("upward wheel loads history even when the transcript cannot scroll", () => 
     assert.equal(loads, 1);
   } finally {
     f.close();
+  }
+});
+
+test("a transcript too short to fill the viewport keeps loading earlier pages until it does", () => {
+  const f = fixture();
+  try {
+    f.fit();
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+    stack.prepend(button);
+    const page = () => stack.append(f.s.ownerDocument.createElement("article"));
+    let loads = 0;
+    button.onclick = () => {
+      loads++;
+      button.disabled = true;
+    };
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "no scroll or wheel is needed when there is nothing to scroll");
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "a page already loading is not requested twice");
+    page();
+    button.disabled = false;
+    f.resize(30, 50);
+    assert.equal(loads, 2, "still short after a page arrives, so the next page loads");
+    for (let i = 0; i < 6; i++) f.grow();
+    page();
+    button.disabled = false;
+    f.resize(30, 50);
+    f.viewport.sync(f.s);
+    assert.equal(loads, 2, "once the content overflows well past the top, loading waits for the reader");
+    button.remove();
+  } finally {
+    f.close();
+  }
+});
+
+test("a page that fails to load is not retried by auto-fill until the reader asks", () => {
+  const f = fixture();
+  try {
+    f.fit();
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    f.s.querySelector(".message-stack")!.prepend(button);
+    let loads = 0;
+    button.onclick = () => loads++;
+    f.viewport.sync(f.s);
+    f.resize(30, 50);
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "no growth since the last automatic load means no automatic retry");
+    f.wheelUp();
+    assert.equal(loads, 2, "the reader can still ask for it");
+  } finally {
+    f.close();
+  }
+});
+
+test("a hidden pane never pulls history just because it has no height", () => {
+  const dom = new JSDOM('<section class="chat-scroll"><div class="message-stack"></div></section>');
+  const s = dom.window.document.querySelector<HTMLElement>("section")!;
+  Object.defineProperties(s, { clientHeight: { value: 0 }, scrollHeight: { value: 0 } });
+  const button = dom.window.document.createElement("button");
+  button.className = "earlier-messages-btn";
+  s.querySelector(".message-stack")!.prepend(button);
+  let loads = 0;
+  button.onclick = () => loads++;
+  const viewport = createTranscriptViewport();
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+  Object.assign(globalThis, { getComputedStyle: dom.window.getComputedStyle.bind(dom.window) });
+  try {
+    viewport.sync(s);
+    assert.equal(loads, 0);
+  } finally {
+    viewport.dispose();
+    if (saved) Object.defineProperty(globalThis, "getComputedStyle", saved);
+    else Reflect.deleteProperty(globalThis, "getComputedStyle");
+    dom.window.close();
   }
 });
 
@@ -909,6 +985,42 @@ test("revealing a message cancels pending and future bottom following", () => {
     f.viewport.follow();
     f.flush();
     assert.equal(f.s.scrollTop, 40);
+  } finally {
+    f.close();
+  }
+});
+
+test("the latest-prompt marker moves between rows and is restored after a template update", () => {
+  const f = fixture();
+  try {
+    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
+    f.prompt.classList.remove("latest-prompt");
+    f.viewport.sync(f.s);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
+    const next = f.prompt.cloneNode(true) as HTMLElement;
+    next.className = "user-row";
+    next.dataset.index = "2";
+    f.prompt.after(next);
+    f.viewport.sync(f.s);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), false);
+    assert.equal(next.classList.contains("latest-prompt"), true);
+    f.viewport.dispose();
+    assert.equal(next.classList.contains("latest-prompt"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("an inline steer does not take the sticky prompt marker from the original request", () => {
+  const f = fixture();
+  try {
+    const work = f.s.ownerDocument.createElement("article");
+    work.className = "assistant-row";
+    work.innerHTML = '<div class="inline-steer"><article class="user-row steered-row" data-index="1"></article></div>';
+    f.prompt.after(work);
+    f.viewport.sync(f.s);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
+    assert.equal(work.querySelector(".steered-row")!.classList.contains("latest-prompt"), false);
   } finally {
     f.close();
   }

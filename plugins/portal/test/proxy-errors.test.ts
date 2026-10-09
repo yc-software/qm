@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, request, type IncomingMessage } from "node:http";
 import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
+import { format } from "node:util";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
 let whoamiMode: "ok" | "down" | "fail-once" | "malformed" = "ok";
@@ -33,6 +34,11 @@ const upstream = createServer((req: IncomingMessage, res) => {
     res.write("partial");
     setTimeout(() => res.destroy(), 10);
     return;
+  }
+  if ((req.url ?? "").startsWith("/api/upstream-reset")) return req.socket.destroy();
+  if ((req.url ?? "").startsWith("/api/upstream-unavailable")) {
+    res.writeHead(503, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: "unavailable" }));
   }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ url: req.url, headers: req.headers }));
@@ -94,16 +100,19 @@ test("deployment proxy binds source auth and portal identity to the signed-in pr
   );
 });
 
-test("an upstream reset mid-response does not crash the portal", async () => {
+test("an upstream reset mid-response does not crash the portal", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
   await assert.rejects(async () => {
     const r = await fetch(`${base}/web-ui/api/reset-mid-stream`, { headers: { cookie: sessionCookie("U1") } });
     await r.text();
   }, "the truncated body should surface as a fetch error to the client");
   const alive = await fetch(`${base}/healthz`);
   assert.equal(alive.status, 200);
+  assert.equal(errors.mock.callCount(), 0);
 });
 
-test("a client abort mid-request-body does not crash the portal", async () => {
+test("a client abort mid-request-body does not crash the portal", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
   await new Promise<void>((resolve) => {
     const s = connect(port, "localhost", () => {
       s.write(
@@ -124,6 +133,49 @@ test("a client abort mid-request-body does not crash the portal", async () => {
   });
   const alive = await fetch(`${base}/healthz`);
   assert.equal(alive.status, 200);
+  assert.equal(errors.mock.callCount(), 0);
+});
+
+test("completed portal failures log status, method and duration once without request data", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
+  for (const [path, status, method] of [
+    ["/web-ui/api/upstream-unavailable", 503, "GET"],
+    ["/web-ui/api/upstream-reset", 502, "GET"],
+    ["/auth/admin-login", 503, "GET"],
+    ["/auth/admin-login", 503, "POST"],
+  ] as const) {
+    const before = errors.mock.callCount();
+    const response = await fetch(`${base}${path}?token=private-query`, {
+      method,
+      headers: { cookie: sessionCookie("private@example.com"), "x-private": "private-header" },
+      body: method === "POST" ? "private-body" : undefined,
+    });
+    await response.text();
+    assert.equal(response.status, status);
+    assert.equal(errors.mock.callCount(), before + 1);
+    assert.match(
+      format(...errors.mock.calls.at(-1)!.arguments),
+      new RegExp(`^\\[portal\\] ${status} ${method} response \\(\\d+ ms\\)$`),
+    );
+  }
+  for (const path of ["/healthz", "/api/unauthenticated"]) {
+    const before = errors.mock.callCount();
+    const response = await fetch(`${base}${path}`);
+    await response.text();
+    assert.ok(response.status < 500);
+    assert.equal(errors.mock.callCount(), before);
+  }
+  const before = errors.mock.callCount();
+  const status = await new Promise<number | undefined>((resolve, reject) => {
+    const req = request(base, { path: "http://[" }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+  assert.equal(status, 500);
+  assert.equal(errors.mock.callCount(), before + 1);
 });
 
 test("a prototype-chain segment like /constructor/ never matches a keyed surface (no 500, falls to the web UI)", async () => {

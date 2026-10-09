@@ -107,6 +107,7 @@ function buildOrchestrator(
   maxContextTokens?: number,
   defaultTurnWallClockMs?: number,
   swarm?: Awaited<ReturnType<typeof swarmFixture>>,
+  sessionTapeMode?: "serve" | "shadow",
 ) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
@@ -140,6 +141,7 @@ function buildOrchestrator(
     acl,
     maxContextTokens,
     defaultTurnWallClockMs,
+    sessionTapeMode,
     runtime: createRuntimeService(
       { config, harnessId: "pi", baseModelDefault: "claude-sonnet-5" },
       { authorizesCapabilityScope: async () => true },
@@ -1378,4 +1380,118 @@ test("verified swarm workers use category defaults instead of copied parent choi
     assert.deepEqual(seen, [configured ? category : inherited, handoff]);
     assert.equal(run.request.model, inherited.modelId, "the verified stored dispatch is not mutated");
   }
+});
+
+for (const explicit of [false, true]) {
+  test(`${explicit ? "explicit" : "automatic"} recent recovery continues the request once and stays reduced next turn`, async () => {
+    const base = createMockHarness();
+    const seen: Parameters<Harness["turns"]["runTurn"]>[0][] = [];
+    let summaries = 0;
+    let effects = 0;
+    const harness: Harness = {
+      ...base,
+      models: {
+        ...base.models,
+        compactHistory: async () => {
+          summaries++;
+          throw new Error("summary refused");
+        },
+      },
+      turns: {
+        ...base.turns,
+        runTurn: async (input) => {
+          seen.push(input);
+          if (explicit && seen.length === 1) {
+            await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+            await input.emit({
+              type: "tool_call",
+              payload: { tool: "files", callId: "effect", action: "write" },
+              scopeLabel: input.scopeLabel,
+            });
+            effects++;
+            await input.emit({
+              type: "tool_result",
+              payload: { tool: "files", callId: "effect", result: "stored" },
+              scopeLabel: input.scopeLabel,
+            });
+            await input.emit({
+              type: "tool_call",
+              payload: { tool: "context", callId: "reduce", action: "compact", mode: "recent" },
+              scopeLabel: input.scopeLabel,
+            });
+            await input.emit({
+              type: "tool_result",
+              payload: { tool: "context", callId: "reduce", result: "requested" },
+              scopeLabel: input.scopeLabel,
+            });
+            return { reply: "not final", runtimeHandoff: { context: "recent" } };
+          }
+          if (seen.length === (explicit ? 2 : 1)) {
+            assert.equal(input.tapeMode, "shadow");
+            assert.ok(estimateHistoryTokens(input.history) <= 600);
+            assert.ok(input.history.some((e) => (e.payload as { mode?: string }).mode === "recent"));
+            assert.ok(
+              input.input.includes("finish the request") ||
+                input.history.some((e) => (e.payload as { text?: string }).text === "finish the request"),
+            );
+            assert.ok(!JSON.stringify(input.history).includes("old excluded sentinel"));
+            if (explicit) assert.ok(input.history.some((e) => (e.payload as { callId?: string }).callId === "effect"));
+          }
+          await input.emit({ type: "assistant", payload: { text: "finished" }, scopeLabel: input.scopeLabel });
+          return { reply: "finished" };
+        },
+      },
+    };
+    const { orch, sessions } = buildOrchestrator(harness, 1000, undefined, undefined, "serve");
+    const sid = await seed(
+      sessions,
+      explicit ? [] : Array.from({ length: 10 }, () => ({ payload: { text: "old excluded sentinel ".repeat(300) } })),
+    );
+    const before = await sessions.getEntries(sid);
+    const result = await orch.handleTurn({ ...turn("finish the request"), surfaceTools: false });
+    assert.equal(result.status, "ok");
+    assert.equal(result.reply, "finished");
+    assert.equal(seen.length, explicit ? 2 : 1);
+    assert.equal(summaries, explicit ? 0 : 1);
+    assert.equal(effects, explicit ? 1 : 0);
+    assert.deepEqual((await sessions.getEntries(sid)).slice(0, before.length), before);
+    assert.equal((await orch.handleTurn({ ...turn("what happened?"), surfaceTools: false })).status, "ok");
+    assert.equal(seen.at(-1)!.tapeMode, "shadow");
+    assert.ok(!JSON.stringify(seen.at(-1)!.history).includes("old excluded sentinel"));
+  });
+}
+
+test("retry recovery supplies an excluded request without rerunning its completed action", async () => {
+  const base = createMockHarness();
+  let mainCalls = 0;
+  const harness: Harness = {
+    ...base,
+    models: {
+      ...base.models,
+      compactHistory: async () => {
+        throw new Error("summary refused");
+      },
+    },
+    turns: {
+      ...base.turns,
+      runTurn: async (input) => {
+        mainCalls++;
+        assert.match(input.input, /Current request.*\nfinish the stored request/);
+        assert.match(input.input, /don't start over or repeat completed steps/);
+        assert.ok(!input.history.some((e) => e.type === "user"));
+        await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
+        return { reply: "resumed" };
+      },
+    },
+  };
+  const { orch, sessions } = buildOrchestrator(harness, 500);
+  await seed(sessions, [
+    { payload: { text: "finish the stored request" } },
+    { type: "tool_call", payload: { tool: "files", action: "write", callId: "done" } },
+    { type: "tool_result", payload: { tool: "files", callId: "done", result: "stored ".repeat(1000) } },
+  ]);
+  const result = await orch.handleTurn({ ...turn("finish the stored request"), attempt: 2, surfaceTools: false });
+  assert.equal(result.status, "ok");
+  assert.equal(result.reply, "resumed");
+  assert.equal(mainCalls, 1);
 });

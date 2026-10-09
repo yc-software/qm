@@ -22,11 +22,13 @@ test("a recalled app picker owns its return even when welcome and Slack widgets 
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.notEqual(sessionStorage.getItem("qm-connection-return:test:tester"), null);
     assert.equal((welcome.querySelector('input[type="search"]') as HTMLInputElement)?.value, "");
+    const continued: string[] = [];
     const apps = Object.assign(document.createElement("qm-onboarding-welcome"), {
       me: { org: "test", user: "tester" },
       widget: "apps",
       setupOnly: true,
       returnKey: "reply:1:0:0",
+      onConnected: (name: string) => continued.push(name),
     });
     document.querySelector(".message-stack")!.append(apps);
     for (let i = 0; i < 100 && sessionStorage.getItem("qm-connection-return:test:tester"); i++)
@@ -35,6 +37,7 @@ test("a recalled app picker owns its return even when welcome and Slack widgets 
     assert.equal((apps.querySelector('input[type="search"]') as HTMLInputElement)?.value, "mail");
     assert.equal((welcome.querySelector('input[type="search"]') as HTMLInputElement)?.value, "");
     assert.match(apps.textContent ?? "", /Gmail connected/);
+    assert.deepEqual(continued, []);
   } finally {
     await h.close();
   }

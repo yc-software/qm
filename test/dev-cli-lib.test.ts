@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } 
 import { createServer } from "node:net";
 import { spawnSync } from "node:child_process";
 import { ensureDeps } from "../scripts/dev/lib/deps.ts";
+import { spawnCommand } from "../scripts/dev/lib/proc.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { envSha, errMessage, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
@@ -627,5 +628,23 @@ test("dev CLI rejects invalid or conflicting surface selection before startup", 
     const result = spawnSync(process.execPath, ["scripts/dev/cli.ts", ...args], { encoding: "utf8" });
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stderr, /surface/);
+  }
+});
+
+test("spawnCommand routes Windows batch shims through cmd.exe with quoted arguments", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm dev shim "));
+  try {
+    const shim = join(dir, "npm.cmd");
+    writeFileSync(shim, "");
+    const env = { PATH: dir, PATHEXT: ".EXE;.cmd", ComSpec: "C:\\Windows\\system32\\cmd.exe" };
+    const args = ["run", "build", "--", "a b", 'say "hi"'];
+    assert.deepEqual(spawnCommand("npm", args, env, "win32"), {
+      cmd: "C:\\Windows\\system32\\cmd.exe",
+      args: ["/d", "/s", "/c", `""${shim}" "run" "build" "--" "a b" "say ""hi""""`],
+      windowsVerbatimArguments: true,
+    });
+    assert.deepEqual(spawnCommand("npm", args, env, "darwin"), { cmd: "npm", args, windowsVerbatimArguments: false });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

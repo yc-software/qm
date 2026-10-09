@@ -246,7 +246,7 @@ test("timed-out provider calls retain bounded execution slots across repeated sw
     for (const release of releases.slice(1)) release();
     await new Promise<void>((resolve) => setImmediate(resolve));
     await first.service.sweep();
-    assert.equal(entered.length, fixtures.length * 3 - 2);
+    assert.equal(entered.length, fixtures.length * 4 - SWARM_LIMITS.sweepConcurrency - 2);
     assert.equal(maximum, SWARM_LIMITS.sweepConcurrency);
     assert.equal(active, 1);
   } finally {
@@ -679,8 +679,10 @@ test("restart between enqueue and outbox acknowledgement does not redeliver", as
 });
 
 test("sandbox reservation survives a crash after provisioning without creating another disk", async () => {
-  const { service, serviceOptions, caller, root, sandboxes, provisioned } = await swarmFixture();
+  const { service, serviceOptions, caller, root, sandboxes, provisioned, store } = await swarmFixture();
   const [worker] = await service.spawn(caller, { requestId: "one", text: "Work" });
+  const { board } = (await store.get(root.id))!;
+  await sandboxes.create("alice", root.scopeId, "modal", "Swarm board", board!.sandboxId);
   await sandboxes.create("alice", root.scopeId, "modal", "Swarm worker", worker!.id);
   const count = provisioned.length;
   await createSwarmService(serviceOptions).sweep();

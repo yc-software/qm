@@ -33,6 +33,7 @@ export interface ToolPayload {
   isError?: boolean;
   result?: string;
   unscreened?: boolean;
+  quarantined?: boolean;
   action?: string;
   process_id?: string;
   sandbox_id?: string | null;
@@ -49,10 +50,20 @@ export interface ToolRowModel {
 }
 
 export type TimelineItem =
+  | { kind: "steer"; activity: ToolActivity }
   | { kind: "thinking"; activity: ToolActivity }
   | { kind: "text"; activity: ToolActivity }
   | { kind: "tool"; row: ToolRowModel }
   | { kind: "approval"; approval: PendingApproval };
+
+export function workTimelineSegments(items: TimelineItem[]): TimelineItem[][] {
+  const segments: TimelineItem[][] = [[]];
+  for (const item of items) {
+    if (item.kind === "steer") segments.push([item], []);
+    else segments.at(-1)!.push(item);
+  }
+  return segments;
+}
 
 function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
   return status === "complete" || status === "failed";
@@ -67,7 +78,7 @@ export function toolCategory(payload: ToolPayload): string {
   }
   if (payload.tool === "skills") return payload.action === "read" ? "skill" : "share";
   if (payload.tool === "apps") return payload.action === "publish" ? "publish" : "share";
-  if (payload.tool === "sessions") return "session";
+  if (payload.tool === "sessions" || payload.tool === "subagents") return "session";
   if (payload.tool !== "sandbox") return payload.tool ?? "unknown";
   if (payload.action === "exec") return "execute";
   if (
@@ -94,17 +105,24 @@ export function toolExecutionOutput(result: ToolPayload): string | null {
 
 export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): ToolRowKind {
   const result = (row.result?.payload ?? {}) as ToolPayload;
-  const tool = toolCategory({ ...result, ...((row.call?.payload ?? {}) as ToolPayload) });
   if (result.blocked === "needs_approval") return "approval";
   if (!row.result) {
     if (!isTerminalWorkStatus(status)) return "running";
     return status === "failed" ? "failed" : "attempted";
   }
+  const completedNonzeroExecution =
+    toolCategory({ ...result, ...((row.call?.payload ?? {}) as ToolPayload) }) === "execute" &&
+    typeof result.code === "number" &&
+    Number.isFinite(result.code) &&
+    result.code !== 0 &&
+    result.timedOut === false &&
+    toolExecutionOutput(result) !== null;
   const failed =
-    result.isError === true ||
+    (result.isError === true && !completedNonzeroExecution) ||
     !!result.error ||
     result.denied === true ||
-    (tool === "execute" && (result.timedOut === true || (typeof result.code === "number" && result.code !== 0)));
+    result.timedOut === true ||
+    result.quarantined === true;
   return failed ? "failed" : "ok";
 }
 
@@ -175,7 +193,14 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   let open: ToolRowModel | null = null;
   for (const a of work.activity) {
     if (a.type === "text_start") continue;
-    if (a.type === "thinking") {
+    if (a.type === "user") {
+      if (
+        (a.payload as { steered?: boolean; hidden?: boolean } | null)?.steered &&
+        !(a.payload as { hidden?: boolean } | null)?.hidden
+      )
+        items.push({ kind: "steer", activity: a });
+      open = null;
+    } else if (a.type === "thinking") {
       items.push({ kind: "thinking", activity: a });
       open = null;
     } else if (a.type === "text") {

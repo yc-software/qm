@@ -561,3 +561,28 @@ test("oversized Mermaid sources are rejected before parsing", async () => {
     /Diagram is too large/,
   );
 });
+
+test("fade ranges preserve selected text across many formatted nodes and paragraphs", async () => {
+  const block = await mount("Before");
+  block.isStreaming = true;
+  block.content += " first **bold** word\n\nSecond _italic_ line\n\nThird";
+  await block.updateComplete;
+  const oldSpans = [...block.querySelectorAll(".tok-in")];
+  const selected = block.querySelector("strong .stream-chunk")!.firstChild!;
+  const selection = window.getSelection()!;
+  selection.setBaseAndExtent(selected, 0, selected, 4);
+  for (const span of oldSpans) span.dispatchEvent(new dom.window.Event("animationend"));
+  block.content += " tail\n\nFourth **new** paragraph";
+  await block.updateComplete;
+  assert.equal(selection.toString(), "bold");
+  assert.ok(oldSpans.every((span) => span.isConnected));
+  assert.deepEqual(
+    [...block.querySelectorAll(".tok-in")].map((span) => span.textContent),
+    [" tail", "Fourth ", "new", " paragraph"],
+  );
+  assert.deepEqual(
+    [...block.querySelectorAll("p")].map((paragraph) => paragraph.textContent),
+    ["Before first bold word", "Second italic line", "Third tail", "Fourth new paragraph"],
+  );
+  block.remove();
+});

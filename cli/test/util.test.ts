@@ -3,7 +3,20 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, runInheritAsync, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
+import {
+  canonicalJson,
+  capture,
+  runInheritAsync,
+  flyBin,
+  isInvalidSecret,
+  readEnvFile,
+  writeEnvValue,
+} from "../src/util.ts";
+
+test("capture accepts CLI output larger than Node's one-megabyte default", () => {
+  const output = capture(process.execPath, ["-e", 'process.stdout.write("x".repeat(2 * 1024 * 1024))']);
+  assert.equal(output.length, 2 * 1024 * 1024);
+});
 
 test("managed credential encryption keys require strong material", () => {
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "short"), true);

@@ -1,6 +1,5 @@
 import {
   KeychainError,
-  isBackendCredential,
   renderAskNotice,
   renderUseScript,
   type CredentialFieldInput,
@@ -8,18 +7,14 @@ import {
   type GrantMode,
 } from "../../credentials/keychain.ts";
 import { parseScopeId } from "../../types.ts";
-import { principalDestination } from "../../reach/reach.ts";
 import { samePerson } from "../../directory/person.ts";
+import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
 import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
-import { swallow, swallowAs } from "../../util/errors.ts";
+import { audit, resolveCapabilityDestination } from "./shared.ts";
+import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
-import { keychainUseCommand } from "../contract.ts";
-
-const CONSENT_ON_TRIGGERED_TURN =
-  "consent can only be recorded on a turn its owner themself sent — this turn was fired by a trigger, not a person";
 
 async function resolveScopeNames(
   app: ApiCtx["app"],
@@ -69,7 +64,11 @@ async function resolveScopeNames(
 
 async function handleKeychain(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, pathname, method, body, capability, params } = ctx;
-  if (!deps.keychain) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.keychain)
+    return sendJson(res, 503, {
+      error: "keychain_unavailable",
+      message: "The keychain isn't set up on this server. An operator needs to set CONNECTOR_SECRET_KEY.",
+    });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "keychain routes require an agent capability token" });
   const kc = deps.keychain;
@@ -182,119 +181,6 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
     }
 
-    if (method === "POST" && pathname === "/v1/keychain/grants") {
-      if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: CONSENT_ON_TRIGGERED_TURN });
-      const b = body as {
-        credential?: unknown;
-        ask?: unknown;
-        mode?: unknown;
-        purpose?: unknown;
-        expiresAt?: unknown;
-        onBehalfOf?: unknown;
-      };
-      const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
-      if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
-      if (
-        typeof b.purpose !== "string" ||
-        (b.mode !== "once" && b.mode !== "standing") ||
-        (typeof b.credential !== "string" && typeof b.ask !== "string")
-      ) {
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: 'expected { credential | ask, mode: "once"|"standing", purpose }',
-        });
-      }
-      const useBlock = async (grant: { id: string; credentialId: string }) => {
-        const credential = await kc.getCredential(grant.credentialId);
-        if (credential && isBackendCredential(credential))
-          return {
-            note: "Composio keys stay in the backend. Use the composio skill and /v1/composio through the authenticated agent API.",
-          };
-        return {
-          command: keychainUseCommand({ grant: grant.id }),
-          ...(credential?.credentialHandle
-            ? { credentialHandle: credential.credentialHandle, credentials: [credential.credentialHandle] }
-            : {}),
-          note: credential?.credentialHandle
-            ? "Pass credentials to execute for the command needing this credential. This handle is available immediately; no keychain/use call is needed."
-            : "Run the task in that same shell. Do not echo or print the credential files.",
-        };
-      };
-      if (typeof b.ask === "string") {
-        if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
-          return sendJson(res, 403, {
-            error: "forbidden",
-            message:
-              "onBehalfOf cannot approve an ask — an ask can release the credential into another conversation, so only its owner's own turn can approve it",
-          });
-        }
-        const { ask, grant } = await kc.approveAsk({
-          askId: b.ask,
-          ownerId: actorId,
-          mode: b.mode as GrantMode,
-          purpose: b.purpose,
-          ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
-        });
-        audit(deps, {
-          principalId: actorId,
-          action: `keychain.grant.${grant.mode}`,
-          resource: `${grant.credentialId}→${grant.audienceScopeId} (ask ${ask.id})`,
-          scopeLabel: capability.scopeId,
-        });
-        void deps
-          .fireAskResolution?.(ask, grant)
-          .then(() => kc.markAskNotified(ask.id, ask.status))
-          .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
-        const grantedCredential = await kc.getCredential(grant.credentialId);
-        return sendJson(res, 200, {
-          grant,
-          ask,
-          use: {
-            ...(grantedCredential?.credentialHandle ? { credentialHandle: grantedCredential.credentialHandle } : {}),
-            note: `Grant is active in ${grant.audienceScopeId} — the asking conversation resumes automatically. Do not load or consume the grant on this approval turn.`,
-          },
-        });
-      }
-      let granter = actorId;
-      if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
-        const speaker = await verifiedConversationSpeaker(ctx, b.onBehalfOf.trim());
-        if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
-        granter = speaker.principalId;
-      }
-      const credentialId = b.credential as string;
-      const credential = await kc.getCredential(credentialId);
-      if (credential && !samePerson(credential.ownerId, granter)) {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message:
-            "only the credential owner can grant it — if the owner authorized this in the conversation, pass onBehalfOf with their id",
-        });
-      }
-      const grant = await kc.createGrant({
-        credentialId,
-        ownerId: granter,
-        audienceScopeId: capability.scopeId,
-        mode: b.mode as GrantMode,
-        purpose: b.purpose,
-        ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
-      });
-      audit(deps, {
-        principalId: actorId,
-        action: `keychain.grant.${grant.mode}`,
-        resource: `${grant.credentialId}→${grant.audienceScopeId}${samePerson(granter, actorId) ? "" : ` (onBehalfOf ${granter})`}`,
-        scopeLabel: capability.scopeId,
-      });
-      for (const adopted of await kc.resolveAsksForGrant(grant)) {
-        audit(deps, {
-          principalId: actorId,
-          action: "keychain.ask.resolve",
-          resource: `${adopted.id} (grant ${grant.id})`,
-          scopeLabel: capability.scopeId,
-        });
-      }
-      return sendJson(res, 200, { grant, use: await useBlock(grant) });
-    }
-
     if (method === "GET" && pathname === "/v1/keychain/grants") {
       const mine = await kc.listGrants({ ownerId: actorId });
       const here = await kc.listGrants({ audienceScopeId: capability.scopeId });
@@ -346,6 +232,8 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const cronId = cronIdOf(capability.threadRef);
       const cron = cronId ? await app.getCron(cronId) : null;
       const dest = resolveCapabilityDestination(capability, undefined);
+      const requesterDestination =
+        (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
       const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
       const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
       const requesterMessageTs =
@@ -359,7 +247,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         requesterScopeId: capability.scopeId,
         ...(requesterSeq != null ? { requesterSeq } : {}),
         ...(requesterMessageTs ? { requesterMessageTs } : {}),
-        ...(dest.ok && dest.destination ? { requesterDestination: dest.destination } : {}),
+        ...(requesterDestination ? { requesterDestination } : {}),
         ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
         purpose: b.purpose,
         ...(b.requestedMode !== undefined ? { requestedMode: b.requestedMode as GrantMode } : {}),
@@ -373,11 +261,13 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ...(scope.kind === "group" && context?.name ? { scopeName: context.name } : {}),
         ...(cron?.ownerScopeId === capability.scopeId ? { taskTitle: cron.title ?? cron.id } : {}),
       });
-      await deps.deliveries?.enqueue({
-        destination: { ...principalDestination(cred.ownerId, actorId), keychainAskId: ask.id },
-        text: notice,
-        idempotencyKey: `ask:${ask.id}:notice`,
-      });
+      const cardDestination = approvalCardDestination(ask);
+      if (cardDestination)
+        await deps.deliveries?.enqueue({
+          destination: cardDestination,
+          text: notice,
+          idempotencyKey: `ask:${ask.id}:notice`,
+        });
       if (!existing) {
         audit(deps, {
           principalId: actorId,
@@ -398,28 +288,6 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           a.requesterScopeId === capability.scopeId,
       );
       return sendJson(res, 200, { asks });
-    }
-
-    if (method === "POST" && pathname.startsWith("/v1/keychain/asks/") && pathname.endsWith("/decline")) {
-      if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: CONSENT_ON_TRIGGERED_TURN });
-      const id = params.id!;
-      const b = body as { note?: unknown };
-      const ask = await kc.declineAsk({
-        askId: id,
-        ownerId: actorId,
-        ...(typeof b?.note === "string" ? { note: b.note } : {}),
-      });
-      audit(deps, {
-        principalId: actorId,
-        action: "keychain.ask.decline",
-        resource: ask.id,
-        scopeLabel: capability.scopeId,
-      });
-      void deps
-        .fireAskResolution?.(ask)
-        .then(() => kc.markAskNotified(ask.id, ask.status))
-        .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
-      return sendJson(res, 200, { ask });
     }
 
     if (method === "POST" && pathname === "/v1/keychain/use") {
@@ -467,16 +335,34 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 404, { error: "not_found" });
 }
 
+async function handleApproval(ctx: ApiCtx): Promise<void> {
+  const { res, deps, body, params } = ctx;
+  const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
+  if (!deps.keychainApprovals || typeof b.principalId !== "string" || !b.principalId)
+    return sendJson(res, 404, { error: "not_found" });
+  try {
+    if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: 'expected { principalId, decision: "once"|"standing"|"deny" }',
+      });
+    const view = await deps.keychainApprovals.decide(params.id!, { externalId: b.principalId }, b.decision);
+    return sendJson(res, 200, view);
+  } catch (e) {
+    if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
+    throw e;
+  }
+}
+
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/overview", auth: "either", handle: handleKeychain },
   { method: "DELETE", path: "/v1/keychain/credentials/:id", auth: "either", handle: handleKeychain },
-  { method: "POST", path: "/v1/keychain/grants", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/grants", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/grants/:id/revoke", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
-  { method: "POST", path: "/v1/keychain/asks/:id/decline", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/use", auth: "either", handle: handleKeychain },
+  { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
 ];

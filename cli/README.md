@@ -30,7 +30,15 @@ path locally.
 
 The CLI deploys long-running QM services; it is not the runtime. Docker runs
 them locally, Fly runs them as Fly apps with Fly Machines for agent computers, and AWS
-runs digest-pinned ARM64 tasks on ECS Fargate with Lambda MicroVM agent computers.
+runs digest-pinned tasks on ECS Fargate (amd64 by default for first-party services) with Lambda MicroVM agent computers.
+
+When upgrading an AWS source deployment that previously relied on the ARM64 default,
+set each existing workload's `architecture: "arm64"` explicitly until rebuilding
+its image for another platform. Secret rotation refuses a task-platform change
+before uploading secrets. New release candidates record their workload architectures;
+legacy source-built first-party candidates without that record require an explicit
+architecture matching the image, or regeneration with the current CLI. Candidate
+deployment and migration reject platform mismatches before accessing AWS.
 
 ## Deployment directory
 
@@ -77,66 +85,77 @@ configuration only, so it prints that timestamp as the matching data restore
 point (`aws rds restore-db-instance-to-point-in-time`);
 `aws.predeployDbSnapshot: false` opts out.
 
+On AWS, `up` waits for every rolling service to reach `COMPLETED` with a single
+deployment, polling until `QM_AWS_ROLLOUT_DEADLINE_MS` (default 20 minutes); a
+timeout rolls the changed services back. ECS stops the old tasks once they exit
+or their `stopTimeout` elapses (core drains for `SHUTDOWN_DRAIN_MS`, 10 s by
+default), and a turn cut off there resumes on the new tasks. Core images older
+than this release protect their task while a turn runs, so the first `qm up`
+that replaces them cannot finish before their longest in-flight turn ends
+(protection expires after 60 minutes at most); run that one deploy with a
+longer deadline or when no long turn is in flight.
+
 AWS deployments can opt into durable background ownership with
-`aws.backgroundWorkControl: true`. Deploy protocol-capable core images to every
-participating stack before bootstrapping ownership. The CLI allocates a unique
-`BACKGROUND_DEPLOYMENT_ID` for each replacement core cohort and records it in the
-deployment manifest. A no-op deployment and automatic ECS task replacement keep
+`aws.backgroundWorkControl: true`. The CLI allocates a unique
+`BACKGROUND_DEPLOYMENT_ID` for each replacement core deployment and records it in
+the deployment manifest. A no-op deployment and automatic ECS task replacement keep
 that identity; an explicit core restart allocates a new one. Pending preparation
 is persisted before ECS changes, and an ambiguous previous deployment must be
 reconciled before another identity can be allocated.
 
 Control requests require both `CORE_SIGNING_SECRET` and a distinct
 `DEPLOYMENT_CONTROL_SECRET` of at least 32 characters. The control secret is
-restricted to core. Configuring an identity preserves the legacy background flag
-until explicit bootstrap verifies every participating task. The exported
-`awsBootstrapBackgroundWork` adapter accepts all peer configurations and an exact
-desired deployment identity, or `null` to start paused. It refuses missing cohorts
-and inconsistent durable membership.
+restricted to core. One shared record names the deployment that owns background
+work; a core process with a configured identity admits work only while that
+record names its deployment, and `BACKGROUND_WORK_ENABLED` is ignored there.
 
 The exported `awsBackgroundWorkBootState` reads the exact manifest core task to
 return its recorded boot flag and optional deployment identity. It returns
 `undefined` only without a recorded core task, and rejects missing or ambiguous
-boot flags or identities. Deployment wrappers can preserve the boot environment
-while changing durable ownership independently.
+boot flags or identities.
+
+The exported `awsBackgroundWorkStatus(config, configDir, candidatePath?)` proves
+the stack's exact healthy core task set and reads the owner record through the
+stack's own API, returning the responder's `ownerDeploymentId`, `setAt`, `setBy`,
+and whether the responding process is currently active. The exported
+`awsSetBackgroundWork(config, configDir, enabled, candidatePath?, expected?)` sets
+the owner record to the stack's identity (or clears it when `enabled` is false)
+without restarting ECS tasks, then polls until every core task of the stack has
+reported matching activity. Passing `expected: { ownerDeploymentId }` refuses the change
+if the owner differs from what the caller last observed. A demotion refuses to
+clear a different deployment's ownership.
 
 The exported `awsBackgroundWorkCapacity(config, configDir, candidatePath?)` proves
 that an inactive controlled stack is currently reusable. It requires another
-owner, fully drained current membership, stable native deployments and exact task
-inventories for every workload, resolved deployment preparation, and explicitly
-disabled protection on every current core task. It never changes task protection
-or deployment state. The deploy role needs `ecs:GetTaskProtection` on its tasks.
-The result binds the manifest and deployment identities, ownership generation,
-workload task definitions, native deployment IDs, task ARNs, and protection proof.
-`awsBackgroundWorkStatus` also returns the current manifest ID for an active-owner
-proof. A release coordinator can combine both snapshots with immutable candidate
-provenance and compare them again under its production lock before any mutation.
-This is a point-in-time check, not a reservation: intervening maintenance or task
-replacement invalidates the proof and must block promotion.
+owner, stable native deployments and exact task inventories for every workload,
+and resolved deployment preparation. It never changes deployment state. The
+result binds the manifest and deployment identities, the owner, workload task
+definitions, native deployment IDs, and task ARNs. A release coordinator can
+combine both snapshots with immutable candidate provenance and compare them
+again under its production lock before any mutation. This is a point-in-time
+check, not a reservation: intervening maintenance or task replacement
+invalidates the proof and must block promotion.
 
-Live checks use the active ownership cohort's authenticated canary endpoint to
-verify a real model reply, session persistence, generated title, error records,
-session cleanup, and database catalog health. The CLI proves the exact healthy
-task cohort and ownership generation before and after the check. It requires a
-final success bound to the request and responding task; heartbeats alone do not
-count. An uncertain result never triggers an automatic replay or fallback.
-Legacy deployments retain the Fargate canary. A controlled deployment uses that
-same path only when a successful ownership read proves bootstrap is disabled or
-another cohort owns background work.
+Live checks use the owning deployment's authenticated canary endpoint to verify a
+real model reply, session persistence, generated title, error records, session
+cleanup, and database catalog health. The CLI confirms the stack owns background
+work and is active before and after the check, and requires a final success bound
+to the request and responding process; heartbeats alone do not count. An uncertain
+result never triggers an automatic replay or fallback. Legacy deployments retain
+the Fargate canary, and a controlled stack that does not own background work uses
+that same path.
 
-Once bootstrapped, background mode changes use generation-checked ownership
-requests without restarting ECS tasks. Activation waits for prior owners to stop
-claiming and every expected task to finish activation. Pausing stops new claims;
-in-flight turns can continue draining. Replacing or rolling back the active core
-cohort requires an explicit pause or handover and proof that every member has
-drained first. A demotion refuses to pause a different current owner. Unresponsive members are never
-assumed dead: `awsRetireBackgroundWorkMembers` requires exact instance, task ARN,
-and generation identities plus ECS evidence that each task stopped. This recovery
-is also available before bootstrap for stopped legacy members.
+Replacing or rolling back a controlled stack's core tasks requires that the stack
+is not the current owner: hand ownership to the other stack first. Processes that
+lose ownership stop claiming within their poll interval (at most their ten-second
+validity window) and finish admitted work under their leases; ECS task
+replacement then drains them through `SIGTERM`. `qm down` is not guarded: if the
+record still names a stack that has no tasks, set the live stack active to
+recover.
 
 Core secret uploads defer activation to a subsequent staged `up --restart core`.
 The generic upload path refuses changes to either control credential while a
-controlled cohort is recorded, because replacing credentials before coordinating
+controlled deployment is recorded, because replacing credentials before coordinating
 all running processes would break ownership control. Legacy AWS deployments keep
 the task replacement path when ownership control is not configured.
 
@@ -154,12 +173,11 @@ receipts must keep the submission slot occupied until the CLI exits.
 sandboxes boot their platform's stock image; tools and skills arrive through the
 deployment-layer sync, which every ordinary `up` performs.
 
-Model screening is off by default. Set `securityScreen: { "backend": "model" }`
-to opt in, or configure a `securityScreen` proxy with a provider label, HTTPS
-endpoint, and `enforce` rollout to use an external screener without model fallback.
-The optional `shadow` rollout explicitly runs the model classifier and compares
-the proxy verdict. Route the proxy token through
-`secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`.
+Content screening is off by default. Set `securityScreen: { "mode": "observe" }`
+to record classifier verdicts without acting on them, or `"enforce"` to quarantine
+flagged content. The classifier is the built-in model unless `"classifier": "proxy"`
+names an external screener with a provider label and HTTPS endpoint; route its token
+through `secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`.
 
 ## Commands
 
@@ -199,7 +217,11 @@ environment. The CLI prints only the URL, which is a temporary login credential;
 do not publish it or put it in shared logs.
 
 `qm setup` offers email setup separately. Skip it to use administrator login
-without Resend or SMTP. To enable ordinary email login later, rerun `qm setup`
+without Resend or SMTP. For ordinary users before email is ready, the broker can
+accept passwords: hash one with `node plugins/auth/src/hash-password.ts
+user@example.com` and store the output with `qm secrets set AUTH_PASSWORD_USERS`.
+This is meant for onboarding; switch to email links or an identity provider
+afterwards. To enable ordinary email login later, rerun `qm setup`
 and configure the selected transport's complete credential set and sender,
 then push secrets and redeploy. Missing email credentials disable email sign-in;
 QM and `qm admin-login` remain available, even if a sender is still configured.

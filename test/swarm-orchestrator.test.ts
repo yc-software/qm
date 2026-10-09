@@ -8,7 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createServer } from "../src/api/server.ts";
-import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { startSignalPoll } from "../src/runs/run-signal-store.ts";
 import { withTimeout } from "../src/util/async.ts";
@@ -47,14 +47,18 @@ mock.module("../src/harness/mock-harness.ts", {
     },
   },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const wiring = await import("../src/wiring.ts");
+const { orgId } = await import("../src/config.ts");
+const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
+  const built = wiring.buildApp(...args);
+  void built.featureFlags.setEnabled("swarms", `org:${orgId()}`, true, "test");
+  return built;
+};
 test.after(() => fake.cleanup());
 
 for (const kind of ["command", "security-screen"] as const) {
   test(`workers require their own approval instead of inheriting root-session ${kind} grants`, async () => {
-    const built = buildApp(
-      testConfig({ sandboxResourcesEnabled: true, modalSandbox: { tokenId: "test", tokenSecret: "test" } }),
-    );
+    const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
     const request: TurnRequest = {
       surface: "swarm",
       actor: { externalId: "U1" },
@@ -119,7 +123,6 @@ for (const kind of ["command", "security-screen"] as const) {
 test("wired swarm outbox drives the real orchestrator, durable runs, and authenticated session viewer", async () => {
   const built = buildApp(
     testConfig({
-      sandboxResourcesEnabled: true,
       modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret", nativeSnapshotsEnabled: true },
     }),
   );
@@ -214,7 +217,7 @@ for (const storage of ["memory", "postgres"] as const) {
         databaseUrl,
         sessionStore: storage,
         runStore: storage,
-        sandboxResourcesEnabled: true,
+
         modalSandbox: { tokenId: "test", tokenSecret: "test" },
         signingSecret: "swarm-http-source-signing-key-distinct",
         portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
@@ -468,6 +471,8 @@ test("unbound request fields cannot claim verified swarm provenance", async () =
 
 test("a resolved command approval informs the model without changing its requested command", async () => {
   const built = buildApp(testConfig());
+  const sandbox = await built.sandboxResources.create("U1", "personal:U1", "sprites");
+  await built.sandboxResources.setDefault("U1", "personal:U1", sandbox.id);
   const request: TurnRequest = {
     surface: "web",
     actor: { externalId: "U1" },
@@ -570,6 +575,19 @@ test("disabled swarms park queued notifications once without running the model o
     }
   } finally {
     exerciseTurn = undefined;
+    await built.runtime.stop();
+  }
+});
+
+test("swarms stay off for a person until the swarms flag names their personal scope", async () => {
+  const built = wiring.buildApp(testConfig());
+  try {
+    assert.ok(built.app.swarms);
+    assert.equal(await built.app.swarms.enabledFor("U1"), false);
+    await built.featureFlags.setEnabled("swarms", "personal:U1", true, "test");
+    assert.equal(await built.app.swarms.enabledFor("U1"), true);
+    assert.equal(await built.app.swarms.enabledFor("U2"), false);
+  } finally {
     await built.runtime.stop();
   }
 });

@@ -6,7 +6,7 @@ runner — core (`SESSION_STORE=memory`) + Slack plugin in Socket Mode on a **CI
 pool app** (`qm dev --ci`) — then `run.ts` drives the catalog in
 `scenarios.ts` posting as a real example **user** (the "QA Human" account), so every
 message takes the exact path a teammate's would: classification, lazy directory push,
-threads, streaming `chat.update` edits.
+threading, acknowledgments, tool execution, and file delivery.
 
 ## Layout
 
@@ -20,9 +20,13 @@ threads, streaming `chat.update` edits.
 - `slack.ts` / `core.ts` — fetch-based Slack Web API + source-auth-signed core admin
   clients (transcripts via `/v1/admin/sessions`, crons via `/v1/admin/crons`).
 
-A bot reply is **final** when its text is not a live-status frame (`⚙ Working… 12s`,
-`⏳ Waiting…`, `💭 …`, trailing `▌` streaming cursor — see `src/slack/status.ts`)
-and has stopped changing for 5s.
+A bot reply is accepted after it has stopped changing for 5s and satisfies the
+scenario's content or attachment assertion. Legacy status text is ignored.
+The long-task scenario requires a bot reaction or an acknowledgment before the
+substantive answer. The audience scenario accepts an answer at the channel top
+level or in the original thread; the threading scenario still requires a thread reply.
+The performance scenario runs alone and requires successful command execution
+before evaluating its timing budgets.
 
 ## Run locally
 

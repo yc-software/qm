@@ -11,7 +11,6 @@ import {
   oneShot,
   parseDetectVerdict,
   piHarnessConfigOptions,
-  isProviderRefusal,
   piLastAssistantTextOrThrow,
   piTurnError,
   providerRefusalError,
@@ -32,6 +31,7 @@ import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
@@ -127,7 +127,7 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       },
       piCaptureRequests: false,
       piSystemCacheSplit: true,
-      sandboxResourcesEnabled: true,
+
       scratchExecEnabled: true,
       reachExecEnabled: true,
       signingSecret: "sek",
@@ -137,6 +137,7 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       execTimeoutMaxMs: 33_000,
       backgroundJobTtlMs: 44_000,
       backgroundJobTtlMaxMs: 55_000,
+      sandboxCapabilityTtlMs: 66_000,
     }),
   );
   assert.deepEqual(opts, {
@@ -162,6 +163,7 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
     execTimeoutCeilingMs: 33_000,
     backgroundJobTtlMs: 44_000,
     backgroundJobTtlMaxMs: 55_000,
+    sandboxCapabilityTtlMs: 66_000,
   });
 });
 
@@ -575,20 +577,30 @@ test("Pi assistant error messages fail the turn instead of becoming a blank repl
   assert.throws(() => piLastAssistantTextOrThrow(session), /provider quota exhausted/);
 });
 
-test("Pi provider JSON errors are surfaced as readable chat errors", () => {
-  const session = {
+type FailedFields = { errorMessage?: string; providerError?: unknown; rawStopReason?: string };
+const failedSession = (...messages: FailedFields[]) =>
+  ({
     getLastAssistantText: () => undefined,
-    messages: [
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage:
-          '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low."},"request_id":"req_123"}',
-        content: [],
-      },
-    ],
-  } as unknown as Parameters<typeof piLastAssistantTextOrThrow>[0];
+    messages: messages.map((m) => ({ role: "assistant", stopReason: "error", content: [], ...m })),
+  }) as unknown as Parameters<typeof piTurnError>[0];
+const overloaded = {
+  errorMessage: "529 Overloaded",
+  providerError: {
+    status: 529,
+    type: "overloaded_error",
+    body: { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+  },
+};
 
+test("Pi provider errors are surfaced from the structured body as readable chat errors", () => {
+  const session = failedSession({
+    errorMessage: "400 Your credit balance is too low.",
+    providerError: {
+      status: 400,
+      type: "invalid_request_error",
+      body: { type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low." } },
+    },
+  });
   assert.throws(
     () => piLastAssistantTextOrThrow(session),
     /Model provider API error \(invalid_request_error\): Your credit balance is too low\./,
@@ -596,20 +608,34 @@ test("Pi provider JSON errors are surfaced as readable chat errors", () => {
 });
 
 test("piTurnError recovers the session's structured error when the agent loop rejects generically", () => {
-  const session = {
-    getLastAssistantText: () => undefined,
-    messages: [
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-        content: [],
-      },
-    ],
-  } as unknown as Parameters<typeof piTurnError>[0];
-
-  const err = piTurnError(session, new Error("An unknown error occurred"));
+  const err = piTurnError(failedSession(overloaded), new Error("An unknown error occurred"));
   assert.match(err.message, /Model provider API error \(overloaded_error\): Overloaded/);
+});
+
+test("Pi retryability comes from status and type, never errorMessage", () => {
+  const retryable: FailedFields[] = [
+    overloaded,
+    { errorMessage: "500", providerError: { status: 500, type: "api_error" } },
+    { errorMessage: "429", providerError: { status: 429 } },
+    { errorMessage: "fetch failed" },
+  ];
+  for (const fields of retryable) {
+    const err = piTurnError(failedSession(fields), new Error("x"));
+    assert.ok(err instanceof ProviderTurnError && err.retryable, JSON.stringify(fields));
+    assert.equal(turnFailureMessage(err), err.message);
+    assert.throws(() => piLastAssistantTextOrThrow(failedSession(fields)), ProviderTurnError);
+  }
+  const terminal: FailedFields[] = [
+    { errorMessage: "429 overloaded, retry", providerError: { status: 429, code: "insufficient_quota" } },
+    { errorMessage: "rate limit", providerError: { status: 400, type: "invalid_request_error" } },
+    { errorMessage: "503", providerError: { status: 400, code: "context_length_exceeded" } },
+    { errorMessage: "overloaded", providerError: { status: 401, type: "authentication_error" } },
+    { errorMessage: "network error", rawStopReason: "refusal" },
+  ];
+  for (const fields of terminal) {
+    const err = piTurnError(failedSession(fields), new Error("x"));
+    assert.ok(err instanceof ProviderTurnError && !err.retryable, JSON.stringify(fields));
+  }
 });
 
 test("piTurnError falls back to the thrown error when the session has no structured error", () => {
@@ -623,18 +649,7 @@ test("piTurnError falls back to the thrown error when the session has no structu
 });
 
 test("piTurnError ignores a PRIOR turn's stale error when nothing new was appended this prompt", () => {
-  const session = {
-    getLastAssistantText: () => undefined,
-    messages: [
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-        content: [],
-      },
-    ],
-  } as unknown as Parameters<typeof piTurnError>[0];
-
+  const session = failedSession(overloaded);
   const err = piTurnError(session, new Error("socket hang up"), 1);
   assert.equal(err.message, "socket hang up");
   const recovered = piTurnError(session, new Error("An unknown error occurred"), 0);
@@ -879,23 +894,50 @@ test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to
   assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai", "claude-opus-4-8"), "claude-opus-4-8");
 });
 
-test("isProviderRefusal matches Anthropic's ToS-refusal wording and nothing else", () => {
-  assert.equal(
-    isProviderRefusal(
-      "Anthropic API error (invalid_request_error): This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs. To learn more, visit https://www.anthropic.com/legal/commercial-terms. API integrators: you can reduce refusals for your users by configuring a fallback model — see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback.",
-    ),
-    true,
-  );
-  assert.equal(isProviderRefusal("This request seems to violate Anthropic’s usage policy."), true);
-  assert.equal(isProviderRefusal("Anthropic API error (overloaded_error): Overloaded"), false);
-  assert.equal(isProviderRefusal("prompt is too long: 250000 tokens > 200000 maximum"), false);
-  assert.equal(isProviderRefusal(undefined), false);
+test("Pi provider errors are classified once into a typed code from structured fields", () => {
+  const classify = (fields: FailedFields) => piTurnError(failedSession(fields), new Error("x")) as ProviderTurnError;
+  const budget = classify({
+    errorMessage: "429: Budget has been exceeded! Limit=$1000.00",
+    providerError: {
+      status: 429,
+      type: "budget_exceeded",
+      code: "400",
+      body: { message: "Budget has been exceeded! Limit=$1000.00", type: "budget_exceeded" },
+    },
+  });
+  assert.deepEqual([budget.code, budget.status, budget.retryable], ["model_budget", 429, false]);
+  assert.match(budget.raw, /Limit=\$1000\.00/, "the gateway's full text is kept for operators");
+  assert.match(budget.message, /Budget has been exceeded/);
+  const cases: Array<[FailedFields, string, number | undefined]> = [
+    [{ providerError: { status: 429, type: "rate_limit_error" } }, "rate_limit", 429],
+    [{ providerError: { status: 401, type: "authentication_error" } }, "auth", 401],
+    [{ providerError: { status: 403 } }, "auth", 403],
+    [{ providerError: { status: 400, code: "context_length_exceeded" } }, "context_too_long", 400],
+    [{ providerError: { status: 529, type: "overloaded_error" } }, "transient", 529],
+    [{ rawStopReason: "refusal" }, "refusal", undefined],
+    // Anthropic documents prompt-too-long only as a 400 invalid_request_error, so it is a bad_request, not context_too_long.
+    [
+      {
+        errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
+        providerError: { status: 400, type: "invalid_request_error" },
+      },
+      "bad_request",
+      400,
+    ],
+    [{ errorMessage: "The model refused to complete the request" }, "unknown", undefined],
+  ];
+  for (const [fields, code, status] of cases) {
+    const err = classify(fields);
+    assert.equal(err.code, code, JSON.stringify(fields));
+    assert.equal(err.status, status, JSON.stringify(fields));
+  }
 });
 
 test("providerRefusalError finds this prompt's refusal but never a prior turn's", () => {
   const refusalMsg = {
     role: "assistant",
     stopReason: "error",
+    rawStopReason: "refusal",
     errorMessage:
       "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs.",
     content: [],
@@ -924,6 +966,12 @@ test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refuse
   assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
+  assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol"), "gpt-6-sol");
+  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), "claude-opus-5");
+  assert.equal(
+    refusalFallbackModelId("claude-opus-5", "not-a-pi-model", (id) => id !== "not-a-pi-model"),
+    "claude-sonnet-5",
+  );
   for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
     assert.notEqual(refusalFallbackModelId(id), id);
     assert.equal(resolveModel(id)?.provider, "anthropic");

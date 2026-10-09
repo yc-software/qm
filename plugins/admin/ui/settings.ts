@@ -21,7 +21,7 @@ import { repeat } from "lit/directives/repeat.js";
 
 type Model = { id: string; name?: string; effortLevels?: string[] };
 type Data = Record<string, any>;
-const runtimeKeys = ["runtime", "cron-runtime", "subagent-runtime"];
+const runtimeKeys = ["runtime", "cron-runtime", "subagent-runtime", "fallback-runtime"];
 const runtimeReadKey = (key: string) => key.replace(/-runtime$/, "Runtime");
 export class SettingsState extends SettingState {
   context: Data = {};
@@ -162,7 +162,7 @@ const harnessLabels: Record<string, string> = {
   claude: "Claude Code",
 };
 const effortLabels: Record<string, string> = {
-  auto: "Legacy default",
+  auto: "Default",
   adaptive: "Auto",
   default: "Provider default",
   low: "Low",
@@ -187,6 +187,10 @@ function card(s: SettingsState) {
       runtime: ["Conversation runtime", "The default runtime for conversations unless overridden."],
       "cron-runtime": ["Cron runtime", "Used for scheduled jobs without a per-job runtime override."],
       "subagent-runtime": ["Sub-agent runtime", "Used for new sub-agents unless explicitly overridden."],
+      "fallback-runtime": [
+        "Fallback runtime",
+        "Retries a turn or compaction when the model refuses it or is unavailable.",
+      ],
     }[s.key]!;
     return html`<section
       class=${classMap({ card: true, "sv-models": true, hidden: !s.available, dirty: s.dirty })}
@@ -210,7 +214,13 @@ function card(s: SettingsState) {
                 <span class="setting-copy"
                   ><strong>Use existing fallback</strong
                   ><small
-                    >${s.key === "cron-runtime" ? "Use the job's scope default." : "Use the child’s scope default."}</small
+                    >${
+                      {
+                        "cron-runtime": "Use the job's scope default.",
+                        "subagent-runtime": "Use the child’s scope default.",
+                        "fallback-runtime": "Use the built-in Claude fallback.",
+                      }[s.key]
+                    }</small
                   ></span
                 >
               </label>`

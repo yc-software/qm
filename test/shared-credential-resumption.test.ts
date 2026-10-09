@@ -22,7 +22,8 @@ function keychain(now = Date.now) {
 }
 
 async function fixture(scope: ScopeId = "channel:C_SHARED") {
-  const k = keychain();
+  const clock = { t: Date.now() };
+  const k = keychain(() => clock.t);
   const credential = await k.save({
     ownerId: "U_CREDENTIAL_OWNER",
     service: "dummy",
@@ -90,7 +91,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     purpose: "read only the dummy account",
   });
   requests.length = 0;
-  return { k, credential, crons, cron, state, requests, deliveries, deps, ...approved };
+  return { k, clock, credential, crons, cron, state, requests, deliveries, deps, ...approved };
 }
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
@@ -112,8 +113,8 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
     assert.equal(request.unattendedGrants, undefined);
     assert.equal(request.ownerKeychainUnion, undefined);
     assert.deepEqual(request.triggerDestination, f.cron.destination);
-    assert.match(request.text, /read only the dummy account/);
-    assert.ok(request.text.includes(f.grant.id));
+    assert.match(request.text, /approved access for one credential use/);
+    assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
     assert.equal(f.grant.audienceScopeId, scope);
     assert.equal(f.grant.ownerId, "U_CREDENTIAL_OWNER");
     await assert.rejects(

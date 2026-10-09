@@ -1,5 +1,7 @@
 # qm
 
+**Read [`docs/SPEC.md`](./docs/SPEC.md) first.** It is the short source of truth for QM's north stars, subsystems and past mistakes. Where another doc disagrees, the spec wins.
+
 To run and test, see [`README.md`](./README.md).
 
 ## Working on the code
@@ -41,7 +43,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   is correct, and that belief is the bias review exists to defeat. Never self-review in the
   authoring context, however small the diff; a green CI run is not review either. What
   scales with risk is how deep the reviewer goes — a change with a narrow blast radius
-  warrants one reviewer at modest effort scoped to the diff, while core control flow, auth
+  warrants modest effort scoped to the diff for each reviewer, while core control flow, auth
   and credentials, data loss or migrations, concurrency and retry logic, spend, public API
   contracts, the shared helpers above that every path flows through, or a diff too large to
   hold in your head warrant high effort and several reviewers with distinct lenses. Judge
@@ -49,6 +51,32 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   fifty importers is not a small change. The reviewer, not the author, has the last word on
   depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
   rather than staying in its lane. Resolve what they find before merging.
+- **Run independent Wall of shame reviews in parallel for every PR.** Dispatch a
+  separate fresh-context subagent or independent reviewer for each lens in the current
+  [Wall of shame](./docs/SPEC.md#wall-of-shame), including newly added lenses. Only
+  Honorable mentions may share one combined reviewer. Launch reviews asynchronously
+  and in parallel within available capacity, queuing any overflow. Do not wait for
+  reviews before opening or updating the PR, running checks, or continuing other work.
+  Each reviewer reads their lens and examples, examines the diff and affected paths,
+  and returns **accept** or **request changes**, a **score out of 100** (higher is
+  better), and **1–2 sentences** explaining their assessment. Cite concrete findings
+  and state the smallest correction needed; explain when a lens has no applicable
+  concerns. Scores are informational, with no aggregate score or numeric merge threshold.
+  Put each reviewer's actual verdict, score, and concise assessment in the **PR
+  description**, labeled by lens and reviewer and tied to the reviewed commit. Update
+  the description as reviews arrive; mark pending reviews honestly and never invent
+  results or substitute the author's self-review. After edits, have independent
+  reviewers reassess affected lenses and explicitly carry forward unaffected results.
+  These reviews run alongside PR work; before merging, every lens must have accepted
+  and all requested changes must be resolved. They supplement the correctness,
+  security, and regression review above. The `Wall of shame review` CI check fails
+  until the description's report covers every lens with an accepting verdict for the PR head.
+- **Disclose config-matrix and database-schema changes in the PR description.** Name
+  added, removed, or changed settings, flags, modes, and providers, including changes to
+  defaults, precedence, and supported combinations. Name changed tables, columns,
+  indexes, and constraints, and describe migrations or backfills and any rollout or
+  compatibility implications. Explain why the changes are needed. If either area is
+  unchanged, say so explicitly; keep the disclosure proportional to the change.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several
@@ -120,7 +148,7 @@ per-instance and wiped by every deploy. Anything an operator or the system reads
 later (audit, logs, resolved config, queued or in-flight work) must live in a durable
 store, never RAM alone. RAM-only is fine only as a cache in front of a durable store, or
 for genuinely disposable, re-derivable state. If you're adding a log, audit, queue, or
-resolved config, back it with Postgres; the spec's data-model & durability section tracks the gaps.
+resolved config, back it with Postgres; see the spec's “Free the brain” north star.
 
 > `CLAUDE.md` is a symlink to `AGENTS.md`, so every tool (Claude Code, Codex,
 > Cursor, …) reads the same guidance from this one file. If a tool-specific

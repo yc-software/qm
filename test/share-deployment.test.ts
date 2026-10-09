@@ -27,10 +27,16 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
+import type { FeatureFlagStore } from "../src/feature-flags.ts";
+
+const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
 type Dir = { resolve: (orgId: string, q: string) => Promise<RecipientResolution> };
 
-function makeDeploy(canManageEmail?: (email: string) => Promise<boolean>): { deploy: DeployService; acl: AclStore } {
+function makeDeploy(
+  canManageEmail?: (email: string) => Promise<boolean>,
+  externalSharing = true,
+): { deploy: DeployService; acl: AclStore } {
   const acl: AclStore = createAclStore();
   const deploy = createDeployService({
     deployStore: createDeployStore(),
@@ -42,6 +48,7 @@ function makeDeploy(canManageEmail?: (email: string) => Promise<boolean>): { dep
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
     ...(canManageEmail ? { canManageEmail } : {}),
+    externalSharingAllowed: async () => externalSharing,
     deployDir: mkdtempSync(join(tmpdir(), "share-api-")),
   });
   return { deploy, acl };
@@ -60,9 +67,16 @@ function apiHarness(directory?: Dir) {
 const cap = (actorId: string, orgId = "acme"): CapabilityClaims =>
   ({ actorId, orgId, scopeId: scopeId("personal", actorId), exp: 9_999_999_999 }) as CapabilityClaims;
 
-function callShare(app: ReturnType<typeof createApp>, capability: CapabilityClaims | null, id: string, body: unknown) {
+function callShare(
+  app: ReturnType<typeof createApp>,
+  capability: CapabilityClaims | null,
+  id: string,
+  body: unknown,
+  featureFlags = externalSharingOn,
+) {
   const out: { status?: number; body?: any } = {};
   const res = {
+    getHeader() {},
     writeHead(s: number) {
       out.status = s;
     },
@@ -70,7 +84,7 @@ function callShare(app: ReturnType<typeof createApp>, capability: CapabilityClai
       out.body = d ? JSON.parse(d) : undefined;
     },
   };
-  const ctx = { res, app, params: { id }, body, capability } as unknown as ApiCtx;
+  const ctx = { res, app, deps: { featureFlags }, params: { id }, body, capability } as unknown as ApiCtx;
   return shareDeployment(ctx).then(() => out);
 }
 
@@ -85,9 +99,11 @@ function callManage(
   capability: CapabilityClaims | null,
   id: string,
   body: unknown,
+  featureFlags = externalSharingOn,
 ) {
   const out: { status?: number; body?: any } = {};
   const res = {
+    getHeader() {},
     writeHead(s: number) {
       out.status = s;
     },
@@ -95,13 +111,14 @@ function callManage(
       out.body = d ? JSON.parse(d) : undefined;
     },
   };
-  const ctx = { res, app, params: { id }, body, capability } as unknown as ApiCtx;
+  const ctx = { res, app, deps: { featureFlags }, params: { id }, body, capability } as unknown as ApiCtx;
   return handle(ctx).then(() => out);
 }
 
 function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityClaims, id: string) {
   const out: { status?: number; body?: any } = {};
   const res = {
+    getHeader() {},
     writeHead(s: number) {
       out.status = s;
     },
@@ -402,36 +419,17 @@ function toolCtx(deploy: DeployService): ToolContext {
   } as never);
 }
 
-test('publish share:[{scope:"org"}] resolves to the org — truthful readback, real reach (the QM bug)', async () => {
-  const { deploy } = makeDeploy();
-  const r = await toolCtx(deploy).publish({
-    entrypoint: "x",
-    name: "wide",
-    share: [{ scope: "org", permission: "read" }],
-  });
-  assert.equal(r.audience?.kind, "org", "an org share is reported as org, not owner-only");
-  assert.ok(!r.audience?.note, "no scary owner-only note when reach was actually granted");
-  assert.equal((await deploy.reachDeployment("wide", "U2")).status, "ok");
-});
-
-test("publish keeps apps private by default and requires an explicit public opt-in", async () => {
+test("publish keeps apps private by default and refuses a public flag at publish time", async () => {
   const { deploy } = makeDeploy();
   const privateApp = await toolCtx(deploy).publish({ entrypoint: "x", name: "private-app" });
   assert.equal(privateApp.public, undefined);
   assert.equal((await deploy.getDeployment("private-app"))?.public, undefined);
 
-  const publicApp = await toolCtx(deploy).publish({ entrypoint: "x", name: "public-app", public: true });
-  assert.equal(publicApp.public, true);
-  assert.equal((await deploy.getDeployment("public-app"))?.public, true);
-});
-
-test("publish rejects a garbage share target instead of silently creating a dead grant", async () => {
-  const { deploy } = makeDeploy();
   await assert.rejects(
-    () =>
-      toolCtx(deploy).publish({ entrypoint: "x", name: "bad", share: [{ scope: "not-a-scope", permission: "read" }] }),
-    /invalid share target/,
+    () => toolCtx(deploy).publish({ entrypoint: "x", name: "public-app", public: true }),
+    /apps action share/,
   );
+  assert.equal(await deploy.getDeployment("public-app"), null);
 });
 
 test("transferDeploymentOwner re-homes the app to the teammate: they own it, prior grants survive, the giver keeps reach", async () => {
@@ -476,19 +474,25 @@ test("a manage grantee may redeploy but cannot make the owner's app public", asy
     name: "managed-private",
   });
   await deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: "U1" });
-  await assert.rejects(
-    () =>
-      deploy.deployOrUpdate({
-        ownerScopeId: scopeId("personal", "U2"),
-        createdBy: "U2",
-        name: "managed-private",
-        entrypoint: "x",
-        files: [],
-        public: true,
-      }),
-    /only the owner/,
-  );
   assert.equal((await deploy.getDeployment(d.id))?.public, undefined);
+});
+
+test("republish, rename and rollback never change visibility; only the separate public toggle does", async () => {
+  const { deploy } = makeDeploy();
+  const owner = { ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [] };
+  const d = await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  assert.equal(d.public, undefined, "first publish is private by default");
+  await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  const after = await deploy.getDeployment(d.id);
+  assert.equal(after?.public, undefined);
+  assert.equal(after?.name, "vis");
+  assert.equal((await deploy.reachDeployment("vis", "U2")).status, "denied");
+  await deploy.setDeploymentPublic(d.id, true, { createdBy: "U1" });
+  assert.equal((await deploy.getDeployment(d.id))?.public, true);
+  await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  await deploy.deployOrUpdate({ ...owner, name: "vis2", renameFrom: "vis" });
+  await deploy.deployOrUpdate({ ...owner, name: "vis2", rollbackTo: 1 });
+  assert.equal((await deploy.getDeployment(d.id))?.public, true, "republish, rename and rollback keep the setting");
 });
 
 test("transferDeploymentOwner is home authority — a write ('manage') grantee cannot give the app away", async () => {
@@ -552,11 +556,62 @@ test("deployment public access is explicit, owner-only, and reversible", async (
     access: "view",
   });
   assert.equal(sharedWhilePublic.body.public, true, "person changes preserve and return general access");
+  const off = { enabled: async () => false } as unknown as FeatureFlagStore;
+  const orgWhileOff = await callShare(app, cap("U1"), "public-toggle", { scope: "org" }, off);
+  assert.equal(orgWhileOff.body.public, false, "with external sharing off, a stored public bit is reported as off");
 
   const disabled = await callShare(app, cap("U1"), "public-toggle", { public: false });
   assert.equal(disabled.status, 200);
   assert.equal(disabled.body.public, false);
   assert.equal((await app.getDeployment("public-toggle"))?.public, undefined);
+});
+
+test("with external app sharing off, public links and outside emails are refused while org sharing still works", async () => {
+  const { deploy } = makeDeploy(async (email) => email.endsWith("@acme.test"), false);
+  const app = createApp({ deploy, identity: createIdentityService() } as unknown as Parameters<typeof createApp>[0]);
+  const off = { enabled: async () => false } as unknown as FeatureFlagStore;
+  await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "locked",
+  });
+
+  const shares = await callManage(getDeploymentShares, app, cap("U1"), "locked", {}, off);
+  assert.equal(shares.body.externalSharing, false);
+
+  const makePublic = await callShare(app, cap("U1"), "locked", { public: true }, off);
+  assert.equal(makePublic.status, 403);
+  assert.equal(makePublic.body.error, "external_sharing_disabled");
+  assert.equal((await app.getDeployment("locked"))?.public, undefined);
+  assert.equal((await callShare(app, cap("U1"), "locked", { public: false }, off)).status, 200);
+
+  const outside = await callShare(app, cap("U1"), "locked", { email: "guest@elsewhere.test" }, off);
+  assert.equal(outside.status, 403);
+  assert.equal(outside.body.error, "external_sharing_disabled");
+
+  const member = await callShare(app, cap("U1"), "locked", { email: "teammate@acme.test" }, off);
+  assert.equal(member.status, 200);
+  const org = await callShare(app, cap("U1"), "locked", { scope: "org" }, off);
+  assert.equal(org.status, 200);
+  assert.deepEqual((await deploy.deploymentGrantees("locked")).map((g) => g.scope).sort(), [
+    "org:default-org",
+    "personal:teammate@acme.test",
+  ]);
+
+  const d = (await app.getDeployment("locked"))!;
+  await assert.rejects(
+    app.grant({
+      ownerScopeId: d.ownerScopeId,
+      ref: `deployment:${d.id}`,
+      granteeScopeId: scopeId("personal", "guest@elsewhere.test"),
+      permission: "read",
+      grantedBy: "U1",
+    }),
+    /external_app_sharing/,
+  );
+  assert.ok(!(await deploy.deploymentGrantees("locked")).some((g) => g.scope === "personal:guest@elsewhere.test"));
 });
 
 test("deployment permissions are visible only to the owner, including for managers", async () => {
@@ -637,15 +692,16 @@ test("exact email read grants admit app-only login and guest reach without membe
   const email = "invitee@example.com";
   await identity.deactivate(email, "directory-sync");
   assert.equal(identity.classify(email).type, "guest");
-  const allowed = async (email: string) => {
+  const allowed = async (email: string, featureFlags = externalSharingOn) => {
     let status: number | undefined;
     let body: unknown;
     const handle = authBrokerRoutes.find((r) => "path" in r && r.path.endsWith("email-allowed"))!.handle;
     await handle({
       app,
-      deps: { identity, acl },
+      deps: { identity, acl, featureFlags },
       url: new URL(`http://core/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`),
       res: {
+        getHeader() {},
         writeHead(s: number) {
           status = s;
         },
@@ -660,6 +716,11 @@ test("exact email read grants admit app-only login and guest reach without membe
   assert.deepEqual(await allowed(email), { allowed: false });
   await app.shareDeployment(d.id, `personal:${email}`, "read", { createdBy: "U1" });
   assert.deepEqual(await allowed(" Invitee@Example.com "), { allowed: true, appOnly: true });
+  assert.deepEqual(
+    await allowed(email, { enabled: async () => false } as unknown as FeatureFlagStore),
+    { allowed: false },
+    "existing outside grants stop admitting sign-in while external sharing is off",
+  );
   assert.deepEqual(await allowed("other@example.com"), { allowed: false });
   assert.equal(await app.effectiveDeploymentPermission(d, "Invitee@Example.com"), "read");
   assert.equal(await app.effectiveDeploymentPermission(d, "other@example.com"), null);

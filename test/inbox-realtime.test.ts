@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLoopItemLedger, type IngestEntryInput } from "../src/loops/item-ledger.ts";
 import { createInboxRealtime } from "../src/loops/inbox-realtime.ts";
+import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { slackConversationRef } from "../src/loops/sources/slack.ts";
 import type { LedgerEvent } from "../src/loops/ledger-events.ts";
 import type { Loop } from "../src/types.ts";
@@ -255,4 +256,21 @@ test("replying in an unrelated DM thread cannot dismiss an unthreaded ask", asyn
     senderEmail: LOOP.owner,
   });
   assert.notEqual((await items.byLoop(LOOP.id))[0]!.status, "skipped");
+});
+
+test("a new inbound message keeps its full text on the card", async () => {
+  const items = createLoopItemLedger();
+  await items.ingest([gmailEntry()]);
+  const rt = realtime(items);
+  const text = `Thanks for the demo. ${"Here is everything we tried last week. ".repeat(12)}The one feature that I needed was model routing.`;
+  await rt.onConversationEvent({ source: "gmail", conversationRef: "t-1", at: 2_000_000, text });
+  const [item] = await items.byLoop(LOOP.id);
+  assert.equal(item!.sourcePayload!.snippet, text);
+  assert.ok(item!.sourceSummary!.length <= 200);
+});
+
+test("the inbox sync task asks for the full waiting message", () => {
+  const task = renderSourceInboxTask("loop-inbox", "gmail");
+  assert.match(task, /snippet \(the full text of the waiting message/);
+  assert.doesNotMatch(task, /snippet \(the waiting message, <=200 chars\)/);
 });

@@ -263,25 +263,30 @@ test("login preserves opaque callback query values while rejecting normalized re
 });
 
 for (const domain of [undefined, "example.test"]) {
-  test(`framed session issuance is staged and clears existing twins (${domain ?? "host-only"})`, () => {
+  test(`login and renewal always issue the framed session twin (${domain ?? "host-only"})`, () => {
     const attrs = { path: "/", maxAge: 100, secure: true, domain };
     const headers = sessionCookieHeaders("signed-session", attrs);
     assert.ok(headers.some((header) => header.startsWith("portal_session=signed-session;")));
-    const twins = headers.filter((header) => header.startsWith("portal_session_x="));
-    assert.equal(twins.length, domain ? 2 : 1);
-    assert.ok(twins.every((header) => header.startsWith("portal_session_x=;") && header.includes("Max-Age=0")));
-    if (domain) assert.ok(twins.some((header) => header.includes(`Domain=${domain}`)));
-    const enabled = sessionCookieHeaders("signed-session", attrs, true);
-    assert.ok(
-      enabled.some(
-        (header) =>
-          header.startsWith("portal_session_x=signed-session;") &&
-          header.includes("SameSite=None") &&
-          header.includes("Secure"),
-      ),
-    );
+    const twins = headers.filter((header) => header.startsWith("portal_session_x=signed-session;"));
+    assert.equal(twins.length, 1);
+    assert.match(twins[0]!, /SameSite=None/);
+    assert.match(twins[0]!, /Secure/);
+    if (domain) {
+      assert.match(twins[0]!, new RegExp(`Domain=${domain}`));
+      assert.ok(headers.some((header) => header.startsWith("portal_session_x=;") && !header.includes("Domain=")));
+    } else {
+      assert.ok(!headers.some((header) => header.startsWith("portal_session_x=;")));
+    }
   });
 }
+
+test("the framed session twin falls back to Lax on a non-https origin", () => {
+  const twin = sessionCookieHeaders("signed-session", { path: "/", maxAge: 100, secure: false }).find((header) =>
+    header.startsWith("portal_session_x="),
+  );
+  assert.match(twin ?? "", /SameSite=Lax/);
+  assert.doesNotMatch(twin ?? "", /Secure/);
+});
 
 test("openSession preserves signed app-only authority and rejects malformed markers", () => {
   const now = Math.floor(Date.now() / 1000);

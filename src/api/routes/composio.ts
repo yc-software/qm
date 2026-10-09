@@ -9,6 +9,9 @@ import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
+import { redactSecrets } from "../../harness/redact-secrets.ts";
+import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
+import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -135,7 +138,7 @@ async function request(ctx: ApiCtx, key: string, path: string, body?: unknown): 
     redirect: "error",
     signal: AbortSignal.timeout(20_000),
   });
-  if (!response.ok) throw new Error("Composio request failed");
+  if (!response.ok) throw new Error(`Composio request failed: ${await httpFailure(response)}`);
   return (await response.json()) as Record<string, unknown>;
 }
 
@@ -260,7 +263,10 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       accountId: link.connected_account_id,
       ...(ticket ? { ticket } : {}),
     });
-  } catch {
+  } catch (error) {
+    // Keep the cause for operators (secret-redacted); the user only sees a generic message.
+    const mask = createExactSecretValueMasker([access.key]);
+    reportFailure("composio: authorize", new Error(mask(redactSecrets(errMessage(error)))), `toolkit=${toolkit}`);
     return sendJson(ctx.res, 502, {
       error: "composio_authorization_failed",
       message: "Could not start authorization. Please try again.",

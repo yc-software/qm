@@ -8,6 +8,7 @@ import { scopeId } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -126,6 +127,8 @@ test("legacy role broker vends only for explicitly selected scoped execution", a
       },
     },
   );
+  const owner = scopeId("personal", actor.externalId);
+  await selectDefaultSandbox(built, actor.externalId, owner);
   const conversation = { kind: "dm" as const, threadRef: "dm:legacy-selected", audience: [actor] };
   const run = (text: string) => built.app.turn({ surface: "slack", actor, conversation, text });
   assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");

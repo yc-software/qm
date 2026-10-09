@@ -1,3 +1,5 @@
+import { messageLinkSeq } from "./message-link.ts";
+
 export const UI_BASE = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(
   /\/$/,
   "",
@@ -73,6 +75,25 @@ export function parseDeepLink(
 export function sessionLink(origin: string, base: string, sessionId: string, seq?: number): string {
   const suffix = seq !== undefined && Number.isSafeInteger(seq) && seq >= 0 ? `?seq=${seq}` : "";
   return `${origin}${deepLinkPath(base, "chats", sessionId)}${suffix}`;
+}
+
+/** The session a same-app link points at (`/s/<id>`, optionally `?seq=N`), or null for anything else. */
+export function sessionLinkTarget(
+  href: string,
+  origin: string,
+  base: string,
+): { session: string; seq: number | null } | null {
+  let url: URL;
+  try {
+    url = new URL(href, origin);
+  } catch {
+    return null;
+  }
+  const b = base.replace(/\/$/, "");
+  if (url.origin !== origin || (b && url.pathname !== b && !url.pathname.startsWith(`${b}/`))) return null;
+  const linked = parseDeepLink(b, url.pathname, url.search);
+  if (linked.view !== "chats" || !linked.session) return null;
+  return { session: linked.session, seq: messageLinkSeq(url.search) };
 }
 
 /** True for an unmodified left click — the case an in-app link should handle itself (SPA nav). Modified clicks (cmd/ctrl/shift/alt, middle-click) fall through to the browser so "open in new tab" works. */

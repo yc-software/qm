@@ -441,3 +441,37 @@ test("channel history includes broadcasts while exact roots exclude them", { ski
     await cache.close();
   }
 });
+
+test("pg channel guidance edits compare the stored text atomically across connections", { skip }, async () => {
+  const left = createPostgresChannelPolicyStore(URL!);
+  const right = createPostgresChannelPolicyStore(URL!);
+  const initial = "First rule. Second rule.";
+  try {
+    await left.set("CAS", initial, { ambientEnabled: true, bots: { news: { mode: "ignore" } } });
+    const attempts = await Promise.allSettled([
+      left.set("CAS", "First updated. Second rule.", { expectedOrders: initial }),
+      right.set("CAS", "First rule. Second updated.", { expectedOrders: initial }),
+    ]);
+    assert.equal(attempts.filter((result) => result.status === "fulfilled").length, 1);
+    const rejected = attempts.find((result) => result.status === "rejected");
+    assert.ok(rejected?.status === "rejected");
+    assert.match(String(rejected.reason), /guidance changed/);
+    assert.equal((await left.history("CAS")).length, 2);
+    const current = (await right.get("CAS"))!;
+    assert.equal(current.ambientEnabled, true);
+    assert.deepEqual(current.bots, { news: { mode: "ignore" } });
+    await right.set("CAS", "First updated. Second updated.", { expectedOrders: current.orders });
+    assert.equal((await left.get("CAS"))!.orders, "First updated. Second updated.");
+    await assert.rejects(left.set("CAS-missing", "new", { expectedOrders: "old" }), /guidance changed/);
+    assert.equal(await right.get("CAS-missing"), null);
+    await left.set("CAS", undefined, { ambientEnabled: false });
+    assert.equal((await right.get("CAS"))!.orders, "First updated. Second updated.");
+    assert.equal((await left.history("CAS"))[0]!.orders, "First updated. Second updated.");
+    await right.set("CAS-new", undefined, { bots: { news: { mode: "ignore" } } });
+    assert.equal((await left.get("CAS-new"))!.orders, "");
+    await left.set("CAS", "replace");
+    assert.equal((await right.get("CAS"))!.orders, "replace");
+  } finally {
+    await Promise.all([left.close(), right.close()]);
+  }
+});

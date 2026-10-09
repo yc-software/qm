@@ -344,7 +344,7 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
   const resourceContains = ctx.url.searchParams.get("resource") ?? undefined;
   const filtered = action !== undefined || resourceContains !== undefined;
   const cap = filtered ? AUDIT_FILTERED_LIMIT : AUDIT_TAIL_LIMIT;
-  const requested = Number(ctx.url.searchParams.get("limit"));
+  const requested = Math.floor(Number(ctx.url.searchParams.get("limit")));
   const fallback = filtered ? cap : AUDIT_TAIL_LIMIT;
   const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, cap) : fallback;
   const events = (

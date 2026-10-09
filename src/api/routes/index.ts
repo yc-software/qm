@@ -1,3 +1,4 @@
+import { browserModelRoutes } from "./browser-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
@@ -43,12 +44,30 @@ import { swarmRoutes } from "./swarms.ts";
 
 export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { method: "GET", path: "/healthz", auth: "public", handle: ({ res }) => sendJson(res, 200, { ok: true }) },
-  ...slackEventRawRoutes,
   {
-    match: (m, p) => (m === "GET" || m === "POST") && p.startsWith(GIT_HTTP_BROKER_PREFIX),
-    auth: { aud: "credential-broker" },
-    handle: brokerGitHttp,
+    method: "GET",
+    path: "/readyz",
+    auth: "public",
+    handle: async ({ res, deps }) => {
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("Readiness deadline exceeded"));
+        }, 1000);
+      });
+      try {
+        await Promise.race([Promise.resolve().then(() => deps.checkReadiness?.(controller.signal)), deadline]);
+        sendJson(res, 200, { ok: true });
+      } catch {
+        sendJson(res, 503, { ok: false });
+      } finally {
+        clearTimeout(timer);
+      }
+    },
   },
+  ...slackEventRawRoutes,
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,
   ...deploymentRawRoutes,
@@ -60,6 +79,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  ...browserModelRoutes,
   ...swarmRoutes,
   ...searchRoutes,
   ...deploymentLayerRoutes,

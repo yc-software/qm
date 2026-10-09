@@ -415,27 +415,6 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
   assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
 
-test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets the scope's sandbox", async () => {
-  const { Readable } = await import("node:stream");
-  const { makeTar } = await import("../src/sandbox/tar.ts");
-  const blobs = createMemoryBlobTransferStore();
-  const s = make({ blobTransfer: blobs, capabilitySecret: "blob-secret", apiBaseUrl: "http://core.internal:8080" });
-
-  const a = await s.provision(layers);
-  await s.writeFile(a, "old.txt", "stale e2b-era sandbox\n");
-  await s.teardown(a, { keepWarm: true });
-
-  const tar = await makeTar([{ path: "migrated.txt", data: Buffer.from("came from e2b\n") }]);
-  const { blobId } = await blobs.put(Readable.from([Buffer.from(tar)]));
-  assert.ok(s.adoptHomeSnapshot);
-  await s.adoptHomeSnapshot!(scope, blobId);
-
-  const b = await s.provision(layers);
-  const migrated = await s.run(b, "cat ~/migrated.txt");
-  assert.equal(migrated.stdout, "came from e2b\n", "hydrates from the adopted snapshot");
-  assert.notEqual((await s.run(b, "cat ~/old.txt")).code, 0, "the pre-adopt sandbox was discarded, not reused");
-});
-
 test("persistHomeSnapshot writes the live home to the snapshot store on demand", async () => {
   const store = createMemoryMap<StoredModalSandbox>();
   const counting = instrumentedSnapshotStore();
@@ -1143,4 +1122,19 @@ test("untracked scope sandboxes are terminated after a grace period while scratc
   for await (const id of fake.client.listRunning!({})) running.add(id);
   assert.deepEqual(running, new Set([tracked, scratch, foreign]));
   assert.equal(running.has(orphan), false);
+});
+
+test("forced scratch destruction surfaces failure and retries the same live session", async () => {
+  const handle = await sandbox.provision(layers, { scratch: { key: "destroy-retry" } });
+  fake.failTerminateOnce();
+  await assert.rejects(sandbox.teardown(handle, { destroy: true }));
+  assert.equal(fake.runningCount(), 1);
+  await sandbox.teardown(handle, { destroy: true });
+  assert.equal(fake.runningCount(), 0);
+});
+
+test("released scratch handles cannot recreate a persistent sandbox", async () => {
+  const handle = await sandbox.provision(layers, { scratch: { key: "released-handle" } });
+  await sandbox.teardown(handle, { destroy: true });
+  await assert.rejects(sandbox.run(handle, "true"), /handle has been released/);
 });

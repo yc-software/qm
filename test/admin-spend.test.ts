@@ -82,6 +82,28 @@ async function seedPricedFixture(sessions: SessionStore): Promise<void> {
 const conserved = (report: any, column: string): number =>
   [...report.people, ...report.scopes].reduce((sum: number, e: any) => sum + e[column], 0);
 
+test("spend: uses the saved report and exposes its freshness", async () => {
+  const store = createMemorySessionStore();
+  const asOf = Date.UTC(2026, 0, 1);
+  let reads = 0;
+  store.spendReport = async (range) => {
+    reads++;
+    return { rows: await store.spendRollup(range), asOf };
+  };
+  const s = start(store);
+  try {
+    await seedPricedFixture(store);
+    const body = await getJson(s.base, "/v1/admin/spend");
+    assert.equal(body.asOf, asOf);
+    assert.equal(body.org.costUsd, 6.75);
+    const csv = await get(s.base, "/v1/admin/spend?format=csv");
+    assert.equal(csv.status, 200);
+    assert.equal(reads, 2);
+  } finally {
+    await s.close();
+  }
+});
+
 test("spend: live and cron dollars land on the owning person, shared scopes on their own rows", async () => {
   const s = start();
   try {

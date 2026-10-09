@@ -1,10 +1,12 @@
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
@@ -115,14 +117,44 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   return { turn, entries, modelCalls, llmRequests };
 }
 
+test("Claude notices use each turn's timezone without leaking it into later turns", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("done");
+  };
+  const harness = createClaudeHarness({});
+  for (const [timezone, summer, winter] of [
+    ["America/Los_Angeles", 14, 13],
+    ["america/los_angeles", 14, 13],
+    ["Asia/Kolkata", 2, 2],
+  ] as const) {
+    await harness.turns.runTurn(harnessTurn({ timezone }).turn);
+    const env = capturedOptions.env as NodeJS.ProcessEnv;
+    const actual = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "-e",
+          'process.stdout.write(JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, hours: ["2026-10-09T21:00:00Z", "2026-12-09T21:00:00Z"].map(value => new Date(value).getHours()) }))',
+        ],
+        { env, encoding: "utf8" },
+      ),
+    );
+    assert.equal(env.TZ, new Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions().timeZone);
+    assert.deepEqual(actual.hours, [summer, winter]);
+  }
+  await harness.turns.runTurn(harnessTurn().turn);
+  assert.equal((capturedOptions.env as NodeJS.ProcessEnv).TZ, undefined);
+});
+
 test("a steered turn persists every reply, not only the last result's", async () => {
   const signals = createMemoryRunSignalStore();
   const runId = "run-steer";
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
-    await iterator.next();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
     await signals.send(runId, { kind: "steer", text: "now do the other three", ts: "123.456" });
-    await iterator.next();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
     yield assistantMessage("msg_A", "The capital of France is Paris.", {
       input_tokens: 3,
       output_tokens: 8,
@@ -532,7 +564,9 @@ test("steering forwards prepared images and file paths while retaining the origi
     const iterator = prompts[Symbol.asyncIterator]();
     await iterator.next();
     await signals.send(runId, { kind: "steer", text: "check this", ts: "files.1", request });
-    injected = (await iterator.next()).value?.message.content;
+    const next = (await iterator.next()).value!;
+    injected = next.message.content;
+    yield next as unknown as FakeSdkMessage;
     yield resultMessage("saw the image");
     yield resultMessage("done");
   };
@@ -650,3 +684,153 @@ test("Claude coordinators expose neither command tools nor native subagents", as
   for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background"]) assert.ok(!allowed.includes(name));
   await harness.turns.close?.();
 });
+
+for (const surfaceTools of [false, true]) {
+  test(`Claude finish_silently suppresses provider closing text (surface=${surfaceTools})`, async () => {
+    currentScript = async function* () {
+      await toolHandlers.get("finish_silently")!({ reason: "nothing new" });
+      yield assistantMessage("quiet", "Nothing to add", {});
+      yield resultMessage("Nothing to add");
+    };
+    const harness = createClaudeHarness();
+    const { turn, entries } = harnessTurn({ pollFire: !surfaceTools, surfaceTools });
+    const result = await harness.turns.runTurn(turn);
+    assert.equal(result.silent, true);
+    assert.equal(result.reply, "");
+    assert.equal(
+      entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+    assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
+  });
+}
+
+test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
+  const signals = createMemoryRunSignalStore();
+  const tape: unknown[] = [];
+  const { turn, entries } = harnessTurn({
+    runId: "echo-intake",
+    input: "same text",
+    tape: async (row) => {
+      tape.push(row);
+    },
+  });
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("echo-intake", { kind: "steer", text: "same text", ts: "one" });
+    const first = (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("echo-intake", { kind: "steer", text: "same text", ts: "two" });
+    const second = (await iterator.next()).value as unknown as FakeSdkMessage;
+    assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+    assert.equal((await signals.pending("echo-intake")).length, 2);
+    yield first;
+    yield first;
+    assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+    yield {
+      ...second,
+      message: {
+        role: "user",
+        content: [
+          ...(first.message as { content: unknown[] }).content,
+          ...(second.message as { content: unknown[] }).content,
+        ],
+      },
+    };
+    yield resultMessage("first");
+    yield resultMessage("second");
+    yield resultMessage("third");
+  };
+  await createClaudeHarness({ signals }).turns.runTurn(turn);
+  assert.deepEqual(capturedOptions.extraArgs, { "replay-user-messages": null });
+  const users = entries.filter((entry) => entry.type === "user");
+  assert.deepEqual(
+    users.map((entry) => (entry.payload as { ts?: string }).ts),
+    [undefined, "one", "two"],
+  );
+  assert.equal((await signals.pending("echo-intake")).length, 0);
+  assert.equal(tape.filter((row) => (row as { meta?: { ts?: string } }).meta?.ts).length, 2);
+});
+
+test("Claude retains a queued message which the SDK never consumes", async () => {
+  const signals = createMemoryRunSignalStore();
+  const { turn, entries } = harnessTurn({ runId: "no-echo" });
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("no-echo", { kind: "steer", text: "not yet", ts: "pending" });
+    await iterator.next();
+    yield resultMessage("original reply");
+  };
+  await createClaudeHarness({ signals }).turns.runTurn(turn);
+  assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+  assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
+});
+
+test("Claude ignores continueTurn and still prompts the resume note as a user message", async () => {
+  const prompted: string[] = [];
+  currentScript = async function* (prompts) {
+    for await (const prompt of prompts) {
+      prompted.push(JSON.stringify(prompt.message.content));
+      break;
+    }
+    yield assistantMessage("msg_A", "picking up", { input_tokens: 3, output_tokens: 2 });
+    yield resultMessage("picking up");
+  };
+  const note = resumeNote({ strategy: { kind: "continue" } });
+  const harness = createClaudeHarness({});
+  const { turn, entries } = harnessTurn({ input: note, continueTurn: true, runId: "run-resume" });
+  const result = await harness.turns.runTurn(turn);
+  assert.equal(result.reply, "picking up");
+  assert.equal(entries[0]?.type, "user");
+  assert.equal((entries[0]!.payload as { text: string }).text, note);
+  assert.ok(prompted[0]!.includes("(system note:"), "the note reaches the model as a user prompt");
+});
+
+for (const shutdown of [false, true]) {
+  test(`Claude ${shutdown ? "skips" : "records"} the stopped partial when cancelled mid-turn ${shutdown ? "by shutdown" : "by the worker"}`, async () => {
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    const shutdownSignal = new AbortController();
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      await toolHandlers.get("memory")!({ action: "read" });
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
+      };
+      waiting.resolve();
+      await release.promise;
+      yield resultMessage("replacement after stop");
+    };
+    const harness = createClaudeHarness({});
+    const { turn, entries } = harnessTurn({
+      cancel: cancel.signal,
+      shutdown: shutdownSignal.signal,
+      readOnly: false,
+      tools: { memoryRead: async () => "remembered facts" } as unknown as HarnessTurnInput["tools"],
+    });
+    const running = harness.turns.runTurn(turn);
+    await waiting.promise;
+    if (shutdown) shutdownSignal.abort();
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.stopped, true);
+    assert.equal(result.stoppedByUser, undefined);
+    assert.deepEqual(
+      entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
+      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant"],
+    );
+    const partial = findTrailingPartialTurn(entries, turn.input);
+    if (shutdown) {
+      assert.ok(partial);
+      assert.notEqual(resumeStrategy(entries, partial).kind, "restart");
+      assert.equal(turnAtSeq(entries, partial.userSeq)?.answer, undefined);
+    } else {
+      assert.deepEqual(entries.at(-1)!.payload, { text: "Visible partial", stopped: true });
+      assert.equal(partial, null);
+    }
+  });
+}

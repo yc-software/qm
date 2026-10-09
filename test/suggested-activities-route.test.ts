@@ -23,6 +23,7 @@ async function request(body: unknown, enabled: boolean, actor = "alice") {
         }
       : {},
     res: {
+      getHeader: () => undefined,
       writeHead: (code: number) => {
         status = code;
       },

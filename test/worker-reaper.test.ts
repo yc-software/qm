@@ -14,6 +14,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
+import type { RunStore } from "../src/runs/run-store.ts";
 import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -244,10 +245,12 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
     unwind = resolve;
   });
   let signal!: AbortSignal;
+  let shutdownSignal: AbortSignal | undefined;
   let leaseToken!: string;
   const orchestrator = {
     async handleTurn(input: OrchestratorInput) {
       signal = input.cancel!;
+      shutdownSignal = input.shutdown;
       leaseToken = input.runLeaseToken!;
       const { lease } = await sessions.acquireLease(session.id);
       assert.ok(lease);
@@ -272,15 +275,14 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
   });
   await sleep(20);
   assert.equal(signal.aborted, true, "shutdown reaches the existing cancellation signal immediately");
+  assert.equal(shutdownSignal?.aborted, true, "the turn can tell this cancellation apart from a user Stop");
   assert.equal(released, false, "handback waits for the cancellation checkpoint and finally block");
-  assert.equal(worker.busy(), true);
   assert.equal((await runs.get(enq.id))?.status, "running");
   assert.equal(await runs.claim("replacement", 5_000), null);
   assert.equal((await sessions.acquireLease(session.id)).lease, null);
   const second = worker.releaseInFlight();
   unwind();
   await Promise.all([handback, second]);
-  assert.equal(worker.busy(), false);
   assert.equal((await runs.get(enq.id))?.status, "pending");
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
   const replacement = await runs.claim("replacement", 5_000);
@@ -327,6 +329,103 @@ test("an uncooperative turn keeps both leases until it actually exits", async ()
   assert.equal((await runs.get(enq.id))?.status, "pending");
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
   assert.ok((await sessions.acquireLease(session.id)).lease);
+});
+
+test("shutdown aborts the blocked step before the handback, and the next worker resumes it exactly once", async () => {
+  const store = createMemoryRunStore();
+  const events: string[] = [];
+  const runs: RunStore = {
+    ...store.runs,
+    async releaseLease(runId, token) {
+      events.push("release");
+      return store.runs.releaseLease(runId, token);
+    },
+  };
+  const blocked = Promise.withResolvers<void>();
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      if (input.attempt === 1) {
+        events.push("step1");
+        blocked.resolve();
+        await new Promise<void>((resolve) => input.cancel!.addEventListener("abort", () => resolve(), { once: true }));
+        events.push("abort");
+        return { status: "silent" as const, stopped: true };
+      }
+      events.push(`resume@${input.attempt}`);
+      events.push("step2");
+      return { status: "ok" as const, reply: "finished" };
+    },
+  } as unknown as Orchestrator;
+  const enq = (await store.runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
+  const old = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "old" });
+  old.start();
+  await blocked.promise;
+  await old.stop(1);
+  await old.releaseInFlight();
+  assert.deepEqual(events, ["step1", "abort", "release"]);
+  const handedBack = (await runs.get(enq.id))!;
+  assert.equal(handedBack.status, "pending");
+  assert.equal(handedBack.errorAttempts, 0);
+  assert.equal(handedBack.leaseToken, null);
+
+  const fresh = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "fresh" });
+  fresh.start();
+  const done = await runs.waitFor(enq.id, 2_000);
+  await fresh.stop();
+  assert.equal(done.status, "done");
+  assert.equal(done.attempts, 2);
+  assert.deepEqual(done.result, { status: "ok", reply: "finished" });
+  assert.deepEqual(events, ["step1", "abort", "release", "resume@2", "step2"]);
+});
+
+test("shutdown mid-turn through the harness leaves no stop marker, and the resumed attempt finishes the work", async () => {
+  const built = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "harness-resume-")), workers: 1, shutdownDrainMs: 30 }),
+  );
+  const threadRef = "harness-shutdown-resume";
+  const queued = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef },
+    text: "!work-until-shutdown",
+    async: true,
+  });
+  const entriesNow = async () => {
+    const session = await built.sessions.getByThread(threadRef);
+    return session ? built.sessions.getEntries(session.id) : [];
+  };
+  built.runtime.start();
+  try {
+    const deadline = Date.now() + 5_000;
+    while (!(await entriesNow()).some((entry) => entry.type === "tool_result")) {
+      if (Date.now() > deadline) throw new Error("the first attempt never recorded its tool work");
+      await sleep(10);
+    }
+    await built.runtime.stopBackground();
+    await built.runtime.releaseInFlightRuns();
+    const handedBack = (await built.runs.get(queued.runId!))!;
+    assert.equal(handedBack.status, "pending");
+    assert.equal(handedBack.attempts, 1);
+    assert.equal(handedBack.leaseToken, null);
+    const interrupted = await entriesNow();
+    assert.deepEqual(
+      interrupted.filter((entry) => entry.type === "assistant"),
+      [],
+      "the shutdown-cancelled attempt must not close the turn",
+    );
+    built.runtime.start();
+    const done = await built.runs.waitFor(queued.runId!, 5_000);
+    assert.equal(done.status, "done");
+    assert.equal(done.attempts, 2);
+    assert.equal(done.result?.reply, "finished after resume");
+    const replies = (await entriesNow()).filter((entry) => entry.type === "assistant");
+    assert.deepEqual(
+      replies.map((entry) => (entry.payload as { text: string }).text),
+      ["finished after resume"],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
 });
 
 test("a thrown claim neither kills the worker loop nor blocks the drain handback", async () => {
@@ -637,7 +736,10 @@ test("inline turns remain admitted through pause and queued intake survives roll
     }),
   );
   let admitted = true;
-  built.runtime.setBackgroundAdmission(() => admitted);
+  built.runtime.setBackgroundAdmission(
+    () => admitted,
+    () => admitted,
+  );
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const complete = built.runs.complete.bind(built.runs);
@@ -783,5 +885,115 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
     assert.deepEqual(events, []);
   } finally {
     await built.runtime.stop();
+  }
+});
+
+test("final shutdown holds an inline turn's lease until the step unwinds, then hands the run back", async () => {
+  const built = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")), workers: 1, shutdownDrainMs: 200 }),
+  );
+  const blocked = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const append = built.sessions.append.bind(built.sessions);
+  let first = true;
+  built.sessions.append = async (lease, entry) => {
+    if (first && entry.type === "user") {
+      first = false;
+      blocked.resolve();
+      await gate.promise;
+    }
+    return append(lease, entry);
+  };
+  const inline = built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "inline-shutdown" },
+    text: "hello",
+  });
+  try {
+    await blocked.promise;
+    const running = (await built.runs.list()).find((run) => run.status === "running")!;
+    assert.ok(running);
+    let stopped = false;
+    const stopping = built.runtime.stop().then(() => {
+      stopped = true;
+    });
+    await sleep(300);
+    assert.equal(stopped, false, "stop waits for the inline step to unwind");
+    assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
+    assert.equal(await built.runs.claim("replacement", 5_000), null);
+    gate.resolve();
+    const result = await inline;
+    await stopping;
+    assert.equal(result.status, "queued");
+    assert.equal(result.runId, running.id);
+    const handedBack = (await built.runs.get(running.id))!;
+    assert.equal(handedBack.status, "pending");
+    assert.equal(handedBack.leaseToken, null);
+    assert.equal(handedBack.errorAttempts, 0);
+    assert.equal(handedBack.attempts, 1);
+    assert.equal((await built.runs.claim("replacement", 5_000))?.id, running.id);
+  } finally {
+    gate.resolve();
+    await inline.catch(() => {});
+  }
+});
+
+test("worker survives sustained claim failures and processes work after recovery", async (t) => {
+  const { runs } = createMemoryRunStore();
+  const queued = (await runs.enqueue({ sessionId: "claim-recovery", request: turn })).run;
+  const claim = runs.claim.bind(runs);
+  let attempts = 0;
+  t.mock.method(runs, "claim", async (...args: Parameters<typeof claim>) => {
+    attempts++;
+    if (attempts <= 25) throw new Error("database unavailable");
+    return claim(...args);
+  });
+  const errors = t.mock.method(console, "error", () => {});
+  t.mock.method(console, "warn", () => {});
+  const worker = createWorker({
+    runs,
+    orchestrator: { handleTurn: async () => ({ status: "silent" }) } as unknown as Orchestrator,
+    leaseTtlMs: 5_000,
+    pollMs: 1,
+  });
+  worker.start();
+  try {
+    const result = await runs.waitFor(queued.id, 5_000);
+    assert.equal(result?.status, "done");
+    assert.ok(attempts > 25);
+    assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("persistent claim failure")));
+  } finally {
+    await worker.stopClaims();
+    await worker.drained();
+  }
+});
+
+test("runtime shutdown contains store close failures and waits for remaining stores", async (t) => {
+  const built = buildApp(testConfig());
+  const closing = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  built.runs.close = async () => {
+    throw new Error("run store disconnect failed");
+  };
+  built.signals.close = async () => {
+    closing.resolve();
+    await release.promise;
+  };
+  const errors = t.mock.method(console, "error", () => {});
+  let stopped = false;
+  const stopping = built.runtime.stop().then(() => {
+    stopped = true;
+  });
+  try {
+    await closing.promise;
+    await sleep(10);
+    assert.equal(stopped, false);
+    release.resolve();
+    await stopping;
+    assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("close event stores")));
+  } finally {
+    release.resolve();
+    await stopping;
   }
 });

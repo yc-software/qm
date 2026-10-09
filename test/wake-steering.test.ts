@@ -230,7 +230,6 @@ test("the proxy receives ambient provenance for an unprompted mid-turn coworker 
   const metadata: Array<Readonly<Record<string, unknown>> | undefined> = [];
   const built = freshApp({
     provider: "example-screen",
-    shadow: true,
     async classify(input) {
       metadata.push(input.metadata);
       return {
@@ -835,7 +834,7 @@ test("reverse race: a sanitized mention follows its fresh run after the ambient 
 });
 
 test("screening off delivers ambient updates to the existing run without a classifier", async () => {
-  const built = buildApp(testConfig({ securityScreenBackend: "off" }));
+  const built = buildApp(testConfig({ securityScreen: "off" }));
   const first = await built.app.turn(mention("start work", "C-off", "100.1"));
   const follow = await built.app.turn(overheard("build finished", "C-off", "100.1"));
   assert.equal(follow.runId, first.runId);

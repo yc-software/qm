@@ -234,12 +234,10 @@ test("Mode 2 (spine channel): autonomous-worklog frame, org policy once, no temp
   const prompt = await sysprompt(orch, spineChannelTurn(""));
 
   assertNoTemplateTokens(prompt, "Mode 2 (spine channel)");
+  assert.match(prompt, /Once you.ve posted, just stop/);
+  assert.doesNotMatch(prompt, /stay_silent|Nothing to add|end with a short log line/);
 
-  assert.match(
-    prompt,
-    /no one ever reads this transcript/,
-    "expected mode-autonomous.md's stated invariant that this transcript has no human reader",
-  );
+  assert.doesNotMatch(prompt, /no one ever reads this transcript|private worklog/);
 
   assert.equal(
     countOccurrences(prompt, ORG_SOUL),
@@ -274,7 +272,7 @@ test("Mode 1 and Mode 2 frames are mutually exclusive within one prompt", async 
   assert.match(dmPrompt, /live, private 1:1/);
   assert.doesNotMatch(dmPrompt, /no one ever reads this transcript/);
 
-  assert.match(spinePrompt, /no one ever reads this transcript/);
+  assert.match(spinePrompt, /Your words reach people ONLY through/);
   assert.doesNotMatch(spinePrompt, /live, private 1:1/);
 });
 
@@ -291,6 +289,7 @@ test("shared-core platform guidance reaches both the DM and the spine prompt", a
     assert.match(prompt, /Compose task rules with one authorized access skill/);
     assert.match(prompt, /prefer the composio skill/);
     assert.match(prompt, /Never switch credentials to evade denial/);
+    assert.match(prompt, /independently authorized system-administration access is not such evasion/);
     assert.doesNotMatch(prompt, /## Scheduling & self-configuration/);
   }
 });
@@ -310,7 +309,7 @@ test("org branding renames the assistant and the organization across both modes"
   assert.doesNotMatch(dmPrompt, /You are QM/);
 
   const spinePrompt = await sysprompt(buildOrchestrator({ branding }), spineChannelTurn(""));
-  assert.match(spinePrompt, /You are straylight, present in this conversation on its own/);
+  assert.match(spinePrompt, /You are straylight, present in this conversation\./);
   assert.doesNotMatch(spinePrompt, /You are QM/);
 });
 

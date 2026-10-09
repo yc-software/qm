@@ -3,12 +3,15 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { Conversation } from "../src/conv-types.ts";
+import { MAX_PANES, MAX_TILES } from "../src/split-layout.ts";
 
 interface Canvas {
   panes: () => number;
   tiles: () => number;
   newChat: () => boolean;
   tabCounts: () => number[];
+  activeTabs: () => number[];
+  cycleTab: (step: number) => void;
   focusTile: (index: number) => void;
   splitTile: (index: number) => void;
   seededChat: (threadRef?: string) => Conversation | null;
@@ -125,6 +128,11 @@ async function withCanvas(
       panes: () => document.querySelectorAll(".dv-tab").length,
       tabCounts: () =>
         Array.from(document.querySelectorAll(".dv-groupview"), (g) => g.querySelectorAll(".dv-tab").length),
+      activeTabs: () =>
+        Array.from(document.querySelectorAll(".dv-groupview"), (g) =>
+          Array.from(g.querySelectorAll(".dv-tab")).findIndex((t) => t.classList.contains("dv-active-tab")),
+        ),
+      cycleTab: (step) => window.dispatchEvent(new dom.window.CustomEvent("qm:cycle-tab", { detail: step })),
       focusTile: (index) => {
         document
           .querySelectorAll(".dv-groupview")
@@ -234,10 +242,23 @@ test("seeded chats return from another view without losing the grid or supplied 
 test("new chat replaces the focused conversation at capacity without dropping the grid", async () => {
   await withCanvas(async (canvas) => {
     await canvas.split();
-    for (let i = 2; i < 12; i++) assert.equal(canvas.newChat(), true);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [12, 3]);
+    for (let i = 2; i < MAX_PANES; i++) assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_PANES, 3]);
     assert.ok(canvas.seededChat()?.state.agent);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [12, 3]);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_PANES, 3]);
+  });
+});
+
+test("explicit splitting reaches the tile cap and stops at capacity", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    for (let i = 2; i < MAX_TILES; i++) canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_TILES, MAX_TILES]);
+    canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_TILES, MAX_TILES]);
+    await canvas.closeTile(0);
+    canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_TILES, MAX_TILES]);
   });
 });
 
@@ -314,5 +335,26 @@ test("app edit chats suppress the general welcome and suggestions", async () => 
     assert.equal(shell.querySelector(".suggested-activities"), null);
     assert.ok(shell.querySelector(".composer-wrap"));
     assert.deepEqual(conv.state.agent.state.messages, []);
+  });
+});
+
+test("cycle-tab steps through the focused pane's tabs in order and wraps", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    canvas.newChat();
+    canvas.newChat();
+    canvas.newChat();
+    assert.deepEqual(canvas.tabCounts(), [1, 1, 3]);
+    const start = canvas.activeTabs()[2];
+    canvas.cycleTab(1);
+    assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 1) % 3]);
+    canvas.cycleTab(1);
+    canvas.cycleTab(1);
+    assert.deepEqual(canvas.activeTabs(), [0, 0, start]);
+    canvas.cycleTab(-1);
+    assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 2) % 3]);
+    canvas.focusTile(0);
+    canvas.cycleTab(1);
+    assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 2) % 3], "a single-tab pane has nothing to cycle");
   });
 });

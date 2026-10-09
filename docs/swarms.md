@@ -9,12 +9,17 @@ with a `Swarm worker` title. Worker transcripts remain read-only for ordinary me
 ## Deployment
 
 Use Postgres for production (`DATABASE_URL`, `SESSION_STORE=postgres`, and
-`RUN_STORE=postgres`) and enable the existing sandbox inventory with
-`SANDBOX_RESOURCES_ENABLED=true`. Configure a sandbox backend with its required
+`RUN_STORE=postgres`) (sandbox resources are always on). Configure a sandbox backend with its required
 credentials and deployment-specific settings. Workers use the provider of the scope's selected computer, or the deployment default when none is selected. An initial
 `backend` override chooses another configured provider that supports creation and
 retirement. That choice is stored once; later default changes never move workers
 to another provider, and the selected computer's files are never copied.
+
+Swarms are also gated per person by the `swarms` feature flag, off by default.
+Enable it for a person's personal scope (for example `personal:alice@example.com`)
+or the org scope in the admin feature-flag table. Without it the swarm routes refuse
+the caller, `/v1/apis` omits them, and existing swarms owned by that person stop
+reconciling and delivering. `SWARMS_ENABLED=false` remains the deployment kill switch.
 
 The `swarms` durable-map table has its own registered migration,
 `durable-map/swarms/0001`. Apply registered migrations through the normal QM deploy
@@ -77,8 +82,14 @@ grants belong only to the session that received them, not its workers. A compute
 is not an authorization principal. Existing provider persistence behavior is
 unchanged; swarms add no filesystem snapshots, immutable copies, or restores.
 
-To add a shared forum, supply `forumSandboxId` naming an existing authorized sandbox
-in the same scope. Every worker still gets its own blank private computer.
+Every swarm gets one shared board computer in the swarm scope, created with the
+first worker. `inspect` returns it as `board.sandboxId`, and every worker carries
+it as `forumSandboxId`; the root session and all workers reach it with
+`execute`'s `sandbox_id`. Board creation is part of each worker's provisioning and
+fails that worker like any other provisioning failure. The board outlives worker
+cleanup so its files remain available to the root. To use an existing computer instead,
+supply `forumSandboxId` naming an authorized sandbox in the same scope; no board is
+then created. Every worker still gets its own blank private computer.
 The forum ID appears in peer metadata and the worker prompt; select it explicitly
 with `execute`'s `sandbox_id` for commands that should use the shared computer.
 This is not a new filesystem synchronization feature. Workers using a forum share
@@ -191,11 +202,27 @@ resource operations exhaust only this instance's resource capacity until a slot 
 released. Pending selection remains single-flight until its underlying database
 query settles, even when a sweep reports a selection timeout.
 
+### Worker controls
+
+`POST` with `{action:"control",memberId,state}` sets a worker to `paused`,
+`active`, or `stopped`. Humans in the swarm may control any worker; an agent may
+control only itself or its descendants. The root session cannot be controlled.
+Controls apply to descendants too. Pausing holds new notifications as pending
+until the worker is resumed; runs already queued continue. Stopping is terminal:
+pending notifications fail, unstarted queued runs are withdrawn, running turns are
+aborted, and later turns in that worker session are refused. `inspect` reports each
+peer's `control`. The web UI shows a Swarm strip on swarm sessions: a collapsed summary of
+active, starting, paused, stopped, and failed workers; when expanded, workers
+grouped under their parent (20 per group, with "show more"); per-worker Pause,
+Resume, and Stop; and Pause all, Resume all, and Stop all (with a confirm), which
+apply this action to the root's direct children so it cascades. The strip
+refreshes every few seconds only while workers are active and the tab is visible.
+
 ## Defaults and safety bounds
 
 | Setting                                          | Default              | Maximum     |
 | ------------------------------------------------ | -------------------- | ----------- |
-| `agents` (root and failed reservations included) | 32                   | 64          |
+| `agents` (root and failed reservations included) | 32                   | 256         |
 | `depth` below root                               | 4                    | 8           |
 | `spawnRequests`                                  | 32                   | 64          |
 | `messages` including initial work                | 128                  | 256         |

@@ -1,6 +1,33 @@
-# qm
+<p align="center">
+  <img src="docs/images/qm-logo.png" alt="QM" width="120">
+</p>
 
-A multiplayer agent harness for work. In Slack and on the web.
+<div align="center">
+
+**A multiplayer agent harness for work. In Slack and on the web.**<br>
+Run it in your own cloud, with your own models and keys.
+
+[![CI](https://img.shields.io/github/actions/workflow/status/yc-software/qm/cicd.yml?branch=main&label=CI&style=flat-square)](https://github.com/yc-software/qm/actions/workflows/cicd.yml)
+[![license](https://img.shields.io/badge/license-MIT-4c1?style=flat-square)](./LICENSE)
+[![node](https://img.shields.io/badge/node-24.15%2B-3178c6?style=flat-square)](./package.json)
+[![npm](https://img.shields.io/npm/v/@yc-software/qm?label=npm&color=000&style=flat-square)](https://www.npmjs.com/package/@yc-software/qm)
+
+[Deploy](#deploy-it-for-your-org) · [How it works](#how-it-works) · [Security model](#security-and-secrets) · [Customize](#customize-your-instance) · [Contribute](#contributing) · [Documentation](#going-deeper)
+
+</div>
+
+## Overview
+
+Most agents are designed like personal assistants. You can make one work for a whole
+company, but it quickly gets complex. QM is designed for startups. Employees each get
+their own isolated workspace, and can also collaborate with the agent in channels, group messages, and projects.
+
+Each person and each room has its own scoped memory, files, keychain view, permissions,
+crons, web apps, and durable sandbox.
+
+It's built with open source in mind. Pick your own harness and model and switch between
+them. Pi, OpenCode, Codex, and Claude Code all drive the same core, so a deployment
+isn't tied to any single vendor.
 
 ## Setup
 
@@ -10,33 +37,18 @@ You can also try out a 3rd-party hosted version of QM [here](https://www.agent37
 
 If you're an infra provider interested in offering a hosted version of QM, feel free to reach out.
 
-## What is QM?
-
-Most agents are designed like personal assistants. You can make one work for a whole
-company, but it quickly gets complex. QM is designed for startups. Employees each get
-their own isolated workspace and work independently without affecting each other, and
-they can also collaborate with the agent in channels, group messages, and projects.
-
-Each person and each room has its own scoped memory, files, keychain view, permissions,
-crons, web apps, and durable sandbox.
-
-It's built with open source in mind. Pick your own harness and model and switch between
-them — Pi, OpenCode, Codex, and Claude Code all drive the same core, so a deployment
-isn't tied to any single vendor.
-
 ## Features
 
 - **Personal and shared scopes.** People customize the agent to be _theirs_, and still
   work with it collaboratively in Slack channels and projects.
 - **Slack and web.** The same identity and configuration carries between Slack and the
   web app.
-- **Admin control.** Set org-level configuration, security and sharing postures, and which
+- **Admin control.** Set org-level configuration, security and sharing postures. Choose which
   harnesses and models are available.
 - **Web apps.** Spin up custom internal apps and publish them to the right people.
 - **Shared skills.** Skills are scope-owned and shareable by grant, with admin-gated
   promotion to the whole org and skill packs imported from git repositories.
-- **Background work.** Crons, watches, and inbound webhooks run work while nobody's
-  watching.
+- **Background work.** Crons, watches, and inbound webhooks work while you're away.
 
 ## What you can do with it
 
@@ -72,7 +84,7 @@ Use `npm run dev-instance:both` when testing both surfaces together. Bare
 `npm run dev-instance` defaults to web for new instances and preserves the surface
 on reload. Switch an existing instance with an explicit surface command.
 
-## Architecture
+## How it works
 
 Every turn runs through a central core, which can use a variety of models and harnesses
 to generate the response. A Postgres persistence layer holds user data, session history,
@@ -102,14 +114,15 @@ can only tighten:
 
 - **Strict** — every harness tool call pauses for human approval, except the two
   no-effect turn enders.
-- **Auto** (default) — blocks private-network access and uses a content screener when
-  the deployment configures one. Model screening is off by default; deployments can
-  use an external proxy or explicitly opt into the built-in model classifier.
-- **Dangerous** — no posture-based content screening or tool approval gates.
+- **Auto** (default) — blocks private-network access.
+- **Dangerous** — no tool approval gates, and content screening only observes.
 
-Deployments can set `securityScreen.allPostures: true` to require external-content
-screening under every posture, including Dangerous and Strict, without changing tool
-approvals or private-network policy. Flagged content still requires release approval.
+Content screening is a deployment setting, `securityScreen.mode`: `off` (default),
+`observe`, or `enforce`, with `securityScreen.classifier` choosing the built-in
+`model` or an external `proxy`. When on, it classifies external content under every
+posture. `observe` only records verdicts in the audit log. `enforce` quarantines
+flagged content pending release approval, except under Dangerous, which caps
+screening at `observe`.
 
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.
@@ -118,30 +131,7 @@ Sharing posture is independent:
 
 - **Isolated** (default) — resources stay in their scope unless explicitly shared.
 - **Open** — on a live authenticated internal human turn, the speaker's opted-in personal
-  files, artifacts, skills, and memory may be read in an opted-in shared room. In the
-  speaker's DM, files and skills from up to 25 recent shared contexts where they are still
-  a member are available. Included memories are loaded into the prompt in full with source-scope
-  labels and are also searchable; relevance ranking is not applied.
-  The candidate window is limited to 100 recent sessions and file discovery to 200 files.
-  Binary files still require explicit sharing before entering another conversation's computer.
-  Cross-context memory search is available only through the active turn's memory tool;
-  reusable sandbox API tokens retain their original memory scope.
-
-The organization value is a ceiling, and personal and room scopes can opt out; Isolated
-wins. “Follow organization” removes a personal or room override. Disabled memory recall
-and writable-only recall still apply. Authenticated human-authored ambient turns use the same
-Open access as direct requests. The speaker can use their own connections on an isolated
-owner-auth computer and target their authorized sandboxes across conversations.
-Open shared crons can retain the owner's resource access and allow member edits, with a brief
-private notification to the owner. Membership and posture are rechecked rather than treating
-a saved conversation reference as permanent access. Scheduled owner access authorized through
-Open stops when Open is withdrawn; changing a job's text does not reset that requirement.
-
-Open does not mount a personal workspace into the shared computer, expose credentials to
-other participants, carry message history, cross organizations, or weaken screening, command
-approvals, or egress. File read/write and publication retain their own permissions.
-It can still reveal private information in a shared reply, so cross-context reads are
-provenance-labelled and audited.
+  files, artifacts, skills, and memory may be read in an opted-in shared room.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.
@@ -246,8 +236,6 @@ upstream source history to merge.
 
 ## Going deeper
 
-- [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
-- [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
@@ -255,51 +243,10 @@ upstream source history to merge.
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
 - [`docs/superserve.md`](./docs/superserve.md) — using Superserve for agent sandboxes
 - [`.env.example`](./.env.example) — every knob, documented in place
+- [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
+- [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, admin, portal)
 
 ## License
 
 Except where otherwise noted, QM is available under the [MIT License](./LICENSE).
-
-### Managed Slack installation
-
-A hosting provider can set `QM_SLACK_SERVICE_URL` (HTTPS),
-`QM_SLACK_SERVICE_TOKEN` (unique per deployment) on core. Optionally set
-`QM_SLACK_APP_ID` to pin a pre-existing app; otherwise the authenticated service
-assigns its app ID during installation. Events must match the stored app identity.
-Set `QM_SLACK_SERVICE_URL` on the admin/web service as well so its browser policy allows the installation form.
-The admin Slack card then offers **Add to Slack** through that service. Core calls
-`POST /install/start` with the deployment bearer credential and expects `{ "url":
-"https://<service>/..." }`. The browser submits a POST form to that URL; the service must validate its Origin against the company URL. The service owns browser-bound OAuth state, Slack
-signature verification, workspace ownership, and app credentials.
-
-The portal forwards only `POST /v1/slack/managed/installation`, `DELETE` on that
-same path, and `POST /v1/slack/managed/events` without a browser session. Core
-requires the deployment bearer credential on each request. Installation takes
-`botToken`, `appId`, `teamId`, `installId`, `installedAt` (epoch milliseconds), and
-optional `teamName`. Repeat the same installation request until it returns 200
-with `ready: true`; 202 means the encrypted token is saved but the runtime has
-not started. Older installation generations and conflicting workspaces fail
-closed. Deletion takes `installId` and only disables that generation.
-
-Delivery takes `{ installId, body, retryNum?, retryReason? }`, where `body` is the
-verified Slack event or decoded interaction payload. Core checks its workspace
-and app before passing it to the existing Slack runtime and acknowledgment
-machinery. There is no shared queue: unavailable core instances return failures,
-and the hosting service must relay those failures to Slack. The service must
-process lifecycle events and ignore revocations older than the installation.
-
-Managed deployments also support an administrator-provided Slack app through the same
-Slack settings card. Saving its validated bot and Socket Mode tokens replaces the
-managed runtime and rejects subsequent managed installation callbacks. To return to
-the managed app, disconnect the administrator-provided app in QM, then explicitly
-choose **Add to Slack**. Disconnecting alone does not permit old managed callbacks to
-restore an installation.
-
-Use the same Slack workspace when replacing the managed app, so existing conversations
-and memberships remain associated with that workspace. Invite the new bot to the
-channels it should serve; Slack does not transfer the old bot's memberships. Once
-replacement is verified, remove the old managed app from Slack to avoid two visible
-QM identities. QM rejects deliveries for the old installation as soon as the new
-credentials are saved. The replacement uses Socket Mode even if the deployment's
-environment previously selected HTTP events.

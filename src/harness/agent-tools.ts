@@ -2,7 +2,7 @@ import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createGrindMeter, grindState } from "./grind.ts";
-import type { RuntimeHandoff, RuntimeRequest } from "./runtime-types.ts";
+import type { HarnessHandoff, RuntimeRequest } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Check, Clone } from "typebox/value";
@@ -16,10 +16,12 @@ import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
+import { redactCommand } from "../sandbox/exec-process-session.ts";
+import { redactSecrets } from "./redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
-import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, goalFloorMeter, goalReport, type GoalRecord } from "./goal.ts";
+import { createGoalRecord, goalFloorMeter, goalReport, type GoalRecord, type GoalVerifier } from "./goal.ts";
 import {
   toolLabelOf,
   toolResultProvenance,
@@ -49,7 +51,7 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
 
 export interface ToolContextRef {
   documents?: DocumentInput[];
-  runtimeHandoff?: RuntimeHandoff;
+  runtimeHandoff?: HarnessHandoff;
   runtimeRunId?: string;
   runtimeActorId?: string;
   runtimeMutationPending?: boolean;
@@ -62,6 +64,7 @@ export interface ToolContextRef {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    summary?: string;
     grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
@@ -87,6 +90,7 @@ export interface ToolContextRef {
   onGapWork?: (work: GapWork) => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
 
@@ -94,9 +98,8 @@ export interface ToolContextRef {
 
   goalRound?: number;
 
-  goalLastBlockedRound?: number;
-
   goalMeter?: import("./grind.ts").GrindMeter;
+  verifyGoal?: GoalVerifier;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string) => boolean;
 }
@@ -325,6 +328,7 @@ export interface AgentToolsOptions {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
+  sandboxCapabilityTtlMs?: number;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
@@ -342,7 +346,7 @@ export type CoreToolOptions = Omit<
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    sandboxResources: config.sandboxResourcesEnabled,
+    sandboxResources: true,
     scratchExec: config.scratchExecEnabled,
     // Availability is checked per turn; Open can be enabled without restarting the harness.
     ownerAuthExec: true,
@@ -352,13 +356,14 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
+    sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,
   };
 }
 
 const CLIENT_TOOL_DEFAULT_TIMEOUT_MS = 10_000;
 const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may have been closed or navigated away.";
 
-const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions"]);
+const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
@@ -378,7 +383,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const processActions = {
     start_process: "start",
     read_process: "poll",
-    write_stdin: "write",
+    write_stdin: "send_input",
     signal_process: "stop",
     list_processes: "list",
     watch_process: "watch",
@@ -407,7 +412,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000) / 1000);
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
-  const capabilityTtlHours = Math.round(SANDBOX_CAPABILITY_TTL_MS / 3_600_000);
+  const capabilityTtlMs = opts?.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
+  const capabilityTtlHours = capabilityTtlMs / 3_600_000;
+  const capabilityExpiry =
+    capabilityTtlMs === 0
+      ? "Two limits: this deployment does not expire those turn tokens, but authorization checks still apply (publish checkpoints to durable Files and retain the file ID for the later turn or cron)"
+      : `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
   const log = async (type: EntryType, payload: unknown, sourceScopeId?: ScopeId | null): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
     const scopeLabel = classifyScopeLabel({
@@ -420,11 +430,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const callId = (payload as { callId?: unknown } | null)?.callId;
       if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
+    if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload)) payload = { ...payload, interrupted: true };
     await ref.emit({ type, payload, scopeLabel });
   };
 
-  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...sandboxLog(payload), callId });
+  const retryMarks = new Map<string, RetryMark>();
+  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
+    const mark = retryMarks.get(callId);
+    return log("tool_call", {
+      ...sandboxLog(payload),
+      callId,
+      ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
+    });
+  };
 
   const resultQueue = createKeyedQueue();
   const quarantinedMessages = new Set<string>();
@@ -592,7 +610,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "the `background` tool to run it detached and poll for the result across turns. " +
     "Always start servers with the background tool, not shell ampersand: inherited output streams can keep execute waiting even after its shell exits. " +
     "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
-    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it.";
+    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it. If a restart or two does not bring the shell back, stop restarting: create a fresh sandbox, set it as the default, and retry there, recovering work from git or Files.";
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
@@ -710,7 +728,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ],
           details: r,
         },
-        r.code !== 0 || r.timedOut,
+        r.timedOut,
         undefined,
         false,
         undefined,
@@ -729,6 +747,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
+      await log("tool_result", {
+        ...sandboxLog({ tool: "execute", ...scopeNote }),
+        callId,
+        isError: true,
+        result: `Command execution failed: ${redactSecrets(errMessage(e))}`,
+      });
       throw e;
     }
   };
@@ -739,11 +763,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const SCRATCH_DURABLE_ERROR =
     '[error] a scratch box cannot be made durable yet — use scope:"scoped" for work that must survive future turns, or drop `durable`.';
   const SCOPED_EPHEMERAL_ERROR =
-    '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for a run that leaves no trace.';
+    '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for disposable local working files.';
   const FILE_SEND_GUIDANCE =
     "The files and apps tools use the default sandbox; execute and background can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
-    "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch and owner are invocation-only. Publish durable code to git and artifacts to Files.";
+    "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn; owner is invocation-only. Publish durable code to git and artifacts to Files.";
 
   const reachScopeDescription =
     (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
@@ -753,7 +777,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
     '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (scratchExec
-      ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens, and NOTHING persists past this turn. Prefer it for heavy self-contained work (crunching fetched material, throwaway experiments, parallel or disk-hungry runs needing no workspace files) — it keeps the sandbox responsive; if the run needs logins, workspace files, or its writes must survive, use scope:"scoped".\n'
+      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, cached logins, or local work that must continue later.\n'
       : "") +
     (ownerAuthExec
       ? "- \"owner\": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
@@ -772,7 +796,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n'
       : "") +
     (scratchExec
-      ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens ($AGENT_API_TOKEN etc. are absent), and NOTHING persists past this turn. Prefer it for heavy self-contained work — crunching or analyzing material you can fetch onto it, throwaway experiments, checks against public code, anything parallel or disk-hungry whose only product is the answer — because it keeps this conversation\'s computer responsive for everything else. Work on THIS conversation\'s workspace (its checkouts, uncommitted changes) and anything needing logins stays scoped; if a scratch run turns out to need those, re-run it with scope:"scoped".\n'
+      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, cached logins, or local work that must continue later.\n'
       : "") +
     "`durable` defaults to true on scoped and false on invocation-only boxes; scoped cannot discard writes, and invocation-only boxes cannot be made durable.\n" +
     FILE_SEND_GUIDANCE +
@@ -876,7 +900,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ],
             {
               description:
-                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and authorized logins; recovery depends on the provider) or "scratch" (blank, instant, credential-free, nothing persists — prefer for heavy self-contained runs needing no logins, workspace files, or follow-up).',
+                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and authorized logins; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
             },
           ),
         ),
@@ -976,7 +1000,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         const verdictLine =
           verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer"
+            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, set it as the default, and retry there"
             : "";
         return recordResult(
           callId,
@@ -1130,9 +1154,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
-      "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
-      "publication-time grants. `public: true` makes the app reachable without sign-in; it is never the default. " +
-      "Use apps action share for subsequent grants. Share the full absolute URL " +
+      "deployment name, not its ID. Publishing is always private to the owner and never changes who can reach an app; " +
+      "grant access separately with apps action share. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
       "Egress is open, " +
@@ -1147,18 +1170,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
       "a panel or extension, and `[]` to turn it back off.",
     parameters: Type.Object({
-      audience: Type.Optional(
-        Type.Array(
-          Type.Object({
-            scope: Type.String({ description: "Scope ID or org." }),
-            permission: Type.Union([Type.Literal("read"), Type.Literal("write")]),
-          }),
-          {
-            description:
-              "Publication-time access grants. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Existing explicit grants survive. Use apps action share for subsequent grants.",
-          },
-        ),
-      ),
       dir: Type.Optional(
         Type.String({
           description:
@@ -1188,12 +1199,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       rollbackTo: Type.Optional(
         Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
       ),
-      public: Type.Optional(
-        Type.Boolean({
-          description:
-            "Explicitly set whether anyone with the link can open the app without signing in. Defaults to private for new apps; omit to preserve the current setting on updates.",
-        }),
-      ),
       alwaysOn: Type.Optional(
         Type.Boolean({
           description:
@@ -1218,7 +1223,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         name: params.name,
       });
       try {
-        const r = await tc.publish({ ...params, share: params.audience } as PublishInput);
+        const r = await tc.publish(params as PublishInput);
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
@@ -1259,8 +1264,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "memory",
     description:
       "Your durable memory of the person or team you work for — the ONE way to read or change it. " +
-      "It is NOT a file: never write it with files action write or shell commands (those land on your computer " +
-      "and are silently lost). It persists across every conversation and surface (continuity — " +
+      "It is NOT a file: writing MEMORY.md with files or the shell does not touch it. It persists across every conversation and surface (continuity — " +
       "you're a colleague who remembers, not a fresh chat each time); this conversation can only " +
       "ever touch its OWN memory, no one else's, by design. " +
       'action="search" finds remembered facts matching every word of `query` (case-insensitive) ' +
@@ -1268,11 +1272,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Every line is loaded into your context on every future turn, so memory is your most " +
       "expensive storage: it is an index, not a datastore. Save pointers to data, never the data " +
       "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
-      "belongs in a file on your computer, with at most one memory line naming that file and what " +
-      "it holds. If a fact is a list that grows, it's a file. Two caveats: files are this " +
+      "belongs in a file written with the files tool, with at most one memory line naming that file and what " +
+      "it holds. If a fact is a list that grows, it's a file. Files are this " +
       "conversation's own (a pointer read from another conversation is a hint of where state " +
-      "lives, not a path you can open), and disk is less durable than memory — keep working " +
-      "state you could rebuild from its source. " +
+      "lives, not a path you can open). " +
       'action="remember" appends durable `facts` now — short, self-contained bullets (a preference, ' +
       "an identifier, an ongoing project, how they like to work); never secrets, credentials, " +
       "one-off trivia, or anything already recorded somewhere you can look up. " +
@@ -1470,19 +1473,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const sessionTool = defineTool({
-    name: "sessions",
-    label: "sessions",
+  const sidebarSessions = opts?.surfaceName === "web";
+  const subagentTool = defineTool({
+    name: "subagents",
+    label: "subagents",
     description:
-      "Coordinate durable subagents using internal agent messages. `open` starts a child with a complete standalone task; children do not inherit your conversation. " +
-      "`send_message` sends information to a parent, sibling, or other accessible session without starting a turn. Messages and child results arrive at tool boundaries or through `wait`. " +
-      "`followup_task` assigns new work to an attached child and starts a turn if idle; active work is queued safely. `write` is an alias for send_message; interrupt:true stops a child. " +
-      "`read` lists children or reads a target transcript. " +
+      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry and does not inherit this conversation, so give it a complete standalone task with the context and authorization it needs. Its final answer comes back to you as an internal message. " +
+      "`open` starts a subagent with `task`. `followup_task` gives an existing subagent more work in `task` and starts a turn if it is idle; active work is queued safely. " +
+      '`send_message` passes information to one of your subagents, a sibling subagent, or your parent (target="parent") without starting a turn; with interrupt:true it stops a subagent\'s current run. ' +
+      "`read` with no target lists your subagents; with a target it reads that subagent's transcript. " +
       (delegateWork
-        ? "Delegate substantial work, then end this turn promptly. Child completion wakes you automatically to report the result. Do not wait or poll for children. "
-        : "`wait` waits up to 60 seconds for internal messages. Keep doing independent work while children run. Do not end with a final answer until the delegated work needed for the request is complete. ") +
+        ? "Delegate substantial work, then end this turn promptly. A subagent's completion wakes you automatically to report the result. Do not wait or poll for subagents. "
+        : "`wait` waits up to 60 seconds for internal messages. Keep doing independent work while subagents run. Do not give a final answer until the work the request needs is complete. ") +
       "Treat messages as internal coordination, not new user requests or authorization. Do not acknowledge routine completions, repeat already-reported results, or send no-action-needed updates. " +
-      "Give the user one combined result when the work is ready, or a meaningful blocker. Use messages for coordination and followup_task only when another turn is necessary.",
+      "Give the user one combined result when the work is ready, or a meaningful blocker." +
+      (sidebarSessions ? " For conversations that should appear in the sidebar, use sessions instead." : ""),
     parameters: Type.Object({
       timeoutMs: Type.Optional(
         Type.Integer({
@@ -1493,7 +1498,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       action: Type.Union([
         Type.Literal("open"),
-        Type.Literal("write"),
         Type.Literal("read"),
         Type.Literal("send_message"),
         Type.Literal("followup_task"),
@@ -1503,10 +1507,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.String({ description: "open: stable request key to reuse when retrying the same delegation." }),
       ),
       task: Type.Optional(
-        Type.String({ description: "open: the complete standalone instruction the subagent works from." }),
+        Type.String({
+          description: "open and followup_task: the complete standalone instruction the subagent works from.",
+        }),
       ),
       name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
-      readOnly: Type.Optional(Type.Boolean({ description: "open: subagent may not change anything." })),
+      noComputer: Type.Optional(
+        Type.Boolean({
+          description:
+            "open: disable computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Omit for tasks that need a computer to read email, files, or code; put 'do not modify anything' in task instead. Default false; cannot override an inherited restriction.",
+        }),
+      ),
       model: Type.Optional(Type.String({ description: "open: model override; fails closed if unavailable." })),
       harness: Type.Optional(Type.String({ description: "open: harness override." })),
       thinkingLevel: Type.Optional(Type.String({ description: "open: reasoning effort override." })),
@@ -1514,18 +1525,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       target: Type.Optional(
         Type.String({
           description:
-            "Message/followup/read target: literal parent, accessible sessionId, or exact child/sibling title. Do not invent filesystem paths such as /root/name. read: omit to list children.",
+            "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's). Do not invent filesystem paths such as /root/name. read: omit to list your subagents.",
         }),
       ),
-      text: Type.Optional(Type.String({ description: "write: the message to deliver." })),
-      interrupt: Type.Optional(Type.Boolean({ description: "write: abort the target's current run instead." })),
+      text: Type.Optional(Type.String({ description: "send_message: the message to deliver." })),
+      interrupt: Type.Optional(
+        Type.Boolean({ description: "send_message: abort the target's current run instead of delivering text." }),
+      ),
       limit: Type.Optional(Type.Integer({ description: "read: max transcript entries to show (default 30)." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       const syscalls = tc?.sessionSyscalls;
       const p = params as {
-        action: "open" | "write" | "read" | "send_message" | "followup_task" | "wait";
+        action: "open" | "read" | "send_message" | "followup_task" | "wait";
         timeoutMs?: number;
         requestId?: string;
         harness?: string;
@@ -1533,7 +1546,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         fastMode?: boolean;
         task?: string;
         name?: string;
-        readOnly?: boolean;
+        noComputer?: boolean;
         model?: string;
         target?: string;
         text?: string;
@@ -1541,10 +1554,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         limit?: number;
       };
       await recordCall(callId, {
-        tool: "sessions",
+        tool: "subagents",
         action: p.action,
         ...(p.task ? { task: p.task } : {}),
         ...(p.name ? { name: p.name } : {}),
+        ...(p.noComputer !== undefined ? { noComputer: p.noComputer } : {}),
         ...(p.target ? { target: p.target } : {}),
         ...(p.text ? { text: p.text } : {}),
         ...(p.interrupt ? { interrupt: true } : {}),
@@ -1552,8 +1566,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (!syscalls) {
         return recordResult(
           callId,
-          { tool: "sessions", action: p.action, error: "unavailable" },
-          text("[error] subagent sessions aren't available on this turn."),
+          { tool: "subagents", action: p.action, error: "unavailable" },
+          text("[error] subagents aren't available on this turn."),
           true,
         );
       }
@@ -1561,7 +1575,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         await syscalls.receive?.(delegateWork ? 0 : (p.timeoutMs ?? 60_000));
         return recordCoreAuthoredResult(
           callId,
-          { tool: "sessions", action: "wait" },
+          { tool: "subagents", action: "wait" },
           text(
             delegateWork
               ? "Mailbox checked. End this turn if no immediate coordination remains; child completion will wake you."
@@ -1577,37 +1591,48 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
           ...(p.fastMode !== undefined ? { fastMode: p.fastMode } : {}),
           ...(p.name ? { name: p.name } : {}),
-          ...(p.readOnly !== undefined ? { readOnly: p.readOnly } : {}),
+          ...(p.noComputer !== undefined ? { readOnly: p.noComputer } : {}),
           ...(p.model ? { model: p.model } : {}),
         });
         if (!result.ok) {
           return recordResult(
             callId,
-            { tool: "sessions", action: "open", error: result.message },
+            { tool: "subagents", action: "open", error: result.message },
             text(`[error] ${result.message}`),
             true,
           );
         }
         return recordResult(
           callId,
-          { tool: "sessions", action: "open", sessionId: result.sessionId, title: result.title },
+          { tool: "subagents", action: "open", sessionId: result.sessionId, title: result.title },
           text(
-            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use sessions wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
+            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
           ),
         );
       }
-      if (p.action === "write" || p.action === "send_message" || p.action === "followup_task") {
+      if (p.action === "send_message" || p.action === "followup_task") {
+        const followup = p.action === "followup_task";
+        const body = followup ? p.task : p.text;
+        if (followup && p.interrupt) {
+          const message = "interrupt applies to send_message, not followup_task.";
+          return recordResult(
+            callId,
+            { tool: "subagents", action: p.action, error: message },
+            text(`[error] ${message}`),
+            true,
+          );
+        }
         const result = await syscalls.write({
           requestId: callId,
-          followup: p.action === "followup_task",
+          followup,
           target: p.target ?? "",
-          ...(p.text ? { text: p.text } : {}),
+          ...(body ? { text: body } : {}),
           ...(p.interrupt ? { interrupt: true } : {}),
         });
         if (!result.ok) {
           return recordResult(
             callId,
-            { tool: "sessions", action: p.action, error: result.message },
+            { tool: "subagents", action: p.action, error: result.message },
             text(`[error] ${result.message}`),
             true,
           );
@@ -1622,7 +1647,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordResult(
           callId,
           {
-            tool: "sessions",
+            tool: "subagents",
             action: p.action,
             sessionId: result.sessionId,
             title: result.title,
@@ -1638,7 +1663,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (!result.ok) {
         return recordResult(
           callId,
-          { tool: "sessions", action: "read", error: result.message },
+          { tool: "subagents", action: "read", error: result.message },
           text(`[error] ${result.message}`),
           true,
         );
@@ -1649,10 +1674,119 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
         return recordResult(
           callId,
-          { tool: "sessions", action: "read", children: result.children.length },
-          text(lines.length ? lines.join("\n") : "[no subagent sessions opened from this conversation]"),
+          { tool: "subagents", action: "read", children: result.children.length },
+          text(lines.length ? lines.join("\n") : "[no subagents opened from this conversation]"),
         );
       }
+      return recordResult(
+        callId,
+        { tool: "subagents", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
+        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
+      );
+    },
+  });
+
+  const sessionTool = defineTool({
+    name: "sessions",
+    label: "sessions",
+    description:
+      "Work with sessions: the conversations people see in the web sidebar, within this same context. Subagents are not sessions; use the subagents tool for them. " +
+      "`list` shows the sessions here that you can see. `read` shows a session's recent transcript. " +
+      "`send_message` delivers a private note to another session without starting a turn; it arrives there as internal context, not as a request from a person. " +
+      "`new` starts a clean session whose first message is `text`; it inherits nothing from this conversation. " +
+      "`fork` copies this conversation's visible history into a new session and, if you give `text`, runs it there as the next message. " +
+      "New and forked sessions appear in the sidebar under the person's name, so create one only when the person attending this turn asks for it; both are refused on automated turns.",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("list"),
+        Type.Literal("read"),
+        Type.Literal("send_message"),
+        Type.Literal("new"),
+        Type.Literal("fork"),
+      ]),
+      target: Type.Optional(Type.String({ description: "read and send_message: a sessionId from list." })),
+      text: Type.Optional(
+        Type.String({
+          description:
+            "send_message: the note to deliver. new: the new session's first message (required). fork: an optional next message to run in the fork.",
+        }),
+      ),
+      title: Type.Optional(Type.String({ description: "new and fork: optional sidebar title." })),
+      limit: Type.Optional(Type.Integer({ description: "read: max transcript entries to show (default 30)." })),
+    }),
+    async execute(callId, params) {
+      const syscalls = ref.current?.sessionSyscalls;
+      const p = params as {
+        action: "list" | "read" | "send_message" | "new" | "fork";
+        target?: string;
+        text?: string;
+        title?: string;
+        limit?: number;
+      };
+      await recordCall(callId, {
+        tool: "sessions",
+        action: p.action,
+        ...(p.target ? { target: p.target } : {}),
+        ...(p.text ? { text: p.text } : {}),
+        ...(p.title ? { name: p.title } : {}),
+      });
+      const fail = (message: string) =>
+        recordResult(callId, { tool: "sessions", action: p.action, error: message }, text(`[error] ${message}`), true);
+      if (!syscalls?.list || !syscalls.start) return fail("sessions aren't available on this turn.");
+      if (p.action === "list") {
+        const result = await syscalls.list();
+        if (!result.ok) return fail(result.message);
+        const lines = result.sessions.map(
+          (s) => `- ${s.title} (${s.sessionId}) — ${s.status}${s.current ? " — this conversation" : ""}`,
+        );
+        return recordResult(
+          callId,
+          { tool: "sessions", action: "list", count: result.sessions.length },
+          text(lines.length ? lines.join("\n") : "[no sessions here]"),
+        );
+      }
+      if (p.action === "new" || p.action === "fork") {
+        const result = await syscalls.start({
+          fork: p.action === "fork",
+          ...(p.text ? { text: p.text } : {}),
+          ...(p.title ? { title: p.title } : {}),
+        });
+        if (!result.ok) return fail(result.message);
+        let outcome = "";
+        if (result.refused) outcome = `, but your message was refused there: ${result.refused}`;
+        else if (p.text) outcome = " and is working on the message you gave it";
+        return recordResult(
+          callId,
+          { tool: "sessions", action: p.action, sessionId: result.sessionId, title: result.title },
+          text(
+            `${p.action === "fork" ? "Forked this conversation into" : "Started"} session "${result.title}" (sessionId ${result.sessionId}). It appears in the sidebar${outcome}.`,
+          ),
+        );
+      }
+      if (!p.target?.trim()) return fail(`${p.action} requires \`target\`: a sessionId from list.`);
+      if (p.action === "send_message") {
+        if (!p.text?.trim()) return fail("send_message requires `text`: the note to deliver.");
+        const result = await syscalls.write({ requestId: callId, peer: true, target: p.target, text: p.text });
+        if (!result.ok) return fail(result.message);
+        return recordResult(
+          callId,
+          {
+            tool: "sessions",
+            action: p.action,
+            sessionId: result.sessionId,
+            title: result.title,
+            delivered: result.delivered,
+          },
+          text(`Message to "${result.title}" queued internally without starting a turn.`),
+        );
+      }
+      const result = await syscalls.read({
+        peer: true,
+        target: p.target,
+        ...(p.limit !== undefined ? { limit: p.limit } : {}),
+      });
+      if (!result.ok) return fail(result.message);
+      if (result.mode === "children") return fail("read requires `target`: a sessionId from list.");
       return recordResult(
         callId,
         { tool: "sessions", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
@@ -1683,13 +1817,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
       `that finishes within ${execCeilingSec}s, just use \`execute\`. Available on the default sandbox or an authorized explicit sandbox_id; ` +
       "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
-      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — checkpoint your progress to the workspace and continue from a later turn or a cron), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
+      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. ${capabilityExpiry}, and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
       "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +
       "`glab auth login`, `gcloud auth login`, and anything that prints a verification URL/code then " +
       "blocks waiting on a human) belong here, NOT in `execute`. Run them with action=start, read the " +
       "URL/code from the returned output and relay it to the user, then `watch` (or `poll`) until the " +
       "command exits — that's when the login is done. If a prompt needs an answer typed in, use " +
-      "action=write. Never run a login with `execute` (it blocks the whole turn) and never `stop`/kill a " +
+      "action=send_input. Never run a login with `execute` (it blocks the whole turn) and never `stop`/kill a " +
       "login mid-flight — that throws away the pending approval and wedges it. The platform captures the " +
       "resulting credential into your keychain automatically; you don't save anything yourself.",
     parameters: Type.Object({
@@ -1697,7 +1831,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         [
           Type.Literal("start"),
           Type.Literal("poll"),
-          Type.Literal("write"),
+          Type.Literal("send_input"),
           Type.Literal("stop"),
           Type.Literal("list"),
           Type.Literal("watch"),
@@ -1705,18 +1839,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ],
         {
           description:
-            "start a long command, poll its output by id, write to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
+            "start a long command, poll its output by id, send_input to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
         },
       ),
       purpose: Type.Optional(
-        Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Start preview server')." }),
+        Type.String({
+          description:
+            "Short job description, about 5 words (e.g. 'App preview server'). Required for start; displayed to the user instead of code.",
+        }),
       ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
-      process_id: Type.Optional(Type.String({ description: "poll/write/stop/watch only: the id start returned." })),
+      process_id: Type.Optional(
+        Type.String({ description: "poll/send_input/stop/watch only: the id start returned." }),
+      ),
       data: Type.Optional(
         Type.String({
           description:
-            "write only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
+            "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
         }),
       ),
       since_cursor: Type.Optional(
@@ -1791,7 +1930,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 text("[error] background start requires `command`."),
                 true,
               );
+            if (!params.purpose?.trim())
+              return recordResult(
+                callId,
+                { tool: "background", action: params.action, error: "start requires purpose" },
+                text("[error] background start requires `purpose`: a short description of the job, about 5 words."),
+                true,
+              );
             const r = await tc.backgroundStart(params.command, {
+              purpose: params.purpose,
               ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
               ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
             });
@@ -1949,19 +2096,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               );
             }
           }
-          case "write": {
+          case "send_input": {
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", action: params.action, error: "write requires process_id" },
-                text("[error] background write requires `process_id`."),
+                { tool: "background", action: params.action, error: "send_input requires process_id" },
+                text("[error] background send_input requires `process_id`."),
                 true,
               );
             if (params.data === undefined)
               return recordResult(
                 callId,
-                { tool: "background", action: params.action, error: "write requires data" },
-                text("[error] background write requires `data` (the text to send to the job's stdin)."),
+                { tool: "background", action: params.action, error: "send_input requires data" },
+                text("[error] background send_input requires `data` (the text to send to the job's stdin)."),
                 true,
               );
             const r = await tc.backgroundWrite(params.process_id, params.data);
@@ -1989,7 +2136,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                       ? jobs
                           .map(
                             (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.command}`,
+                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
                           )
                           .join("\n")
                       : "(no background jobs)",
@@ -2034,7 +2181,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const processFieldDescription = (description: string) =>
     description.replace(
-      /\b(start|poll|write|stop|watch|unwatch)\b/g,
+      /\b(start|poll|send_input|stop|watch|unwatch)\b/g,
       (action) => Object.entries(processActions).find(([, legacy]) => legacy === action)?.[0] ?? action,
     );
   const schemas = (tool: ToolDefinition) => (tool.parameters as { properties: Record<string, TSchema> }).properties;
@@ -2054,7 +2201,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     purpose: Type.Optional(
       Type.String({
         description:
-          "Human-readable intent label, at most 4 words (e.g. 'Check Python version'). Describe the purpose, not the code. Required for exec and management actions; optional for process actions.",
+          "Human-readable intent label, about 5 words (e.g. 'App preview server'). Describe what the job does, not the code. Required for exec, management actions, and start_process; optional for other process actions.",
       }),
     ),
     timeout_seconds: Type.Optional(
@@ -2089,7 +2236,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     set_default: ["purpose", "sandbox_id"],
     retire: ["purpose", "sandbox_id"],
     exec: ["purpose", "command"],
-    start_process: ["command"],
+    start_process: ["purpose", "command"],
     read_process: ["process_id"],
     write_stdin: ["process_id", "data"],
     signal_process: ["process_id"],
@@ -2114,7 +2261,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description
       .replaceAll("action=start", "action=start_process")
       .replaceAll("action=poll", "action=read_process")
-      .replaceAll("action=write", "action=write_stdin")
+      .replaceAll("action=send_input", "action=write_stdin")
       .replaceAll("action=stop", "action=signal_process")
       .replaceAll("action=list", "action=list_processes")
       .replaceAll("action=watch", "action=watch_process")
@@ -2215,7 +2362,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "{everyMs} is ONLY for genuine sub-day polling where wall-clock time does not matter (first run one " +
       "interval from now, not immediately; an everyMs of 24h+ is rejected — use {cron,timezone} instead), or " +
       '{firstFireAt} (epoch ms; fires once then auto-cancels — use Date.now() for "send now").\n' +
-      "DELIVERY: by default a cron posts back to this conversation. To deliver elsewhere, set `recipient` " +
+      "DELIVERY: by default a cron posts back to this conversation — the surface where you are talking now (a web session, Slack DM, or thread). " +
+      "Keep that default for watches and follow-ups on work started here (including delegated sessions) unless the person names another destination; don't pick a DM just because it is a DM. " +
+      "To deliver elsewhere, set `recipient` " +
       "(a teammate's name → a DM; core resolves the name and the result echoes who it matched), `channel` " +
       "(a channel name → that channel), `participants` (a list of member ids → a group DM, which has no name; " +
       "you're added automatically; the group must already exist — post to it once with the slack tool's " +
@@ -2244,8 +2393,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "action=patch edits IN PLACE (rename via `title`, change `schedule`/`task`/`text`, `enabled:false` " +
       "pauses, `enabled:true` resumes, `archived:true` archives). `task` is the standing instructions every " +
       "fire receives — patch it only to change what future fires are told to do; durable run-state (notes, " +
-      "workarounds, checkpoints a future fire needs) lives in files on the cron's workspace disk, not in " +
-      "`task`. action=delete removes it for good; " +
+      "workarounds, checkpoints a future fire needs) belongs in this conversation's durable Files via the available Files API, not in " +
+      "`task` or only on sandbox disk. Confirm publication succeeds, use a cron-specific filename, and leave the file ID in action=note for retrieval with GET /v1/files/:id/content. Small progress state can live directly in the note; never store credentials there. If publication is unavailable, report it and retain needed local state on a scoped computer. Keep tasks that need existing workspace files on that computer until their state has been migrated and verified. action=delete removes it for good; " +
       "action=run fires it once now (no effect on a paused cron) and is refused while a fire of that cron is " +
       "still running — repeating it never double-fires; action=disable pauses it.\n" +
       "action=note (id + note, running inside a cron fire) leaves a short shift-change note the NEXT fire " +
@@ -2333,6 +2482,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       destinationKey: Type.Optional(
         Type.String({ description: 'create/retarget: a key from the "Where scheduled tasks post" menu.' }),
+      ),
+      session: Type.Optional(
+        Type.Boolean({
+          description:
+            "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
+        }),
       ),
       unfurlLinks: Type.Optional(
         Type.Boolean({
@@ -2436,6 +2591,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
             ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
+            ...(params.session !== undefined ? { session: params.session } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {
@@ -2566,6 +2722,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
+            ...(params.session !== undefined ? { session: params.session } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
@@ -2809,7 +2966,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "guidance",
     label: "guidance",
     description:
-      "Read or rewrite your durable guidance — the standing instructions you carry into " +
+      "Read or change your durable guidance — the standing instructions you carry into " +
       "future turns. Two scopes: `channel` = how you behave in THIS channel (when to chime " +
       "in unprompted, where replies land, ongoing 'whenever X, do Y' orders — evaluated " +
       "against every new message automatically, so never build a poll or timer for these); " +
@@ -2819,14 +2976,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "context it is shared by ALL of that person's sessions, not tied to the session that " +
       "wrote it. Never store session pins or 'for this session' notes here: ALL pinning goes " +
       "through the pins self-API (POST /v1/pins), which routes by context — the session's own " +
-      "pins in the web UI, native pinning in Slack. `write` REPLACES that scope's entire " +
-      "guidance with `content` — " +
-      "include everything that should remain. Org-wide policy is always layered above and " +
+      "pins in the web UI, native pinning in Slack. `edit` swaps one exact passage `old` for `new` " +
+      "and fails unless `old` appears exactly once in that scope's guidance; prefer it for small changes. " +
+      "`replace` REPLACES that scope's entire guidance with `content` — include everything that " +
+      "should remain. Org-wide policy is always layered above and " +
       "cannot be overridden. Don't store one-off facts here — that's what memory is for.",
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("read"), Type.Literal("write")]),
+      action: Type.Union([Type.Literal("read"), Type.Literal("replace"), Type.Literal("edit")]),
       scope: Type.Optional(Type.Union([Type.Literal("channel"), Type.Literal("conversation")])),
-      content: Type.Optional(Type.String()),
+      content: Type.Optional(Type.String({ description: "replace: the full new guidance for the scope." })),
+      old: Type.Optional(
+        Type.String({ description: "edit: an exact passage that appears once in the scope's current guidance." }),
+      ),
+      new: Type.Optional(Type.String({ description: "edit: the text that takes the place of `old`." })),
       ambientEnabled: Type.Optional(
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
@@ -2857,6 +3019,28 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         action: params.action,
         ...(params.scope ? { scope: params.scope } : {}),
       });
+
+      const editError = (message: string) =>
+        recordResult(
+          callId,
+          { tool: "guidance", scope, error: message },
+          text(`[error] guidance edit ${message}.`),
+          true,
+        );
+      const applyEdit = (current: string): { ok: true; next: string } | { ok: false; message: string } => {
+        if (typeof params.old !== "string" || !params.old || typeof params.new !== "string")
+          return { ok: false, message: "requires `old` (an exact passage of the current guidance) and `new`" };
+        const at = current.indexOf(params.old);
+        if (at < 0)
+          return {
+            ok: false,
+            message:
+              "found no exact match for `old` in this scope's own guidance; org policy layered above it cannot be edited",
+          };
+        if (current.indexOf(params.old, at + 1) >= 0)
+          return { ok: false, message: "found `old` more than once; include more surrounding text so it is unique" };
+        return { ok: true, next: current.slice(0, at) + params.new + current.slice(at + params.old.length) };
+      };
 
       let scope = params.scope;
       let channel: Awaited<ReturnType<typeof tc.getStandingOrder>> | undefined;
@@ -2894,18 +3078,27 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             (channel!.orders.trim() ? channel!.orders : "[no channel guidance set]") + ambient + ledger + note;
           return recordResult(callId, { tool: "guidance", scope, ok: true }, text(body));
         }
-        if (typeof params.content !== "string" && params.bots === undefined && params.ambientEnabled === undefined) {
+        let orders = typeof params.content === "string" ? params.content : undefined;
+        if (params.action === "edit") {
+          const edited = applyEdit(channel!.orders);
+          if (!edited.ok) return editError(edited.message);
+          orders = edited.next;
+        } else if (typeof orders !== "string" && params.bots === undefined && params.ambientEnabled === undefined) {
           return recordResult(
             callId,
             { tool: "guidance", scope, error: "content, bots, or ambientEnabled required" },
             text(
-              "[error] guidance write needs `content` (the full new channel guidance), `bots`, and/or `ambientEnabled`.",
+              "[error] guidance replace needs `content` (the full new channel guidance), `bots`, and/or `ambientEnabled`.",
             ),
             true,
           );
         }
-        const orders = typeof params.content === "string" ? params.content : channel!.orders;
-        const r = await tc.setStandingOrder(orders, params.bots, params.ambientEnabled);
+        const r = await tc.setStandingOrder(
+          orders,
+          params.bots,
+          params.ambientEnabled,
+          params.action === "edit" ? channel!.orders : undefined,
+        );
         if (!r.ok)
           return recordResult(callId, { tool: "guidance", scope, ok: false }, text(`[error] ${r.message}`), true);
         return recordResult(callId, { tool: "guidance", scope, ok: true }, text("[channel guidance updated]"));
@@ -2929,15 +3122,24 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           text(r.effectiveSoul ? r.effectiveSoul : "(no standing instructions set)"),
         );
       }
-      if (typeof params.content !== "string") {
+      let content = params.content;
+      let expectedVersion: number | undefined;
+      if (params.action === "edit") {
+        const current = tc.soulRead();
+        if (isUnavailable(current)) return unavailable(callId, "guidance");
+        const edited = applyEdit(current.soul ?? "");
+        if (!edited.ok) return editError(edited.message);
+        content = edited.next;
+        expectedVersion = current.soulVersion;
+      } else if (typeof content !== "string") {
         return recordResult(
           callId,
           { tool: "guidance", scope, error: "content required" },
-          text("[error] guidance write requires `content` (the full new standing instructions)."),
+          text("[error] guidance replace requires `content` (the full new standing instructions)."),
           true,
         );
       }
-      const r = await tc.soulWrite(params.content);
+      const r = await tc.soulWrite(content, expectedVersion);
       if (isUnavailable(r)) return unavailable(callId, "guidance");
       if (!r.ok)
         return recordResult(callId, { tool: "guidance", scope, error: r.code }, text(`[error] ${r.message}`), true);
@@ -3274,8 +3476,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "and only back to each channel's coverage date, so it can miss both very recent and older messages. " +
             "`slack` runs Slack's own full-history search AS THE ASKING PERSON, via their connected Slack login — it sees " +
             "exactly what they can see, including their own DMs and private channels (never anyone else's). Retry with " +
-            "`slack` whenever the mirror comes up empty; if the asker hasn't connected Slack, the result says where they " +
-            "can connect it themselves. A message neither lens can see may still exist — say what you couldn't search, don't declare it nonexistent. " +
+            "`slack` when the mirror and this conversation's own history both come up empty; reading the conversation needs no personal login. " +
+            "A message neither lens can see may still exist — say what you couldn't search, don't declare it nonexistent. " +
             "In a channel or group, hits from the asker's DMs or private channels are for their eyes: don't quote that content to the room — acknowledge you found it and take it to their DM.",
         }),
       ),
@@ -3624,24 +3826,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const staySilent = defineTool({
-    name: "stay_silent",
-    label: "stay_silent",
-    description:
-      "Explicitly end this turn without posting anything. Only valid when you were addressed directly " +
-      "and have decided not to reply — give a one-line reason (it is logged, never shown).",
-    parameters: Type.Object({
-      reason: Type.String(),
-    }),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "stay_silent", reason: params.reason });
-      const r = await tc.staySilent(params.reason);
-      return recordResult(callId, { tool: "stay_silent", ok: true }, text(r.message));
-    },
-  });
-
   const attach = defineTool({
     name: "attach",
     label: "Attach",
@@ -3677,10 +3861,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "finish_silently",
     label: "finish_silently",
     description:
-      "End this turn immediately without sending anything — the turn stops at this call. ONLY for a " +
-      "scheduled background fire (a cron or poll check) that found nothing worth reporting — for a " +
-      'poll, silence is the success case, so call this instead of sending a "nothing to report" ' +
-      "note. On a turn where a person is waiting for your reply this does nothing — just answer.",
+      "Ends this turn silently. Use on surface turns when choosing not to reply at all, and on " +
+      "scheduled background fires with nothing worth reporting. After posting a reply, just stop; " +
+      "this is not needed. Keeps the audit log and any messages already posted. " +
+      "On a direct human turn without surface tools this does nothing — just answer.",
     parameters: Type.Object({
       reason: Type.Optional(
         Type.String({
@@ -3690,13 +3874,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
     }),
     async execute(callId, params) {
-      if (!ref.pollFire) {
+      if (!ref.pollFire && !surfaceTools) {
         await recordCall(callId, { tool: "finish_silently", ...(params.reason ? { reason: params.reason } : {}) });
         return recordResult(
           callId,
           { tool: "finish_silently", noop: "not_a_poll_fire" },
           text(
-            "[no-op] finish_silently only applies to scheduled background fires; a person is waiting on this turn — just reply.",
+            "[no-op] finish_silently only applies to surface turns or scheduled background fires; a person is waiting on this turn — just reply.",
           ),
           true,
         );
@@ -3707,7 +3891,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return await recordResult(
           callId,
           { tool: "finish_silently", silent: true },
-          { ...text("Ending this turn silently — nothing will be delivered."), terminate: true },
+          { ...text("Turn ended without a closing reply."), terminate: true },
         );
       } catch (e) {
         ref.silentRequested = false;
@@ -3770,15 +3954,41 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
+  const GOAL_EVIDENCE_FILES = 5;
+  const GOAL_EVIDENCE_FILE_CHARS = 20_000;
+  async function goalEvidenceFiles(
+    tc: typeof ref.current,
+    paths: readonly string[] | undefined,
+    signal?: AbortSignal,
+  ): Promise<string[]> {
+    const out: string[] = [];
+    for (const path of (paths ?? []).slice(0, GOAL_EVIDENCE_FILES)) {
+      const content = tc
+        ? await tc.read(path, signal).then(
+            (r) => r.content,
+            () => null,
+          )
+        : null;
+      let body = content ?? "[missing: no such file]";
+      if (body.length > GOAL_EVIDENCE_FILE_CHARS)
+        body = `${body.slice(0, GOAL_EVIDENCE_FILE_CHARS)}\n[truncated at ${GOAL_EVIDENCE_FILE_CHARS} of ${body.length} chars]`;
+      out.push(`<file path="${path.replace(/"/g, "")}">\n${body}\n</file>`);
+    }
+    return out;
+  }
+
   const createGoal = defineTool({
     name: "create",
     label: "create",
     description:
-      "Register a goal for this session — ONLY when the user explicitly asks for sustained, self-directed work " +
-      '("grind on X for 30 minutes", "keep going until the tests are green", "work through this list"); never infer ' +
-      "one from an ordinary request. Once registered the harness enforces it: trying to end a reply while the goal " +
-      "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Close it by " +
-      'verifiably completing it (goal action update "complete") or, after repeated genuine impasses, marking it blocked. ' +
+      "Register a goal for this session when the user explicitly asks for sustained, self-directed work " +
+      '("grind on X for 30 minutes", "do 20 minutes of research", "keep going until the tests are green"); never infer ' +
+      "one from an ordinary request. A request that names a duration or amount of work IS such a request: create the goal " +
+      "FIRST, before doing any of the work, with the floor set to exactly the amount the user named (20 minutes = " +
+      "minMs 1200000; never subtract time already spent). Do this even when the task looks hard, slow or impossible: " +
+      "the user asked for the effort, so create the goal and spend it rather than explaining why you will stop. Once registered the harness enforces it: trying to end a reply while the goal " +
+      "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
+      'when the work is verifiably done, request completion (goal action update "complete"); a fresh verifier decides. ' +
       "Fails if an unfinished goal exists.",
     parameters: Type.Object({
       objective: Type.String({
@@ -3810,9 +4020,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "create", error: "goal_exists" },
-          text(
-            "A goal is already registered (active or paused). Resume, complete, or block it with goal action update first — goal action get shows it.",
-          ),
+          text("A goal is already registered (active or paused) — goal action get shows it."),
           true,
         );
       }
@@ -3822,7 +4030,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           objective: p.objective,
           ...(p.floor ? { floor: p.floor } : {}),
           ...(p.token_cap !== undefined ? { capTokens: p.token_cap } : {}),
-          source: "tool",
         });
       } catch (e) {
         return recordCoreAuthoredResult(
@@ -3864,126 +4071,114 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "update",
     label: "update",
     description:
-      'Close, pause, or resume the goal. status "complete" ONLY when the objective is achieved and verified against ' +
-      'current evidence. status "blocked" ONLY at a genuine impasse that has recurred across ' +
-      `${GOAL_BLOCKED_MIN_ROUNDS} separate continuation rounds — never because the work is hard, slow, or unclear. ` +
-      'status "paused" suspends enforcement (the user asked to set it aside; a halted turn also pauses it); ' +
-      'status "active" resumes a paused goal.',
+      'Request completion of the goal. Set to "complete" only when the objective has actually been achieved and no ' +
+      "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
+      "you are stopping work. An independent fresh-context verifier reads only the objective, your note, and any " +
+      "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
+      "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
+      'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
+      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap.",
     parameters: Type.Object({
-      status: Type.Union([
-        Type.Literal("complete"),
-        Type.Literal("blocked"),
-        Type.Literal("paused"),
-        Type.Literal("active"),
-      ]),
-      note: Type.Optional(
-        Type.String({ description: "complete: what evidence proves it. blocked: the exact impasse (required)." }),
+      status: Type.Union([Type.Literal("complete"), Type.Literal("resume")]),
+      note: Type.String({
+        description:
+          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume: quote the user's request to resume.",
+      }),
+      files: Type.Optional(
+        Type.Array(Type.String(), {
+          maxItems: GOAL_EVIDENCE_FILES,
+          description: "Workspace paths of the deliverables; the verifier reads them directly.",
+        }),
       ),
     }),
     async execute(callId, params) {
-      const p = params as { status: "complete" | "blocked" | "paused" | "active"; note?: string };
+      const p = params as { status?: "complete" | "resume"; note: string; files?: string[] };
+      const status = p.status === "resume" ? "resume" : "complete";
       await recordCall(callId, {
         tool: "goal",
         action: "update",
-        status: p.status,
+        status,
         ...(p.note ? { note: p.note } : {}),
       });
       const goal = ref.goal;
-      if (!goal || (goal.status !== "active" && goal.status !== "paused")) {
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", error: "no_active_goal" },
-          text("No active or paused goal to update."),
-          true,
-        );
-      }
-      if (p.status === "active") {
-        if (goal.status !== "paused") {
+      if (status === "resume") {
+        if (goal?.status !== "paused") {
           return recordCoreAuthoredResult(
             callId,
             { tool: "goal", action: "update", error: "not_paused" },
-            text("The goal is already active."),
+            text(goal?.status === "active" ? "The goal is already active." : "No paused goal to resume."),
             true,
           );
         }
-        goal.status = "active";
-        goal.updatedAt = Date.now();
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", goal },
-          text("Goal resumed. It is enforced again; keep working toward it."),
-        );
-      }
-      if (p.status === "paused") {
-        goal.status = "paused";
-        goal.updatedAt = Date.now();
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", goal },
-          text('Goal paused. Enforcement is off until it is resumed with goal action update status "active".'),
-        );
-      }
-      if (goal.status === "paused") {
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", error: "paused" },
-          text('The goal is paused. Resume it first (goal action update status "active") before closing it.'),
-          true,
-        );
-      }
-      if (p.status === "blocked") {
-        const reason = p.note?.trim();
-        if (!reason) {
+        // Only a person's own message can lift a pause the person put there;
+        // crons, webhooks, ambient and delegated wakes cannot.
+        if (ref.current?.humanTurn !== true) {
           return recordCoreAuthoredResult(
             callId,
-            { tool: "goal", action: "update", error: "blocked_needs_reason" },
-            text("Blocking requires a note naming the exact impasse."),
-            true,
-          );
-        }
-        const round = ref.goalRound ?? 0;
-        if (ref.goalLastBlockedRound !== round) {
-          ref.goalLastBlockedRound = round;
-          goal.blockedStreak += 1;
-          goal.blockedReason = reason;
-          goal.updatedAt = Date.now();
-        }
-        if (goal.blockedStreak < GOAL_BLOCKED_MIN_ROUNDS) {
-          return recordCoreAuthoredResult(
-            callId,
-            { tool: "goal", action: "update", error: "blocked_audit", streak: goal.blockedStreak },
+            { tool: "goal", action: "update", error: "human_required" },
             text(
-              `Blocked claim ${goal.blockedStreak}/${GOAL_BLOCKED_MIN_ROUNDS} recorded — not accepted yet. ` +
-                "Attack the impasse differently this round; if the SAME impasse recurs, claim blocked again next round.",
+              "Only the user can resume a paused goal, by asking in their own message; this run was not started by one. The goal stays paused.",
             ),
             true,
           );
         }
-        goal.status = "blocked";
-        goal.updatedAt = Date.now();
+        goal.status = "active";
+        goal.updatedAt = goal.activeSince = Date.now();
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
-          text("Goal marked blocked. Tell the user the exact impasse and what would unblock it."),
+          text("The goal is active again and enforced as before. Continue working toward it."),
         );
       }
-      let floorNote = "";
-      if (goal.floor) {
-        const meter = ref.goalMeter;
-        if (meter) {
-          const { grindState } = await import("./grind.ts");
-          const state = grindState(goal.floor, goalFloorMeter(goal, meter));
-          if (!state.met)
-            floorNote = ` The work floor is not met yet (${state.text}); expect keep-going prompts until it is — spend them on adjacent, genuinely useful work.`;
-        }
+      if (goal?.status !== "active") {
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "update", error: "no_active_goal" },
+          text(
+            goal?.status === "paused"
+              ? "The goal is paused by the user. Only the user can resume it, by asking to."
+              : "No active goal to complete.",
+          ),
+          true,
+        );
       }
+      if (goal.floor) {
+        const state = grindState(goal.floor, goalFloorMeter(goal, ref.goalMeter ?? createGrindMeter()));
+        if (!state.met)
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "floor_unmet", goal },
+            text(
+              `The work floor is not met yet (${state.text}); the goal stays active and cannot be completed before then. Keep working: verify the result more deeply, harden it, or go further on the objective.`,
+            ),
+            true,
+          );
+      }
+      const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal))].join("\n");
+      const verdict = ref.verifyGoal
+        ? await ref.verifyGoal(goal.objective, evidence).catch((e: unknown) => ({
+            complete: false,
+            reasons: `the verifier failed (${errMessage(e)}); request completion again`,
+          }))
+        : { complete: false, reasons: "no independent verifier is available on this runtime; keep working" };
+      if (!verdict.complete) {
+        goal.verifierFeedback = verdict.reasons;
+        goal.updatedAt = Date.now();
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "update", error: "verifier_rejected", goal },
+          text(`The verifier did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`),
+          true,
+        );
+      }
+      delete goal.verifierFeedback;
       goal.status = "complete";
       goal.updatedAt = Date.now();
-      if (p.note) goal.completionNote = p.note;
+      goal.completionNote = p.note;
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "update", goal },
-        text(`Goal marked complete. Report the outcome (and evidence) to the user.${floorNote}`),
+        text(`The verifier accepted completion; the goal is complete. Report the outcome (and evidence) to the user.`),
       );
     },
   });
@@ -4074,6 +4269,27 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
     );
 
+  const context = defineTool({
+    name: "context",
+    label: "context",
+    description:
+      "Reduce this conversation's model context without calling a summarizer. compact with mode recent keeps bounded recent entries, a saved summary if it fits, and structured goal state. Stored history is not deleted. This stops the current segment and resumes the unfinished request; do not repeat completed actions. Call this by itself after other tools finish.",
+    parameters: Type.Object({ action: Type.Literal("compact"), mode: Type.Literal("recent") }),
+    async execute(callId, params) {
+      await recordCall(callId, { tool: "context", ...params });
+      const result = await recordCoreAuthoredResult(
+        callId,
+        { tool: "context", ...params, ok: true },
+        {
+          ...text("Recent-context recovery requested. Continue from recorded results after the context is reduced."),
+          terminate: true,
+        },
+      );
+      ref.runtimeHandoff = { context: "recent" };
+      return result;
+    },
+  });
+
   const runtime = defineTool({
     name: "runtime",
     label: "runtime",
@@ -4095,14 +4311,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const request = params as RuntimeRequest;
       await recordCall(callId, { tool: "runtime", ...request });
-      if (
-        request.action !== "get" &&
-        ref.goal &&
-        (ref.goal.status === "active" ||
-          ref.goal.status === "paused" ||
-          (ref.goal.floor &&
-            !grindState(ref.goal.floor, goalFloorMeter(ref.goal, ref.goalMeter ?? createGrindMeter())).met))
-      ) {
+      if (request.action !== "get" && ref.goal && (ref.goal.status === "active" || ref.goal.status === "paused")) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "runtime", error: "goal_in_progress" },
@@ -4147,7 +4356,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     memory,
     history,
     ...(!opts?.sandboxResources && !delegateWork ? [background] : []),
-    ...(opts?.sessionTools === false ? [] : [sessionTool]),
+    ...(opts?.sessionTools === false ? [] : [subagentTool, ...(sidebarSessions ? [sessionTool] : [])]),
     sandbox,
     registerLogin,
     ...(controlTools
@@ -4164,20 +4373,77 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ]
       : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
-    ...(surfaceTools ? [surface, staySilent] : [attach, finishSilently]),
+    ...(surfaceTools ? [surface] : [attach]),
+    finishSilently,
     resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
     runtime,
+    context,
     ...mcpTools,
     ...clientTools,
   ];
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
   return active.map((t) =>
-    withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+    withRetrySafety(
+      withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+      retryMarks,
+    ),
   );
 }
 
-const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "stay_silent"]);
+const RETRY_SAFE_FIELD = "retrySafe";
+
+const RETRY_SAFE_SCHEMA = Type.Optional(
+  Type.Boolean({
+    description:
+      "true if re-running this exact call is harmless (reads, searches, idempotent writes) so the platform may re-run it after an interruption; false if it would duplicate a side effect (sending a message, charging, creating a record).",
+  }),
+);
+const RERUN_INPUT_MAX_CHARS = 4_000;
+
+interface RetryMark {
+  safe: boolean;
+  rerun?: { tool: string; input: Record<string, unknown> };
+}
+
+function withRetrySafeField(parameters: unknown): unknown | null {
+  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return null;
+  if (RETRY_SAFE_FIELD in parameters.properties) return null;
+  return { ...parameters, properties: { ...parameters.properties, [RETRY_SAFE_FIELD]: RETRY_SAFE_SCHEMA } };
+}
+
+function stripRetrySafeField(params: unknown): { params: unknown; retrySafe?: boolean } {
+  if (!isObj(params) || !(RETRY_SAFE_FIELD in params)) return { params };
+  const { [RETRY_SAFE_FIELD]: retrySafe, ...rest } = params;
+  return { params: rest, ...(typeof retrySafe === "boolean" ? { retrySafe } : {}) };
+}
+
+function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): ToolDefinition {
+  const parameters = withRetrySafeField(tool.parameters);
+  if (!parameters) return tool;
+  const inner = tool.execute.bind(tool);
+  return {
+    ...tool,
+    parameters: parameters as ToolDefinition["parameters"],
+    async execute(callId: string, params: unknown, ...rest: unknown[]) {
+      const stripped = stripRetrySafeField(params);
+      if (stripped.retrySafe !== undefined && isObj(stripped.params)) {
+        const replayable = stripped.retrySafe && JSON.stringify(stripped.params).length <= RERUN_INPUT_MAX_CHARS;
+        marks.set(callId, {
+          safe: stripped.retrySafe,
+          ...(replayable ? { rerun: { tool: tool.name, input: stripped.params } } : {}),
+        });
+      }
+      try {
+        return await (inner as (...args: unknown[]) => unknown)(callId, stripped.params, ...rest);
+      } finally {
+        marks.delete(callId);
+      }
+    },
+  } as ToolDefinition;
+}
+
+const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 
 function withToolApprovalGate(
@@ -4215,6 +4481,7 @@ function withToolApprovalGate(
           reason: STRICT_TOOL_APPROVAL_REASON,
           kind: "approval",
           approvalKey: `tool:${approvalIdentity}`,
+          ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
           ...(tool.name === "sandbox" && isObj(params) && typeof params.purpose === "string"
             ? { purpose: params.purpose }
             : {}),
@@ -4285,7 +4552,8 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
           details: {},
           terminate: !!ref.runtimeHandoff,
         };
-      const mutation = tool.name === "runtime" && (!isObj(params) || params.action !== "get");
+      const mutation =
+        tool.name === "context" || (tool.name === "runtime" && (!isObj(params) || params.action !== "get"));
       if (mutation) {
         ref.runtimeMutationPending = true;
         try {

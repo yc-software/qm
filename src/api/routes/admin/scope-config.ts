@@ -52,6 +52,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       "runtime",
       "cron-runtime",
       "subagent-runtime",
+      "fallback-runtime",
       "webui-models",
       "browse-model",
       "auto-flagger",
@@ -151,10 +152,13 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
-  const crons = await app.listCrons();
-  const deployments = await app.listDeployments();
-  const skills = await app.listSkills();
-  const environmentRows = await app.listEnvironments();
+  const [crons, deployments, skills, environmentRows, rollups] = await Promise.all([
+    app.listCrons(),
+    app.listDeployments(),
+    app.listSkills(),
+    app.listEnvironments(),
+    deps.sessions?.scopeSessionRollups(scope, true) ?? [],
+  ]);
   const environments = environmentRows.map(({ environment, attachments }) => ({
     id: environment.id,
     name: environment.name,
@@ -174,16 +178,17 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     ...environments.map((environment) => environment.id),
     ...environments.flatMap((environment) => environment.attachedScopes),
   ];
-  const labels = await discoverScopes(app, deps, owners);
+  const previewIds = rollups.flatMap((r) => (r.previewSessionId ? [r.previewSessionId] : []));
+  const [labels, previews] = await Promise.all([
+    discoverScopes(app, deps, owners),
+    deps.sessions?.lastUserMessages(previewIds) ?? new Map<string, string>(),
+  ]);
   const countBy = (ids: string[]): Map<string, number> => {
     const m = new Map<string, number>();
     for (const id of ids) m.set(id, (m.get(id) ?? 0) + 1);
     return m;
   };
-  const rollups = (await deps.sessions?.scopeSessionRollups(scope, true)) ?? [];
   const rollupBy = new Map(rollups.map((r) => [r.scopeId, r]));
-  const previewIds = rollups.flatMap((r) => (r.previewSessionId ? [r.previewSessionId] : []));
-  const previews = (await deps.sessions?.lastUserMessages(previewIds)) ?? new Map<string, string>();
   const cronN = countBy(crons.map((c) => c.ownerScopeId));
   const deployN = countBy(deployments.map((d) => d.ownerScopeId));
   const skillN = countBy(skills.map((s) => s.scopeId));
@@ -269,6 +274,7 @@ const SETTINGS_RESOURCES = {
     "runtime",
     "cronRuntime",
     "subagentRuntime",
+    "fallbackRuntime",
     "approvedHarnesses",
     "webuiModels",
     "interactiveFastMode",
@@ -369,7 +375,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     name: resolvedCurrent?.name ?? currentId + " (configured)",
     provider: resolvedCurrent?.provider ?? (currentId.includes("/") ? "openrouter" : ""),
   };
-  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime].filter(
+  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
     (value): value is { harnessId: string; modelId: string } =>
       !!value &&
       typeof (value as { harnessId?: unknown }).harnessId === "string" &&

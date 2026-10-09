@@ -672,10 +672,11 @@ function flySyncOpts(dir: string, allowUnavailable?: boolean): Parameters<typeof
   };
 }
 
-test("fly sync succeeds on the response marker, piping the exact bundle over stdin", async () => {
+test("fly sync carries the exact bundle in bounded exec arguments", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
   try {
     writeLayer(dir);
+    writeFileSync(join(dir, "sandbox", "skills", "a", "SKILL.md"), "x".repeat(100_000));
     const argsLog = join(dir, "args.log");
     const bin = fakeFlyStatus(
       dir,
@@ -690,12 +691,19 @@ test("fly sync succeeds on the response marker, piping the exact bundle over std
         const request = captured[0]!;
         assert.equal(request.url, "https://api.machines.dev/v1/apps/acme-core/machines/machine-core/exec");
         assert.equal(request.authorization, "Bearer test-token");
-        assert.equal(request.body.stdin, bundle, "the full bundle reaches the remote script's stdin");
+        assert.equal(request.body.stdin, undefined, "the transport does not rely on Machines exec stdin");
         assert.equal(request.body.timeout, 120);
         assert.ok(Array.isArray(request.body.command));
         assert.deepEqual((request.body.command as string[]).slice(0, 2), ["node", "-e"]);
         const remoteScript = (request.body.command as string[])[2] ?? "";
         assert.match(remoteScript, /createHmac\("sha256"/, "the signing script is passed to node -e directly");
+        assert.equal(
+          Buffer.from((request.body.command as string[]).slice(3).join(""), "base64").toString("utf8"),
+          bundle,
+          "the full bundle reaches the remote script",
+        );
+        assert.ok((request.body.command as string[]).slice(3).every((arg) => Buffer.byteLength(arg) <= 64 * 1024));
+        assert.ok((request.body.command as string[]).length > 4, "large bundles are split across arguments");
         assert.doesNotMatch(remoteScript, /eval\(/, "no eval indirection");
         assert.deepEqual(JSON.parse(readFileSync(argsLog, "utf8")) as string[], [
           "status",

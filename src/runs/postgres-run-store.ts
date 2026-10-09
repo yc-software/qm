@@ -119,6 +119,19 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `CREATE INDEX IF NOT EXISTS idx_runs_pending_child_returns ON runs(id) WHERE status IN ('done','failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%'`,
         ],
       },
+      {
+        id: "runs/store/0005-session-history",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_created_seq ON runs(session_id, created_at DESC, seq DESC)`,
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_created ON runs(created_at DESC)`,
+        ],
+      },
+      {
+        id: "runs/store/0006-terminal-finished",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done','failed')`,
+        ],
+      },
     ],
     [
       {
@@ -128,7 +141,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `DO $$
       BEGIN
         IF to_regclass('tool_calls') IS NOT NULL THEN
-          ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;
+          IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                         WHERE attrelid = 'tool_calls'::regclass AND attname = 'attempt' AND NOT attisdropped) THEN
+            ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;
+          END IF;
           IF EXISTS (
             SELECT 1 FROM pg_constraint c
             WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
@@ -356,15 +372,35 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
       const { rowCount } =
         leaseToken === null
-          ? await q("UPDATE runs SET delivery_state=$1 WHERE id=$2", [JSON.stringify(state), runId])
-          : await q("UPDATE runs SET delivery_state=$1 WHERE id=$2 AND lease_token=$3", [
-              JSON.stringify(state),
-              runId,
-              leaseToken,
-            ]);
+          ? await q(
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2",
+              [JSON.stringify(state), runId],
+            )
+          : await q(
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3",
+              [JSON.stringify(state), runId, leaseToken],
+            );
       return rowCount > 0;
     },
 
+    async latestForThreads(threadRefs, opts) {
+      if (!threadRefs.length) return new Map();
+      const { rows } = await q(
+        `SELECT latest.* FROM unnest($1::text[]) AS threads(id)
+         CROSS JOIN LATERAL (
+           SELECT * FROM runs WHERE session_id = threads.id
+           AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
+           ORDER BY created_at DESC, seq DESC LIMIT 1
+         ) latest`,
+        [[...new Set(threadRefs)], Boolean(opts?.excludePrivateMessages)],
+      );
+      return new Map(
+        rows.map((row) => {
+          const run = rowToRun(row);
+          return [run.sessionId, run];
+        }),
+      );
+    },
     async latestForThread(threadRef, opts) {
       const { rows } = await q(
         "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
@@ -384,13 +420,28 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            AND wake.idempotency_key LIKE 'subagent-return:%'
            AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
            AND child.id > $2
-         ) pending ORDER BY id LIMIT $1`,
-        [limit, afterId],
+         ) pending WHERE retry_after <= $3 ORDER BY id LIMIT $1`,
+        [limit, afterId, Date.now()],
+      );
+      return rows.map(rowToRun);
+    },
+    async terminalFinished(after, beforeMs, limit) {
+      const { rows } = await q(
+        `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
+           AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
+         ORDER BY finished_at, id LIMIT $4`,
+        [beforeMs, after.finishedAt, after.id, limit],
       );
       return rows.map(rowToRun);
     },
     async markReturned(runId) {
       await q("UPDATE runs SET returned_at = $2 WHERE id = $1 AND status IN ('done','failed')", [runId, Date.now()]);
+    },
+    async deferReturn(runId, delayMs) {
+      await q("UPDATE runs SET retry_after = $2 WHERE id = $1 AND status IN ('done','failed')", [
+        runId,
+        Date.now() + Math.max(0, delayMs),
+      ]);
     },
     onTerminal(listener): void {
       terminalListeners.push(listener);

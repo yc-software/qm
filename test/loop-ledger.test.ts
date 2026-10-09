@@ -1,3 +1,5 @@
+import { createMemoryMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
+import type { LoopItem } from "../src/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentDraftOf, createLoopItemLedger, loopItemId, type IngestEntryInput } from "../src/loops/item-ledger.ts";
@@ -225,7 +227,7 @@ test("open items sort ahead of resolved ones, newest source event first", async 
   ]);
   const items = await ledger.byLoop(LOOP);
   await ledger.recordAction(items.find((i) => i.sourceKey === "done")!.id, { kind: "send", outcome: "actioned" });
-  const sorted = sortLedgerItems(await ledger.byLoop(LOOP));
+  const sorted = sortLedgerItems(await ledger.byLoop(LOOP), {});
   assert.deepEqual(
     sorted.map((i) => i.sourceKey),
     ["new", "old", "done"],
@@ -236,7 +238,7 @@ test("the ledger view exposes the generic shape and never leaks claim tokens", a
   const ledger = createLoopItemLedger();
   await ledger.ingest([entry({ proposal: { data: { body: "hi" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
-  const view = ledgerItemView(item!);
+  const view = ledgerItemView(item!, {});
   assert.equal(view.dedupeKey, "gmail:thread-1");
   assert.equal(view.state, "held");
   assert.equal(view.source, "gmail");
@@ -382,4 +384,97 @@ test("continuing a sent reply clears the old draft without losing chat or allowi
   const ordinary = (await ledger.byLoop(LOOP)).find((item) => item.sourceKey === "ordinary")!;
   await ledger.recordAction(ordinary.id, { kind: "send", outcome: "actioned" });
   assert.equal(await ledger.reopen(ordinary.id, { sentReply: true }), null);
+});
+
+test("email classification projection is opt-in, scoped, and never changes stored previews", async (t) => {
+  const backing = createMemoryMap<LoopItem>();
+  const ledger = createLoopItemLedger(backing);
+  await ledger.ingest([
+    entry({
+      sourcePayload: { automated: true, privateDetail: "hidden" },
+      proposal: { by: "agent", data: { body: "Draft" } },
+    }),
+    entry({ loopId: "unselected", sourcePayload: { automated: true } }),
+  ]);
+  const stored = structuredClone(await ledger.get(loopItemId(LOOP, "gmail:thread-1")));
+  t.mock.method(backing, "all", async () => {
+    assert.fail("summaries must not scan the full ledger");
+  });
+  const originalSelect = backing.select.bind(backing);
+  t.mock.method(backing, "select", async (query: DurableMapSelect<LoopItem, keyof LoopItem>) => {
+    assert.deepEqual(query.where, { field: "loopId", anyOfFold: [LOOP] });
+    assert.ok(query.omit?.includes("proposal"));
+    assert.ok(query.omit?.includes("thread"));
+    if (!query.omit?.includes("sourcePayload"))
+      assert.deepEqual(query.pickNested, { sourcePayload: ["source", "automated"] });
+    const rows = await originalSelect(query);
+    for (const row of rows) assert.equal((row as LoopItem).sourcePayload?.privateDetail, undefined);
+    return rows;
+  });
+  const before = await ledger.summaries([LOOP]);
+  assert.equal(before.length, 1);
+  assert.equal(before[0]!.inboxPreview!.automated, undefined);
+  const classified = await ledger.summaries([LOOP], { includeEmailClassification: true });
+  assert.equal(classified.length, 1);
+  assert.equal(classified[0]!.inboxPreview!.automated, true);
+  assert.equal(classified[0]!.inboxPreview!.privateDetail, undefined);
+  for (const key of ["sourcePayload", "proposal", "thread", "agentDrafts"]) assert.ok(!(key in classified[0]!));
+  assert.deepEqual(await ledger.summaries([LOOP]), before);
+  assert.deepEqual(await ledger.get(loopItemId(LOOP, "gmail:thread-1")), stored);
+});
+
+test("flagged summaries classify payload-only legacy email without changing stored records", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry({ source: undefined, sourcePayload: { source: "gmail", automated: true } })]);
+  const before = await ledger.summaries([LOOP]);
+  const [classified] = await ledger.summaries([LOOP], { includeEmailClassification: true });
+  assert.equal(classified!.source, "gmail");
+  assert.equal(classified!.inboxPreview!.automated, true);
+  assert.deepEqual(await ledger.summaries([LOOP]), before);
+  assert.equal((await ledger.byLoop(LOOP))[0]!.source, undefined);
+});
+
+test("ingest batches per-loop locks and writes while resolving legacy IDs and duplicate events", async () => {
+  const backing = createMemoryMap<LoopItem>();
+  const seed = createLoopItemLedger(backing);
+  await seed.ingest([entry()]);
+  const original = (await seed.byLoop(LOOP))[0]!;
+  await backing.delete(original.id);
+  await backing.put("legacy", { ...original, id: "legacy" });
+  let selects = 0;
+  let writes = 0;
+  let locks = 0;
+  const ledger = createLoopItemLedger(
+    {
+      ...backing,
+      select: async (query) => {
+        selects++;
+        return backing.select(query);
+      },
+      get: async () => {
+        throw new Error("per-item read");
+      },
+      mutateMany: async (updates) => {
+        writes++;
+        return backing.mutateMany(updates);
+      },
+    },
+    undefined,
+    {
+      lock: {
+        withLock: async (_key, fn) => {
+          locks++;
+          return fn();
+        },
+      },
+      accepts: async () => true,
+    },
+  );
+  const batch = Array.from({ length: 100 }, (_, i) => entry({ dedupeKey: `new:${i}` }));
+  const outcome = await ledger.ingest([entry(), ...batch, ...batch]);
+  assert.deepEqual(outcome, { created: 100, updated: 0, skipped: 101 });
+  assert.deepEqual({ selects, writes, locks }, { selects: 1, writes: 1, locks: 1 });
+  assert.equal((await backing.all()).length, 101);
+  assert.ok(await backing.get("legacy"));
+  assert.equal(await backing.get(original.id), null);
 });

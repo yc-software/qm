@@ -17,10 +17,10 @@ export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout:
   if (spec.diskGb) size.push(`${spec.diskGb} GB disk`);
   const head = [spec.os, size.join(" / ")].filter(Boolean).join(" · ");
   if (head) lines.push(`${head}.`);
-  if (spec.runtimes?.length) lines.push(`Runtimes: ${spec.runtimes.join(", ")}.`);
-  if (spec.tools?.length) lines.push(`Installed CLIs: ${spec.tools.join(", ")}.`);
+  if (spec.runtimes?.length) lines.push(`Runtimes: ${spec.runtimes.toSorted().join(", ")}.`);
+  if (spec.tools?.length) lines.push(`Installed CLIs: ${spec.tools.toSorted().join(", ")}.`);
   if (spec.notInstalled?.length) {
-    lines.push(`NOT installed (install on demand if a task needs one): ${spec.notInstalled.join(", ")}.`);
+    lines.push(`NOT installed (install on demand if a task needs one): ${spec.notInstalled.toSorted().join(", ")}.`);
   }
 
   const cwd = spec.workdir ?? ".";
@@ -51,7 +51,7 @@ export function renderResidentLoginsBlock(
     "Logins survive machine replacement automatically: the platform keeps an encrypted copy core-side and restores it onto a fresh machine; they are never written into workspace backups.",
     "To (re)log in, start the login command as a background process using the available process controls. A device-flow login prints a URL/code then waits for the person to approve. Relay the URL/code, then watch or poll the process until it exits; never kill it mid-flight. Capture into your keychain is automatic.",
   ];
-  for (const c of present) {
+  for (const c of present.sort((a, b) => a.id.localeCompare(b.id))) {
     if (record.connectors[c.id] === "active") {
       lines.push(`- ${c.label} — ✓ signed in`);
     } else {

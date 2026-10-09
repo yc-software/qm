@@ -1,7 +1,7 @@
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -114,12 +114,62 @@ test("apply serves the app on a stable public domain", async () => {
   assert.equal(provider.profile.managedScaleToZero, false);
 });
 
+const bulkFiles = (): Record<string, string> =>
+  Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`assets/file-${i}.txt`, `x${i}`.repeat(50_000)]));
+
+test("apply uploads each tree as one bundle and removes it after unpacking", async () => {
+  const execsBefore = fake.execScripts().length;
+  await provider.apply(
+    deployment("dep-bundle", "bundled"),
+    version({ ...bulkFiles(), "server.js": SERVER }, "node server.js", {
+      homeDir: mkdtempSync(join(tmpdir(), "porter-deploy-home-")),
+    }),
+  );
+  const scripts = fake.execScripts().slice(execsBefore);
+  assert.equal(scripts.filter((s) => s.includes("base64 -d")).length, 0);
+  assert.equal(scripts.filter((s) => s.includes("tar -xmf")).length, 1);
+  assert.match(await fetchText("/"), /^hello from .*-app v\?$/);
+  assert.deepEqual(readdirSync(fake.volumeDir("qmt-app-dep-bundle-data")), []);
+});
+
+test("apply writes files one at a time when the bundle upload fails", async () => {
+  fake.client.volumes.raw.writeFile = async () => {
+    throw new Error("upload refused");
+  };
+  const execsBefore = fake.execScripts().length;
+  await provider.apply(
+    deployment("dep-fallback", "fallback"),
+    version({ ...bulkFiles(), "server.js": SERVER }, "node server.js"),
+  );
+  const scripts = fake.execScripts().slice(execsBefore);
+  assert.equal(scripts.filter((s) => s.includes("tar -xmf")).length, 0);
+  assert.ok(scripts.some((s) => s.includes("base64 -d")));
+  assert.match(await fetchText("/"), /^hello from .*-app v\?$/);
+});
+
 test("explicit public visibility opts the domain out of the private default", async () => {
   make({ visibility: "public" });
   await provider.apply(deployment("dep-1b", "shown"), version({ "server.js": SERVER }, "node server.js"));
   assert.deepEqual(fake.bodies()[0]!.networking, [
     { port: appPort, domains: [{ domain: "shown.apps.test", visibility: "public" }] },
   ]);
+});
+
+test("without an apps domain the app defaults to its cluster-internal address", async () => {
+  const bare = createPorterDeployProvider({
+    namePrefix: "qmt",
+    appPort,
+    readyWindowSec: 10,
+    client: fake.client,
+    store,
+  });
+  const d = deployment("dep-1c", "hidden");
+  const endpoint = await bare.apply(d, version({ "server.js": SERVER }, "node server.js"));
+  assert.deepEqual(endpoint, { host: "127.0.0.1", port: appPort });
+  assert.deepEqual(fake.bodies()[0]!.networking, [{ port: appPort, internal: true }]);
+  assert.equal(fake.bodies()[0]!.host, "");
+  assert.deepEqual(await bare.resolveEndpoint!(d, version({}, "true")), endpoint);
+  assert.match(await (await fetch(`http://${endpoint.host}:${endpoint.port}/`)).text(), /^hello from .*-app v\?$/);
 });
 
 test("redeploy keeps the domain and the /data volume and retires the old body", async () => {
@@ -249,8 +299,9 @@ test("a body that vanished between list and terminate does not break destroy or 
   assert.match(await fetchText("/"), /^hello from/);
 });
 
-test("without an apps domain the cluster names the host itself", async () => {
+test("without an apps domain a private app gets the host the cluster names", async () => {
   const bare = createPorterDeployProvider({
+    visibility: "private",
     namePrefix: "qmt",
     appPort,
     readyWindowSec: 10,
@@ -269,6 +320,7 @@ test("a cluster that names no host fails the deploy and leaves no body behind", 
   fake.cleanup();
   fake = installFakePorter({ assignHost: false });
   const bare = createPorterDeployProvider({
+    visibility: "private",
     namePrefix: "qmt",
     appPort,
     readyWindowSec: 10,

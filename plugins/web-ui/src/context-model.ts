@@ -11,6 +11,8 @@ import {
 } from "./model-options";
 import { createModelPicker } from "./model-picker";
 import {
+  ULTRAFAST_MODEL_ID,
+  ultrafastChoice,
   loadLoadout,
   saveLoadout,
   reconcileLoadout,
@@ -104,10 +106,9 @@ function selectedValue(config: RuntimeConfig): string {
 function effortLevelsFor(
   harnessId: string,
   model?: ModelOption["model"],
-  effort?: string,
 ): Array<{ value: EffortLevel; label: string }> {
   if (!harnessSupportsEffort(harnessId)) return [];
-  return effortLevelsForHarness(harnessId, model, effort);
+  return effortLevelsForHarness(harnessId, model);
 }
 
 function selectedEffort(config: RuntimeConfig): string {
@@ -146,7 +147,7 @@ async function choose(scope: string, value: string, effort?: string, fast = fals
             harnessId,
             modelId: value.slice(sep + 1),
             fastMode: fast && harnessSupportsFastMode(harnessId) && modelSupportsFastMode(scope, value.slice(sep + 1)),
-            ...(effort && effortLevelsFor(harnessId, model, effort).some((o) => o.value === effort)
+            ...(effort && effortLevelsFor(harnessId, model).some((o) => o.value === effort)
               ? { effortLevel: effort }
               : {}),
           },
@@ -187,7 +188,7 @@ function contextPicker(scopeId: string) {
     if (contextModelState.saving) return;
     const option = options().find((option) => option.value === entry.value);
     if (!option) return;
-    const levels = effortLevelsForHarness(option.harnessId, option.model, entry.effort);
+    const levels = effortLevelsForHarness(option.harnessId, option.model);
     const normalized = {
       ...entry,
       effort: levels.some((level) => level.value === entry.effort) ? entry.effort : levels[0]!.value,
@@ -218,7 +219,11 @@ function contextPicker(scopeId: string) {
         compatibleHarnessOptions(options(), selected.model.id).find((option) => option.harnessId === harnessId);
       if (target) apply({ ...current(), value: target.value });
     },
-    toggleFastMode: () => apply({ ...current(), fast: !current().fast }),
+    toggleFastMode: () => {
+      const selected = options().find((option) => option.value === current().value);
+      const target = selected?.model.id === ULTRAFAST_MODEL_ID ? ultrafastChoice(options(), selected) : undefined;
+      apply({ ...current(), ...(target ? { value: target.value } : {}), fast: !current().fast });
+    },
     effectiveFastMode: () => current().fast,
     changeDefault: () => choose(scopeId, INHERIT),
     showDefaultAction: false,

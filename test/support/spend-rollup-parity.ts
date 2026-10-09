@@ -182,4 +182,25 @@ export async function assertSpendRollupParity(
     assert.equal(row.calls, 1);
     assert.equal(row.costUsd, 0.01);
   }
+
+  clock.at = BASE + 123;
+  const changing = await record(`${prefix}:changing`, "dm", alice, 0, `${prefix}-changing`);
+  const range = { from: clock.at, to: clock.at + 1 };
+  const readChanging = async () => (await store.spendRollup(range)).filter((r) => r.model === `${prefix}-changing`);
+  assert.equal((await readChanging())[0]!.calls, 1);
+  assert.equal((await readChanging())[0]!.costUsd, 0);
+  assert.equal(
+    (await store.spendRollup({ from: BASE, to: clock.at })).some((r) => r.model === `${prefix}-changing`),
+    false,
+  );
+  await record(`${prefix}:changing`, "dm", alice, 2, `${prefix}-changing`);
+  assert.equal((await readChanging())[0]!.calls, 2);
+  assert.equal((await readChanging())[0]!.costUsd, 2);
+  const cronParent = await store.getOrCreateByThread(`cron:${prefix}-changing:fire:aaa`, "dm", bob);
+  await store.setParentSession(changing.id, cronParent.id);
+  assert.equal((await readChanging())[0]!.origin, "cron");
+  await store.deleteSession(cronParent.id);
+  assert.equal((await readChanging())[0]!.origin, "conversation");
+  await store.deleteSession(changing.id);
+  assert.deepEqual(await readChanging(), []);
 }

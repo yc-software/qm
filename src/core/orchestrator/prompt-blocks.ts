@@ -2,10 +2,12 @@ import type { CandidateDestination, Cron, Monitor, Webhook } from "../../types.t
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 
 export function deliveryMenu(candidates: CandidateDestination[], defaultKey: string | undefined): string {
-  const lines = candidates.map(
-    (c) =>
-      `- ${c.label}${c.key === defaultKey ? " (default — where we're talking now)" : ""}: destinationKey \`${c.key}\``,
-  );
+  const lines = candidates
+    .toSorted((a, b) => a.key.localeCompare(b.key))
+    .map(
+      (c) =>
+        `- ${c.label}${c.key === defaultKey ? " (default — where we're talking now)" : ""}: destinationKey \`${c.key}\``,
+    );
   return [
     "## Where scheduled tasks post",
     "When you schedule a cron here, it delivers to the default below unless you pass a different",
@@ -42,13 +44,20 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   const snippet = (s: string) => (s.length > 100 ? `${s.slice(0, 97)}…` : s).replace(/\s+/g, " ");
   const lines = [
     ...crons
+      .toSorted((a, b) => a.id.localeCompare(b.id))
       .slice(0, OBLIGATIONS_CAP)
       .map(
         (c) =>
           `- cron \`${c.id}\`${c.title ? ` "${c.title}"` : ""} (${cronSchedulePromptLabel(c)}, owner ${c.owner}): ${snippet(c.action ?? c.message ?? "")}`,
       ),
-    ...webhooks.slice(0, OBLIGATIONS_CAP).map((w) => `- webhook \`${w.id}\` (owner ${w.owner}): ${snippet(w.action)}`),
-    ...monitors.slice(0, OBLIGATIONS_CAP).map((m) => `- job watch on \`${m.processId}\`: ${snippet(m.command)}`),
+    ...webhooks
+      .toSorted((a, b) => a.id.localeCompare(b.id))
+      .slice(0, OBLIGATIONS_CAP)
+      .map((w) => `- webhook \`${w.id}\` (owner ${w.owner}): ${snippet(w.action)}`),
+    ...monitors
+      .toSorted((a, b) => a.id.localeCompare(b.id))
+      .slice(0, OBLIGATIONS_CAP)
+      .map((m) => `- job watch on \`${m.processId}\`: ${snippet(m.purpose ?? m.command)}`),
   ];
   return [
     "## Already scheduled here",
@@ -67,6 +76,7 @@ const REACH_ROSTER_CAP = 30;
 export function renderReachRoster(channels: DirectoryChannel[], displayName: string): string | null {
   if (channels.length === 0) return null;
   const shown = channels
+    .toSorted((a, b) => a.channelId.localeCompare(b.channelId))
     .slice(0, REACH_ROSTER_CAP)
     .map((c) => `#${c.name}`)
     .join(", ");
@@ -84,7 +94,7 @@ export function renderReachRoster(channels: DirectoryChannel[], displayName: str
 const ROSTER_CAP = 20;
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
-  const shown = members.slice(0, ROSTER_CAP);
+  const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
   const lines = shown.map((m) => `- ${m.displayName} (${m.principalId})`);
   const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
   return (

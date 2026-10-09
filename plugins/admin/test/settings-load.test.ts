@@ -312,6 +312,7 @@ test("models view loads and saves purpose cards through the real page handlers",
       runtime: null,
       cronRuntime: null,
       subagentRuntime: null,
+      fallbackRuntime: null,
     };
     const requests: any[] = [];
     const context = vm.createContext({
@@ -336,7 +337,7 @@ test("models view loads and saves purpose cards through the real page handlers",
       extract('document.querySelectorAll("[data-save]").forEach', '$("view-governance").addEventListener("input"'),
       context,
     );
-    for (const key of ["cron-runtime", "subagent-runtime"]) {
+    for (const key of ["cron-runtime", "subagent-runtime", "fallback-runtime"]) {
       assert.equal(f.document.getElementById(`card-${key}`)!.classList.contains("hidden"), false);
       const button = f.document.querySelector<HTMLButtonElement>(`[data-save="${key}"]`)!;
       (f.document.getElementById(`${key}-inherit`) as HTMLInputElement).click();
