@@ -161,6 +161,14 @@ Replacing or swallowing a failure so the evidence needed to diagnose it disappea
 - **Rejected session titles:** `sanitizeTitle` returned `undefined` for rejected model output. The fallback title made the request look successful, while neither the rejected text nor the rule that rejected it reached the error log. _Status:_ [qm#1303](https://github.com/yc-software/qm/pull/1303) records the rejection rule and a bounded sample in the durable error log.
 - **Failed transaction rollback:** `withPgTransaction` and copied transaction handlers awaited `ROLLBACK` before rethrowing the original error. If rollback also failed, its exception replaced the actual transaction failure. _Status:_ still present on main; [qm#1834](https://github.com/yc-software/qm/pull/1834) proposes preserving the original error and discarding the broken connection.
 
+### Legacy preservation (3 examples)
+
+Keeping old endpoints, data shapes, and code paths alive next to their replacement. Our priority is future users, not seamless continuity for past ones. Do the bare minimum for history: a DB migration or a one-off migration script, then make the breaking change and let people adapt; agents can usually smooth over the breakage for existing users. Only preserve the old way when removing it would leave the system in an unrecoverable state.
+
+- **Credential capture redesign** (2026-10-08): The login-as-a-skill handoff planned that "a stale skill calling /v1/keychain/use gets a clear refusal" and that "logins saved under the old capture system still load." Both keep the old system on life support. Remove the endpoint and the old capture system outright; stale skills fail and get fixed. _Status:_ [qm#2146](https://github.com/yc-software/qm/pull/2146) deletes `/v1/keychain/use` (open).
+- **Sandbox routing retirement** (2026-10-02): Retiring `sandbox_routing` came with a locked, marker-guarded one-time upgrade import that preserved legacy IDs, explicit nulls, and machine IDs, kept the old table as rollback input, and told operators to keep credentials for legacy-mapped providers. A plain migration would have done. _Status:_ merged in [qm#2019](https://github.com/yc-software/qm/pull/2019).
+- **Legacy Inbox loop:** `src/loops/inbox-migration.ts` migrates each owner's legacy Inbox loop at runtime, with its own phase record in UI-state preferences, a pause-and-disable sequence, and a repair path for half-finished runs. _Status:_ still on main; deletion approved for the loops rebuild.
+
 ### Over-testing
 
 Description and examples pending human input.
