@@ -1,4 +1,5 @@
 import type { View } from "./shell-state";
+import { TITLE_SUFFIX } from "./title-suffix.ts";
 
 interface TitledSession {
   id: string;
@@ -11,10 +12,6 @@ interface ActiveConversation {
   threadRef: string | null;
 }
 
-/** Shared with the server's branded <title>, so the tab title has one format (#2108). */
-export const TITLE_SUFFIX = "· Web";
-
-/** The org's brand, from the meta tag the server stamps; the client's only source for it. */
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";
   return document.querySelector<HTMLMetaElement>('meta[name="brand-self-label"]')?.content || "QM";

@@ -41,7 +41,7 @@ import {
   PORTAL_IDENTITY_SECRET,
   portFromEnv,
 } from "../../chassis/src/env.ts";
-import { TITLE_SUFFIX } from "../src/document-title.ts";
+import { TITLE_SUFFIX } from "../src/title-suffix.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 const PORT = portFromEnv(8096);
