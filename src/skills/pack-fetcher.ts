@@ -130,14 +130,14 @@ export async function resolvePackAuth(
     ) {
       throw new Error(`skill pack credential is not authorized for ${repo.pathname}`);
     }
-    const [header, value] = gitCredentialAuthHeader(credential, repoHost);
+    const [header, value] = gitCredentialAuthHeader(credential);
     return { header, value, secret: credential.secret };
   }
   const host = connectorHostFor(pack.url);
   if (host) {
     const token = await sources.connectorToken(host, pack.createdBy);
     if (!token) return undefined;
-    const [header, value] = gitCredentialAuthHeader({ secret: token }, "github.com");
+    const [header, value] = gitCredentialAuthHeader({ secret: token });
     return { header, value, secret: token };
   }
   return undefined;

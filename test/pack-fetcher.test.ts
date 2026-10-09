@@ -142,7 +142,7 @@ test("resolveRef rejects an arg-smuggling ref before invoking git", async () => 
   );
 });
 
-test("resolvePackAuth: a GitHub slug with no scheme sends a Basic login (#1235)", async () => {
+test("resolvePackAuth: a slug with no scheme sends a Basic login (#1235)", async () => {
   const sources = {
     serviceCredential: async (s: string) => ({ secret: "svc:" + s, host: "github.com", enabled: true }),
     connectorToken: async () => "connector",

@@ -155,7 +155,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
   }
 
   const headers = callerHeaders(ctx);
-  const [authHeader, authValue] = gitCredentialAuthHeader(rec, upstream.hostname);
+  const [authHeader, authValue] = gitCredentialAuthHeader(rec);
   headers[authHeader] = authValue;
 
   let upstreamResp: GitHttpFetchResponse;
