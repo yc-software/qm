@@ -7,16 +7,6 @@ import { interleaveNotebooks, PRINCIPAL_REFS } from "./principal-refs.ts";
 const DEACTIVATIONS = "deactivated_principals";
 const EMAIL_KEYED = "external_members";
 
-/**
- * One-time conversion from handle-keyed rows to principal UUIDs.
- *
- * Groups every principal id the database mentions (joined by `principal_links` and by Slack directory rows), gives
- * each group a principal, writes its identities, rewrites every registered column and durable-map row to the UUID,
- * records the Composio user id each handle connected apps under (so those connections keep resolving to their owner
- * without reconnecting), merges notebooks, then drops `principal_links`. Dry-run by default; `apply` runs it in one transaction after
- * copying each touched table to `identity_premigration_<table>`.
- */
-
 interface MigrationReport {
   principals: number;
   identities: number;
@@ -29,10 +19,6 @@ const fold = (id: string): string => {
   return s.includes("@") ? s.toLowerCase() : s;
 };
 
-/**
- * Pre-identity rows stored bare handles with no provider, so this one-time conversion is the only place that reads a
- * provider off a stored value. Slack ids it knows from `directory_members.slack_id` are passed in, not guessed.
- */
 function legacyHandle(id: string, slackIds: ReadonlySet<string>): Handle {
   if (slackIds.has(id) || /^(T[A-Z0-9]+:)?[UW][A-Z0-9]+$/.test(id)) return { provider: "slack", externalId: id };
   if (id.includes("@") && !id.startsWith("oidc:")) return { provider: "email", externalId: id.toLowerCase() };
@@ -50,10 +36,6 @@ function tokenRewriter(mapping: ReadonlyMap<string, string>, prefix = ""): (s: s
   return (s) => s.replace(re, (m, id: string) => `${prefix}${mapping.get(fold(id)) ?? m.slice(prefix.length)}`);
 }
 
-/**
- * JSON values are rewritten only when the whole string is a handle or holds a `personal:<handle>` scope, so prose
- * (cron prompts, titles) that merely mentions an address is left alone. Keys are structural and use token rewrite.
- */
 function rewriteJson(v: unknown, rw: Rewriters): unknown {
   if (typeof v === "string") return rw.exact(v) ?? rw.personal(v);
   if (Array.isArray(v)) return v.map((x) => rewriteJson(x, rw));
@@ -328,7 +310,6 @@ export async function runIdentityMigration(opts: {
   }
 }
 
-/** Tables the migration writes, created ahead of it so a fresh database and a migrated one look the same. */
 export async function ensurePrincipalSchema(pool: Pool): Promise<void> {
   for (const m of PRINCIPAL_MIGRATIONS) for (const statement of m.statements) await pool.query(statement);
 }

@@ -15,7 +15,6 @@ function sources(dir: string): string[] {
   });
 }
 
-/** Every `table.column` a schema statement in src declares. */
 function declaredColumns(): Set<string> {
   const out = new Set<string>();
   for (const file of sources("src")) {

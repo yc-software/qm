@@ -29,7 +29,6 @@ export function open(token: string | null | undefined, key: Buffer): Record<stri
 export interface SessionClaims {
   k: "session";
   sub: string;
-  /** The identity provider that vouched for `sub`; core resolves (prov, sub) to a principal. */
   prov?: "email" | "oidc" | "slack";
   org: string;
   name?: string;

@@ -14,11 +14,6 @@ import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit, principalGraph } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
-/**
- * Composio user ids are identities: each `composio` identity row names one Composio user id and the principal that
- * owns its connections. Ids minted before principals existed were imported by the identity migration, so old
- * connections keep working without reconnecting.
- */
 function composioUserIds(graph: PrincipalGraph, principal: string): string[] {
   return graph
     .identitiesOf(principal)
@@ -29,7 +24,6 @@ function composioUserIds(graph: PrincipalGraph, principal: string): string[] {
 const ownsComposioUser = (graph: PrincipalGraph, principal: string, userId: unknown): boolean =>
   typeof userId === "string" && graph.principalOf(handle("composio", userId)) === principal;
 
-/** New connections use the principal's own Composio user id, recorded as an identity like every other. */
 async function claimComposioUser(graph: PrincipalGraph, principal: string): Promise<string> {
   const userId = composioUserId(orgId(), principal);
   if (graph.principalOf(handle("composio", userId)) !== principal)

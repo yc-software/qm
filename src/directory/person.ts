@@ -20,10 +20,9 @@ export const identityOf = (id: string, provider: IdentityProvider): string | und
 export function personLabel(person: { id: string; displayName?: string }): string {
   const handle = identityOf(person.id, "email") ?? identityOf(person.id, "slack");
   if (person.displayName && handle) return `${person.displayName} (${handle})`;
-  return person.displayName || handle || "unknown person";
+  return person.displayName || handle || "A teammate";
 }
 
-/** The Slack user id linked to a principal (identities may be stored team-qualified as `T…:U…`). */
 export const slackUserOf = (id: string): string | undefined => identityOf(id, "slack")?.split(":").at(-1);
 
 export function samePerson(a: string | null | undefined, b: string | null | undefined): boolean {

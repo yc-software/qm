@@ -115,7 +115,6 @@ function fixture() {
   return { invoke: invokeReady, own, shared, calls, replies, deps, ready };
 }
 
-/** Seed principals the way production has them: each owns the Composio user id derived from it. */
 async function seededGraph(): Promise<PrincipalGraph> {
   const store = createMemoryPrincipalStore();
   for (const [id, name] of [
@@ -143,7 +142,6 @@ async function seededGraph(): Promise<PrincipalGraph> {
   return graph;
 }
 
-/** A Composio user id minted for a handle before principals existed, as the identity migration records it. */
 const legacyComposioUser = (f: { deps: Partial<ServerDeps> }, legacyHandle: string) => {
   const id = handle("composio", composioUserId(orgId(), legacyHandle));
   return {

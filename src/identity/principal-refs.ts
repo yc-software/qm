@@ -2,13 +2,6 @@ import type { PoolClient } from "pg";
 import { normalize } from "../memory/notebook.ts";
 import { parseMemoryRecords, renderMemoryRecords, type MemoryRecords } from "../memory/records.ts";
 
-/**
- * How a column refers to a principal:
- * - `id`    the whole value is a principal UUID
- * - `scope` the value is a scope id such as `personal:<uuid>` (other scopes pass through)
- * - `text`  a label or free text where the UUID appears as a whole token
- * - `json`  a JSONB document where the UUID appears as a whole token in keys or values
- */
 type RefKind = "id" | "scope" | "text" | "json";
 
 export interface PrincipalRef {
@@ -19,11 +12,6 @@ export interface PrincipalRef {
 
 const ref = (table: string, column: string, kind: RefKind): PrincipalRef => ({ table, column, kind });
 
-/**
- * Every relational column that can hold a principal. `combine` and the identity migration both walk this list,
- * and test/principal-refs.test.ts fails when a schema adds a principal-shaped column that is missing here.
- * Durable-map tables (`id TEXT`, `json JSONB`) are found from the catalog and need no entry.
- */
 export const PRINCIPAL_REFS: readonly PrincipalRef[] = [
   ref("identities", "principal_id", "id"),
   ref("participants", "principal_id", "id"),
@@ -76,10 +64,6 @@ export const PRINCIPAL_REFS: readonly PrincipalRef[] = [
   ref("credential_usage", "scope_label", "text"),
 ];
 
-/**
- * Columns whose names look principal-shaped but never hold a principal. Listed so the registry test can tell an
- * oversight from a decision.
- */
 export const NOT_PRINCIPAL_COLUMNS: readonly string[] = [
   "principals.principal_id",
   "session_leases.holder",
@@ -104,7 +88,6 @@ async function tableColumns(client: PoolClient): Promise<Map<string, Set<string>
   return out;
 }
 
-/** Other columns of each unique index that contains `column`, so a clash can be detected per row. */
 async function uniquePeers(client: PoolClient, table: string, column: string): Promise<string[][]> {
   const { rows } = await client.query<{ cols: string[] }>(
     `SELECT array_agg(a.attname::text ORDER BY a.attnum) AS cols
@@ -131,11 +114,6 @@ async function repointEquals(client: PoolClient, table: string, column: string, 
   await client.query(`UPDATE ${quote(table)} SET ${quote(column)} = $2 WHERE ${quote(column)}::text = $1`, [from, to]);
 }
 
-/**
- * Merge several notebooks into `target` as if they had always been one: every source revision is replayed in `at`
- * order and becomes one revision whose records are the de-duplicated union of each source's head at that moment.
- * The sources' rows are replaced by the merged history, numbered from 1 under `target`.
- */
 export async function interleaveNotebooks(
   client: PoolClient,
   target: string,
@@ -175,7 +153,6 @@ interface SourceRevision {
   records: unknown;
 }
 
-/** Pure core of {@link interleaveNotebooks}, exported for tests. */
 export function interleaveRevisions(sources: readonly string[], rows: readonly SourceRevision[]) {
   const order = (r: SourceRevision): number => sources.indexOf(r.scope_id);
   const sorted = [...rows].sort((a, b) => a.at - b.at || order(a) - order(b) || a.seq - b.seq);
@@ -195,11 +172,6 @@ export function interleaveRevisions(sources: readonly string[], rows: readonly S
   });
 }
 
-/**
- * Fold principal `drop` into `keep` inside the caller's transaction: every registered column and every durable-map
- * row is re-pointed, singleton clashes keep `keep`'s row, the two notebooks are interleaved into one history,
- * `drop`'s identities move to `keep`, and `drop` is deleted.
- */
 export async function combineReferences(client: PoolClient, keep: string, drop: string): Promise<void> {
   const columns = await tableColumns(client);
   const has = (t: string, c: string): boolean => columns.get(t)?.has(c) ?? false;

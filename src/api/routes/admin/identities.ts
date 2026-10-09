@@ -35,7 +35,6 @@ export async function listIdentities(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { principals, identities });
 }
 
-/** Admin link: point an identity at a principal. Same function as the self-serve connect flow. */
 export async function linkIdentity(ctx: ApiCtx): Promise<void> {
   const a = await admin(ctx);
   if (!a) return;
@@ -78,7 +77,6 @@ export async function unlinkIdentity(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { ok: true, identity: row });
 }
 
-/** Admin or deployment: replace the email identities this caller maintains for a principal. */
 export async function setPrincipalEmails(ctx: ApiCtx): Promise<void> {
   const a = await admin(ctx);
   if (!a) return;

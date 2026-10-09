@@ -30,7 +30,6 @@ async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
 }
 
-/** Web sign-in edge: the handle acted, so resolve it to its principal, creating one if needed. */
 async function principalForHandle(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const provider = ctx.params.provider;

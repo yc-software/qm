@@ -45,13 +45,14 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
     );
   for (const member of externalUsers.filter((m) => m.kind === "teammate" && m.status === "active")) {
-    if (!users.some((u) => samePerson(u.principalId, member.email)))
+    const principalId = deps.identity?.principals.principalOf(handle("email", member.email));
+    if (principalId && !users.some((u) => samePerson(u.principalId, principalId)))
       users.push({
-        principalId: member.email,
+        principalId,
         sessionCount: 0,
         turnCount: 0,
         lastSeenAt: null,
-        admin: adminStatusFromGrants(grants, member.email),
+        admin: adminStatusFromGrants(grants, principalId),
       });
   }
   const signInUrl = signInUrlOf(deps);
@@ -134,15 +135,15 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if ((!teammate && expiry.value === undefined) || (expiry.value !== undefined && expiry.value <= now))
     return bad("expiresAt is required and must be in the future");
   await deps.identity.refresh(true);
-  const principal = deps.identity.principals.principalOf(handle("email", email));
-  if (teammate && principal && deps.identity.deactivationSource(principal) === "manual")
+  const principal = await deps.identity.principals.act(handle("email", email), { email });
+  if (teammate && deps.identity.deactivationSource(principal) === "manual")
     return sendJson(res, 409, {
       error: "conflict",
       message: "This account is manually deactivated. Reactivate it before inviting them.",
     });
   const existing = deps.identity.externalMember(email);
   if (!teammate && existing?.kind === "teammate") return bad("Manage this teammate in Users.");
-  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), email).isAdmin;
+  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), principal).isAdmin;
   const ownsGrant = existing?.role === "org_admin";
   if (!teammate && ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))))
     return sendJson(res, 409, { error: "conflict", message: ALREADY_A_MEMBER });
@@ -156,8 +157,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   else if (!teammate && role === "member" && holdsGrant) grantChange = "grant.revoke";
   try {
     if (grantChange === "grant.create")
-      await deps.admin!.createGrant(actor, { principalId: email, role: "org_admin", scopeId: scope });
-    else if (grantChange === "grant.revoke") await deps.admin!.revokeGrant(actor, email, scope, "org_admin");
+      await deps.admin!.createGrant(actor, { principalId: principal, role: "org_admin", scopeId: scope });
+    else if (grantChange === "grant.revoke") await deps.admin!.revokeGrant(actor, principal, scope, "org_admin");
   } catch (e) {
     return grantError(res, "grant_failed", e);
   }
@@ -244,7 +245,8 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   await deps.identity.refresh(true);
   const existing = deps.identity.externalMember(params.email ?? "");
   if (!existing) return sendJson(res, 404, { error: "not_found", message: "external user not found" });
-  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), existing.email).isAdmin;
+  const principal = deps.identity.principals.principalOf(handle("email", existing.email)) ?? "";
+  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), principal).isAdmin;
   const ownsGrant = existing.role === "org_admin";
   if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant)) {
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
@@ -252,7 +254,7 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   if (holdsGrant && !ownsGrant) return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   if (holdsGrant) {
     try {
-      await deps.admin!.revokeGrant(actor, existing.email, scope, "org_admin");
+      await deps.admin!.revokeGrant(actor, principal, scope, "org_admin");
     } catch (e) {
       return grantError(res, "revoke_failed", e);
     }

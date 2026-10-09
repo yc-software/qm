@@ -732,7 +732,6 @@ export interface TurnRequest {
 }
 
 export interface ActorAssertion {
-  /** A principal id, or a handle when `provider` names who vouched for it. */
   externalId: string;
   provider?: IdentityProvider;
   isExternalGuest?: boolean;

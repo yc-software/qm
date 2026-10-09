@@ -6,13 +6,11 @@ import { combineReferences } from "./principal-refs.ts";
 type PrincipalKind = "person" | "agent";
 export type IdentityProvider = "oidc" | "slack" | "email" | "composio";
 
-/** A handle as its edge knows it: the provider that vouched for it and that provider's id. */
 export interface Handle {
   provider: IdentityProvider;
   externalId: string;
 }
 
-/** Emails are stored lowercased; every other provider's id is kept verbatim. */
 export const handle = (provider: IdentityProvider, externalId: string): Handle => ({
   provider,
   externalId: provider === "email" ? externalId.trim().toLowerCase() : externalId.trim(),
@@ -50,7 +48,6 @@ export const isPrincipalId = (id: string): boolean => UUID.test(id);
 const PROVIDERS: readonly IdentityProvider[] = ["oidc", "slack", "email", "composio"];
 export const isIdentityProvider = (v: unknown): v is IdentityProvider => PROVIDERS.includes(v as IdentityProvider);
 
-/** An id as an edge hands it over: a principal id, or a handle whose provider the edge names. */
 export interface EdgeHandle {
   principalId: string;
   provider?: IdentityProvider;
@@ -65,7 +62,6 @@ export async function principalFromEdge(
   return provider ? graph.act(handle(provider, id), opts) : id.trim();
 }
 
-/** The Composio user id an org mints for a principal (or, before principals, for a handle). */
 export function composioUserId(org: string, owner: string): string {
   return `qm_${createHash("sha256")
     .update(JSON.stringify([org, owner]))
@@ -74,10 +70,8 @@ export function composioUserId(org: string, owner: string): string {
 
 const key = (provider: string, externalId: string): string => `${provider}\u0000${externalId}`;
 
-/** Storage for the two identity tables. Postgres in production, memory in tests and single-process dev. */
 export interface PrincipalStore {
   load(): Promise<{ principals: PrincipalRow[]; identities: IdentityRow[] }>;
-  /** Changes whenever either table is written, so readers reload only when something moved. */
   version(): Promise<string>;
   createForIdentity(principal: PrincipalRow, identity: IdentityRow): Promise<string>;
   putIdentity(row: IdentityRow): Promise<void>;
@@ -144,7 +138,6 @@ const PRINCIPAL_SCHEMA = [
   `CREATE INDEX IF NOT EXISTS identities_by_principal ON identities(principal_id)`,
 ];
 
-/** One counter both tables bump on every statement, so a cached graph reloads only after a write. */
 const VERSION_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS identity_version(id INT PRIMARY KEY CHECK (id = 1), v BIGINT NOT NULL)`,
   `INSERT INTO identity_version(id, v) VALUES (1, 0) ON CONFLICT DO NOTHING`,
@@ -332,7 +325,6 @@ export function createPrincipalGraph(
     byPrincipal.set(row.principalId, rows);
   }
 
-  /** Checks the store's version at most once per TTL (always when forced) and reloads only when it moved. */
   function refresh(force = false): Promise<void> {
     if (refreshP) return refreshP;
     if (!force && Date.now() - checkedAt < REFRESH_TTL_MS) return Promise.resolve();
@@ -473,7 +465,7 @@ export function createPrincipalGraph(
         await refresh();
         await principalFor(principalId);
         const wanted = new Set(emails.map((e) => handle("email", e).externalId).filter(Boolean));
-        for (const row of [...(byPrincipal.get(principalId)?.values() ?? [])])
+        for (const row of Array.from(byPrincipal.get(principalId)?.values() ?? []))
           if (row.provider === "email" && row.linkedBy === linkedBy && !wanted.has(row.externalId)) {
             await store.deleteIdentity(row.provider, row.externalId);
             forget(key(row.provider, row.externalId));
