@@ -880,7 +880,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     ? { privateSessionMessage: true as const, sessionMessageDepth: messageDepth }
                     : {}),
                   text: stamped,
-                  displayText: stamped,
+                  displayText: text,
                 },
                 maxAttempts: deps.maxAttempts,
               });
