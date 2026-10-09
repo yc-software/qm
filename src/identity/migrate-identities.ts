@@ -1,6 +1,6 @@
 import { swallowAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
 import { composioUserId, isPrincipalId, PRINCIPAL_MIGRATIONS, type Handle } from "./principals.ts";
 import { orgId } from "../config.ts";
 import { interleaveNotebooks, PRINCIPAL_REFS, quote, tableColumns } from "./principal-refs.ts";
