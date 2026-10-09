@@ -760,8 +760,7 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
     const added = await memory.capture(write, facts, Date.now(), capability.actorId, {
       mode: "explicit",
       actorId: capability.actorId,
-      // An admin's org write publishes to the org; sourcing it to this conversation hid it everywhere else (#2126).
-      conversationScopeId: requestedScope === "org" ? write : capability.scopeId,
+      conversationScopeId: capability.scopeId,
       ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     });
     audit(deps, {
