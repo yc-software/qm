@@ -659,8 +659,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             : html`
                 <textarea
                   class="composer-input"
-                  ${emojiCompletion(composerState.draft)}
                   dir="auto"
+                  ${emojiCompletion(composerState.draft)}
                   rows="1"
                   placeholder=${placeholder}
                   ?disabled=${inputBlocked}
