@@ -52,8 +52,10 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
   rather than staying in its lane. Resolve what they find before merging.
 - **Run independent Wall of shame reviews in parallel for every PR.** Dispatch a
-  separate fresh-context subagent or independent reviewer for each lens in the current
-  [Wall of shame](./docs/SPEC.md#wall-of-shame), including newly added lenses. Only
+  separate fresh-context subagent or independent reviewer for each relevant lens in the
+  current [Wall of shame](./docs/SPEC.md#wall-of-shame), including newly added lenses.
+  `node scripts/wall-of-shame-check.ts --triage` asks a small model which lenses the diff
+  can touch; with no `ANTHROPIC_API_KEY`, every lens is relevant. Only
   Honorable mentions may share one combined reviewer. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
@@ -70,7 +72,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   These reviews run alongside PR work; before merging, every lens must have accepted
   and all requested changes must be resolved. They supplement the correctness,
   security, and regression review above. The `Wall of shame review` CI check fails
-  until the description's report covers every lens with an accepting verdict for the PR head.
+  until the description's report covers every relevant lens with an accepting verdict for the PR head.
 - **Disclose config-matrix and database-schema changes in the PR description.** Name
   added, removed, or changed settings, flags, modes, and providers, including changes to
   defaults, precedence, and supported combinations. Name changed tables, columns,
