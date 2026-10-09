@@ -45,7 +45,11 @@ export function resendMailer(cfg: AuthConfig, fetchImpl: typeof fetch = fetch): 
         headers: { authorization },
         signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),
       });
-      if (r.status === 401 || r.status === 403) throw new Error("Resend rejected RESEND_API_KEY");
+      if (r.status === 401 || r.status === 403) {
+        const body = (await r.json().catch(() => ({}))) as { name?: string };
+        if (body.name === "restricted_api_key") return "Resend API key accepted";
+        throw new Error("Resend rejected RESEND_API_KEY");
+      }
       if (!r.ok) throw new Error(`Resend API returned HTTP ${r.status}`);
       return "Resend API key accepted";
     },

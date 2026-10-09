@@ -63,6 +63,31 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
   );
 });
 
+test("doctor accepts a Resend sending-only API key", async () => {
+  const { sandbox: _sandbox, ...withoutSandbox } = config;
+  void _sandbox;
+  const priorFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        statusCode: 401,
+        message: "This API key is restricted to only send emails",
+        name: "restricted_api_key",
+      }),
+      { status: 401, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  try {
+    await assert.doesNotReject(
+      doctorCommon(
+        { ...withoutSandbox, services: ["auth"], env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } } },
+        new Map([["RESEND_API_KEY", "re_sending_only"]]),
+      ),
+    );
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});
+
 test("doctor rejects missing and placeholder portal OIDC client ids and tenant gates", async () => {
   const { sandbox: _sandbox, ...withoutSandbox } = config;
   void _sandbox;
