@@ -388,6 +388,8 @@ interface GrantListFilter {
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<void>;
+  sealValues(values: readonly string[]): string;
+  openValues(sealed: string): string[];
   writebackBaseline(
     source: FileCredentialSource,
     fingerprint: string,
@@ -1139,6 +1141,12 @@ export function createKeychain(deps: {
       if (!updated) throw new KeychainError(410, "Credential was removed during execution");
     },
 
+    sealValues(values) {
+      return encryptSecret(JSON.stringify(values), deps.key);
+    },
+    openValues(sealed) {
+      return JSON.parse(decryptSecret(sealed, deps.key)) as string[];
+    },
     async writebackBaseline(source, fingerprint) {
       const current = await deps.creds.get(source.credentialId);
       if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))

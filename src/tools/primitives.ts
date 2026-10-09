@@ -44,6 +44,7 @@ import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
 import { waitForClientResult, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type {
+  BackgroundCredentials,
   BackgroundExecBroker,
   BackgroundStartResult,
   BackgroundPollResult,
@@ -1251,27 +1252,30 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return once(
         async () => {
           const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
-          let result: BackgroundStartResult;
-          try {
-            result = await deps.backgroundBroker!.start(
-              handle,
-              deps.scopedCommand?.(command, { ...handle.env, ...staged?.commandEnv }) ?? command,
-              opts.purpose,
-              opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
-              staged
-                ? {
-                    env: staged.commandEnv,
-                    ...(staged.fileExecution
-                      ? { files: processCredentialFiles(staged.fileExecution.plan, staged.fileCredentials) }
-                      : {}),
-                  }
-                : undefined,
-            );
-          } catch (error) {
+          const release = async () => {
             await staged?.fileExecution?.finish();
+          };
+          let credentials: BackgroundCredentials | undefined;
+          try {
+            credentials = staged && {
+              env: staged.commandEnv,
+              secrets: Object.values(executionSecretEnv(staged.commandEnv, staged.secretValues)),
+              ...(staged.fileExecution
+                ? { files: processCredentialFiles(staged.fileExecution.plan, staged.fileCredentials) }
+                : {}),
+              release,
+            };
+          } catch (error) {
+            await release();
             throw error;
           }
-          return result;
+          return deps.backgroundBroker!.start(
+            handle,
+            deps.scopedCommand?.(command, { ...handle.env, ...staged?.commandEnv }) ?? command,
+            opts.purpose,
+            opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
+            credentials,
+          );
         },
         () => true,
       );

@@ -25,9 +25,13 @@ applies the AWS grant rules. Each execution removes its own directory in `finall
 
 Background jobs accept the same `credentials` handles. The staging plan, credential ids,
 grant ids and baseline fingerprints (no secrets) are stored on the job's `process_sessions`
-row (`credential_files`). Whichever path first observes the exit (background poll/stop,
-monitor, reaper, reconcile on provision) takes that column atomically, re-checks the
-baseline against the keychain, writes refreshes back and removes the directory.
+row (`credential_files`). Any path that observes the exit (background poll/stop, monitor,
+reaper, reconcile on provision) re-checks the baseline against the keychain, writes
+refreshes back, clears the column and removes the directory. If a write fails for a reason
+other than a keychain rejection, the column and directory stay so a later observer or the
+next provision retries. A start that fails after the process launched leaves cleanup to
+these paths. Env credential values are sealed with the keychain key on the same row, so
+background output is masked like `execute` output on every later read.
 
 Directories older than two hours are swept when the next credentialed execution starts,
 which is longer than any execution or background job may live, so concurrent operations never
@@ -40,6 +44,5 @@ is restored into `$HOME` at provisioning. `/v1/keychain/use` no longer exists.
 
 - The staging directory is protected by mode 0700 and a random name, not by a separate user.
   Another process running as the same user during the command can read it.
-- Background job output is not masked for env credential values the way `execute` output is.
 - No proactive refresh for idle AWS sessions; the CLI refreshes only when a command runs.
 - Granted non-AWS file credentials cannot be written back.

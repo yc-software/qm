@@ -5,12 +5,15 @@ import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess, processIsGone } from "../sandbox/process-poll.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
+import { backgroundOutputMasker } from "../security/secret-masking.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
   registry: ProcessRegistry;
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
+  sealSecrets?: (values: readonly string[]) => string;
+  openSecrets?: (sealed: string) => string[];
   scopeId: string;
   sessionRef?: string;
   ttlMs?: number;
@@ -56,6 +59,13 @@ export interface BackgroundWriteResult {
   status: ProcessState;
 }
 
+export interface BackgroundCredentials {
+  env: Record<string, string>;
+  secrets: readonly string[];
+  files?: ProcessCredentialFiles;
+  release?: () => Promise<void>;
+}
+
 export interface BackgroundExecBroker {
   handleFor?(processId: string): Promise<SandboxHandle | null>;
   start(
@@ -63,7 +73,7 @@ export interface BackgroundExecBroker {
     command: string,
     purpose: string,
     ttlMs?: number,
-    credentials?: { env: Record<string, string>; files?: ProcessCredentialFiles },
+    credentials?: BackgroundCredentials,
   ): Promise<BackgroundStartResult>;
   poll(
     handle: SandboxHandle,
@@ -84,6 +94,10 @@ const DEFAULT_KILL_GRACE_MS = 1_000;
 function stateFromRow(status: ProcessStatus): ProcessState {
   if (status === "running") return { state: "running" };
   return { state: "exited", code: status === "reaped" ? 143 : 0 };
+}
+
+function missingKeychain(): never {
+  throw new Error("Background job credentials cannot be stored without the keychain");
 }
 
 export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): BackgroundExecBroker {
@@ -150,33 +164,54 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           waitMs: 0,
         });
         if (read.status.state === "exited") await exited(handle, processId);
-        return { processId, output: read.chunks, cursor: read.cursor, status: read.status, reattached: true };
+        return {
+          processId,
+          output: backgroundOutputMasker(handle.env, undefined, undefined)(read.chunks),
+          cursor: read.cursor,
+          status: read.status,
+          reattached: true,
+        };
       }
 
-      const register = async (id: string): Promise<void> => {
-        await deps.registry.register({
-          processId: id,
-          scopeId: deps.scopeId,
-          ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
-          kind: "background",
-          command: redacted,
-          purpose,
-          ttlMs: ttl,
-          ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
-          ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
+      let launched = false;
+      try {
+        const secretValuesEnc = credentials?.secrets.length
+          ? (deps.sealSecrets ?? missingKeychain)(credentials.secrets)
+          : undefined;
+        const mask = backgroundOutputMasker(handle.env, secretValuesEnc, deps.openSecrets);
+        const register = async (id: string): Promise<void> => {
+          launched = true;
+          await deps.registry.register({
+            processId: id,
+            scopeId: deps.scopeId,
+            ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
+            kind: "background",
+            command: redacted,
+            purpose,
+            ttlMs: ttl,
+            ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
+            ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
+            ...(secretValuesEnc ? { secretValuesEnc } : {}),
+          });
+        };
+        const startOptions = { env: { PYTHONUNBUFFERED: "1", ...credentials?.env } };
+        if (deps.sandbox.startRegisteredProcess) {
+          ({ processId } = await deps.sandbox.startRegisteredProcess(handle, command, register, startOptions));
+        } else {
+          ({ processId } = await deps.sandbox.startProcess(handle, command, startOptions));
+          launched = true;
+          await register(processId);
+        }
+
+        const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, {
+          deadlineMs: POLL_MS,
         });
-      };
-      const startOptions = { env: { PYTHONUNBUFFERED: "1", ...credentials?.env } };
-      if (deps.sandbox.startRegisteredProcess) {
-        ({ processId } = await deps.sandbox.startRegisteredProcess(handle, command, register, startOptions));
-      } else {
-        ({ processId } = await deps.sandbox.startProcess(handle, command, startOptions));
-        await register(processId);
+        if (status.state === "exited") await exited(handle, processId);
+        return { processId, output: mask(output), cursor, status, reattached: false };
+      } catch (error) {
+        if (!launched) await credentials?.release?.();
+        throw error;
       }
-
-      const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, { deadlineMs: POLL_MS });
-      if (status.state === "exited") await exited(handle, processId);
-      return { processId, output, cursor, status, reattached: false };
     },
 
     async poll(handle, processId, opts): Promise<BackgroundPollResult> {
@@ -193,8 +228,9 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         maxBytes: opts?.maxBytes ?? DEFAULT_MAX_BYTES,
         waitMs: opts?.waitMs ?? 0,
       });
+      const mask = backgroundOutputMasker(handle.env, rec.secretValuesEnc, deps.openSecrets);
       if (read.status.state === "exited") await exited(handle, processId);
-      return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
+      return { processId, chunks: mask(read.chunks), cursor: read.cursor, status: read.status };
     },
 
     async write(handle, processId, data): Promise<BackgroundWriteResult> {

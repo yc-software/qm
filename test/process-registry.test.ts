@@ -133,7 +133,7 @@ for (const [name, make] of [
   ["memory", () => createMemoryProcessRegistry()],
   ...(PG_URL ? [["postgres", () => createPostgresProcessRegistry(PG_URL)] as const] : []),
 ] as const) {
-  test(`[${name}] background credential files survive a new registry and are taken exactly once`, async () => {
+  test(`[${name}] background credential files survive a new registry until settled`, async () => {
     const reg = make();
     const credentialFiles = {
       plan: { directory: "/tmp/qm-credentials.abc", credentials: [{ paths: [".aws/config"], roots: [] }] },
@@ -148,11 +148,15 @@ for (const [name, make] of [
         command: "x",
         ttlMs: 60_000,
         credentialFiles,
+        secretValuesEnc: "sealed",
       });
       const reopened = name === "postgres" ? make() : reg;
-      const taken = await Promise.all([reopened.takeCredentialFiles(processId), reg.takeCredentialFiles(processId)]);
-      assert.deepEqual(taken.filter(Boolean), [credentialFiles]);
-      assert.equal(await reg.takeCredentialFiles(processId), null);
+      assert.deepEqual(await reopened.credentialFiles(processId), credentialFiles);
+      assert.equal((await reopened.get(processId))?.credentialsPending, true);
+      assert.equal((await reopened.get(processId))?.secretValuesEnc, "sealed");
+      await reopened.setCredentialFiles(processId, null);
+      assert.equal(await reg.credentialFiles(processId), null);
+      assert.equal((await reg.get(processId))?.credentialsPending, undefined);
       if (reopened !== reg) reopened.close?.();
     } finally {
       await reg.delete(processId);

@@ -1,4 +1,5 @@
 import type { AdmittedWork } from "../util/admitted-work.ts";
+import { backgroundOutputMasker } from "../security/secret-masking.ts";
 import type { Monitor, TurnRequest, TurnResult } from "../types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
@@ -44,6 +45,7 @@ export interface MonitorPollerDeps {
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
   onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
+  openSecrets?: (sealed: string) => string[];
   heartbeatMs?: number;
   minFireIntervalMs?: number;
 }
@@ -181,11 +183,14 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     if (!(await stillLive(m))) return false;
     let read;
     try {
+      const rec = await deps.processes.get(m.processId);
+      const mask = backgroundOutputMasker(handle.env, rec?.secretValuesEnc, deps.openSecrets);
       read = await sandbox.readProcess(handle, m.processId, {
         sinceCursor: m.cursor,
         maxBytes: MAX_READ_BYTES,
         waitMs: 0,
       });
+      read = { ...read, chunks: mask(read.chunks) };
     } catch (e) {
       if (processIsGone(e)) {
         await reportLost(m);

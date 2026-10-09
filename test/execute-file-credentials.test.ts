@@ -8,7 +8,8 @@ import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, writeFile, rm, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createKeychain, type CredentialFile } from "../src/credentials/keychain.ts";
+import { createKeychain, type CredentialFile, type Keychain } from "../src/credentials/keychain.ts";
+import { reconcileProcesses } from "../src/processes/reconcile.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
@@ -16,6 +17,7 @@ import type { ProcessSandbox, ProcessState, Sandbox, SandboxHandle } from "../sr
 import { scopeId } from "../src/types.ts";
 
 const run = promisify(execFile);
+const SECRET_TOKEN = "synthetic-background-token-123";
 const owner = "file-execution-test";
 const scope = scopeId("personal", owner);
 const files = (value: string): CredentialFile[] => [
@@ -97,6 +99,13 @@ async function fixture(t: TestContext) {
                 source: { credentialId: materialized.credentialId, ownerId: owner, service: "aws" },
               },
             };
+          },
+        },
+        {
+          handle: "token",
+          scope: "scoped",
+          async resolve() {
+            return { env: [{ key: "API_TOKEN", value: SECRET_TOKEN }] };
           },
         },
       ],
@@ -265,18 +274,26 @@ test("concurrent executions keep their own credential directories", async (t) =>
   await assert.rejects(access(home));
 });
 
-test("background credentials stay staged until the job exits, then refreshes are saved", async (t) => {
-  const f = await fixture(t);
+function background(
+  f: Awaited<ReturnType<typeof fixture>>,
+  opts: {
+    keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
+    readFailures?: number;
+    startFailure?: boolean;
+  } = {},
+) {
   const registry = createMemoryProcessRegistry();
   const jobs = new Map<string, { output: string; code?: number; child: ChildProcess }>();
+  let readFailures = opts.readFailures ?? 0;
   const sandbox = {
     ...f.sandbox,
     profile: { processSessions: true },
-    async startProcess(h: SandboxHandle, command: string, opts?: { env?: Record<string, string> }) {
+    async startProcess(h: SandboxHandle, command: string, startOpts?: { env?: Record<string, string> }) {
+      if (opts.startFailure) throw new Error("sandbox refused the process");
       const processId = `job-${jobs.size}`;
       const child = spawn("/bin/sh", ["-c", command], {
         cwd: h.rootDir,
-        env: { PATH: process.env.PATH, HOME: h.homeDir, ...h.env, ...opts?.env },
+        env: { PATH: process.env.PATH, HOME: h.homeDir, ...h.env, ...startOpts?.env },
       });
       const job: { output: string; code?: number; child: ChildProcess } = { output: "", child };
       child.stdout!.on("data", (chunk) => (job.output += chunk));
@@ -284,12 +301,13 @@ test("background credentials stay staged until the job exits, then refreshes are
       jobs.set(processId, job);
       return { processId };
     },
-    async readProcess(_h: SandboxHandle, processId: string, opts?: { sinceCursor?: number; waitMs?: number }) {
+    async readProcess(_h: SandboxHandle, processId: string, readOpts?: { sinceCursor?: number; waitMs?: number }) {
+      if (readFailures-- > 0) throw new Error("transient read failure");
       const job = jobs.get(processId)!;
-      if (job.code === undefined && opts?.waitMs)
-        await new Promise((resolve) => setTimeout(resolve, Math.min(opts.waitMs!, 50)));
+      if (job.code === undefined && readOpts?.waitMs)
+        await new Promise((resolve) => setTimeout(resolve, Math.min(readOpts.waitMs!, 50)));
       return {
-        chunks: job.output.slice(opts?.sinceCursor ?? 0),
+        chunks: job.output.slice(readOpts?.sinceCursor ?? 0),
         cursor: job.output.length,
         status: job.code === undefined ? { state: "running" as const } : { state: "exited" as const, code: job.code },
       };
@@ -299,31 +317,117 @@ test("background credentials stay staged until the job exits, then refreshes are
       jobs.get(processId)!.child.kill();
     },
     async listProcesses() {
-      return [];
+      return [...jobs].map(([processId, job]) => ({
+        processId,
+        status: job.code === undefined ? { state: "running" as const } : { state: "exited" as const, code: job.code },
+      }));
     },
   } as unknown as ProcessSandbox;
-  const broker = createBackgroundBroker({
-    sandbox,
-    registry,
-    scopeId: scope,
-    pollMs: 10,
-    onExit: (h, processId) =>
-      finishProcessCredentials({ sandbox, processes: registry, keychain: f.keychain }, h, processId),
-  });
-  const ctx = f.context({ sandbox, backgroundBroker: broker });
-  const started = await ctx.backgroundStart(
-    'printf %s "$HOME" > staged-home; sleep 0.5; cat "$HOME/.aws/sso/cache/session.json" > seen; printf background > "$HOME/.aws/sso/cache/session.json"',
-    { purpose: "Refresh a background login", credentials: ["aws"] },
-  );
+  const finish = (h: SandboxHandle, processId: string, keychain = opts.keychain ?? f.keychain) =>
+    finishProcessCredentials({ sandbox, processes: registry, keychain }, h, processId);
+  const broker = () =>
+    createBackgroundBroker({
+      sandbox,
+      registry,
+      scopeId: scope,
+      pollMs: 10,
+      onExit: (h, processId) => finish(h, processId),
+      sealSecrets: (values) => f.keychain.sealValues(values),
+      openSecrets: (sealed) => f.keychain.openValues(sealed),
+    });
+  const ctx = (b = broker()) => f.context({ sandbox, backgroundBroker: b });
+  const waitForExit = async (processId: string) => {
+    while (jobs.get(processId)?.code === undefined) await new Promise((resolve) => setTimeout(resolve, 20));
+  };
+  return { registry, sandbox, broker, ctx, finish, waitForExit };
+}
+
+const savedValue = async (f: Awaited<ReturnType<typeof fixture>>) => {
+  const saved = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  assert.equal(saved.kind, "file");
+  return saved.kind === "file" ? Buffer.from(saved.files[0]!.contentBase64, "base64").toString() : "";
+};
+
+const refresh =
+  'printf %s "$HOME" > staged-home; sleep 0.5; cat "$HOME/.aws/sso/cache/session.json" > seen; printf background > "$HOME/.aws/sso/cache/session.json"';
+
+test("background credentials stay staged until the job exits, then refreshes are saved", async (t) => {
+  const f = await fixture(t);
+  const bg = background(f);
+  const ctx = bg.ctx();
+  const started = await ctx.backgroundStart(refresh, { purpose: "Refresh a background login", credentials: ["aws"] });
   assert.equal(started.status.state, "running");
   assert.equal((await ctx.execute("echo unrelated")).stdout.trim(), "unrelated");
   let status: ProcessState = started.status;
   while (status.state !== "exited") status = (await ctx.backgroundPoll(started.processId, { waitSeconds: 1 })).status;
   assert.equal(await readFile(join(f.handle.rootDir, "seen"), "utf8"), "original");
-  const saved = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
-  assert.equal(saved.kind, "file");
-  if (saved.kind === "file")
-    assert.equal(Buffer.from(saved.files[0]!.contentBase64, "base64").toString(), "background");
+  assert.equal(await savedValue(f), "background");
   await assert.rejects(access(await readFile(join(f.handle.rootDir, "staged-home"), "utf8")));
-  assert.equal(await registry.takeCredentialFiles(started.processId), null);
+  assert.equal(await bg.registry.credentialFiles(started.processId), null);
+});
+
+test("background output masks credential values, including on a later turn's poll", async (t) => {
+  const f = await fixture(t);
+  const bg = background(f);
+  const started = await bg.ctx().backgroundStart('echo "early $API_TOKEN"; sleep 0.3; echo "late $API_TOKEN"', {
+    purpose: "Print a token",
+    credentials: ["token"],
+  });
+  assert.match(started.output, /early <redacted:credential>/);
+  await bg.waitForExit(started.processId);
+  const later = await bg.ctx(bg.broker()).backgroundPoll(started.processId);
+  assert.match(later.chunks, /late <redacted:credential>/);
+  assert.ok(!`${started.output}${later.chunks}`.includes(SECRET_TOKEN));
+  assert.ok(!JSON.stringify(await bg.registry.get(started.processId)).includes(SECRET_TOKEN));
+});
+
+test("a failed background writeback keeps the refresh for a later retry", async (t) => {
+  const f = await fixture(t);
+  let outage = true;
+  const keychain: Pick<Keychain, "writebackBaseline" | "updateFiles"> = {
+    writebackBaseline: (source, fingerprint) => f.keychain.writebackBaseline(source, fingerprint),
+    async updateFiles(materialized, updated) {
+      if (outage) throw new Error("keychain database unavailable");
+      await f.keychain.updateFiles(materialized, updated);
+    },
+  };
+  const bg = background(f, { keychain });
+  const started = await bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] });
+  await bg.waitForExit(started.processId);
+  await assert.rejects(bg.ctx().backgroundPoll(started.processId), /will retry/);
+  const staged = await readFile(join(f.handle.rootDir, "staged-home"), "utf8");
+  await access(staged);
+  assert.equal(await savedValue(f), "original");
+  assert.equal((await bg.registry.get(started.processId))?.credentialsPending, true);
+  outage = false;
+  await reconcileProcesses(bg.sandbox, f.handle, bg.registry, scope, (h, processId) => bg.finish(h, processId));
+  assert.equal(await savedValue(f), "background");
+  await assert.rejects(access(staged));
+  assert.equal(await bg.registry.credentialFiles(started.processId), null);
+});
+
+test("a background start that fails after launch leaves staging to the exit hook", async (t) => {
+  const f = await fixture(t);
+  const bg = background(f, { readFailures: 1 });
+  await assert.rejects(
+    bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] }),
+    /transient read failure/,
+  );
+  const [record] = await bg.registry.listByScope(scope);
+  await bg.waitForExit(record!.processId);
+  assert.equal(await readFile(join(f.handle.rootDir, "seen"), "utf8"), "original");
+  await bg.ctx().backgroundPoll(record!.processId);
+  assert.equal(await savedValue(f), "background");
+  await assert.rejects(access(await readFile(join(f.handle.rootDir, "staged-home"), "utf8")));
+});
+
+test("a background start that fails before launch removes its staging", async (t) => {
+  const f = await fixture(t);
+  const bg = background(f, { startFailure: true });
+  const before = (await run("sh", ["-c", "ls -d /tmp/qm-credentials.* 2>/dev/null | wc -l"])).stdout;
+  await assert.rejects(
+    bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] }),
+    /sandbox refused/,
+  );
+  assert.equal((await run("sh", ["-c", "ls -d /tmp/qm-credentials.* 2>/dev/null | wc -l"])).stdout, before);
 });

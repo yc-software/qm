@@ -8,6 +8,7 @@ import { builtInCredentialPaths, type CredentialPathSpec } from "./resident-path
 import {
   credentialFilesFingerprint,
   fileCredentialEnvironment,
+  KeychainError,
   restoredFileMode,
   type CredentialFile,
   type FileCredentialSource,
@@ -46,13 +47,13 @@ export function processCredentialFiles(
 export async function finishProcessCredentials(
   deps: {
     sandbox: Sandbox;
-    processes: Pick<ProcessRegistry, "takeCredentialFiles">;
+    processes: Pick<ProcessRegistry, "credentialFiles" | "setCredentialFiles">;
     keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
   },
   handle: SandboxHandle,
   processId: string,
 ): Promise<void> {
-  const stored = await deps.processes.takeCredentialFiles(processId);
+  const stored = await deps.processes.credentialFiles(processId);
   if (!stored) return;
   const keychain = deps.keychain;
   await finishExecutionFiles(
@@ -63,6 +64,16 @@ export async function finishProcessCredentials(
       if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
       await keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint), files);
     }),
+    (retry) =>
+      deps.processes.setCredentialFiles(
+        processId,
+        retry.length
+          ? {
+              plan: { ...stored.plan, credentials: retry.map((index) => stored.plan.credentials[index]!) },
+              sources: retry.map((index) => stored.sources[index]!),
+            }
+          : null,
+      ),
   );
 }
 
@@ -154,9 +165,15 @@ async function finishExecutionFiles(
   handle: SandboxHandle,
   plan: ExecutionFilePlan,
   saves: ReadonlyArray<(files: CredentialFile[]) => Promise<void>>,
+  settle?: (retry: number[]) => Promise<void>,
 ): Promise<void> {
   const { directory } = plan;
   const home = `${directory}/home`;
+  let retry = settle ? plan.credentials.map((_, index) => index) : [];
+  const permanent = (message: string) => {
+    retry = [];
+    return new Error(message);
+  };
   try {
     const captured = await sandbox.run(
       handle,
@@ -164,26 +181,41 @@ async function finishExecutionFiles(
         `COPYFILE_DISABLE=1 tar --null -T ${shq(`${directory}/paths`)} -cf ${shq(`${directory}/files.tar`)} && ` +
         `[ "$(wc -c < ${shq(`${directory}/files.tar`)})" -le 8388608 ]`,
     );
-    if (captured.code !== 0) throw new Error("Could not capture refreshed credential files");
+    if (captured.code !== 0) throw permanent("Could not capture refreshed credential files");
     const archive = await sandbox.readFileBytes({ ...handle, rootDir: directory }, "files.tar");
-    if (!archive || archive.length > 8 * 1024 * 1024) throw new Error("Credential capture exceeds size limit");
+    if (!archive || archive.length > 8 * 1024 * 1024) throw permanent("Credential capture exceeds size limit");
     const entries = await parseTar(archive);
-    if (entries.length > 500) throw new Error("Credential capture exceeds file limit");
+    if (entries.length > 500) throw permanent("Credential capture exceeds file limit");
     const refreshed = entries.map((entry) => ({
       path: homeRelativePath(entry.path),
       contentBase64: entry.data.toString("base64"),
       mode: restoredFileMode(entry.mode),
     }));
     if (plan.credentials.some(({ paths }) => paths.some((path) => !refreshed.some((entry) => entry.path === path))))
-      throw new Error("Credential files were removed or replaced with symlinks during execution");
+      throw permanent("Credential files were removed or replaced with symlinks during execution");
     const results = await Promise.allSettled(
       plan.credentials.map(({ roots }, index) =>
         saves[index]!(refreshed.filter((file) => belongsTo(file.path, roots))),
       ),
     );
-    const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
-    if (failures.length) throw new AggregateError(failures, "Could not persist refreshed credentials");
+    const failures = results.flatMap((result, index) =>
+      result.status === "rejected" ? [{ index, reason: result.reason as unknown }] : [],
+    );
+    retry = retry.filter((index) =>
+      failures.some(
+        (failure) =>
+          failure.index === index && !(failure.reason instanceof KeychainError && failure.reason.status < 500),
+      ),
+    );
+    if (failures.length)
+      throw new AggregateError(
+        failures.map(({ reason }) => reason),
+        retry.length
+          ? "Could not persist refreshed credentials; will retry"
+          : "Could not persist refreshed credentials",
+      );
   } finally {
-    await removeDirectory(sandbox, handle, directory);
+    await settle?.(retry);
+    if (!retry.length) await removeDirectory(sandbox, handle, directory);
   }
 }
