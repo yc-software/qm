@@ -1,4 +1,4 @@
-import { identityOf } from "../directory/person.ts";
+import { identityOf, slackUserOf } from "../directory/person.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -256,7 +256,7 @@ export function encodeDeliveryTarget(channel: string, threadTs?: string): string
 }
 
 async function slackUserIdFor(client: any, principalId: string): Promise<string> {
-  const slackId = identityOf(principalId, "slack")?.split(":").at(-1);
+  const slackId = slackUserOf(principalId);
   if (slackId) return slackId;
   const email = identityOf(principalId, "email");
   if (!email) throw new Error(`no Slack or email identity for ${principalId}`);

@@ -17,7 +17,7 @@ const namespace = externalSlackNamespace("T1", policy);
 function request(text: string): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     origin: { kind: "human" },
     externalSlack: {
       accountId: "batch",
@@ -31,7 +31,10 @@ function request(text: string): TurnRequest {
       kind: "channel",
       channelRef: `${namespace}:C1`,
       threadRef: `${namespace}:C1:thread`,
-      audience: [{ externalId: "U1" }, { externalId: "outsider", isExternalGuest: true }],
+      audience: [
+        { externalId: "U1", provider: "slack" as const },
+        { externalId: "outsider", provider: "slack" as const, isExternalGuest: true },
+      ],
     },
     text,
   };

@@ -1,3 +1,4 @@
+import type { EdgeHandle } from "../identity/principals.ts";
 import type { PrincipalGraph } from "../identity/principals.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
@@ -499,17 +500,17 @@ export interface App {
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
-  upsertDirectory(members: (DirectoryMember & { email?: string })[], syncedAt?: number): Promise<boolean>;
+  upsertDirectory(members: (DirectoryMember & EdgeHandle & { email?: string })[], syncedAt?: number): Promise<boolean>;
   upsertChannels(
     channels: DirectoryChannel[],
-    channelMembers?: ChannelMembership[],
+    channelMembers?: (ChannelMembership & EdgeHandle)[],
     syncedAt?: number,
     channelRosterIds?: string[],
-    revocations?: ChannelMembership[],
+    revocations?: (ChannelMembership & EdgeHandle)[],
     partial?: boolean,
   ): Promise<boolean>;
   upsertGroups(
-    groupMembers: GroupMembership[],
+    groupMembers: (GroupMembership & EdgeHandle)[],
     syncedAt?: number,
     groupIds?: string[],
     groupRosterIds?: string[],
@@ -662,7 +663,7 @@ export interface AppDeps {
   webhooks: WebhookStore;
   deliveries: DeliveryStore;
   directory: DirectoryStore;
-  emailAuthMembers?: DirectoryMember[];
+  emailAuthMembers?: (DirectoryMember & EdgeHandle)[];
   projects?: ProjectStore;
   deploy: DeployService;
   deployAppsDomain?: string;

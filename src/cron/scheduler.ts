@@ -146,8 +146,7 @@ function cronFireThreadRef(cronId: string, fireKey: string): string {
 const CRON_MENTION_ROSTER_MAX = 40;
 
 function mentionable(m: DirectoryMember): string {
-  const mentionId = m.slackId ?? (/^[A-Z0-9]+$/i.test(m.principalId) ? m.principalId : undefined);
-  return `@${m.displayName}${mentionId ? ` (<@${mentionId}>)` : ""}`;
+  return `@${m.displayName}${m.slackId ? ` (<@${m.slackId}>)` : ""}`;
 }
 
 async function cronMentionRoster(deps: SchedulerDeps, cron: Cron): Promise<string | undefined> {

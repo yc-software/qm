@@ -138,7 +138,7 @@ test("screenings from real turns become the replay corpus, verbatim", async () =
   for (const [i, securityScreenData] of screened.entries()) {
     const result = await built.app.turn({
       surface: "webhook",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: `dm:U1:x${i}` },
       text: "summarize this",
       triggered: true,

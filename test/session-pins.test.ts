@@ -169,7 +169,7 @@ describe("conversation pins self-API", async () => {
     const SLACK_DM = "dm:D0PINCHAN";
     const slackTurn: TurnRequest = {
       surface: "slack",
-      actor: { externalId: "U9" },
+      actor: { externalId: "U9", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: SLACK_DM },
       origin: { kind: "human", messageTs: "1723497600.000100" },
       text: "the venue is booked for Sept 4",

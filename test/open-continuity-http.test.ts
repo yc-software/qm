@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, mock, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -60,9 +61,9 @@ async function fixture(t: TestContext) {
     })),
   );
   const P = {
-    alice: await b.principals.act("alice"),
-    bob: await b.principals.act("bob"),
-    stranger: await b.principals.act("stranger"),
+    alice: await b.principals.act(handle("slack", "alice")),
+    bob: await b.principals.act(handle("slack", "bob")),
+    stranger: await b.principals.act(handle("slack", "stranger")),
   };
   const members = [P.alice, P.bob].map((id) => ({ id, type: "internal" as const }));
   const roster = (handles: Array<keyof typeof P>) =>
@@ -125,7 +126,10 @@ async function fixture(t: TestContext) {
     text: string,
     actor = "alice",
     room = true,
-    audience: { externalId: string; isExternalGuest?: boolean }[] = [{ externalId: "alice" }, { externalId: "bob" }],
+    audience: { externalId: string; provider?: "slack"; isExternalGuest?: boolean }[] = [
+      { externalId: "alice", provider: "slack" as const },
+      { externalId: "bob", provider: "slack" as const },
+    ],
   ) => {
     const body = JSON.stringify({
       surface: "test",
@@ -170,7 +174,10 @@ test("HTTP Open continuity: personal sandbox follows owner into shared channel a
   await b.config.clearSharingPosture(`personal:${b.P.alice}`);
   await b.roster(["bob"]);
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
-  const guests = [{ externalId: "alice" }, { externalId: "guest", isExternalGuest: true }];
+  const guests = [
+    { externalId: "alice", provider: "slack" as const },
+    { externalId: "guest", provider: "slack" as const, isExternalGuest: true },
+  ];
   const refused = await b.turn(command("cat proof.txt"), "alice", true, guests);
   assert.equal(refused.http, 403);
   assert.equal(refused.status, "refused");

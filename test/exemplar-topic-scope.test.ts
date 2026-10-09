@@ -43,7 +43,7 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
     );
 
     const root = "20.1";
-    const alice = { externalId: "U_ALICE", displayName: "alice" };
+    const alice = { externalId: "U_ALICE", provider: "slack" as const, displayName: "alice" };
     const req: TurnRequest = {
       surface: "slack",
       actor: alice,

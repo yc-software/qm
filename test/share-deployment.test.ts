@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
@@ -44,7 +45,7 @@ function makeDeploy(
 } {
   const acl: AclStore = createAclStore();
   const identity = createIdentityService();
-  const emailPrincipal = (email: string) => identity.principals.act(email, { email });
+  const emailPrincipal = (email: string) => identity.principals.act(handle("email", email), { email });
   const deploy = createDeployService({
     deployStore: createDeployStore(),
     provider: {
@@ -708,7 +709,7 @@ test("exact email read grants admit app-only login and guest reach without membe
     name: "invite-test",
   });
   const email = "invitee@example.com";
-  const invitee = await identity.principals.act(email);
+  const invitee = await identity.principals.act(handle("email", email));
   await identity.deactivate(invitee, "directory-sync");
   assert.equal(identity.classify(invitee).type, "guest");
   const allowed = async (email: string, featureFlags = externalSharingOn) => {

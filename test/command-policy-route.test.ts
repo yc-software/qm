@@ -40,7 +40,7 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
     const command = "git push --force origin main";
     const turn = {
       surface: "slack",
-      actor: { externalId: "U1", displayName: "Alice" },
+      actor: { externalId: "U1", provider: "slack" as const, displayName: "Alice" },
       conversation: { kind: "dm", threadRef: "dm:U1:t-approval-recovery" },
       text: `!run ${command}`,
     };
@@ -113,7 +113,7 @@ test("GET /v1/sessions/:id/approvals lists the commands the session is still pau
     const command = "git push --force origin main";
     const turn = {
       surface: "slack",
-      actor: { externalId: "U2", displayName: "Bob" },
+      actor: { externalId: "U2", provider: "slack" as const, displayName: "Bob" },
       conversation: { kind: "dm", threadRef: "dm:U2:t-approvals-list" },
       text: `!run ${command}`,
     };

@@ -8,7 +8,7 @@ import type { TurnRequest } from "../src/types.ts";
 
 const request: TurnRequest = {
   surface: "test",
-  actor: { externalId: "U1" },
+  actor: { externalId: "U1", provider: "slack" as const },
   conversation: { kind: "dm", threadRef: "inline-retry" },
   text: "hello",
   idempotencyKey: "inline-retry",

@@ -843,12 +843,12 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
   const { built } = setup();
   const base = {
     surface: "cron",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: {
       kind: "channel" as const,
       channelRef: "C9",
       threadRef: "t-union",
-      audience: [{ externalId: "U1" }],
+      audience: [{ externalId: "U1", provider: "slack" as const }],
     },
     text: "compute digest",
     triggered: true,
@@ -1281,7 +1281,7 @@ test("scheduled runtime is refused before execution when its model is no longer 
     const result = await built.app.turn({
       surface,
       triggered: true,
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: `cron-runtime-${surface}` },
       text: "must not execute",
       harness: "mock",
@@ -1310,7 +1310,7 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     built.app.turn({
       surface: "cron",
       triggered: true,
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
       text: "must not execute",
       harness: "mock",

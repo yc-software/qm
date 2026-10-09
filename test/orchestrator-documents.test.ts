@@ -17,7 +17,7 @@ test("document uploads survive follow-up turns and stay isolated to their conver
   const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
   const request = {
     surface: "test" as const,
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm" as const, threadRef: "dm:U1:docs" },
   };
   const first = await built.app.turn({
@@ -46,7 +46,7 @@ test("compaction stops automatic document replay while preserving the original f
   const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
   const request = {
     surface: "test" as const,
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm" as const, threadRef: "dm:U1:compacted-docs" },
   };
   const first = await built.app.turn({
@@ -88,7 +88,7 @@ test("compaction during a turn stops document replay immediately", async () => {
   const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
   const request = {
     surface: "test" as const,
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm" as const, threadRef: "dm:U1:compacted-docs" },
   };
   const first = await built.app.turn({
@@ -140,7 +140,7 @@ for (const extension of ["docx", "pdf"]) {
     const blob = await built.blobTransfer.put(bytes);
     const request = {
       surface: "test" as const,
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm" as const, threadRef: `dm:U1:hostile-${extension}` },
     };
     const result = await built.app.turn({

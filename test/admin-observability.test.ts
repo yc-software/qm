@@ -42,7 +42,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello there",
     };
@@ -173,7 +173,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:llm" },
       text: "what's the weather",
     };
@@ -639,7 +639,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
 
     const turn: TurnRequest = {
       surface: "slack",
-      actor: { externalId: "U-alice" },
+      actor: { externalId: "U-alice", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:D-alice" },
       text: "what was that deploy note?",
     };

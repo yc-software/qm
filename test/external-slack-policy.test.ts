@@ -180,7 +180,7 @@ test("private continuation directive is self-only and strips incomplete directiv
 function handoffFixture() {
   const source: TurnRequest = {
     surface: "slack",
-    actor: { externalId: "employee@company.example" },
+    actor: { externalId: "employee@company.example", provider: "email" as const },
     externalSlack: { accountId: "partner", teamId: "TPARTNER", userId: "UEMPLOYEE", ...policy },
     conversation: {
       kind: "group",

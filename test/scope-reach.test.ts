@@ -349,20 +349,20 @@ async function roomApp() {
 
 const dm = (text: string): TurnRequest => ({
   surface: "test",
-  actor: { externalId: "U1", displayName: "Alice" },
+  actor: { externalId: "U1", provider: "slack" as const, displayName: "Alice" },
   conversation: { kind: "dm", threadRef: "dm:U1:t1" },
   text,
 });
 
 const channelTurn = (text: string): TurnRequest => ({
   surface: "test",
-  actor: { externalId: "U1", displayName: "Alice" },
+  actor: { externalId: "U1", provider: "slack" as const, displayName: "Alice" },
   conversation: {
     kind: "channel",
     threadRef: "ch:C-ph:t1",
     channelRef: "C-ph",
     channelName: "project-alpha",
-    audience: [{ externalId: "U1" }],
+    audience: [{ externalId: "U1", provider: "slack" as const }],
   },
   text,
 });

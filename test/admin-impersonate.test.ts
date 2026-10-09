@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -51,7 +52,7 @@ test("an org admin can start impersonating a user; audited", async () => {
         (e) =>
           e.action === "impersonate.start" &&
           e.resource === "U-target" &&
-          e.principalId === s.built.principals.principalOf("admin-alice"),
+          e.principalId === s.built.principals.principalOf(handle("slack", "admin-alice")),
       ),
       "the start is recorded in the durable audit log",
     );

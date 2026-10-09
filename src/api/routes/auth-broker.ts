@@ -1,3 +1,4 @@
+import { handle } from "../../identity/principals.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
@@ -60,7 +61,7 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   if (!validEmail(email)) return sendJson(res, 400, { error: "bad_request", message: "email required" });
   if (!deps.identity) return sendJson(res, 200, { allowed: false });
   await deps.identity.refresh();
-  const principal = principalGraph(ctx).principalOf(email);
+  const principal = principalGraph(ctx).principalOf(handle("email", email));
   if (principal && deps.identity.deactivationSource(principal) === "manual")
     return sendJson(res, 200, { allowed: false });
   const member = deps.identity.externalMember(email);
@@ -102,7 +103,7 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "invalid_email" });
   const email = b.email.trim().toLowerCase();
   if (ctx.pathname.endsWith("/revoke")) {
-    const own = !!ctx.actor && principalGraph(ctx).principalOf(email) === ctx.actor.p;
+    const own = !!ctx.actor && principalGraph(ctx).principalOf(handle("email", email)) === ctx.actor.p;
     if (!own && !(await authorizeAdmin(ctx, orgScope()))) return;
     await deps.brokerSessions.revoke(email);
     audit(deps, {

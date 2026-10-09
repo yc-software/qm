@@ -10,7 +10,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 function dm(text: string): TurnRequest {
   return {
     surface: "slack",

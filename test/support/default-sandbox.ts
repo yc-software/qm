@@ -1,10 +1,6 @@
 import type { BuiltApp } from "../../src/wiring.ts";
 import type { ScopeId } from "../../src/types.ts";
-import { isPrincipalId } from "../../src/identity/principals.ts";
-
-async function asPrincipal(built: BuiltApp, id: string): Promise<string> {
-  return isPrincipalId(id) ? id : built.principals.act(id);
-}
+import { principalOf as asPrincipal } from "./principal.ts";
 
 export async function selectDefaultSandbox(built: BuiltApp, actorId: string, ...scopes: ScopeId[]): Promise<void> {
   const actor = await asPrincipal(built, actorId);

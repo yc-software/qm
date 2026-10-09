@@ -261,7 +261,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
     assert.ok(requests.filter((r) => r.path === "/v1/models").length > beforeRefresh);
     const result = await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "discovery-tool-loop" },
       text: "Use the execute tool, then reply.",
     });

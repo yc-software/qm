@@ -1,8 +1,7 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { normalizeHandle } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
-import { createPrincipalGraph, type PrincipalGraph } from "./principals.ts";
+import { createPrincipalGraph, handle, principalFromEdge, type PrincipalGraph } from "./principals.ts";
 
 type DeactivationSource = "manual" | "directory-sync";
 
@@ -62,7 +61,7 @@ export function createIdentityService(
   let refreshP: Promise<void> | null = null;
   let hydrateP: Promise<void> | null = null;
 
-  const emailKey = (email: string): string => normalizeHandle(email);
+  const emailKey = (email: string): string => handle("email", email).externalId;
   const emailsOf = (principalId: string): string[] =>
     graph
       .identitiesOf(principalId)
@@ -75,7 +74,8 @@ export function createIdentityService(
   const overridden = (principalId: string): boolean =>
     !!opts.isOverridden && graph.identitiesOf(principalId).some((i) => opts.isOverridden!(i.externalId));
   const keptByDirectorySync = (principalId: string): boolean =>
-    directorySyncProtected.some((e) => graph.principalOf(e) === principalId) || externalFor(principalId) !== undefined;
+    directorySyncProtected.some((e) => graph.principalOf(handle("email", e)) === principalId) ||
+    externalFor(principalId) !== undefined;
 
   async function load(overwrite: boolean): Promise<void> {
     await graph.refresh(true);
@@ -186,11 +186,18 @@ export function createIdentityService(
 }
 
 async function asPrincipal(graph: PrincipalGraph, a: ActorAssertion): Promise<ActorAssertion> {
-  if (a.isExternalGuest) return a;
+  if (a.isExternalGuest) {
+    const { provider: _edge, ...guest } = a;
+    return guest;
+  }
   const kind = a.isBot ? "agent" : "person";
+  const { provider, ...rest } = a;
   return {
-    ...a,
-    externalId: await graph.act(a.externalId, { kind, ...(a.displayName ? { displayName: a.displayName } : {}) }),
+    ...rest,
+    externalId: await principalFromEdge(graph, a.externalId, provider, {
+      kind,
+      ...(a.displayName ? { displayName: a.displayName } : {}),
+    }),
   };
 }
 
@@ -225,7 +232,7 @@ export function emailInternal(
   identity: Pick<IdentityService, "principals" | "classify" | "externalMember">,
   email: string,
 ): boolean {
-  const principal = identity.principals.principalOf(email);
+  const principal = identity.principals.principalOf(handle("email", email));
   if (principal) return identity.classify(principal).type === "internal";
   const member = identity.externalMember(email);
   return !member || externalMemberActive(member);

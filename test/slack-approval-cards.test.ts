@@ -123,7 +123,7 @@ test("recoveredApprovalContext carries the durable summary through a restart", (
       summary: "Deletes the entire build/ directory and everything inside it.",
       request: {
         surface: "slack",
-        actor: { externalId: "U2" },
+        actor: { externalId: "U2", provider: "slack" as const },
         conversation: { kind: "dm", threadRef: "dm:D1" },
         text: "!run rm -rf build",
       },
@@ -153,8 +153,13 @@ test("recoveredApprovalContext rebuilds a button context from core's durable rec
       idempotencyKey: "ik-1",
       intakePreambleMs: 12,
       clientSentAt: 1000,
-      actor: { externalId: "U1", displayName: "Alice" },
-      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [{ externalId: "U1" }] },
+      actor: { externalId: "U1", provider: "slack" as const, displayName: "Alice" },
+      conversation: {
+        kind: "channel",
+        threadRef: "ch:C1:t1",
+        channelRef: "C1",
+        audience: [{ externalId: "U1", provider: "slack" as const }],
+      },
       deliveryTarget: "C1:t1",
       text: "!run git push --force origin main",
       unprompted: true,
@@ -183,7 +188,7 @@ test("recoveredApprovalContext: a DM record is not thread-only and inherits the 
       command: "rm -rf build",
       request: {
         surface: "slack",
-        actor: { externalId: "U2" },
+        actor: { externalId: "U2", provider: "slack" as const },
         conversation: { kind: "dm", threadRef: "dm:D1" },
         text: "!run rm -rf build",
       },
@@ -210,7 +215,14 @@ test("recoveredApprovalContext refuses records it cannot replay", () => {
   );
   assert.equal(
     recoveredApprovalContext(
-      { command: "x", request: { actor: { externalId: "U1" }, conversation: { kind: "weird" }, text: "hi" } },
+      {
+        command: "x",
+        request: {
+          actor: { externalId: "U1", provider: "slack" as const },
+          conversation: { kind: "weird" },
+          text: "hi",
+        },
+      },
       { channel: "C1" },
     ),
     null,

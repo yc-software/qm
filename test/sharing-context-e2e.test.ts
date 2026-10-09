@@ -1,3 +1,4 @@
+import { handle as identityHandle } from "../src/identity/principals.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
@@ -21,7 +22,9 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
     built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
-  const [U1, U2, U3] = await Promise.all(["U1", "U2", "U3"].map((h) => built.principals.act(h)));
+  const [U1, U2, U3] = await Promise.all(
+    ["U1", "U2", "U3"].map((h) => built.principals.act(identityHandle("slack", h))),
+  );
   const handle = new Map([
     [U1, "U1"],
     [U2, "U2"],

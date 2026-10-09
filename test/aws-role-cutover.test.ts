@@ -85,7 +85,7 @@ test("a scope allow rule cannot override the ephemeral_only direct-execution den
   );
 });
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 
 test("shared ACMECLI cutover isolates brokered STS without shrinking the existing scopeShared owner union", async () => {
   const acmecliBroker = createAwsRoleBroker({
@@ -109,8 +109,8 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     }),
     { credentialBrokers: { acmecli: acmecliBroker } },
   );
-  const bob = { externalId: "BOB" };
-  const alice = { externalId: "ALICE" };
+  const bob = { externalId: "BOB", provider: "slack" as const };
+  const alice = { externalId: "ALICE", provider: "slack" as const };
   const room = scopeId("channel", "C-owner-auth");
   await selectDefaultSandbox(built, "BOB", room);
   const BOB = await principalOf(built, "BOB");

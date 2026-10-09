@@ -1,3 +1,4 @@
+import { personKey } from "../../directory/person.ts";
 import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.ts";
 import type { Principal } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
@@ -32,7 +33,8 @@ export async function adminActorFrom(
   ctx: Pick<ApiCtx, "req" | "deps" | "app" | "capability" | "actor">,
 ): Promise<Principal | null> {
   const actor = rawAdminActor(ctx);
-  return actor ? { ...actor, id: await principalGraph(ctx).act(actor.id) } : null;
+  const id = personKey(actor?.id);
+  return actor && id ? { ...actor, id } : null;
 }
 
 export async function authorizeAdmin(

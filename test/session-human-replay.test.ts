@@ -68,7 +68,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
     text: "Please continue the investigation",
     request: {
       surface: "web",
-      actor: { externalId: "sender" },
+      actor: { externalId: "sender", provider: "slack" as const },
       conversation: {
         kind: "group",
         channelRef,

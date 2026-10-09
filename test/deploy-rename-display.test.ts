@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -66,7 +67,7 @@ test("setDeploymentDisplayName sets the label, then clears it (independent of th
 test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   const s = svc();
   const principals = createPrincipalGraph();
-  const u1 = await principals.act("U1");
+  const u1 = await principals.act(handle("slack", "U1"));
   const app = createApp({ deploy: s.deploy, identity: { principals } } as unknown as Parameters<typeof createApp>[0]);
   const identitySecret = "deployment-route-identity-secret";
   const server = createInsecureTestServer(app, {

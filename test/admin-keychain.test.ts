@@ -39,7 +39,7 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello",
     };

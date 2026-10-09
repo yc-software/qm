@@ -19,7 +19,7 @@ function freshApp() {
   return buildApp(testConfig({ dataDir, orgId: "acme" }));
 }
 
-const actor = { externalId: "U1", orgId: "acme" };
+const actor = { externalId: "U1", provider: "slack" as const, orgId: "acme" };
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }
@@ -200,7 +200,13 @@ test("GET /v1/session-state/events streams transitions as SSE frames", async () 
 function resolvedDm(text: string, thread: string): OrchestratorInput {
   return {
     surface: "test",
-    actor: { id: "user:U1", type: "user", orgId: "acme", externalId: "U1" } as unknown as OrchestratorInput["actor"],
+    actor: {
+      id: "user:U1",
+      type: "user",
+      orgId: "acme",
+      externalId: "U1",
+      provider: "slack" as const,
+    } as unknown as OrchestratorInput["actor"],
     conversation: { kind: "dm", threadRef: thread, audience: [] },
     origin: { kind: "direct" },
     text,

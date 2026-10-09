@@ -428,7 +428,7 @@ async function freshApp() {
   return built;
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 
 function dm(text: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: "dm:U1:t1" }, text };

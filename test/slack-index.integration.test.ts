@@ -263,8 +263,8 @@ class FakeCore implements SlackCoreClient {
   async publishEmojiCatalog(emoji: Record<string, string>): Promise<void> {
     this.publishedEmojiCatalogs.push(emoji);
   }
-  async personalScopeOf(handle: string): Promise<ScopeId> {
-    return `personal:principal-of-${handle}`;
+  async personalScopeOf(actor: { externalId: string }): Promise<ScopeId> {
+    return `personal:principal-of-${actor.externalId}`;
   }
   async surfaceHeaderFacts(): Promise<{ agentLabel?: string; modelName: string }> {
     return { agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" };

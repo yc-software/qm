@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
@@ -29,7 +30,7 @@ async function fixture() {
     now: () => now,
   });
   const identity = createIdentityService();
-  const alice = await identity.principals.act("alice@example.com");
+  const alice = await identity.principals.act(handle("email", "alice@example.com"));
   const credential = await keychain.save({ ownerId: alice, service: "aws", secret: "fixture-secret" });
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread(`web:${alice}:fixture`, "dm", `personal:${alice}`);
@@ -89,7 +90,11 @@ test("native approval persists the explicit duration, resumes once, and replays 
   const f = await fixture();
   const outcomes = await Promise.all(
     ["standing", "standing", "deny"].map((decision) =>
-      f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, decision as "standing" | "deny"),
+      f.approvals.decide(
+        f.ask.id,
+        { externalId: "alice@example.com", provider: "email" as const },
+        decision as "standing" | "deny",
+      ),
     ),
   );
   assert.ok(outcomes.every((view) => view.ask.status === "approved"));
@@ -105,7 +110,11 @@ test("native approval persists the explicit duration, resumes once, and replays 
 test("one-time and denial decisions keep their exact meaning", async () => {
   for (const decision of ["once", "deny"] as const) {
     const f = await fixture();
-    const view = await f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, decision);
+    const view = await f.approvals.decide(
+      f.ask.id,
+      { externalId: "alice@example.com", provider: "email" as const },
+      decision,
+    );
     assert.equal(view.ask.status, decision === "deny" ? "declined" : "approved");
     assert.equal((await f.grants.all()).length, decision === "deny" ? 0 : 1);
     if (decision === "once") assert.equal(view.mode, "once");
@@ -115,18 +124,24 @@ test("one-time and denial decisions keep their exact meaning", async () => {
 test("wrong owner, revoked membership, and expired requests never grant access", async () => {
   const f = await fixture();
   await assert.rejects(
-    f.approvals.decide(f.ask.id, { externalId: "other@example.com" }, "standing"),
+    f.approvals.decide(f.ask.id, { externalId: "other@example.com", provider: "email" as const }, "standing"),
     /Only the credential owner/,
   );
   f.revokeMembership();
   await assert.rejects(
-    f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, "standing"),
+    f.approvals.decide(f.ask.id, { externalId: "alice@example.com", provider: "email" as const }, "standing"),
     /still have access/,
   );
   const expired = await fixture();
   expired.expire();
   assert.equal(
-    (await expired.approvals.decide(expired.ask.id, { externalId: "alice@example.com" }, "standing")).ask.status,
+    (
+      await expired.approvals.decide(
+        expired.ask.id,
+        { externalId: "alice@example.com", provider: "email" as const },
+        "standing",
+      )
+    ).ask.status,
     "expired",
   );
   assert.equal((await f.grants.all()).length, 0);
@@ -228,9 +243,16 @@ test("a crash after grant persistence recovers approval before denial or expiry"
       }
       return merge(id, patch);
     };
-    await assert.rejects(f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, "standing"), /injected/);
+    await assert.rejects(
+      f.approvals.decide(f.ask.id, { externalId: "alice@example.com", provider: "email" as const }, "standing"),
+      /injected/,
+    );
     if (expire) f.expire();
-    const replay = await f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, "deny");
+    const replay = await f.approvals.decide(
+      f.ask.id,
+      { externalId: "alice@example.com", provider: "email" as const },
+      "deny",
+    );
     assert.equal(replay.ask.status, "approved");
     assert.equal(replay.mode, "standing");
     assert.equal((await f.grants.all()).length, 1);
@@ -261,7 +283,7 @@ test("an expired notification cannot hide an approval recovered after a failed w
       return merge(id, patch);
     };
     const approving = assert.rejects(
-      f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, "standing"),
+      f.approvals.decide(f.ask.id, { externalId: "alice@example.com", provider: "email" as const }, "standing"),
       /injected/,
     );
     await started;
@@ -329,7 +351,7 @@ test("a sub-agent request shows in both sessions, and deciding anywhere syncs th
   const view = (await f.approvals.card(ask.id))!;
   assert.equal(view.requesterSessionId, child.id);
   assert.equal(view.sessionId, f.session.id, "the parent sees it too");
-  await f.approvals.decide(ask.id, { externalId: "alice@example.com" }, "standing");
+  await f.approvals.decide(ask.id, { externalId: "alice@example.com", provider: "email" as const }, "standing");
   const sync = f.enqueued.find((d) => d.idempotencyKey === `ask:${ask.id}:resolved`);
   assert.equal(sync?.destination.keychainAskId, ask.id);
 

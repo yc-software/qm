@@ -25,7 +25,7 @@ function freshApp() {
   return buildApp(config);
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 
 async function publishPersonalSkill(built: ReturnType<typeof buildApp>) {
   const { skills } = built;

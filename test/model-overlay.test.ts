@@ -264,7 +264,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.doesNotMatch(wire, /baseUrl|headers|apiKey|local-test-key/);
     const turn = await built.app.turn({
       surface: "web",
-      actor: { externalId: "alice" },
+      actor: { externalId: "alice", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "overlay-live-test" },
       text: "hello",
       model: MODEL_ID,
@@ -291,7 +291,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.equal((await api("/v1/runtime-config", "PUT", runtime)).status, 400);
     const deletedTurn = await built.app.turn({
       surface: "web",
-      actor: { externalId: "alice" },
+      actor: { externalId: "alice", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
       text: "hello",
       model: MODEL_ID,
@@ -305,7 +305,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     for (const model of [undefined, "gpt-5.6-sol"]) {
       const recoveredTurn = await built.app.turn({
         surface: "web",
-        actor: { externalId: "admin-alice@default-org" },
+        actor: { externalId: "admin-alice@default-org", provider: "email" as const },
         conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
         text: "Continue with the replacement I selected",
         ...(model ? { model } : {}),

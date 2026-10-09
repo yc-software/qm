@@ -1,3 +1,4 @@
+import { personKey } from "../../directory/person.ts";
 import { EXTERNAL_APP_SHARING_OFF, externalAppSharingAllowed } from "../../feature-flags.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
@@ -17,7 +18,7 @@ import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
-import { audit, authorizeAdmin, isObj, orgScope, principalGraph } from "./shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
@@ -893,7 +894,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (sub && deployment) {
     if (session?.appOnly) {
       await deps.identity?.refresh();
-      const principal = principalGraph(ctx).principalOf(sub);
+      const principal = personKey(sub) || undefined;
       if (
         externalAllowed &&
         principal !== undefined &&

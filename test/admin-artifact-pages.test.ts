@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -384,7 +385,9 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
     assert.equal(audit.length, 2);
     assert.ok(
       audit.every(
-        (event) => event.principalId === s.built.principals.principalOf("admin-alice") && event.resource === cron.id,
+        (event) =>
+          event.principalId === s.built.principals.principalOf(handle("slack", "admin-alice")) &&
+          event.resource === cron.id,
       ),
     );
   } finally {

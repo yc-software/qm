@@ -159,8 +159,8 @@ export async function resolvePrincipal(
   rule: PrincipalRule,
   args: PrincipalArgs,
   invited: (email: string) => Promise<EmailAdmission> = async () => ({ allowed: false }),
-): Promise<{ sub: string; appOnly?: true }> {
-  if (rule.claim === "sub" && !rule.requireCoreAdmission) return { sub: args.sub };
+): Promise<{ sub: string; prov: "email" | "sub"; appOnly?: true }> {
+  if (rule.claim === "sub" && !rule.requireCoreAdmission) return { sub: args.sub, prov: "sub" };
   const rawEmail = args.userinfo.email;
   if (typeof rawEmail !== "string" || !rawEmail.includes("@")) throw new Error("identity provider returned no email");
   const verified = args.userinfo.email_verified;
@@ -170,12 +170,14 @@ export async function resolvePrincipal(
   if (refusal || rule.requireCoreAdmission) {
     const admission = await invited(email);
     if (!admission.allowed) throw new Error(refusal ?? "account is not permitted");
+    const byEmail = admission.appOnly || rule.claim === "email";
     return {
-      sub: admission.appOnly || rule.claim === "email" ? email : args.sub,
+      sub: byEmail ? email : args.sub,
+      prov: byEmail ? "email" : "sub",
       ...(admission.appOnly ? { appOnly: true } : {}),
     };
   }
-  return { sub: email };
+  return { sub: email, prov: "email" };
 }
 
 async function readJson(r: Response, what: string): Promise<Record<string, unknown>> {

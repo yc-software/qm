@@ -35,8 +35,13 @@ async function scopeWithoutDefault() {
   await built.sandboxResources.initialize();
   const base: Omit<TurnRequest, "text"> = {
     surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "channel", threadRef: "ch:C1:native", channelRef: "C1", audience: [{ externalId: "U1" }] },
+    actor: { externalId: "U1", provider: "slack" as const },
+    conversation: {
+      kind: "channel",
+      threadRef: "ch:C1:native",
+      channelRef: "C1",
+      audience: [{ externalId: "U1", provider: "slack" as const }],
+    },
   };
   const files = async () => [
     { name: "shot.png", mimetype: "image/png", ...(await built.blobTransfer.put(PNG)) },

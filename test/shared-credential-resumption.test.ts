@@ -109,7 +109,7 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
     assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
     assert.equal(request.conversation.kind, scope.startsWith("channel:") ? "channel" : "group");
     assert.equal(request.conversation.channelRef, scope.slice(scope.indexOf(":") + 1));
-    assert.deepEqual(request.conversation.audience, [{ externalId: "U_REQUESTER" }]);
+    assert.deepEqual(request.conversation.audience, [{ externalId: "U_REQUESTER", provider: "slack" as const }]);
     assert.equal(request.unattendedGrants, undefined);
     assert.equal(request.ownerKeychainUnion, undefined);
     assert.deepEqual(request.triggerDestination, f.cron.destination);

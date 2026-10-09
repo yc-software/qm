@@ -17,7 +17,7 @@ function freshApp(securityScreener?: SecurityScreener) {
   return buildApp(testConfig({ dataDir }), securityScreener ? { securityScreener } : {});
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 function mention(text: string, channel: string, root: string): TurnRequest {
   return {
     surface: "slack",
@@ -33,7 +33,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
 function overheard(text: string, channel: string, root: string): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "U2" },
+    actor: { externalId: "U2", provider: "slack" as const },
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text,
@@ -101,7 +101,7 @@ test("a mid-turn message from a DIFFERENT person is attributed and its author du
 
   const second = await built.app.turn({
     ...mention("you can use my linear key", channel, root),
-    actor: { externalId: "U_PAUL", displayName: "Paul" },
+    actor: { externalId: "U_PAUL", provider: "slack" as const, displayName: "Paul" },
   });
   assert.equal(second.runId, liveRunId);
   assert.equal(second.steered, true);
@@ -344,7 +344,7 @@ test("an addressed bare 'stop' still ABORTS a live UNPROMPTED run", async () => 
 function automationRun(channel: string, root: string): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "U-owner" },
+    actor: { externalId: "U-owner", provider: "slack" as const },
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [] },
     deliveryTarget: `slack:${channel}:${root}`,
     text: "check the deploy and report back",
@@ -407,7 +407,7 @@ test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run 
 
   const synthetic: TurnRequest = {
     surface: "slack",
-    actor: { externalId: "U2" },
+    actor: { externalId: "U2", provider: "slack" as const },
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text: "bot posted: build finished",
@@ -424,7 +424,7 @@ test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run 
 function spawnedWorker(channel: string, askTs: string): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "jordan@acme.test", displayName: "Jordan" },
+    actor: { externalId: "jordan@acme.test", provider: "email" as const, displayName: "Jordan" },
     conversation: { kind: "channel", threadRef: `slack:${channel}:ambient:${askTs}`, channelRef: channel },
     deliveryTarget: channel,
     text: "can you check the deploy?",

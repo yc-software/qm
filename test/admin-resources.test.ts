@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -395,7 +396,7 @@ test("a generic resource round-trips through the registry dispatch + read loop",
     assert.equal(body.soul, "be excellent");
     assert.equal(body.soulVersion, 2);
     assert.equal(body.soulHistory[0]?.content, "be excellent");
-    assert.equal(body.soulHistory[0]?.updatedBy, srv.built.principals.principalOf("admin-alice"));
+    assert.equal(body.soulHistory[0]?.updatedBy, srv.built.principals.principalOf(handle("slack", "admin-alice")));
     assert.ok(body.soulHistory[0]?.updatedAt);
 
     const stale = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/soul`, {
@@ -449,7 +450,10 @@ test("device-flow cutover is scope-specific, audited, and reverses without delet
       deviceFlowCutover: { acmecli: { effective: string; configured: { updatedBy: string } } };
     };
     assert.equal(body.deviceFlowCutover.acmecli.effective, "prefer_ephemeral");
-    assert.equal(body.deviceFlowCutover.acmecli.configured.updatedBy, srv.built.principals.principalOf("admin-alice"));
+    assert.equal(
+      body.deviceFlowCutover.acmecli.configured.updatedBy,
+      srv.built.principals.principalOf(handle("slack", "admin-alice")),
+    );
 
     const unsupported = await fetch(endpoint, {
       method: "PUT",
@@ -754,7 +758,7 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     assert.equal(got.ambientPolicy.orders, "flag anything about the Q3 launch");
     assert.deepEqual(Object.keys(got.ambientPolicy.bots).sort(), ["GitHub", "Linear", "__proto__"]);
     assert.equal(got.ambientPolicy.updatedAt, stored?.updatedAt);
-    assert.equal(stored?.setBy, srv.built.principals.principalOf("admin-alice"));
+    assert.equal(stored?.setBy, srv.built.principals.principalOf(handle("slack", "admin-alice")));
     const revs = await srv.built.channelPolicy.history("C1");
     assert.deepEqual(Object.keys(revs[0]?.bots ?? {}).sort(), ["GitHub", "Linear", "__proto__"]);
 

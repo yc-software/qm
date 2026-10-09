@@ -22,7 +22,15 @@ test("Slack Stop cancels the durable conversation tree even when the coordinator
     ids: { botUserId: "BOT" },
   } as unknown as Parameters<typeof createTurnHandler>[0]);
   await handler.handleIncoming(
-    { kind: "dm", channel: "D1", userId: "U1", actor: { externalId: "U1" }, rawText: "stop", files: [], ts: "10.0" },
+    {
+      kind: "dm",
+      channel: "D1",
+      userId: "U1",
+      actor: { externalId: "U1", provider: "slack" as const },
+      rawText: "stop",
+      files: [],
+      ts: "10.0",
+    },
     {},
   );
   assert.deepEqual(stopped, ["dm:D1"]);

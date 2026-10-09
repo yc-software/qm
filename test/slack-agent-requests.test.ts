@@ -91,8 +91,10 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
     ...opts.coreOverrides,
   } as unknown as SlackCoreClient;
   const directory = {
-    classifyActor: async () => ({ externalId: "carol@example.com", displayName: "Carol" }),
-    classifyUserCached: async () => ({ actor: { externalId: "carol@example.com", displayName: "Carol" } }),
+    classifyActor: async () => ({ externalId: "carol@example.com", provider: "email" as const, displayName: "Carol" }),
+    classifyUserCached: async () => ({
+      actor: { externalId: "carol@example.com", provider: "email" as const, displayName: "Carol" },
+    }),
   } as never;
   const posts: any[] = [];
   const updates: any[] = [];
@@ -151,7 +153,7 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
         threadOnly: true,
         kind: "channel",
         channelName: "proj",
-        audience: [{ externalId: "U2", displayName: "Carol" }],
+        audience: [{ externalId: "U2", provider: "slack" as const, displayName: "Carol" }],
       },
       [{ targetUserId: "U2", task: "run the check" }],
     );

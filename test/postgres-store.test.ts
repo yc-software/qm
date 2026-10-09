@@ -1927,7 +1927,7 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
   const safe = "nul lone� low� emoji😀 literal\\u0000";
   const inbound: TurnRequest = {
     surface: "web",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: thread },
     text: unsafe,
   };

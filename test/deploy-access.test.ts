@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -41,12 +42,12 @@ async function fixture(t: { after(fn: () => void): void }) {
   const auditLog = createAuditLog();
   const deliveries = createDeliveryStore();
   const identity = createIdentityService();
-  const act = (email: string) => identity.principals.act(email, { email });
+  const act = (email: string) => identity.principals.act(handle("email", email), { email });
   const p = { owner: await act(owner), requester: await act(requester), carol: await act("carol@example.com") };
   const directory = createDirectoryStore();
   await directory.replace(
     [owner, requester, "carol@example.com"].map((email) => ({
-      principalId: identity.principals.principalOf(email)!,
+      principalId: identity.principals.principalOf(handle("email", email))!,
       displayName: email,
       type: "internal" as const,
     })),
@@ -54,7 +55,7 @@ async function fixture(t: { after(fn: () => void): void }) {
   const deploy = createDeployService({
     principals: identity.principals,
     canManageEmail: async (email) =>
-      (await directory.get(identity.principals.principalOf(email) ?? email))?.type === "internal",
+      (await directory.get(identity.principals.principalOf(handle("email", email)) ?? email))?.type === "internal",
     deliveries,
     deployAppsDomain: "apps.example.com",
     deployStore: createDeployStore(),
@@ -164,7 +165,7 @@ test("requester, stranger, guest and deactivated owner cannot approve or decline
     for (const id of [requester, "carol@example.com"]) await assert.rejects(f.decide(id, approve), /owner/);
     await assert.rejects(f.decide(owner, approve, { isExternalGuest: true }), /owner/);
   }
-  await f.identity.deactivate(await f.identity.principals.act(owner));
+  await f.identity.deactivate(await f.identity.principals.act(handle("email", owner)));
   await assert.rejects(f.decide(), /owner/);
   await assert.rejects(f.decide(owner, false), /owner/);
   assert.deepEqual(await f.grants(), []);

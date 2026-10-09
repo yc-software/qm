@@ -73,7 +73,12 @@ mock.module("../src/harness/mock-harness.ts", {
 const { buildApp } = await import("../src/wiring.ts");
 
 function request(threadRef = "fixture-thread"): TurnRequest {
-  return { surface: "test", actor: { externalId: "U1" }, conversation: { kind: "dm", threadRef }, text: "run fixture" };
+  return {
+    surface: "test",
+    actor: { externalId: "U1", provider: "slack" as const },
+    conversation: { kind: "dm", threadRef },
+    text: "run fixture",
+  };
 }
 
 for (const securityPosture of ["auto", "strict"] as const) {
@@ -160,7 +165,12 @@ test("released shared content retains scope and survives a failed continuation",
   const req: TurnRequest = {
     ...request(),
     text: "run fixture shared",
-    conversation: { kind: "channel", threadRef: "shared-fixture", channelRef: "C", audience: [{ externalId: "U1" }] },
+    conversation: {
+      kind: "channel",
+      threadRef: "shared-fixture",
+      channelRef: "C",
+      audience: [{ externalId: "U1", provider: "slack" as const }],
+    },
   };
   const blocked = await built.app.turn(req);
   const approval = { requestId: blocked.pendingApprovals![0]!.requestId, approved: true };

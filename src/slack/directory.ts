@@ -1,3 +1,4 @@
+import type { IdentityProvider } from "../identity/principals.ts";
 import { companySlackActor, type ExternalSlackAccess } from "./external-access.ts";
 import {
   type ActorAssertion,
@@ -45,11 +46,13 @@ interface ChannelRow {
 interface ChannelMembershipRow {
   channelId: string;
   principalId: string;
+  provider?: IdentityProvider;
 }
-type ChannelInvalidations = ReadonlyMap<string, ReadonlySet<string>>;
+type ChannelInvalidations = ReadonlyMap<string, ReadonlyMap<string, ActorAssertion>>;
 interface GroupMembershipRow {
   groupId: string;
   principalId: string;
+  provider?: IdentityProvider;
 }
 interface ChannelRef {
   id: string;
@@ -78,7 +81,7 @@ function withInternalOverride(
 
 export interface Directory {
   getUserSnapshot(client: any): Promise<{ byId: Map<string, CachedUser>; fetchedAt: number } | undefined>;
-  forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
+  forceDirectorySync(client: any, invalidateChannelId?: string, invalidateMember?: ActorAssertion): Promise<void>;
   classifyUserCached(client: any, userId: string | undefined): Promise<CachedUser & { ok: boolean }>;
   classifyActor(client: any, userId: string): Promise<ActorAssertion>;
   getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined>;
@@ -98,7 +101,7 @@ export interface Directory {
     client: any,
     refs: ReadonlyArray<{ id: string; info?: ChannelMeta }>,
     kind: RosterKind,
-  ): Promise<Map<string, string[]>>;
+  ): Promise<Map<string, ActorAssertion[]>>;
   syncForUnseenGroup(client: any, groupId: string): void;
   resolveAutoIdentityMode(client: any): Promise<SlackIdentityMode>;
 }
@@ -228,9 +231,9 @@ export function createDirectory(deps: {
     client: any,
     refs: ReadonlyArray<{ id: string; info?: ChannelMeta }>,
     kind: RosterKind,
-  ): Promise<Map<string, string[]>> {
+  ): Promise<Map<string, ActorAssertion[]>> {
     const classified = await allClassifiedRosters(client, refs, kind);
-    const rosters = new Map<string, string[]>();
+    const rosters = new Map<string, ActorAssertion[]>();
     for (const ref of refs) {
       const roster = classified.get(ref.id);
       if (!roster) continue;
@@ -301,8 +304,12 @@ export function createDirectory(deps: {
     const refs = [...publicChannels, ...privateChannels];
     const channelMembers: ChannelMembershipRow[] = [];
     const channelRosterIds: string[] = [];
-    const channelRevocations = [...invalidations].flatMap(([channelId, principalIds]) =>
-      [...principalIds].map((principalId) => ({ channelId, principalId })),
+    const channelRevocations = [...invalidations].flatMap(([channelId, members]) =>
+      [...members.values()].map((m) => ({
+        channelId,
+        principalId: m.externalId,
+        ...(m.provider ? { provider: m.provider } : {}),
+      })),
     );
     const rosters = await allClassifiedRosters(client, refs, {
       plural: "channels",
@@ -316,8 +323,13 @@ export function createDirectory(deps: {
       if (!internalIds) continue;
       const revoked = invalidations.get(channel.id);
       channelRosterIds.push(channel.id);
-      for (const principalId of internalIds) {
-        if (!revoked?.has(principalId)) channelMembers.push({ channelId: channel.id, principalId });
+      for (const m of internalIds) {
+        if (!revoked?.has(m.externalId))
+          channelMembers.push({
+            channelId: channel.id,
+            principalId: m.externalId,
+            ...(m.provider ? { provider: m.provider } : {}),
+          });
       }
     }
     return { channelMembers, channelRosterIds, channelRevocations };
@@ -350,7 +362,8 @@ export function createDirectory(deps: {
     for (const id of groupIds) {
       const internalIds = rosters.get(id);
       if (!internalIds) continue;
-      for (const pid of internalIds) groupMembers.push({ groupId: id, principalId: pid });
+      for (const m of internalIds)
+        groupMembers.push({ groupId: id, principalId: m.externalId, ...(m.provider ? { provider: m.provider } : {}) });
     }
     return { groupMembers, groupRosterIds: [...rosters.keys()] };
   }
@@ -458,10 +471,11 @@ export function createDirectory(deps: {
         const a = u.actor;
         return {
           principalId: a.externalId,
+          ...(a.provider ? { provider: a.provider } : {}),
           displayName: a.displayName ?? a.externalId,
           type: "internal" as const,
           slackId,
-          ...(a.externalId !== slackId ? { email: a.externalId } : {}),
+          ...(a.provider === "email" ? { email: a.externalId } : {}),
         };
       });
     const fetched = await fetchChannels(client, invalidations, targetChannelIds);
@@ -527,7 +541,7 @@ export function createDirectory(deps: {
   }
 
   let directorySyncClient: any;
-  const invalidatedChannelMembers = new Map<string, Set<string>>();
+  const invalidatedChannelMembers = new Map<string, Map<string, ActorAssertion>>();
   const targetedChannelIds = new Set<string>();
   let fullDirectorySyncRequested = false;
   let syncRetryTimer: NodeJS.Timeout | undefined;
@@ -547,13 +561,13 @@ export function createDirectory(deps: {
     if (!targets) lastFullRosterFetchAt = undefined;
     const snap = userSnapshot ?? (await getUserSnapshot(directorySyncClient));
     const pendingInvalidations = new Map(
-      [...invalidatedChannelMembers].map(([channelId, principalIds]) => [channelId, new Set(principalIds)]),
+      [...invalidatedChannelMembers].map(([channelId, members]) => [channelId, new Map(members)]),
     );
     if (snap && (await pushDirectory(snap, directorySyncClient, pendingInvalidations, targets))) {
       for (const channelId of scheduledTargets) targetedChannelIds.delete(channelId);
-      for (const [channelId, principalIds] of pendingInvalidations) {
+      for (const [channelId, members] of pendingInvalidations) {
         const current = invalidatedChannelMembers.get(channelId);
-        for (const principalId of principalIds) current?.delete(principalId);
+        for (const id of members.keys()) current?.delete(id);
         if (!current?.size) invalidatedChannelMembers.delete(channelId);
       }
     } else {
@@ -565,14 +579,14 @@ export function createDirectory(deps: {
   function forceDirectorySync(
     client: any,
     invalidateChannelId?: string,
-    invalidatePrincipalId?: string,
+    invalidateMember?: ActorAssertion,
   ): Promise<void> {
     directorySyncClient = client;
     if (!invalidateChannelId) fullDirectorySyncRequested = true;
-    if (invalidateChannelId && invalidatePrincipalId) {
-      const principals = invalidatedChannelMembers.get(invalidateChannelId) ?? new Set<string>();
-      principals.add(invalidatePrincipalId);
-      invalidatedChannelMembers.set(invalidateChannelId, principals);
+    if (invalidateChannelId && invalidateMember?.externalId) {
+      const members = invalidatedChannelMembers.get(invalidateChannelId) ?? new Map<string, ActorAssertion>();
+      members.set(invalidateMember.externalId, invalidateMember);
+      invalidatedChannelMembers.set(invalidateChannelId, members);
     }
     if (invalidateChannelId) targetedChannelIds.add(invalidateChannelId);
     return coalescedDirectorySync();
@@ -604,7 +618,7 @@ export function createDirectory(deps: {
       if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);
       return { ...classified, ok: true };
     } catch {
-      return { actor: { externalId: userId ?? "", isExternalGuest: true }, ok: false };
+      return { actor: { externalId: userId ?? "", provider: "slack", isExternalGuest: true }, ok: false };
     }
   }
 
@@ -654,6 +668,7 @@ export function createDirectory(deps: {
           channelMembers: membership.publishMembers.map((member) => ({
             channelId: channel,
             principalId: member.externalId,
+            ...(member.provider ? { provider: member.provider } : {}),
           })),
           channelRosterIds: [channel],
           channelsSyncedAt: observedAt,

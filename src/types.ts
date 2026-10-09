@@ -1,3 +1,4 @@
+import type { IdentityProvider } from "./identity/principals.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 
@@ -731,7 +732,9 @@ export interface TurnRequest {
 }
 
 export interface ActorAssertion {
+  /** A principal id, or a handle when `provider` names who vouched for it. */
   externalId: string;
+  provider?: IdentityProvider;
   isExternalGuest?: boolean;
   isBot?: boolean;
   teamIds?: string[];

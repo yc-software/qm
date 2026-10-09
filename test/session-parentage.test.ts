@@ -152,8 +152,14 @@ test("late human child messages retain their sender and revalidate access", asyn
       text,
       request: {
         surface: "web",
-        actor: { externalId: "U2" },
-        conversation: { ...conversation, audience: [{ externalId: "U1" }, { externalId: "U2" }] },
+        actor: { externalId: "U2", provider: "slack" as const },
+        conversation: {
+          ...conversation,
+          audience: [
+            { externalId: "U1", provider: "slack" as const },
+            { externalId: "U2", provider: "slack" as const },
+          ],
+        },
         text,
       },
     });

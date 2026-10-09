@@ -13,8 +13,8 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const org = scopeId("org", "default-org");
-const internalActor = { externalId: "U1" };
-const guest = { externalId: "G9", isExternalGuest: true };
+const internalActor = { externalId: "U1", provider: "slack" as const };
+const guest = { externalId: "G9", provider: "slack" as const, isExternalGuest: true };
 
 function externalChannelTurn(surface: string): TurnRequest {
   return {
@@ -93,7 +93,7 @@ test("a bot assertion can enter the turn pipeline", async () => {
   const built = freshApp();
   const res = await built.app.turn({
     surface: "slack",
-    actor: { externalId: "B1", isBot: true },
+    actor: { externalId: "B1", provider: "slack" as const, isBot: true },
     conversation: { kind: "dm", threadRef: "dm:B1:t1" },
     text: "hello",
   });

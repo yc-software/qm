@@ -17,7 +17,7 @@ import {
 import { testConfig } from "./support/test-config.ts";
 import { principalOf } from "./support/principal.ts";
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 const onboardingSkillDir = join(process.cwd(), "plugins/onboarding/skills");
 
 function freshApp(overrides: Partial<Config> = {}) {

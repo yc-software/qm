@@ -1,3 +1,4 @@
+import { handle, isIdentityProvider } from "../../../identity/principals.ts";
 import { IdentityLinkError } from "../../../identity/principals.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
@@ -39,14 +40,16 @@ export async function linkIdentity(ctx: ApiCtx): Promise<void> {
   const a = await admin(ctx);
   if (!a) return;
   const b = isObj(ctx.body) ? ctx.body : {};
-  const handle = str(b.handle);
+  const externalId = str(b.externalId);
   const principalId = str(b.principalId);
   const evidence = str(b.evidence);
-  if (!handle || !principalId) return sendJson(ctx.res, 400, { error: "handle and principalId are required" });
+  const provider = b.provider;
+  if (!externalId || !isIdentityProvider(provider) || !principalId)
+    return sendJson(ctx.res, 400, { error: "provider, externalId and principalId are required" });
   if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
     return sendJson(ctx.res, 400, { error: "evidence must say how the identity was verified as this person" });
   await guarded(ctx, async () => {
-    const row = await a.principals.attach(handle, principalId, `admin:${a.actor.id}`, evidence);
+    const row = await a.principals.attach(handle(provider, externalId), principalId, `admin:${a.actor.id}`, evidence);
     audit(ctx.deps, {
       principalId: a.actor.id,
       action: "identity.link",
@@ -60,8 +63,10 @@ export async function linkIdentity(ctx: ApiCtx): Promise<void> {
 export async function unlinkIdentity(ctx: ApiCtx): Promise<void> {
   const a = await admin(ctx);
   if (!a) return;
-  const handle = str(isObj(ctx.body) ? ctx.body.handle : "");
-  const row = handle ? await a.principals.unlink(handle) : null;
+  const b = isObj(ctx.body) ? ctx.body : {};
+  const externalId = str(b.externalId);
+  const row =
+    externalId && isIdentityProvider(b.provider) ? await a.principals.unlink(handle(b.provider, externalId)) : null;
   if (!row) return sendJson(ctx.res, 404, { error: "not_found" });
   await ctx.deps.identity?.refresh(true);
   audit(ctx.deps, {

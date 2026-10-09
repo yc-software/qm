@@ -11,7 +11,7 @@ import { messageRevision } from "../src/core/message-revisions.ts";
 import { sleep } from "../src/util/async.ts";
 import type { TurnRequest } from "../src/types.ts";
 
-const actor = { externalId: "U1", displayName: "Ada" };
+const actor = { externalId: "U1", provider: "slack" as const, displayName: "Ada" };
 
 function channelTurn(text: string, messageTs: string): TurnRequest {
   return {

@@ -286,7 +286,7 @@ export function createTurnHandler(deps: {
       replyThreadTs = inc.threadTs;
       if (!actor.isBot && !actor.isExternalGuest)
         void core
-          .personalScopeOf(actor.externalId)
+          .personalScopeOf(actor)
           .then((scope) => deps.ensureHeader?.(client, inc.channel, scope, "dm"))
           .catch(swallowAs("slack: dm header scope", undefined));
     } else {

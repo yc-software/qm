@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -82,7 +83,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello",
     };
@@ -115,13 +116,17 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello",
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
-    await s.built.app.turn({ ...dm, actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "dm:U2:t1" } });
+    await s.built.app.turn({
+      ...dm,
+      actor: { externalId: "U2", provider: "slack" as const },
+      conversation: { kind: "dm", threadRef: "dm:U2:t1" },
+    });
     await s.built.app.turn({ ...dm, conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:t1" } });
     const fail = () => {
       throw new Error("User detail must not load org history or artifact lists");
@@ -156,7 +161,7 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hi",
     };
@@ -193,7 +198,7 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hi",
     };
@@ -240,7 +245,7 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
         headers: { "x-admin-actor": "admin-alice@default-org" },
       })
     ).json();
-    assert.equal(d.principalId, s.built.principals.principalOf("admin-alice"));
+    assert.equal(d.principalId, s.built.principals.principalOf(handle("slack", "admin-alice")));
     assert.equal(d.admin.isAdmin, true);
     assert.equal(d.stats.sessions, 0);
     assert.equal("conversations" in d, false);
@@ -309,7 +314,7 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U9" },
+      actor: { externalId: "U9", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U9:t1" },
       text: "hi",
     };

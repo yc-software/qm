@@ -83,7 +83,7 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello there",
     };

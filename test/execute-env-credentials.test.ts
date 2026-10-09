@@ -43,7 +43,7 @@ function acmecliBrokeredLayer(binary?: string, approvals?: Array<{ pattern: stri
   return dir;
 }
 
-const actor = { externalId: "U_ENV_BROKER" };
+const actor = { externalId: "U_ENV_BROKER", provider: "slack" as const };
 test("selected broker credential uses isolated execute with policy before vending", async () => {
   let assumes = 0;
   const sentinels = {

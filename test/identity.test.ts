@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
@@ -25,7 +26,7 @@ test("classifies a flagged Slack Connect user as guest", () => {
 });
 
 test("resolves bot assertions as internal automation callers", async () => {
-  const p = await id.actor({ externalId: "B1", isBot: true });
+  const p = await id.actor({ externalId: "B1", provider: "slack" as const, isBot: true });
   assert.equal(p.type, "internal");
   assert.equal(id.isInternal(p), true);
 });
@@ -54,11 +55,11 @@ test("a deactivated principal classifies as non-internal (fail-closed source, §
 
 test("deactivation folds email case: a leaver stays out under any casing of their address", async () => {
   const svc = createIdentityService();
-  await svc.deactivate(await svc.principals.act("Alice@Corp.com"));
-  assert.equal(svc.classify(svc.principals.principalOf("alice@corp.com")!).type, "guest");
-  assert.equal(svc.classify(svc.principals.principalOf("ALICE@CORP.COM")!).type, "guest");
-  await svc.reactivate(svc.principals.principalOf("alice@corp.com")!);
-  assert.equal(svc.classify(svc.principals.principalOf("Alice@Corp.com")!).type, "internal");
+  await svc.deactivate(await svc.principals.act(handle("email", "Alice@Corp.com")));
+  assert.equal(svc.classify(svc.principals.principalOf(handle("email", "alice@corp.com"))!).type, "guest");
+  assert.equal(svc.classify(svc.principals.principalOf(handle("email", "ALICE@CORP.COM"))!).type, "guest");
+  await svc.reactivate(svc.principals.principalOf(handle("email", "alice@corp.com"))!);
+  assert.equal(svc.classify(svc.principals.principalOf(handle("email", "Alice@Corp.com"))!).type, "internal");
 });
 
 test("case fold does not merge distinct emails or touch non-email ids", async () => {
@@ -73,10 +74,10 @@ test("durable rehydration folds a cased stored deactivation", async () => {
   const backing = createMemoryMap<DeactivationRecord>();
   const deployment = sharedPrincipals();
   const first = createIdentityService(backing, deployment());
-  await first.deactivate(await first.principals.act("Carol@Corp.com"));
+  await first.deactivate(await first.principals.act(handle("email", "Carol@Corp.com")));
   const second = createIdentityService(backing, deployment());
   await second.hydrate();
-  assert.equal(second.classify(second.principals.principalOf("carol@corp.com")!).type, "guest");
+  assert.equal(second.classify(second.principals.principalOf(handle("email", "carol@corp.com"))!).type, "guest");
 });
 
 test("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
@@ -108,7 +109,7 @@ test("external members written by one instance reach another over the same backi
   const deployment = sharedPrincipals();
   const writer = createIdentityService(undefined, { externalMembers, ...deployment() });
   const reader = createIdentityService(undefined, { externalMembers, ...deployment() });
-  const pat = await reader.principals.act("pat@partner.example");
+  const pat = await reader.principals.act(handle("email", "pat@partner.example"));
   await reader.hydrate();
   const now = Date.now();
   const member = (expiresAt: number): ExternalMember => ({
@@ -163,9 +164,9 @@ test("an overridden principal classifies internal even when flagged guest or dea
   const svc = createIdentityService(createMemoryMap<DeactivationRecord>(), {
     isOverridden: (email) => overrides.has(email),
   });
-  const contractor = await svc.principals.act("Contractor@Corp.com");
+  const contractor = await svc.principals.act(handle("email", "Contractor@Corp.com"));
   assert.equal(svc.classify(contractor, true).type, "internal");
   await svc.deactivate(contractor);
   assert.equal(svc.classify(contractor).type, "internal");
-  assert.equal(svc.classify(await svc.principals.act("other@corp.com"), true).type, "guest");
+  assert.equal(svc.classify(await svc.principals.act(handle("email", "other@corp.com")), true).type, "guest");
 });

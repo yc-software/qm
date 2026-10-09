@@ -353,7 +353,7 @@ test("memory store: a signal round-trips ts and request intact", async () => {
   const store = createMemoryRunSignalStore();
   const request = {
     surface: "slack",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
     text: "why did you do it wrong?",
   };
@@ -368,7 +368,7 @@ test("pg store: a signal round-trips ts and request intact", { skip }, async () 
   const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const request = {
     surface: "slack",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
     text: "why did you do it wrong?",
   };
@@ -475,7 +475,7 @@ test("startSignalPoll delivers the request and files even when a steer has no ca
   const signals = createMemoryRunSignalStore();
   const request = {
     surface: "web",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm" as const, threadRef: "files" },
     text: "",
     attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 3, blobId: "b1" }],

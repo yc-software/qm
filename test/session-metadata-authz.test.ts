@@ -47,7 +47,7 @@ test("the single-session read applies the managed-project check the session list
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
   const outcome = await built.app.turn({
     surface: "web",
-    actor: { externalId: "member" },
+    actor: { externalId: "member", provider: "slack" as const },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:member:project" },
     text: "!run git push --force origin main",
   });

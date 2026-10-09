@@ -3,7 +3,6 @@ import { orgId as configOrgId } from "../config.ts";
 import { createHash } from "node:crypto";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { PrincipalType } from "../types.ts";
-import { normalizeHandle } from "./person.ts";
 import {
   MAX_CANDIDATES,
   groupParticipantsKey,
@@ -654,13 +653,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
 
     async get(principalId) {
-      const key = normalizeHandle(principalId);
-      const rows = await q(
-        `SELECT ${MEMBER_COLS} FROM directory_members
-         WHERE org_id = $1 AND (principal_id = $2 OR ($3 AND lower(principal_id) = $4))
-         ORDER BY (principal_id = $2) DESC LIMIT 1`,
-        [orgId, principalId, key.includes("@"), key],
-      );
+      const rows = await q(`SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND principal_id = $2`, [
+        orgId,
+        principalId,
+      ]);
       return rows.length ? memberRow(rows[0]!) : null;
     },
 

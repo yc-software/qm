@@ -1,7 +1,8 @@
+import { handle, principalFromEdge, type EdgeHandle } from "../identity/principals.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
+import { personKey, samePerson } from "../directory/person.ts";
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
@@ -32,8 +33,7 @@ import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
-  const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
-  const viewersOwn = (id: string): boolean => viewerKeys.has(personKey(id));
+  const viewersOwn = (id: string): boolean => samePerson(id, principalId);
   const scopeNames = new Map<ScopeId, string | null>([[scopeId("org", orgIdOf()), null]]);
   if (deps.identity.isInternal(deps.identity.classify(principalId))) {
     for (const c of await deps.directory.listChannelsFor(principalId)) {
@@ -142,7 +142,12 @@ export function createMessagingMethods(
       ...(deps.emailAuthMembers ?? []),
       ...externals
         .filter((member) => externalMemberActive(member))
-        .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
+        .map((member) => ({
+          principalId: member.email,
+          provider: "email" as const,
+          displayName: member.email,
+          type: "internal" as const,
+        })),
       ...participants
         .filter((principalId) => deps.identity.classify(principalId).type === "internal")
         .map((principalId) => ({
@@ -171,9 +176,10 @@ export function createMessagingMethods(
     if (error) throw new Error(error);
   };
 
-  async function principalRows<T extends { principalId: string }>(rows: readonly T[]): Promise<T[]> {
-    const out: T[] = [];
-    for (const row of rows) out.push({ ...row, principalId: await deps.identity.principals.act(row.principalId) });
+  async function principalRows<T extends EdgeHandle>(rows: readonly T[]): Promise<Omit<T, "provider">[]> {
+    const out: Omit<T, "provider">[] = [];
+    for (const { provider, ...row } of rows)
+      out.push({ ...row, principalId: await principalFromEdge(deps.identity.principals, row.principalId, provider) });
     return out;
   }
 
@@ -462,12 +468,12 @@ export function createMessagingMethods(
       const graph = deps.identity.principals;
       const members: DirectoryMember[] = [];
       for (const m of handleMembers) {
-        const { email, ...member } = m;
-        const principalId = await graph.act(m.principalId, {
+        const { email, provider, ...member } = m;
+        const principalId = await principalFromEdge(graph, m.principalId, provider, {
           displayName: m.displayName,
           email: email ?? null,
         });
-        if (m.slackId && email) await graph.autoLink(m.slackId, email);
+        if (m.slackId && email) await graph.autoLink(handle("slack", m.slackId), email);
         members.push({ ...member, principalId });
       }
       const previous = await deps.directory.list();
@@ -557,11 +563,11 @@ export function createMessagingMethods(
         null
       );
     },
-    samePerson(a, b) {
-      return samePersonInDirectory(deps.directory, a, b);
+    async samePerson(a, b) {
+      return samePerson(a, b);
     },
-    personMatcher(actorId) {
-      return samePersonMatcher(deps.directory, actorId);
+    async personMatcher(actorId) {
+      return async (id: string) => samePerson(id, actorId);
     },
     cronAdminUrl(cron) {
       return adminBase ? adminCronHistoryUrl(adminBase, cron.ownerScopeId, cron.id) : undefined;

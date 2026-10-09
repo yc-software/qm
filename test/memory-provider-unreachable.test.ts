@@ -44,7 +44,7 @@ test("wiring: an unreachable fail-open MCP memory provider still serves turns vi
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "mem-unreachable-")), memoryProviderConfig }),
   );
   try {
-    const actor = { externalId: "U1" };
+    const actor = { externalId: "U1", provider: "slack" as const };
     const dm = (text: string, thread: string): TurnRequest => ({
       surface: "test",
       actor,

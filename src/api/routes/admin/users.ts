@@ -1,3 +1,4 @@
+import { handle } from "../../../identity/principals.ts";
 import { randomUUID } from "node:crypto";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
@@ -130,7 +131,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if ((!teammate && expiry.value === undefined) || (expiry.value !== undefined && expiry.value <= now))
     return bad("expiresAt is required and must be in the future");
   await deps.identity.refresh(true);
-  const principal = deps.identity.principals.principalOf(email);
+  const principal = deps.identity.principals.principalOf(handle("email", email));
   if (teammate && principal && deps.identity.deactivationSource(principal) === "manual")
     return sendJson(res, 409, {
       error: "conflict",

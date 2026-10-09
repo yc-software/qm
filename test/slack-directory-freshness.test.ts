@@ -147,7 +147,7 @@ test("periodic and unrelated targeted refreshes cannot resurrect another core's 
   const b = core([channel("C_ONE", true), channel("C_OTHER")]);
   await b.refresh();
   advance(1);
-  await b.directory.forceDirectorySync(b.client, "C_ONE", "U_ONE");
+  await b.directory.forceDirectorySync(b.client, "C_ONE", { externalId: "U_ONE", provider: "slack" });
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), false);
   advance(1);
   await a.directory.forceDirectorySync(a.client, "C_OTHER");

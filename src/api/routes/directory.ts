@@ -1,3 +1,5 @@
+import { handle, isIdentityProvider } from "../../identity/principals.ts";
+import { personKey } from "../../directory/person.ts";
 import { isPrincipalType, PRINCIPAL_TYPES, type PrincipalType } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { sendJson } from "../http.ts";
@@ -10,7 +12,8 @@ async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   if (!ctx.params.id) return sendJson(res, 404, { error: "not_found" });
-  const id = await principalGraph(ctx).act(ctx.params.id);
+  const id = personKey(ctx.params.id);
+  if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.deactivate(id);
   audit(deps, { principalId: id, action: "principal.deactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: false });
@@ -20,7 +23,8 @@ async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   if (!ctx.params.id) return sendJson(res, 404, { error: "not_found" });
-  const id = await principalGraph(ctx).act(ctx.params.id);
+  const id = personKey(ctx.params.id);
+  if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.reactivate(id);
   audit(deps, { principalId: id, action: "principal.reactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
@@ -29,9 +33,10 @@ async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
 /** Web sign-in edge: the handle acted, so resolve it to its principal, creating one if needed. */
 async function principalForHandle(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const handle = ctx.params.id!;
-  if (!handle) return sendJson(res, 404, { error: "not_found" });
-  const principalId = await principalGraph(ctx).act(handle, { verified: true });
+  const provider = ctx.params.provider;
+  const externalId = ctx.params.id;
+  if (!externalId || !isIdentityProvider(provider)) return sendJson(res, 404, { error: "not_found" });
+  const principalId = await principalGraph(ctx).act(handle(provider, externalId), { verified: true });
   await deps.identity?.refresh(true);
   return sendJson(res, 200, { principalId });
 }
@@ -85,11 +90,21 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   if (Array.isArray(b.members)) {
     const members = b.members
       .filter(
-        (m): m is { principalId: string; displayName: string; type: PrincipalType; slackId?: string; email?: string } =>
+        (
+          m,
+        ): m is {
+          principalId: string;
+          provider?: unknown;
+          displayName: string;
+          type: PrincipalType;
+          slackId?: string;
+          email?: string;
+        } =>
           isObj(m) && typeof m.principalId === "string" && typeof m.displayName === "string" && isPrincipalType(m.type),
       )
       .map((m) => ({
         principalId: m.principalId,
+        ...(isIdentityProvider(m.provider) ? { provider: m.provider } : {}),
         displayName: m.displayName,
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
@@ -178,7 +193,7 @@ async function channelMembership(ctx: ApiCtx): Promise<void> {
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
   { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },
-  { method: "GET", path: "/v1/identities/:id/principal", auth: "source", handle: principalForHandle },
+  { method: "GET", path: "/v1/identities/:provider/:id/principal", auth: "source", handle: principalForHandle },
   { method: "POST", path: "/v1/directory", auth: "source", handle: pushDirectory },
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
   {

@@ -1508,7 +1508,10 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     accountLabel: "AliceBell",
   });
 
-  const audience = [{ externalId: "U_ASKER" }, { externalId: "U_OWNER", displayName: "Alice" }];
+  const audience = [
+    { externalId: "U_ASKER", provider: "slack" as const },
+    { externalId: "U_OWNER", provider: "slack" as const, displayName: "Alice" },
+  ];
   const sys = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
   assert.equal(sys.status, "ok");
   assert.match(sys.reply ?? "", /## Teammate keychains/);
@@ -1541,8 +1544,12 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   mark = fakeSprites.execScripts().length;
   const dm: TurnRequest = {
     surface: "test",
-    actor: { externalId: "U_OWNER" },
-    conversation: { kind: "dm", threadRef: "dm:U_OWNER", audience: [{ externalId: "U_OWNER" }] },
+    actor: { externalId: "U_OWNER", provider: "slack" as const },
+    conversation: {
+      kind: "dm",
+      threadRef: "dm:U_OWNER",
+      audience: [{ externalId: "U_OWNER", provider: "slack" as const }],
+    },
     origin: { kind: "human" },
     text: "!run true",
   } as TurnRequest;

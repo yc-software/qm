@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { handleOf, isPrincipalId, PRINCIPAL_SCHEMA } from "./principals.ts";
+import { composioUserId, isPrincipalId, PRINCIPAL_MIGRATIONS, type Handle } from "./principals.ts";
+import { orgId } from "../config.ts";
 import { interleaveNotebooks, PRINCIPAL_REFS } from "./principal-refs.ts";
 
 const DEACTIVATIONS = "deactivated_principals";
@@ -11,7 +12,8 @@ const EMAIL_KEYED = "external_members";
  *
  * Groups every principal id the database mentions (joined by `principal_links` and by Slack directory rows), gives
  * each group a principal, writes its identities, rewrites every registered column and durable-map row to the UUID,
- * merges notebooks, then drops `principal_links`. Dry-run by default; `apply` runs it in one transaction after
+ * records the Composio user id each handle connected apps under (so those connections keep resolving to their owner
+ * without reconnecting), merges notebooks, then drops `principal_links`. Dry-run by default; `apply` runs it in one transaction after
  * copying each touched table to `identity_premigration_<table>`.
  */
 
@@ -26,6 +28,16 @@ const fold = (id: string): string => {
   const s = id.trim();
   return s.includes("@") ? s.toLowerCase() : s;
 };
+
+/**
+ * Pre-identity rows stored bare handles with no provider, so this one-time conversion is the only place that reads a
+ * provider off a stored value. Slack ids it knows from `directory_members.slack_id` are passed in, not guessed.
+ */
+function legacyHandle(id: string, slackIds: ReadonlySet<string>): Handle {
+  if (slackIds.has(id) || /^(T[A-Z0-9]+:)?[UW][A-Z0-9]+$/.test(id)) return { provider: "slack", externalId: id };
+  if (id.includes("@") && !id.startsWith("oidc:")) return { provider: "email", externalId: id.toLowerCase() };
+  return { provider: "oidc", externalId: id };
+}
 
 const quote = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -90,10 +102,12 @@ const PERSONAL = /^personal:(.+)$/;
 
 export async function runIdentityMigration(opts: {
   pool: Pool;
+  org?: string;
   apply: boolean;
   log?: (line: string) => void;
 }): Promise<MigrationReport> {
   const log = opts.log ?? ((line: string) => console.log(line));
+  const org = opts.org ?? orgId();
   const client = await opts.pool.connect();
   const report: MigrationReport = { principals: 0, identities: 0, rewrites: {}, notebooksMerged: 0 };
   try {
@@ -103,6 +117,7 @@ export async function runIdentityMigration(opts: {
     const uf = new UnionFind();
     const names = new Map<string, string>();
     const slackEmail = new Map<string, string>();
+    const slackIds = new Set<string>();
     const see = (raw: unknown): void => {
       if (typeof raw !== "string" || !raw.trim() || isPrincipalId(raw.trim())) return;
       uf.find(fold(raw));
@@ -132,6 +147,7 @@ export async function runIdentityMigration(opts: {
       for (const { p, s, n } of rows) {
         if (isPrincipalId(p)) continue;
         if (n) names.set(fold(p), n);
+        if (s) slackIds.add(s);
         if (s && s !== p) {
           uf.union(s, fold(p));
           if (p.includes("@")) slackEmail.set(s, fold(p));
@@ -162,8 +178,11 @@ export async function runIdentityMigration(opts: {
         "INSERT INTO principals(principal_id, kind, display_name, created_at) VALUES ($1, 'person', $2, $3)",
         [principalId, displayName, now],
       );
-      for (const m of members) {
-        const h = handleOf(m);
+      const handles = members.flatMap((m) => [
+        { h: legacyHandle(m, slackIds), m },
+        { h: { provider: "composio" as const, externalId: composioUserId(org, m) }, m },
+      ]);
+      for (const { h, m } of handles) {
         await client.query(
           `INSERT INTO identities(provider, external_id, principal_id, email, linked_by, evidence, updated_at)
            VALUES ($1, $2, $3, $4, 'platform:migration', $5, $6) ON CONFLICT DO NOTHING`,
@@ -176,7 +195,7 @@ export async function runIdentityMigration(opts: {
             now,
           ],
         );
-        report.identities++;
+        if (h.provider !== "composio") report.identities++;
       }
     }
     if (!opts.apply) report.identities = mapping.size;
@@ -311,5 +330,5 @@ export async function runIdentityMigration(opts: {
 
 /** Tables the migration writes, created ahead of it so a fresh database and a migrated one look the same. */
 export async function ensurePrincipalSchema(pool: Pool): Promise<void> {
-  for (const statement of PRINCIPAL_SCHEMA) await pool.query(statement);
+  for (const m of PRINCIPAL_MIGRATIONS) for (const statement of m.statements) await pool.query(statement);
 }

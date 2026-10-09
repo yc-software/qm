@@ -50,15 +50,15 @@ const upstream = createServer((req: IncomingMessage, res) => {
       JSON.stringify({ status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" }),
     );
   }
-  if (req.url?.startsWith("/v1/identities/U-admin-alias/principal")) {
+  if (req.url?.startsWith("/v1/identities/oidc/U-admin-alias/principal")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ principalId: "U-admin" }));
   }
-  if (req.url?.startsWith("/v1/identities/U-alias/principal")) {
+  if (req.url?.startsWith("/v1/identities/oidc/U-alias/principal")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ principalId: "U1" }));
   }
-  if (req.url?.startsWith("/v1/identities/U-unresolved/principal")) {
+  if (req.url?.startsWith("/v1/identities/oidc/U-unresolved/principal")) {
     res.writeHead(500, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ error: "boom" }));
   }
@@ -125,7 +125,7 @@ const sessionKey = deriveKey("router-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, ageS = 0): string {
   const now = Math.floor(Date.now() / 1000);
   const iat = now - ageS;
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", prov: "oidc", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 test.after(() => {

@@ -327,8 +327,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
         channelRef: groupRef,
         channelName: "forged name",
         threadRef,
-        audience: [{ externalId: "outsider" }],
-        publishMembers: [{ externalId: "outsider" }],
+        audience: [{ externalId: "outsider", provider: "slack" as const }],
+        publishMembers: [{ externalId: "outsider", provider: "slack" as const }],
       },
       text,
     });
@@ -411,7 +411,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   );
   const forgedApproval = await built.app.turn({
     surface: "web",
-    actor: { externalId: "member" },
+    actor: { externalId: "member", provider: "slack" as const },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:approval", audience: [] },
     text: "!run git push --force origin main",
     approval: { requestId: pendingApproval.requestId, approved: true },
@@ -458,7 +458,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.deepEqual(await built.app.listSessionApprovals(sharedApproval.sessionId!, "member"), []);
   const crossMemberApproval = await built.app.turn({
     surface: "web",
-    actor: { externalId: "member" },
+    actor: { externalId: "member", provider: "slack" as const },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:shared-approval", audience: [] },
     text: "!run git push --force origin main",
     approval: { requestId: sharedPending.requestId, approved: true },
@@ -576,12 +576,12 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   const background = () =>
     built.app.turn({
       surface: "cron",
-      actor: { externalId: "member" },
+      actor: { externalId: "member", provider: "slack" as const },
       conversation: {
         kind: "group",
         channelRef: groupRef,
         threadRef: `cron:${project.id}:fire`,
-        audience: [{ externalId: "outsider" }],
+        audience: [{ externalId: "outsider", provider: "slack" as const }],
       },
       text: "background project work",
       triggered: true,
@@ -663,7 +663,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const queued = await built.app.turn({
     surface: "web",
-    actor: { externalId: "member" },
+    actor: { externalId: "member", provider: "slack" as const },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:member:queued-before-removal", audience: [] },
     text: "work that must not cross membership tenures",
     async: true,
@@ -714,7 +714,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
   const threadRef = "web:owner:roster-race";
   const turn = built.app.turn({
     surface: "web",
-    actor: { externalId: "owner" },
+    actor: { externalId: "owner", provider: "slack" as const },
     conversation: {
       kind: "group",
       channelRef: projectGroupRef(project.id),
@@ -765,8 +765,14 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
   const threadRef = "web:owner:tape-tenure";
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "PRE_JOIN_SECRET" }))
-      .status,
+    (
+      await built.app.turn({
+        surface: "web",
+        actor: { externalId: "owner", provider: "slack" as const },
+        conversation,
+        text: "PRE_JOIN_SECRET",
+      })
+    ).status,
     "ok",
   );
   assert.equal((await built.app.addProjectMember(project.id, "owner", "late-member")).status, "ok");
@@ -774,7 +780,7 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
     (
       await built.app.turn({
         surface: "web",
-        actor: { externalId: "late-member" },
+        actor: { externalId: "late-member", provider: "slack" as const },
         conversation,
         text: "hello after joining",
       })
@@ -806,7 +812,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
   const request = (marker: string, overheard = false) =>
     built.app.turn({
       surface: "web",
-      actor: { externalId: "owner" },
+      actor: { externalId: "owner", provider: "slack" as const },
       conversation: {
         kind: "group",
         channelRef: projectGroupRef(project.id),
@@ -829,7 +835,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
   assert.equal(quarantined.pendingApprovals?.[0]?.kind, "input");
   const denied = await built.app.turn({
     surface: "web",
-    actor: { externalId: "owner" },
+    actor: { externalId: "owner", provider: "slack" as const },
     conversation: {
       kind: "group",
       channelRef: projectGroupRef(project.id),
@@ -889,8 +895,14 @@ test("a member added to a Project inherits the chats that predate them", async (
   const threadRef = "web:owner:pre-join";
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "BEFORE_JOIN_TOPIC" }))
-      .status,
+    (
+      await built.app.turn({
+        surface: "web",
+        actor: { externalId: "owner", provider: "slack" as const },
+        conversation,
+        text: "BEFORE_JOIN_TOPIC",
+      })
+    ).status,
     "ok",
   );
   const session = await built.sessions.getByThread(threadRef);
@@ -910,7 +922,7 @@ test("a member added to a Project inherits the chats that predate them", async (
     (
       await built.app.turn({
         surface: "web",
-        actor: { externalId: "member" },
+        actor: { externalId: "member", provider: "slack" as const },
         conversation,
         text: "hello after joining",
       })
@@ -933,16 +945,28 @@ test("leaving a Project still cuts off everything after the member left", async 
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "WHILE_A_MEMBER" }))
-      .status,
+    (
+      await built.app.turn({
+        surface: "web",
+        actor: { externalId: "owner", provider: "slack" as const },
+        conversation,
+        text: "WHILE_A_MEMBER",
+      })
+    ).status,
     "ok",
   );
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "AFTER_THEY_LEFT" }))
-      .status,
+    (
+      await built.app.turn({
+        surface: "web",
+        actor: { externalId: "owner", provider: "slack" as const },
+        conversation,
+        text: "AFTER_THEY_LEFT",
+      })
+    ).status,
     "ok",
   );
   assert.equal(await built.app.getSessionForViewer(session.id, "member"), null);
@@ -1030,7 +1054,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   // a session predating the link, so channel-derived members should inherit it
   await built.app.turn({
     surface: "web",
-    actor: { externalId: "owner" },
+    actor: { externalId: "owner", provider: "slack" as const },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:pre", audience: [] },
     text: "before the link",
   });
@@ -1152,7 +1176,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
         kind: "group",
         channelRef: groupRef,
         threadRef,
-        audience: [{ externalId: "outsider" }],
+        audience: [{ externalId: "outsider", provider: "slack" as const }],
       },
       text,
     });

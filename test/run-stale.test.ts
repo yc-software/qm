@@ -18,7 +18,7 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
   );
   const ack = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "t1" },
     text: "x",
     async: true,

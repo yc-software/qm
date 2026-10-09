@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
@@ -62,7 +63,7 @@ const PRINCIPAL_HANDLES = [
   "shared-member",
 ] as const;
 const principals = new Map(
-  await Promise.all(PRINCIPAL_HANDLES.map(async (h) => [h, await built.principals.act(h)] as const)),
+  await Promise.all(PRINCIPAL_HANDLES.map(async (h) => [h, await built.principals.act(handle("slack", h))] as const)),
 );
 function P(handle: (typeof PRINCIPAL_HANDLES)[number]): string {
   return principals.get(handle)!;

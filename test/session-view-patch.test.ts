@@ -30,7 +30,7 @@ async function newSession(base: string, threadRef: string): Promise<string> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef },
       text: "hello",
     }),

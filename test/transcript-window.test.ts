@@ -168,7 +168,7 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
   const srv = start();
   try {
     const u1 = await principalOf(srv.built, "U1");
-    const actor = { externalId: "U1" };
+    const actor = { externalId: "U1", provider: "slack" as const };
     const threadRef = `web:${u1}:window-test`;
     let sessionId = "";
     for (const text of ["first turn", "second turn", "third turn"]) {

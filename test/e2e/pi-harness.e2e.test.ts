@@ -23,7 +23,7 @@ function freshApp() {
   return buildApp(config);
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 function dm(text: string, thread = "t1"): TurnRequest {
   return { surface: "e2e", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }
@@ -79,7 +79,7 @@ test("internal-only still refuses a guest even with the real harness", opts, asy
   const { app } = freshApp();
   const r = await app.turn({
     surface: "e2e",
-    actor: { externalId: "G1", isExternalGuest: true },
+    actor: { externalId: "G1", provider: "slack" as const, isExternalGuest: true },
     conversation: { kind: "dm", threadRef: "g1" },
     text: "hello",
   });

@@ -992,7 +992,7 @@ test("git http broker enforces broker-token audience, entitlement, method, and p
   }
 });
 
-const internalActor = { externalId: "U1" };
+const internalActor = { externalId: "U1", provider: "slack" as const };
 const dm = (text: string): TurnRequest => ({
   surface: "test",
   actor: internalActor,
@@ -1067,7 +1067,7 @@ test("orchestrator vends a capability for only the requested org credential", as
   assert.equal(claims?.aud, CREDENTIAL_BROKER_AUD);
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
 
-  const actor = { externalId: "B-LEGACY", isBot: true };
+  const actor = { externalId: "B-LEGACY", provider: "slack" as const, isBot: true };
   await built.app.turn({
     surface: "slack",
     actor,
@@ -1138,8 +1138,8 @@ test("a channel grantee stamps the credential in that channel's conversations an
       kind: "channel",
       threadRef: `ch:${channelRef}:t1`,
       channelRef,
-      audience: [internalActor, { externalId: "U2" }],
-      publishMembers: [internalActor, { externalId: "U2" }],
+      audience: [internalActor, { externalId: "U2", provider: "slack" as const }],
+      publishMembers: [internalActor, { externalId: "U2", provider: "slack" as const }],
     },
     text: "!run echo hi",
   });

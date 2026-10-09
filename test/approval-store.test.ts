@@ -12,7 +12,7 @@ function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
     createdAt,
     request: {
       surface: "slack",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef },
       text: "publish report",
     },

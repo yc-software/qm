@@ -22,7 +22,7 @@ function freshApp(overrides: Partial<Config> = {}) {
   return { ...buildApp(config), dataDir };
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 
 test("file memory compare-and-set permits only one writer for a revision", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memory-cas-")));

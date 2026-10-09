@@ -313,10 +313,11 @@ const PRINCIPAL_TTL_MS = 60_000;
 const PRINCIPAL_TIMEOUT_MS = 4_000;
 const principalCache = new LRUCache<string, string>({ max: 10_000, ttl: PRINCIPAL_TTL_MS });
 
-async function principalFor(sub: string): Promise<string | null> {
-  const hit = principalCache.get(sub);
+async function principalFor(prov: NonNullable<SessionClaims["prov"]>, sub: string): Promise<string | null> {
+  const cacheKey = `${prov}\u0000${sub}`;
+  const hit = principalCache.get(cacheKey);
   if (hit !== undefined) return hit;
-  const path = withSourceAuthNonce(`/v1/identities/${encodeURIComponent(sub)}/principal`, CORE_SIGNING_SECRET);
+  const path = withSourceAuthNonce(`/v1/identities/${prov}/${encodeURIComponent(sub)}/principal`, CORE_SIGNING_SECRET);
   try {
     const r = await fetch(`${CORE}${path}`, {
       headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
@@ -331,7 +332,7 @@ async function principalFor(sub: string): Promise<string | null> {
       console.warn("[portal] principal lookup returned no principal");
       return null;
     }
-    principalCache.set(sub, body.principalId);
+    principalCache.set(cacheKey, body.principalId);
     return body.principalId;
   } catch (error) {
     console.warn(`[portal] principal lookup failed: ${errMessage(error)}`);
@@ -464,7 +465,7 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
+  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, prov: "oidc", org: ORG, iat: now, exp: now + SESSION_TTL_S };
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
@@ -1131,8 +1132,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = renewSessionCookie(req, res) ?? currentSession(req);
   const authenticatedPrincipal = session?.sub;
+  if (session && !session.anon && !session.prov) session = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
-    const principal = await principalFor(session.sub);
+    const principal = await principalFor(session.prov!, session.sub);
     if (principal === null) return identityUnavailable(req, res);
     session = { ...session, sub: principal };
   }
@@ -1143,8 +1145,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await principalFor(target)) === session.sub)
-      return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
+    if (target === session.sub) return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
       const status = result.status === 403 || result.status === 400 ? result.status : 502;
@@ -1535,7 +1536,7 @@ async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<v
         ),
       );
     const data = (await r.json()) as { email: string };
-    setAuthenticatedSession(res, data.email);
+    setAuthenticatedSession(res, "email", data.email);
     res.writeHead(303, { location: "/", "cache-control": "no-store" });
     res.end();
   } catch {
@@ -1593,7 +1594,7 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
     }
     throw error;
   }
-  setAuthenticatedSession(res, claims.email);
+  setAuthenticatedSession(res, "email", claims.email);
   res.writeHead(303, { location: "/admin/", "cache-control": "no-store" });
   res.end();
 }
@@ -1638,7 +1639,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       );
       adminCache.delete(identity.sub);
     }
-    setAuthenticatedSession(res, identity.sub, identity.name);
+    setAuthenticatedSession(res, "oidc", identity.sub, identity.name);
     res.writeHead(302, {
       location: sanitizeReturnTo(identity.returnTo, PUBLIC_URL, APPS_DOMAIN),
       "cache-control": "no-store",
@@ -1653,11 +1654,18 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   }
 }
 
-function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", appOnly = false): void {
+function setAuthenticatedSession(
+  res: ServerResponse,
+  prov: NonNullable<SessionClaims["prov"]>,
+  sub: string,
+  name = "",
+  appOnly = false,
+): void {
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
     sub,
+    prov,
     org: ORG,
     auth: now,
     iat: now,
@@ -1727,7 +1735,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
   if (!consumeState(tmp.state)) return fail("login already used, please try again");
 
-  let principal: { sub: string; appOnly?: true };
+  let principal: { sub: string; prov: "email" | "sub"; appOnly?: true };
   let name = "";
   try {
     const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
@@ -1749,7 +1757,8 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     return fail(errMessage(e, "sign-in failed"));
   }
 
-  setAuthenticatedSession(res, principal.sub, name, principal.appOnly);
+  const prov = principal.prov === "email" ? "email" : OIDC.issuer === "https://slack.com" ? "slack" : "oidc";
+  setAuthenticatedSession(res, prov, principal.sub, name, principal.appOnly);
   res.writeHead(302, {
     location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),
     "cache-control": "no-store",

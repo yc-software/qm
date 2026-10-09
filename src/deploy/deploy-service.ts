@@ -1,3 +1,4 @@
+import type { PrincipalGraph } from "../identity/principals.ts";
 import { createPrincipalGraph } from "../identity/principals.ts";
 import { EXTERNAL_APP_SHARING_OFF } from "../feature-flags.ts";
 import { notifyDeploymentShared } from "./share-notice.ts";
@@ -131,7 +132,7 @@ export interface DeployServiceDeps {
   canReadScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
   canWriteScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
   canManageEmail?: (email: string) => Promise<boolean>;
-  principals?: { act(handle: string, opts?: { email?: string | null }): Promise<string> };
+  principals?: Pick<PrincipalGraph, "act">;
   externalSharingAllowed?: (ownerScopeId: ScopeId) => Promise<boolean>;
   managesArtifactHome?: (homeScopeId: ScopeId, createdBy: string, principalId: string) => Promise<boolean>;
   deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>;

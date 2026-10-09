@@ -160,7 +160,7 @@ test("status/selector parity — a personal-only connection reports connected (m
 });
 
 function turn(kind: "dm" | "channel", text: string): TurnRequest {
-  const actor = { externalId: "U1" };
+  const actor = { externalId: "U1", provider: "slack" as const };
   return kind === "dm"
     ? { surface: "test", actor, conversation: { kind: "dm", threadRef: "dm:U1" }, text }
     : {
@@ -189,7 +189,7 @@ test("F1/F3 — a live DM receives only its requested connector; a channel recei
 function wake(text: string, readOnly: boolean): TurnRequest {
   return {
     surface: "cron",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "agent:main:cron:c1" },
     text,
     triggered: true,

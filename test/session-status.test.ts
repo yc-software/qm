@@ -19,7 +19,7 @@ test("status changes notify viewers without changing run state; former participa
   const built = buildApp(testConfig({}));
   const turn = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "status-notify" },
     text: "hello",
   });

@@ -14,7 +14,7 @@ function freshApp() {
   return buildApp(testConfig({ dataDir }));
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }

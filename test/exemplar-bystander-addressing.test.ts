@@ -47,12 +47,12 @@ test("exemplar: a thread reply addressed to a teammate arrives author-attributed
 
     const req: TurnRequest = {
       surface: "slack",
-      actor: { externalId: "U_ALICE", displayName: "Alice" },
+      actor: { externalId: "U_ALICE", provider: "slack" as const, displayName: "Alice" },
       conversation: {
         kind: "channel",
         threadRef: `ch:${channel}:${root}`,
         channelRef: channel,
-        audience: [{ externalId: "U_ALICE" }],
+        audience: [{ externalId: "U_ALICE", provider: "slack" as const }],
       },
       deliveryTarget: `slack:${channel}:${root}`,
       text: REQUEST,

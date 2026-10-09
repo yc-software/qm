@@ -19,7 +19,7 @@ function freshApp() {
 function monitorFire(text: string, channel: string, root: string, fireKey: string): TurnRequest {
   return {
     surface: "monitor",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel },
     text,
     triggered: true,
@@ -101,12 +101,12 @@ test("interactive mention: the first-block ack still posts immediately (unchange
   try {
     await built.app.turn({
       surface: "slack",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: {
         kind: "channel",
         threadRef: "ch:C-live:900.1",
         channelRef: "C-live",
-        audience: [{ externalId: "U1" }],
+        audience: [{ externalId: "U1", provider: "slack" as const }],
       },
       deliveryTarget: "slack:C-live:900.1",
       text: "!preamble On it — checking.",

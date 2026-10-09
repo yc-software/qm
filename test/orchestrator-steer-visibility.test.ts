@@ -29,7 +29,7 @@ for (const mode of ["retry", "handoff"] as const) {
     const built = buildApp(testConfig());
     const request: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "resume-steer-visibility" },
       text: "!work-then-boom",
       idempotencyKey: "resume-steer-visibility",

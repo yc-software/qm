@@ -100,7 +100,7 @@ test("personal provider choice is durable and controls the submitted run indepen
   await built.config.setPersonalModelAuth(u1, true, "openai");
   const submitted = await built.app.turn({
     surface: "slack",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "personal-provider-choice" },
     text: "hello",
     liveActor: true,

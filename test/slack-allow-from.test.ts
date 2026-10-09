@@ -20,14 +20,14 @@ test("normalizeAllowFrom accepts only strings", () => {
 
 test("createActorGate admits exact emails and whole domains, nothing else", () => {
   const gate = createActorGate(["example.org", "guest@partner.co"])!;
-  assert.equal(gate({ externalId: "josh@example.org", isExternalGuest: false }), true);
-  assert.equal(gate({ externalId: "Josh@example.org", isExternalGuest: false }), true);
-  assert.equal(gate({ externalId: "guest@partner.co", isExternalGuest: false }), true);
-  assert.equal(gate({ externalId: "founder@startup.io", isExternalGuest: false }), false);
-  assert.equal(gate({ externalId: "other@partner.co", isExternalGuest: false }), false);
-  assert.equal(gate({ externalId: "josh@example.org", isExternalGuest: true }), false);
-  assert.equal(gate({ externalId: "B123", isExternalGuest: false, isBot: true }), false);
-  assert.equal(gate({ externalId: "U123", isExternalGuest: false }), false);
+  assert.equal(gate({ externalId: "josh@example.org", provider: "email" as const, isExternalGuest: false }), true);
+  assert.equal(gate({ externalId: "Josh@example.org", provider: "email" as const, isExternalGuest: false }), true);
+  assert.equal(gate({ externalId: "guest@partner.co", provider: "email" as const, isExternalGuest: false }), true);
+  assert.equal(gate({ externalId: "founder@startup.io", provider: "email" as const, isExternalGuest: false }), false);
+  assert.equal(gate({ externalId: "other@partner.co", provider: "email" as const, isExternalGuest: false }), false);
+  assert.equal(gate({ externalId: "josh@example.org", provider: "email" as const, isExternalGuest: true }), false);
+  assert.equal(gate({ externalId: "B123", provider: "slack" as const, isExternalGuest: false, isBot: true }), false);
+  assert.equal(gate({ externalId: "U123", provider: "slack" as const, isExternalGuest: false }), false);
 });
 
 test("createActorGate is absent when no entries are configured", () => {

@@ -118,7 +118,7 @@ test("a queued run surfaces replyComplete via getRun once the reply is final", a
   try {
     const ack = await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t1" },
       text: "hello",
       async: true,
@@ -148,7 +148,7 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
   try {
     const ack = await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t1" },
       text: "!run echo hi",
       async: true,
@@ -179,7 +179,7 @@ test("getRun projects durable tasks for its surface poller", async () => {
   );
   const ack = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "task-view" },
     text: "hello",
     async: true,
@@ -210,7 +210,7 @@ test("a queued run exposes the agent's in-flight reply via getRun().partial", as
   try {
     const ack = await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t1" },
       text: "hello",
       async: true,
@@ -292,7 +292,7 @@ test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed
   try {
     const ack = await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t-fb" },
       text: "!preamble On it — checking.",
       async: true,
@@ -321,7 +321,7 @@ test("a harvested first block is stripped from the final reply (never shown twic
   try {
     const ack = await built.app.turn({
       surface: "slack",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t-strip" },
       text: "!preamble On it — checking.",
       async: true,
@@ -349,7 +349,7 @@ test("a long first block is harvested too (no length gate) and stripped from the
     const long = "x".repeat(400);
     const ack = await built.app.turn({
       surface: "slack",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t-held" },
       text: `!preamble ${long}`,
       async: true,
@@ -379,7 +379,7 @@ test("a non-slack surface never strips the first block from the reply", async ()
   try {
     const ack = await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t-web" },
       text: "!preamble On it — checking.",
       async: true,
@@ -462,7 +462,7 @@ test("monitor wakes persist engagement after the reply gate", async () => {
   try {
     const ack = await built.app.turn({
       surface: "monitor",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t-monitor" },
       text: "!preamble Checking background results.",
       async: true,

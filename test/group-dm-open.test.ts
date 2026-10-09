@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 
@@ -226,7 +227,7 @@ describe("the Slack surface opening a group DM", () => {
     const graph = createPrincipalGraph();
     installPrincipalResolver(graph);
     t.after(() => installPrincipalResolver(null));
-    return Promise.all(["alice@acme.dev", "kai@acme.dev"].map((email) => graph.act(email)));
+    return Promise.all(["alice@acme.dev", "kai@acme.dev"].map((email) => graph.act(handle("email", email))));
   }
 
   function fulfiller(open: (args: { users: string }) => Promise<unknown>, syncs: string[] = []) {
@@ -427,7 +428,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     });
 
-    await dir.forceDirectorySync(client, "C1", "kai@x.com");
+    await dir.forceDirectorySync(client, "C1", { externalId: "kai@x.com", provider: "email" });
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(pushes.length, 0, "nothing lands while the lease is held elsewhere");
 
@@ -481,7 +482,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     });
 
-    await dir.forceDirectorySync(client, "C1", "kai@x.com");
+    await dir.forceDirectorySync(client, "C1", { externalId: "kai@x.com", provider: "email" });
     const deadline = Date.now() + 2000;
     while (pushes.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
 

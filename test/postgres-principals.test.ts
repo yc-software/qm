@@ -2,7 +2,12 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import type { Pool } from "pg";
-import { createPostgresPrincipalStore, createPrincipalGraph } from "../src/identity/principals.ts";
+import {
+  composioUserId,
+  createPostgresPrincipalStore,
+  createPrincipalGraph,
+  handle,
+} from "../src/identity/principals.ts";
 import { ensurePrincipalSchema, runIdentityMigration } from "../src/identity/migrate-identities.ts";
 import { PRINCIPAL_REFS } from "../src/identity/principal-refs.ts";
 
@@ -55,14 +60,14 @@ after(async () => {
 });
 
 test(
-  "combine re-points every reference, keeps A on singleton clashes, appends B's memory, deletes B",
+  "combine re-points every reference, keeps A on singleton clashes, interleaves the notebooks, deletes B",
   { skip },
   async () => {
     const { pool, url } = db!;
     await ensurePrincipalSchema(pool);
     const graph = createPrincipalGraph(createPostgresPrincipalStore(url));
-    const a = await graph.act("oidc:alice");
-    const b = await graph.act("U0ALICE");
+    const a = await graph.act(handle("oidc", "oidc:alice"));
+    const b = await graph.act(handle("slack", "U0ALICE"));
     const seed: [string, string[]][] = [
       ["INSERT INTO participants VALUES ('s1', $1), ('s1', $2), ('s2', $2)", [a, b]],
       ["INSERT INTO sessions VALUES ('s2', 'personal:' || $1, 'web:personal:' || $1 || ':s2')", [b]],
@@ -95,13 +100,20 @@ test(
     assert.deepEqual(
       memory.map((r) => [r.seq, r.body]),
       [
-        [1, "A one"],
-        [2, "A two"],
-        [3, "B one"],
-        [4, "A two\nB one"],
+        [1, "A one\n"],
+        [2, "A two\n"],
+        [3, "A two\n\nB one\n"],
       ],
+      "one history in time order, no trailing join revision",
     );
-    assert.equal(graph.principalOf("U0ALICE"), a);
+    assert.deepEqual(await q(`SELECT 1 FROM memory_revisions WHERE scope_id = 'personal:${b}'`), []);
+    assert.equal(graph.principalOf(handle("slack", "U0ALICE")), a);
+    const other = createPrincipalGraph(createPostgresPrincipalStore(url));
+    await other.refresh(true);
+    assert.equal(other.principalOf(handle("slack", "U0ALICE")), a);
+    await graph.attach(handle("email", "alice@acme.test"), a, "test");
+    await other.refresh(true);
+    assert.equal(other.principalOf(handle("email", "alice@acme.test")), a, "a write elsewhere bumps the version");
     assert.deepEqual(await q(`SELECT 1 FROM principals WHERE principal_id = '${b}'`), []);
   },
 );
@@ -131,7 +143,7 @@ test(
       assert.equal(dry.principals, 2);
       assert.equal((await pool.query("SELECT count(*)::int AS n FROM principals")).rows[0].n, 0);
 
-      const report = await runIdentityMigration({ pool, apply: true, log: silent });
+      const report = await runIdentityMigration({ pool, apply: true, org: "org_test", log: silent });
       assert.equal(report.principals, 2);
       assert.equal(report.notebooksMerged, 1);
       const ids = (await pool.query("SELECT provider, external_id, principal_id FROM identities ORDER BY 1, 2")).rows;
@@ -154,8 +166,20 @@ test(
       ]);
       const memory = await q("SELECT scope_id, body FROM memory_revisions ORDER BY seq");
       assert.ok(memory.every((r) => r.scope_id === `personal:${pranav}`));
-      assert.match(memory.at(-1)!.body, /slack side|web side/);
-      assert.equal(memory.length, 3);
+      assert.deepEqual(
+        memory.map((r) => r.body),
+        ["slack side\n", "slack side\n\nweb side\n"],
+        "interleaved by time with no trailing join revision",
+      );
+
+      const graph = createPrincipalGraph(createPostgresPrincipalStore(fresh.url));
+      await graph.refresh(true);
+      for (const legacy of ["oidc:pranav", "pranav@acme.test", "U0PRANAV"])
+        assert.equal(
+          graph.principalOf(handle("composio", composioUserId("org_test", legacy))),
+          pranav,
+          `a Composio connection made as ${legacy} before the migration still resolves to its owner`,
+        );
       assert.equal((await q("SELECT id FROM sandbox_defaults")).length, 1);
       assert.equal((await q("SELECT id FROM sandbox_defaults"))[0]!.id, `personal:${jonathan}`);
       assert.deepEqual((await q("SELECT json FROM crons"))[0]!.json, {

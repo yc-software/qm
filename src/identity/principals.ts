@@ -1,10 +1,22 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { combineReferences } from "./principal-refs.ts";
 
 type PrincipalKind = "person" | "agent";
-export type IdentityProvider = "oidc" | "slack" | "email";
+export type IdentityProvider = "oidc" | "slack" | "email" | "composio";
+
+/** A handle as its edge knows it: the provider that vouched for it and that provider's id. */
+export interface Handle {
+  provider: IdentityProvider;
+  externalId: string;
+}
+
+/** Emails are stored lowercased; every other provider's id is kept verbatim. */
+export const handle = (provider: IdentityProvider, externalId: string): Handle => ({
+  provider,
+  externalId: provider === "email" ? externalId.trim().toLowerCase() : externalId.trim(),
+});
 
 interface PrincipalRow {
   principalId: string;
@@ -33,16 +45,35 @@ export class IdentityLinkError extends Error {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SLACK_USER = /^[UW][A-Z0-9]+$/;
-
 export const isPrincipalId = (id: string): boolean => UUID.test(id);
 
-/** The identity a raw handle names. Emails are lowercased; Slack user ids and OIDC subjects are kept verbatim. */
-export function handleOf(raw: string): { provider: IdentityProvider; externalId: string } {
-  const id = raw.trim();
-  if (id.includes("@") && !id.startsWith("oidc:")) return { provider: "email", externalId: id.toLowerCase() };
-  if (SLACK_USER.test(id) || /^T[A-Z0-9]+:[UW][A-Z0-9]+$/.test(id)) return { provider: "slack", externalId: id };
-  return { provider: "oidc", externalId: id };
+const PROVIDERS: readonly IdentityProvider[] = ["oidc", "slack", "email", "composio"];
+export const isIdentityProvider = (v: unknown): v is IdentityProvider => PROVIDERS.includes(v as IdentityProvider);
+
+/** An id as an edge hands it over: a principal id, or a handle whose provider the edge names. */
+export interface EdgeHandle {
+  principalId: string;
+  provider?: IdentityProvider;
+}
+
+/** Resolve an edge id. Without a provider it must already be a principal id; nothing is inferred from its shape. */
+export async function principalFromEdge(
+  graph: Pick<PrincipalGraph, "act">,
+  id: string,
+  provider: IdentityProvider | undefined,
+  opts?: ActOptions,
+): Promise<string> {
+  if (provider) return graph.act(handle(provider, id), opts);
+  const s = id.trim();
+  if (!isPrincipalId(s)) throw new IdentityLinkError(400, "a handle needs its provider");
+  return s.toLowerCase();
+}
+
+/** The Composio user id an org mints for a principal (or, before principals, for a handle). */
+export function composioUserId(org: string, owner: string): string {
+  return `qm_${createHash("sha256")
+    .update(JSON.stringify([org, owner]))
+    .digest("hex")}`;
 }
 
 const key = (provider: string, externalId: string): string => `${provider}\u0000${externalId}`;
@@ -50,6 +81,8 @@ const key = (provider: string, externalId: string): string => `${provider}\u0000
 /** Storage for the two identity tables. Postgres in production, memory in tests and single-process dev. */
 export interface PrincipalStore {
   load(): Promise<{ principals: PrincipalRow[]; identities: IdentityRow[] }>;
+  /** Changes whenever either table is written, so readers reload only when something moved. */
+  version(): Promise<string>;
   createForIdentity(principal: PrincipalRow, identity: IdentityRow): Promise<string>;
   putIdentity(row: IdentityRow): Promise<void>;
   deleteIdentity(provider: string, externalId: string): Promise<void>;
@@ -59,31 +92,42 @@ export interface PrincipalStore {
 export function createMemoryPrincipalStore(): PrincipalStore {
   const principals = new Map<string, PrincipalRow>();
   const identities = new Map<string, IdentityRow>();
+  let version = 0;
   return {
     async load() {
-      return { principals: [...principals.values()], identities: [...identities.values()] };
+      return {
+        principals: [...principals.values()].map((p) => ({ ...p })),
+        identities: [...identities.values()].map((i) => ({ ...i })),
+      };
+    },
+    async version() {
+      return String(version);
     },
     async createForIdentity(principal, row) {
       const existing = identities.get(key(row.provider, row.externalId))?.principalId;
       if (existing) return existing;
       principals.set(principal.principalId, principal);
-      identities.set(key(row.provider, row.externalId), row);
+      identities.set(key(row.provider, row.externalId), { ...row });
+      version++;
       return principal.principalId;
     },
     async putIdentity(row) {
-      identities.set(key(row.provider, row.externalId), row);
+      identities.set(key(row.provider, row.externalId), { ...row });
+      version++;
     },
     async deleteIdentity(provider, externalId) {
       identities.delete(key(provider, externalId));
+      version++;
     },
     async combine(keep, drop) {
       for (const row of identities.values()) if (row.principalId === drop) row.principalId = keep;
       principals.delete(drop);
+      version++;
     },
   };
 }
 
-export const PRINCIPAL_SCHEMA = [
+const PRINCIPAL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS principals(
     principal_id UUID PRIMARY KEY,
     kind         TEXT NOT NULL CHECK (kind IN ('person', 'agent')),
@@ -104,6 +148,25 @@ export const PRINCIPAL_SCHEMA = [
   `CREATE INDEX IF NOT EXISTS identities_by_principal ON identities(principal_id)`,
 ];
 
+/** One counter both tables bump on every statement, so a cached graph reloads only after a write. */
+const VERSION_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS identity_version(id INT PRIMARY KEY CHECK (id = 1), v BIGINT NOT NULL)`,
+  `INSERT INTO identity_version(id, v) VALUES (1, 0) ON CONFLICT DO NOTHING`,
+  `CREATE OR REPLACE FUNCTION bump_identity_version() RETURNS trigger LANGUAGE plpgsql AS $$
+   BEGIN UPDATE identity_version SET v = v + 1 WHERE id = 1; RETURN NULL; END $$`,
+  `DROP TRIGGER IF EXISTS principals_version ON principals`,
+  `CREATE TRIGGER principals_version AFTER INSERT OR UPDATE OR DELETE ON principals
+   FOR EACH STATEMENT EXECUTE FUNCTION bump_identity_version()`,
+  `DROP TRIGGER IF EXISTS identities_version ON identities`,
+  `CREATE TRIGGER identities_version AFTER INSERT OR UPDATE OR DELETE ON identities
+   FOR EACH STATEMENT EXECUTE FUNCTION bump_identity_version()`,
+];
+
+export const PRINCIPAL_MIGRATIONS = [
+  { id: "identity/principals/0001", statements: PRINCIPAL_SCHEMA },
+  { id: "identity/principals/0002-version", statements: VERSION_SCHEMA },
+];
+
 const ts = (ms: number | null): Date | null => (ms === null ? null : new Date(ms));
 const ms = (v: unknown): number | null => {
   if (v instanceof Date) return v.getTime();
@@ -111,7 +174,7 @@ const ms = (v: unknown): number | null => {
 };
 
 export function createPostgresPrincipalStore(connectionString: string): PrincipalStore {
-  const { q, pool } = createPgPool(connectionString, "identity/principals/0001", PRINCIPAL_SCHEMA);
+  const { q, pool } = createPgPool(connectionString, PRINCIPAL_MIGRATIONS);
   return {
     async load() {
       const [p, i] = await Promise.all([q("SELECT * FROM principals"), q("SELECT * FROM identities")]);
@@ -133,6 +196,10 @@ export function createPostgresPrincipalStore(connectionString: string): Principa
           updatedAt: ms(r.updated_at) ?? 0,
         })),
       };
+    },
+    async version() {
+      const rows = await q("SELECT v FROM identity_version WHERE id = 1");
+      return String(rows[0]?.v ?? "");
     },
     async createForIdentity(principal, row) {
       const client: PoolClient = await (await pool()).connect();
@@ -221,14 +288,14 @@ interface ActOptions {
 
 export interface PrincipalGraph {
   refresh(force?: boolean): Promise<void>;
-  principalOf(handle: string): string | undefined;
+  principalOf(h: Handle): string | undefined;
   identitiesOf(principalId: string): IdentityRow[];
   displayName(principalId: string): string | undefined;
-  act(handle: string, opts?: ActOptions): Promise<string>;
-  attach(handle: string, principalId: string, linkedBy: string, evidence?: string): Promise<IdentityRow>;
-  unlink(handle: string): Promise<IdentityRow | null>;
+  act(h: Handle, opts?: ActOptions): Promise<string>;
+  attach(h: Handle, principalId: string, linkedBy: string, evidence?: string): Promise<IdentityRow>;
+  unlink(h: Handle): Promise<IdentityRow | null>;
   setEmails(principalId: string, emails: readonly string[], linkedBy: string): Promise<void>;
-  autoLink(handle: string, email: string): Promise<string | undefined>;
+  autoLink(h: Handle, email: string): Promise<string | undefined>;
   identities(principalId?: string): Promise<IdentityRow[]>;
   principals(): Promise<PrincipalRow[]>;
   combine(keep: string, drop: string): Promise<void>;
@@ -243,7 +310,8 @@ export function createPrincipalGraph(
   const principals = new Map<string, PrincipalRow>();
   const identities = new Map<string, IdentityRow>();
   const byPrincipal = new Map<string, Map<string, IdentityRow>>();
-  let refreshedAt = 0;
+  let checkedAt = 0;
+  let loadedVersion: string | null = null;
   let refreshP: Promise<void> | null = null;
   let tail: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -268,35 +336,29 @@ export function createPrincipalGraph(
     byPrincipal.set(row.principalId, rows);
   }
 
-  async function refresh(force = false): Promise<void> {
-    if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return;
+  /** Checks the store's version at most once per TTL (always when forced) and reloads only when it moved. */
+  function refresh(force = false): Promise<void> {
     if (refreshP) return refreshP;
-    refreshP = store
-      .load()
-      .then((data) => {
-        principals.clear();
-        identities.clear();
-        byPrincipal.clear();
-        for (const p of data.principals) principals.set(p.principalId, p);
-        for (const i of data.identities) remember(i);
-        refreshedAt = Date.now();
-      })
-      .finally(() => {
-        refreshP = null;
-      });
+    if (!force && Date.now() - checkedAt < REFRESH_TTL_MS) return Promise.resolve();
+    refreshP = (async () => {
+      const version = await store.version();
+      checkedAt = Date.now();
+      if (version === loadedVersion) return;
+      const data = await store.load();
+      principals.clear();
+      identities.clear();
+      byPrincipal.clear();
+      for (const p of data.principals) principals.set(p.principalId, p);
+      for (const i of data.identities) remember(i);
+      loadedVersion = version;
+    })().finally(() => {
+      refreshP = null;
+    });
     return refreshP;
   }
 
-  const identity = (handle: string): IdentityRow | undefined => {
-    const h = handleOf(handle);
-    return identities.get(key(h.provider, h.externalId));
-  };
-
-  function principalOf(handle: string): string | undefined {
-    const id = handle.trim();
-    if (isPrincipalId(id)) return id.toLowerCase();
-    return identity(id)?.principalId ?? undefined;
-  }
+  const identity = (h: Handle): IdentityRow | undefined => identities.get(key(h.provider, h.externalId));
+  const principalOf = (h: Handle): string | undefined => identity(h)?.principalId ?? undefined;
 
   async function write(row: IdentityRow): Promise<IdentityRow> {
     await store.putIdentity(row);
@@ -304,11 +366,9 @@ export function createPrincipalGraph(
     return row;
   }
 
-  function blank(handle: string, email: string | null): IdentityRow {
-    const h = handleOf(handle);
-    const prior = identities.get(key(h.provider, h.externalId));
+  function blank(h: Handle, email: string | null): IdentityRow {
     return (
-      prior ?? {
+      identity(h) ?? {
         ...h,
         principalId: null,
         email: h.provider === "email" ? h.externalId : email,
@@ -320,19 +380,17 @@ export function createPrincipalGraph(
     );
   }
 
-  const emailOwner = (email: string): string | undefined =>
-    identities.get(key("email", email.trim().toLowerCase()))?.principalId ?? undefined;
-
-  async function autoLinkLocked(handle: string, email: string): Promise<string | undefined> {
-    const current = identity(handle);
+  async function autoLinkLocked(h: Handle, email: string): Promise<string | undefined> {
+    const current = identity(h);
     if (current?.principalId) return current.principalId;
-    const owner = emailOwner(email);
+    const address = email.trim().toLowerCase();
+    const owner = address ? principalOf(handle("email", address)) : undefined;
     if (!owner) return undefined;
     const row = await write({
-      ...blank(handle, email.trim().toLowerCase()),
+      ...blank(h, address),
       principalId: owner,
       linkedBy: "auto:email",
-      evidence: email.trim().toLowerCase(),
+      evidence: address,
       updatedAt: Date.now(),
     });
     opts.onAutoLink?.(row);
@@ -340,10 +398,9 @@ export function createPrincipalGraph(
   }
 
   async function principalFor(id: string): Promise<string> {
-    const target = principalOf(id);
-    if (!target || !principals.has(target)) await refresh(true);
-    if (!target || !principals.has(target)) throw new IdentityLinkError(404, `no principal ${id}`);
-    return target;
+    if (!principals.has(id)) await refresh(true);
+    if (!principals.has(id)) throw new IdentityLinkError(404, `no principal ${id}`);
+    return id;
   }
 
   return {
@@ -355,16 +412,15 @@ export function createPrincipalGraph(
     displayName(principalId) {
       return principals.get(principalId)?.displayName;
     },
-    async act(handle, o = {}) {
-      const cached = principalOf(handle);
+    async act(h, o = {}) {
+      const cached = principalOf(h);
       if (cached) return cached;
       return serial(async () => {
         await refresh();
-        const known = principalOf(handle);
+        const known = principalOf(h);
         if (known) return known;
         const email = o.email?.trim().toLowerCase() || null;
-        const h = handleOf(handle);
-        const linked = await autoLinkLocked(handle, email ?? (h.provider === "email" ? h.externalId : ""));
+        const linked = await autoLinkLocked(h, email ?? (h.provider === "email" ? h.externalId : ""));
         if (linked) return linked;
         const principal: PrincipalRow = {
           principalId: randomUUID(),
@@ -373,7 +429,7 @@ export function createPrincipalGraph(
           createdAt: Date.now(),
         };
         const row: IdentityRow = {
-          ...blank(handle, email),
+          ...blank(h, email),
           principalId: principal.principalId,
           linkedBy: "self",
           verifiedAt: o.verified ? Date.now() : null,
@@ -389,13 +445,13 @@ export function createPrincipalGraph(
         return owner;
       });
     },
-    attach(handle, principalId, linkedBy, evidence) {
+    attach(h, principalId, linkedBy, evidence) {
       return serial(async () => {
         await refresh();
         const target = await principalFor(principalId);
-        const previous = identity(handle)?.principalId;
+        const previous = principalOf(h);
         const row = await write({
-          ...blank(handle, null),
+          ...blank(h, null),
           principalId: target,
           linkedBy,
           evidence: evidence ?? null,
@@ -408,10 +464,10 @@ export function createPrincipalGraph(
         return row;
       });
     },
-    unlink(handle) {
+    unlink(h) {
       return serial(async () => {
         await refresh();
-        const row = identity(handle);
+        const row = identity(h);
         if (!row?.principalId) return null;
         return write({ ...row, principalId: null, linkedBy: null, evidence: null, updatedAt: Date.now() });
       });
@@ -420,30 +476,32 @@ export function createPrincipalGraph(
       return serial(async () => {
         await refresh();
         await principalFor(principalId);
-        const wanted = new Set(emails.map((e) => e.trim().toLowerCase()).filter((e) => e.includes("@")));
+        const wanted = new Set(emails.map((e) => handle("email", e).externalId).filter(Boolean));
         for (const row of [...(byPrincipal.get(principalId)?.values() ?? [])])
           if (row.provider === "email" && row.linkedBy === linkedBy && !wanted.has(row.externalId)) {
             await store.deleteIdentity(row.provider, row.externalId);
             forget(key(row.provider, row.externalId));
           }
         for (const address of wanted) {
-          if (identities.get(key("email", address))?.principalId) continue;
-          await write({ ...blank(address, address), principalId, linkedBy, updatedAt: Date.now() });
+          const h = handle("email", address);
+          if (principalOf(h)) continue;
+          await write({ ...blank(h, address), principalId, linkedBy, updatedAt: Date.now() });
         }
         for (const row of Array.from(identities.values()))
           if (row.provider !== "email" && !row.principalId && row.email && wanted.has(row.email))
-            await autoLinkLocked(row.externalId, row.email);
+            await autoLinkLocked(row, row.email);
       });
     },
-    autoLink(handle, email) {
+    autoLink(h, email) {
       return serial(async () => {
         await refresh();
-        return autoLinkLocked(handle, email);
+        return autoLinkLocked(h, email);
       });
     },
     async identities(principalId) {
       await refresh();
-      return [...identities.values()].filter((r) => principalId === undefined || r.principalId === principalId);
+      if (principalId !== undefined) return [...(byPrincipal.get(principalId)?.values() ?? [])];
+      return [...identities.values()];
     },
     async principals() {
       await refresh();

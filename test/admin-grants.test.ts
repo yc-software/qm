@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -47,7 +48,7 @@ test("an org admin promotes a user to org_admin; whoami reflects it; audited", a
     assert.equal(r.status, 200);
     const body: any = await r.json();
     assert.equal(body.ok, true);
-    assert.equal(body.grant.grantedBy, s.built.principals.principalOf("admin-alice"));
+    assert.equal(body.grant.grantedBy, s.built.principals.principalOf(handle("slack", "admin-alice")));
     assert.deepEqual(await whoami(s.base, "U1@default-org"), {
       isAdmin: true,
       role: "org_admin",

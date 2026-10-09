@@ -2152,9 +2152,10 @@ export function buildApp(
     directory,
     ...(config.emailAuthPrincipals?.length
       ? {
-          emailAuthMembers: config.emailAuthPrincipals.map((principalId) => ({
-            principalId,
-            displayName: principalId,
+          emailAuthMembers: config.emailAuthPrincipals.map((email) => ({
+            principalId: email,
+            provider: "email" as const,
+            displayName: email,
             type: "internal" as const,
           })),
         }

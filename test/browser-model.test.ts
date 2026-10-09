@@ -149,7 +149,7 @@ test("gateway deployment provisions a browser token without exposing the company
   };
   const result = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "dm:U1:browser" },
     text: "!run echo browser",
   });
@@ -187,7 +187,7 @@ test("gateway browsing never selects a direct provider when callback signing or 
     };
     await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:missing" },
       text: "!run echo missing",
     });
@@ -247,7 +247,7 @@ test("company browsing without a gateway uses current deployment credentials and
   };
   await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "dm:U1:direct" },
     text: "!run echo direct",
   });

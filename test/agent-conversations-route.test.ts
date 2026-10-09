@@ -1,3 +1,5 @@
+import { principalOf } from "./support/principal.ts";
+import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -25,7 +27,7 @@ describe("agent conversations self-API", async () => {
 
   const P = { U1: "", U2: "", U3: "", U4: "" };
   const capFor = async (handle: string, scope?: string, live = true) => {
-    const actorId = await built.principals.act(handle);
+    const actorId = await principalOf(built, handle);
     return mintCapabilityToken(
       {
         actorId,
@@ -58,7 +60,7 @@ describe("agent conversations self-API", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    for (const h of ["U1", "U2", "U3", "U4"] as const) P[h] = await built.principals.act(h);
+    for (const h of ["U1", "U2", "U3", "U4"] as const) P[h] = await built.principals.act(handle("slack", h));
     mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
     theirsId = (await built.app.turn(dm("U2", "someone else's chat", "web:U2:c1"))).sessionId!;
   });

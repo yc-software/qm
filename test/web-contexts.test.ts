@@ -154,7 +154,7 @@ test("prior participation never authorizes a shared scope after directory member
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         surface: "slack",
-        actor: { externalId: "alice" },
+        actor: { externalId: "alice", provider: "slack" as const },
         conversation: { kind: "group", threadRef: "grp:G1:1", channelRef: "G1" },
         text: "hello",
       }),
