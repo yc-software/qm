@@ -1,11 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { samePerson } from "../directory/person.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 import type { SlackAgentRequestContext, SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";
-import type { Approvals } from "./approvals.ts";
 import { button } from "./approval-cards.ts";
 import { uploadAttachments, uploadFailureNote } from "./attachments.ts";
 import { encodeDeliveryTarget, parseDeliveryTarget } from "./delivery.ts";
@@ -102,7 +101,18 @@ export function createAgentHandoffs(deps: {
   ids: BotIdentity;
   runTurn: (body: CoreTurnBody) => Promise<TurnOutcome>;
   ackConveyedQuarantine: (outcome: TurnOutcome) => void;
-  rememberSlackApprovals: Approvals["rememberSlackApprovals"];
+  rememberSlackApprovals: (
+    approvals: NonNullable<TurnResult["pendingApprovals"]>,
+    ctx: {
+      requesterId: string | undefined;
+      channel: string;
+      approvalChannel: string;
+      triggerTs?: string;
+      threadOnly: boolean;
+      turn: Omit<CoreTurnBody, "approval">;
+      agentRequest: SlackAgentRequestContext;
+    },
+  ) => void;
 }) {
   const { core, directory, ids, runTurn, ackConveyedQuarantine, rememberSlackApprovals } = deps;
 
@@ -296,20 +306,10 @@ export function createAgentHandoffs(deps: {
     client: any,
     ask: { runId: string; targetUserId: string; task: string },
   ): Promise<AskAgentOutcome> {
-    const run = await core.getAgentRequestRun(ask.runId);
-    if (!run) return { error: "this turn is no longer running, so there is no conversation to report back to" };
-    const { request } = run;
-    if (
-      deps.externalAccess ||
-      request.externalSlack ||
-      request.surface !== "slack" ||
-      request.conversation.kind !== "channel"
-    )
-      return { error: "asking a personal agent works only from an internal Slack channel" };
-    const task = ask.task.trim();
-    if (!request.deliveryTarget || !task) return { error: "a task and a Slack thread to report back to are required" };
+    const request = (await core.getAgentRequestRun(ask.runId))?.request;
+    if (!request?.deliveryTarget)
+      return { error: "this turn is no longer running, so there is no conversation to report back to" };
     const { channel, threadTs } = parseDeliveryTarget(request.deliveryTarget);
-    const originAgentLabel = channelAgentLabel("channel", request.conversation.channelName, channel);
     const target = await directory.classifyActor(client, ask.targetUserId);
     if (target.isBot)
       return {
@@ -319,11 +319,16 @@ export function createAgentHandoffs(deps: {
     if (!member || member.type !== "internal" || target.isExternalGuest)
       return { error: "you can only ask the personal agent of an internal person who is already in this conversation" };
 
-    const requestId = randomUUID();
+    const requestId = createHash("sha256")
+      .update(JSON.stringify([ask.runId, ask.targetUserId, ask.task]))
+      .digest("hex");
     const targetAgentLabel = personalAgentLabel(target, ask.targetUserId);
+    const handoff = { handoff: { requestId, target: targetAgentLabel } };
+    if ((await core.getAgentRequest(requestId))?.dmMessageTs) return handoff;
     const opened = await client.conversations.open({ users: ask.targetUserId });
     const dmChannel = String(opened?.channel?.id ?? "");
     if (!dmChannel) return { error: `couldn't open a DM to ${target.displayName ?? ask.targetUserId}` };
+    const originAgentLabel = channelAgentLabel("channel", request.conversation.channelName, channel);
     const pendingCtx: SlackAgentRequestContext = {
       requestId,
       createdAt: Date.now(),
@@ -335,13 +340,14 @@ export function createAgentHandoffs(deps: {
       ...(threadTs ? { originThreadTs: threadTs } : {}),
       originThreadOnly: true,
       ...(request.conversation.channelName ? { originChannelName: request.conversation.channelName } : {}),
-      task,
+      task: ask.task,
       originAgentLabel,
       targetAgentLabel,
       dmChannel,
     };
     try {
-      const prompt = agentRequestMessage({ requestId, originAgentLabel, targetAgentLabel, task });
+      await core.putAgentRequest(requestId, pendingCtx);
+      const prompt = agentRequestMessage({ requestId, originAgentLabel, targetAgentLabel, task: ask.task });
       const dm = await client.chat.postMessage({
         channel: dmChannel,
         text: prompt.text,
@@ -357,12 +363,19 @@ export function createAgentHandoffs(deps: {
       await core.putAgentRequest(requestId, pendingCtx);
     } catch (err) {
       swallow("slack: agent request dispatch", err);
-      const withdrawn = "This request couldn't be recorded, so it was withdrawn.";
-      await tryUpdateSlackMessage(client, dmChannel, pendingCtx.dmMessageTs, withdrawn);
-      await tryUpdateSlackMessage(client, channel, pendingCtx.originStatusTs, withdrawn);
+      const withdrawn = "the request couldn't be sent or recorded, so it was withdrawn";
+      await settleAgentRequest(pendingCtx);
+      await tryUpdateSlackMessage(
+        client,
+        dmChannel,
+        pendingCtx.dmMessageTs,
+        `I couldn't finish the handoff: ${withdrawn}`,
+      );
+      const failed = `${agentRequestStatusText(pendingCtx, "failed")}\n${withdrawn}`;
+      await tryUpdateSlackMessage(client, channel, pendingCtx.originStatusTs, failed);
       return { error: `couldn't send the request to ${target.displayName ?? ask.targetUserId}: ${errMessage(err)}` };
     }
-    return { handoff: { requestId, target: targetAgentLabel } };
+    return handoff;
   }
 
   function personalAgentTurnText(ctx: SlackAgentRequestContext): string {

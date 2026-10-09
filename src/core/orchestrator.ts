@@ -36,7 +36,7 @@ import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
-import { renderSharingPosturePrompt } from "../resolution/sharing-posture.ts";
+import { ASK_AGENT_PROMPT, askAgentAvailable, renderSharingPosturePrompt } from "../resolution/sharing-posture.ts";
 import { resolveReachableChannel } from "../resolution/scope-reach.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
@@ -248,14 +248,6 @@ const DETECT_HISTORY_TAIL = 400;
 const MIN_SESSION_LEASE_TTL_MS = 15_000;
 
 const AUTOMATED_TURN_LEASE_WAIT_MS = 1_000;
-
-const ASK_AGENT_INSTRUCTION =
-  "In this Slack channel you cannot use another person's private setup (their logins, keys, personal computer or files). " +
-  'When a task needs it, ask that person\'s personal agent: POST /v1/ask-agent with {person: "<@U123>", task}, using the Slack id from the People here line. ' +
-  "Say exactly what to try and what result is safe to share back here; never ask for secrets. " +
-  "They get a DM to approve, their agent runs only if they approve, and the result posts back in this thread. " +
-  "Tell people you've asked only after the call returns ok; if it fails, say what failed. " +
-  "Another agent in the channel is a colleague: @mention it instead.";
 
 const SESSION_GONE_REASON = "this conversation is no longer available — start a new one";
 
@@ -1171,13 +1163,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
       const sharingPrompt = renderSharingPosturePrompt(actor, sharingSources);
       if (sharingPrompt) systemPrompt += `\n\n${sharingPrompt}`;
-      if (
-        isSlack &&
-        conversation.kind === "channel" &&
-        !external &&
-        (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
-      )
-        systemPrompt += `\n\n${ASK_AGENT_INSTRUCTION}`;
+      if (await askAgentAvailable(deps.config, { surface: input.surface, scopeId, actorId: actor.id, external }))
+        systemPrompt += `\n\n${ASK_AGENT_PROMPT}`;
       const scopeProfile = supportsScopeProfile(deps.sandbox)
         ? await deps.sandbox
             .profileFor(memoryScopeId, swarmBinding?.sandboxId)

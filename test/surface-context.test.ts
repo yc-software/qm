@@ -9,7 +9,6 @@ import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { orgId as configOrgId } from "../src/config.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -368,11 +367,7 @@ describe("surface-context pulls", async () => {
   });
   it("ask-agent reports a sent handoff only after the Slack side confirms it", async () => {
     const token = await cap({ surface: "slack", runId: "run-ask-1", liveActor: true });
-    const asking = post(
-      "/v1/ask-agent",
-      { person: "<@U2>", task: "republish the page" },
-      { "x-agent-capability": token },
-    );
+    const asking = post("/v1/ask-agent", { person: "U2", task: "republish the page" }, { "x-agent-capability": token });
     const query = await fulfillNext(() => ({
       messages: [],
       handoff: { requestId: "h1", target: "Carol's personal agent" },
@@ -394,22 +389,16 @@ describe("surface-context pulls", async () => {
     assert.equal(((await res.json()) as any).message, "couldn't open a DM to Carol");
   });
 
-  it("ask-agent is refused outside a live Slack turn and in Open conversations", async () => {
-    const outside = await post("/v1/ask-agent", { person: "<@U2>", task: "x" }, { "x-agent-capability": await cap() });
-    assert.equal(outside.status, 409);
-    const org = scopeId("org", configOrgId());
-    await built.config.setSharingPosture(org, "open");
-    try {
-      const open = await post(
-        "/v1/ask-agent",
-        { person: "<@U2>", task: "x" },
-        { "x-agent-capability": await cap({ surface: "slack", runId: "run-ask-3" }) },
-      );
-      assert.equal(open.status, 409);
-      assert.equal(((await open.json()) as any).error, "open_posture");
-    } finally {
-      await built.config.clearSharingPosture(org);
-    }
+  it("ask-agent is refused outside a live turn in an internal Slack channel", async () => {
+    const live = { surface: "slack", runId: "run-ask-3" };
+    const status = async (body: unknown, claims: Record<string, unknown>) => {
+      const res = await post("/v1/ask-agent", body, { "x-agent-capability": await cap(claims) });
+      return `${res.status} ${((await res.json()) as any).error}`;
+    };
+    assert.equal(await status({ person: "<@U2>", task: "x" }, live), "400 bad_request");
+    assert.equal(await status({ person: "U2", task: "x" }, {}), "409 unavailable");
+    assert.match(await status({ person: "U2", task: "x" }, { ...live, externalSlack: true }), /^40[39] /);
+    assert.match(await status({ person: "U2", task: "x" }, { ...live, scopeId: scopeId("group", "G9") }), /^40[39] /);
     assert.equal((await built.app.pendingContextRequests("slack")).length, 0);
   });
 });

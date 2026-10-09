@@ -1,5 +1,6 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { livePersonCapability } from "./artifact-share.ts";
+import { askAgentConversation } from "../resolution/sharing-posture.ts";
 
 interface AgentApiRoute {
   method: string;
@@ -462,13 +463,14 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: onPath("POST", "/v1/ask-agent"),
-    when: (view) => view.claims.surface === "slack" && !view.claims.externalSlack,
+    when: ({ claims }) =>
+      askAgentConversation({ surface: claims.surface, scopeId: claims.scopeId, external: !!claims.externalSlack }),
     routes: [
       {
         method: "POST",
         path: "/v1/ask-agent",
         summary:
-          'ask a person in this Slack channel to let their personal agent do a task that needs their private setup — body {person:"<@U123>", task}; they get a DM to approve and the result posts back in this thread. ok:true means the request was sent, not that it ran. Unavailable in DMs, group DMs, external channels, and Open conversations, where you use the requester\'s own access directly',
+          'ask a person in this Slack channel to let their personal agent do a task that needs their private setup — body {person:"U123", task}; they get a DM to approve and the result posts back in this thread. ok:true means the request was sent, not that it ran. Refused in Open conversations, where you use the requester\'s own access directly',
       },
     ],
   },

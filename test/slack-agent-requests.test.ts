@@ -161,35 +161,13 @@ test("asking a personal agent from a channel turn sends the consent DM, posts th
   assert.equal(f.store.size, 1);
 });
 
-test("asking a personal agent is refused without posting anything when the target or conversation doesn't qualify", async () => {
+test("asking a personal agent is refused without posting anything when the run or target doesn't qualify", async () => {
   const cases: Array<[string, Parameters<typeof durableFixture>[0], string]> = [
     ["finished run", {}, "run-gone"],
     ["bot target", { actor: { externalId: "B1", displayName: "Helper", isBot: true } }, "run-1"],
     ["outsider", { actor: { externalId: "dave@example.com", displayName: "Dave" } }, "run-1"],
     ["guest", { actor: { externalId: "carol@example.com", displayName: "Carol", isExternalGuest: true } }, "run-1"],
   ];
-  for (const kind of ["dm", "group"]) {
-    cases.push([
-      kind,
-      {
-        coreOverrides: {
-          getAgentRequestRun: async () => ({
-            request: { ...CHANNEL_RUN.request, conversation: { ...CHANNEL_RUN.request.conversation, kind } },
-          }),
-        },
-      },
-      "run-1",
-    ]);
-  }
-  cases.push([
-    "external",
-    {
-      coreOverrides: {
-        getAgentRequestRun: async () => ({ request: { ...CHANNEL_RUN.request, externalSlack: { teamId: "T2" } } }),
-      },
-    },
-    "run-1",
-  ]);
   for (const [label, opts, runId] of cases) {
     const f = durableFixture(opts);
     const outcome = await f.ask(runId);
@@ -207,6 +185,14 @@ test("a consent DM that Slack rejects is reported as a failure and leaves no wai
   const outcome = await f.ask();
   assert.match((outcome as any).error, /couldn't send the request to Carol: channel_not_found/);
   assert.equal(f.store.size, 0);
+});
+
+test("asking again with the same person and task returns the first request instead of sending a second card", async () => {
+  const f = durableFixture();
+  const first = await f.ask();
+  const posted = f.posts.length;
+  assert.deepEqual(await f.ask(), first);
+  assert.equal(f.posts.length, posted);
 });
 
 test("a Run click on an instance that did not post the card recovers the request and completes the handoff", async () => {
@@ -260,14 +246,11 @@ test("a click that loses the claim race to another instance stays silent", async
 });
 
 test("a store outage answers the click with a retry nudge instead of expiring the card", async () => {
-  const f = durableFixture({
-    coreOverrides: {
-      getAgentRequest: async () => {
-        throw new Error("db down");
-      },
-    },
-  });
+  const f = durableFixture();
   const { requestId, cardTs } = await f.postRequest();
+  f.core.getAgentRequest = async () => {
+    throw new Error("db down");
+  };
 
   await f.newInstance().click("agent_request_run", requestId, { ts: cardTs });
 
