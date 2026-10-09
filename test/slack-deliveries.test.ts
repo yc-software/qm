@@ -387,11 +387,12 @@ for (const type of ["slack", "group", "principal"]) {
 }
 
 test("explicit post and recovered run deliveries dispatch stripped handoffs", async () => {
-  for (const key of ["post:RUN1:slack:C1:100.200:0", "run:RUN1"]) {
+  for (const key of ["post:TURN1:slack:C1:100.200:0", "run:RUN1"]) {
     const requests: unknown[][] = [];
     const row = {
       id: "handoff",
       idempotencyKey: key,
+      provenance: { sourceRunId: "RUN1" },
       createdAt: Date.now() - 60_000,
       text: "[[ask-agent: <@U2> | Check the synthetic report.]]",
       destination: { type: "slack", target: "C1:100.200" },

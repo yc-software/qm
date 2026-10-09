@@ -2708,6 +2708,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sourceScopeId: scopeId as ScopeId,
             sourceThreadRef: session.threadRef,
             sourceSessionId: session.id,
+            ...(input.runId ? { sourceRunId: input.runId } : {}),
           });
         const earlyTaskAck =
           input.surface === "slack" &&

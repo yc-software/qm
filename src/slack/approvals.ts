@@ -105,6 +105,7 @@ export interface Approvals {
   postAgentRequests(
     client: any,
     ctx: {
+      dedupeKey: string;
       requesterId: string | undefined;
       channel: string;
       replyThreadTs?: string;
@@ -390,51 +391,35 @@ export function createApprovals(deps: {
       request.deliveryTarget !== encodeDeliveryTarget(channel, threadTs)
     )
       return;
+    const audience: ActorAssertion[] = [];
+    const slackIdsByPrincipal = new Map<string, string>();
     for (const req of requests) {
       const actor = await directory.classifyActor(client, req.targetUserId);
       const member = request.conversation.audience.find((p) => samePerson(p.id, actor.externalId));
-      const audience = member
-        ? [{ ...actor, isExternalGuest: member.type !== "internal" || actor.isExternalGuest }]
-        : [];
-      const requestId = createHash("sha256")
-        .update(JSON.stringify([runId, channel, threadTs ?? "", req.targetUserId, req.task.trim()]))
-        .digest("hex");
-      const completed = await core.holdAgentRequestDispatch(requestId, async (lost) => {
-        let leaseLost = false;
-        void lost.then(() => {
-          leaseLost = true;
-        });
-        await postAgentRequests(
-          client,
-          {
-            requesterId: request.actor.id,
-            channel,
-            replyThreadTs: threadTs,
-            threadOnly: true,
-            kind: request.conversation.kind,
-            channelName: request.conversation.channelName,
-            audience,
-            slackIdsByPrincipal: new Map([[actor.externalId, req.targetUserId]]),
-            dispatch: {
-              requestId,
-              createdAt: run.createdAt,
-              check: () => {
-                if (leaseLost) throw new Error("agent request dispatch lease lost");
-              },
-            },
-          },
-          [req],
-        );
-        return true;
-      });
-      if (!completed) throw new Error("agent request dispatch is busy");
+      if (member) audience.push({ ...actor, isExternalGuest: member.type !== "internal" || actor.isExternalGuest });
+      slackIdsByPrincipal.set(actor.externalId, req.targetUserId);
     }
+    await postAgentRequests(
+      client,
+      {
+        dedupeKey: runId,
+        requesterId: request.actor.id,
+        channel,
+        replyThreadTs: threadTs,
+        threadOnly: true,
+        kind: request.conversation.kind,
+        channelName: request.conversation.channelName,
+        audience,
+        slackIdsByPrincipal,
+      },
+      requests,
+    );
   }
 
   async function postAgentRequests(
     client: any,
     ctx: {
-      dispatch?: { requestId: string; createdAt: number; check(): void };
+      dedupeKey: string;
       requesterId: string | undefined;
       channel: string;
       replyThreadTs?: string;
@@ -473,11 +458,15 @@ export function createApprovals(deps: {
         continue;
       }
 
-      const requestId = ctx.dispatch?.requestId ?? randomUUID();
+      const requestId = createHash("sha256")
+        .update(
+          JSON.stringify([ctx.dedupeKey, ctx.channel, ctx.replyThreadTs ?? "", req.targetUserId, req.task.trim()]),
+        )
+        .digest("hex");
       const targetAgentLabel = personalAgentLabel(target, req.targetUserId);
       const base: Omit<SlackAgentRequestContext, "originStatusTs" | "dmChannel" | "dmMessageTs"> = {
         requestId,
-        createdAt: ctx.dispatch?.createdAt ?? Date.now(),
+        createdAt: Date.now(),
         requesterId: ctx.requesterId,
         targetUserId: req.targetUserId,
         ...(target.displayName ? { targetDisplayName: target.displayName } : {}),
@@ -496,7 +485,6 @@ export function createApprovals(deps: {
         const opened = await client.conversations.open({ users: req.targetUserId });
         const dmChannel = String(opened?.channel?.id ?? "");
         if (!dmChannel) {
-          if (ctx.dispatch) throw new Error("could not open personal-agent DM");
           await client.chat.postMessage(
             slackReplyArgs(
               ctx.channel,
@@ -510,27 +498,15 @@ export function createApprovals(deps: {
           continue;
         }
 
-        pendingCtx = { ...base, dmChannel };
-        if (ctx.dispatch) {
-          pendingCtx = await core.reserveAgentRequest(requestId, pendingCtx);
-          if (pendingCtx.settled || pendingCtx.dmMessageTs) continue;
-          ctx.dispatch.check();
-        }
-        const post = async (args: Parameters<typeof postWithVerify>[1], suffix: string) => {
-          ctx.dispatch?.check();
-          return ctx.dispatch
-            ? postWithVerify(client, args, `agent-request:${requestId}:${suffix}`, {
-                verifyFirst: true,
-                verifyOldest: String(base.createdAt / 1000 - 1),
-              })
-            : client.chat.postMessage(args);
-        };
+        pendingCtx = await core.reserveAgentRequest(requestId, { ...base, dmChannel });
+        if (pendingCtx.settled || pendingCtx.dmMessageTs) continue;
+        const verifyOldest = String(pendingCtx.createdAt / 1000 - 1);
+        const post = (args: Parameters<typeof postWithVerify>[1], suffix: string) =>
+          postWithVerify(client, args, `agent-request:${requestId}:${suffix}`, { verifyFirst: true, verifyOldest });
         const status = await post(
-          {
-            ...slackReplyArgs(ctx.channel, agentRequestStatusText(pendingCtx, "waiting"), ctx.replyThreadTs, {
-              threadOnly: ctx.threadOnly,
-            }),
-          },
+          slackReplyArgs(ctx.channel, agentRequestStatusText(pendingCtx, "waiting"), ctx.replyThreadTs, {
+            threadOnly: ctx.threadOnly,
+          }),
           "status",
         );
         if (status?.ts) pendingCtx.originStatusTs = String(status.ts);
@@ -542,7 +518,6 @@ export function createApprovals(deps: {
           task: req.task,
         });
         await core.putAgentRequest(requestId, pendingCtx);
-        if (ctx.dispatch && !(await core.getAgentRequest(requestId))) continue;
         const dm = await post(
           {
             channel: dmChannel,
@@ -555,7 +530,6 @@ export function createApprovals(deps: {
         if (dm?.ts) pendingCtx.dmMessageTs = String(dm.ts);
         await core.putAgentRequest(requestId, pendingCtx);
       } catch (err) {
-        if (ctx.dispatch) throw err;
         swallow("slack: agent request dispatch", err);
         const reason = `couldn't send the personal-agent request to ${target.displayName ?? req.targetUserId} — ${GENERIC_FAILURE_CLAUSE}`;
         if (pendingCtx?.originStatusTs) {
@@ -857,12 +831,11 @@ export function createApprovals(deps: {
         }
         const { directives } = resolveReactionTargets(reactions, ctx.allowedTs ?? new Set());
         await applyAndLogReactions(client, ctx.channel, ctx.triggerTs, directives);
-        if (actionableAgentRequests.length && outcome.runId) {
-          await postRunAgentRequests(client, outcome.runId, ctx.channel, ctx.replyThreadTs, actionableAgentRequests);
-        } else if (actionableAgentRequests.length) {
+        if (actionableAgentRequests.length) {
           await postAgentRequests(
             client,
             {
+              dedupeKey: outcome.runId ?? ctx.triggerTs ?? randomUUID(),
               requesterId: ctx.requesterId,
               channel: ctx.channel,
               ...(ctx.replyThreadTs ? { replyThreadTs: ctx.replyThreadTs } : {}),

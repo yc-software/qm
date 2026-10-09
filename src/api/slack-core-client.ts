@@ -132,7 +132,6 @@ export interface SlackCoreClient {
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   getAgentRequestRun(runId: string): Promise<Pick<Run, "request" | "createdAt"> | null>;
-  holdAgentRequestDispatch<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   reserveAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<SlackAgentRequestContext>;
   putAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<void>;
   getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null>;
@@ -261,7 +260,6 @@ export function createAgentRequestStore(map: DurableMap<SlackAgentRequestContext
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease ?? createNoopLeaderLease();
   const orgScope: ScopeId = scopeId("org", configOrgId());
-  const agentRequestDispatches = new Set<string>();
   const terminalWaiters = new Map<string, Set<() => void>>();
   deps.runs.onTerminal((run) => {
     for (const wake of terminalWaiters.get(run.id) ?? []) wake();
@@ -526,15 +524,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async getAgentRequestRun(runId) {
       const run = await deps.runs.get(runId);
       return run ? { request: run.request, createdAt: run.createdAt } : null;
-    },
-    async holdAgentRequestDispatch(key, fn) {
-      if (agentRequestDispatches.has(key)) return null;
-      agentRequestDispatches.add(key);
-      try {
-        return await lease.hold(`slack:agent-request:${key}`, fn);
-      } finally {
-        agentRequestDispatches.delete(key);
-      }
     },
 
     async pushDirectory(body) {

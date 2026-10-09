@@ -78,6 +78,8 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
     reportRunEditRef: async () => {},
     getApproval: async (id: string) => storedApprovals.get(id) ?? null,
     putAgentRequest: async (id: string, record: SlackAgentRequestContext) => void store.set(id, record),
+    reserveAgentRequest: async (id: string, record: SlackAgentRequestContext) =>
+      store.get(id) ?? (store.set(id, record), record),
     getAgentRequest: async (id: string) => store.get(id) ?? null,
     takeAgentRequest: async (id: string) => {
       const record = store.get(id) ?? null;
@@ -101,7 +103,11 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
   const ephemerals: any[] = [];
   let nextTs = 0;
   const client = {
-    conversations: { open: async () => ({ channel: { id: "D-CAROL" } }) },
+    conversations: {
+      open: async () => ({ channel: { id: "D-CAROL" } }),
+      replies: async () => ({ messages: [] }),
+      history: async () => ({ messages: [] }),
+    },
     chat: {
       postMessage: async (body: any) => {
         posts.push(body);
@@ -147,6 +153,7 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
     await newInstance().approvals.postAgentRequests(
       client,
       {
+        dedupeKey: "TURN1",
         requesterId: "U1",
         channel: "C1",
         replyThreadTs: "1.1",
@@ -493,11 +500,10 @@ function runDispatchFixture() {
   };
 }
 
-test("run-backed handoffs recover, dedupe concurrent dispatch and retain consumed tombstones", async () => {
+test("run-backed handoffs recover, dedupe replays and retain consumed tombstones", async () => {
   const f = runDispatchFixture();
   f.loseDmResponse();
-  const outcomes = await Promise.allSettled([f.dispatch(), f.dispatch()]);
-  assert.equal(outcomes.filter((r) => r.status === "fulfilled").length, 1);
+  await f.dispatch();
   await f.dispatch();
   assert.equal(f.posts.length, 2, "status and one consent card despite lost response and replay");
   const [id, record] = (await f.map.entries())[0]!;
@@ -510,13 +516,14 @@ test("run-backed handoffs recover, dedupe concurrent dispatch and retain consume
   assert.equal(await f.store.getAgentRequest(id), null);
 });
 
-test("transient handoff failure remains retryable without another status card", async () => {
+test("a failed handoff is reported once and a replay does not reopen it", async () => {
   const f = runDispatchFixture();
   f.setFailDm(true);
-  await assert.rejects(f.dispatch(), /temporary Slack failure/);
-  assert.equal(f.posts.length, 1);
+  await f.dispatch();
   f.setFailDm(false);
   await f.dispatch();
+  assert.equal(f.posts.filter((p) => p.channel === "D2").length, 0);
+  assert.match(f.posts.at(-1)!.text, /couldn't send the personal-agent request/);
   assert.equal(f.posts.length, 2);
 });
 

@@ -293,7 +293,7 @@ export function createDeliveryPoller(deps: {
                 }
               }
               const cleaned = cleanAgentReplyForSlack(d.text);
-              const sourceRunId = runId ?? /^post:([^:]+):/.exec(d.idempotencyKey)?.[1];
+              const sourceRunId = runId ?? d.provenance?.sourceRunId;
               if (sourceRunId && cleaned.agentRequests.length && deps.approvals) {
                 await deps.approvals.postRunAgentRequests(
                   client,

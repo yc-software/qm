@@ -229,9 +229,6 @@ class FakeCore implements SlackCoreClient {
   async getAgentRequestRun() {
     return null;
   }
-  async holdAgentRequestDispatch<T>(_key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
-    return fn(new Promise(() => {}));
-  }
   async reserveAgentRequest(requestId: string, record: SlackAgentRequestContext) {
     const existing = await this.getAgentRequest(requestId);
     if (existing) return existing;
