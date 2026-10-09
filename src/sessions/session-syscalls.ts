@@ -108,7 +108,7 @@ const READ_MAX_CHARS_CEILING = 20_000;
 const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
 
-export interface SessionOpenInput {
+interface SessionOpenInput {
   requestId?: string;
   task: string;
   name?: string;
@@ -122,7 +122,7 @@ export interface SessionOpenInput {
 type SessionOpenResult =
   { ok: true; sessionId: string; title: string; liveRunsRemaining: number } | { ok: false; message: string };
 
-export interface SessionWriteInput {
+interface SessionWriteInput {
   target: string;
   peer?: boolean;
   text?: string;
@@ -140,7 +140,7 @@ type SessionWriteResult =
     }
   | { ok: false; message: string };
 
-export interface SessionReadInput {
+interface SessionReadInput {
   target?: string;
   peer?: boolean;
   limit?: number;
@@ -520,8 +520,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 
       function sidebarRefusal(): string | null {
         if (binding.request.surface !== "web") return WEB_ONLY;
-        if (binding.request.swarm || binding.session.parentSessionId || isSubagentThreadRef(binding.session.threadRef))
-          return "sessions belong to the person's sidebar; a subagent reports to its parent instead.";
+        if (binding.request.swarm) return "swarm workers coordinate through the swarm API.";
         return null;
       }
 

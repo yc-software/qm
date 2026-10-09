@@ -339,6 +339,11 @@ export interface AgentToolsOptions {
   clientTools?: readonly ClientToolDeclaration[];
 }
 
+export const SUBAGENT_TOOL_EXCEPTIONS = {
+  surfaceTools: "a subagent's result returns to its parent, which owns posting to the conversation",
+  delegateWork: "a subagent is the delegate, so it does the work instead of delegating again",
+} satisfies Partial<Record<keyof AgentToolsOptions, string>>;
+
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
   "readOnly" | "surfaceTools" | "surfaceName" | "delegateWork" | "clientTools"

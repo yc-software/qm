@@ -592,15 +592,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
           (!!conversation.publishMembers?.length && conversation.publishMembers.every((p) => p.type === "internal")));
-      const liveTurn = humanTurn && allInternal && !external;
       const authoredDetection =
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
       const delegationEnabled =
         !external && (await deps.featureFlags?.enabled("responsive_spine", `personal:${actor.id}` as ScopeId)) === true;
       const delegatedOrigin =
-        delegationEnabled && deps.runs
+        !external && deps.runs
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
+      const liveTurn = (humanTurn || delegatedOrigin?.kind === "human") && allInternal && !external;
       const liveAuthorTurn =
         !external && (humanTurn || authoredDetection || delegatedOrigin !== undefined) && allInternal;
       const messageTs = input.origin.kind === "human" ? input.origin.messageTs : undefined;

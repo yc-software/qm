@@ -29,12 +29,7 @@ import { type PublishAudienceKind } from "../resolution/publish-audience.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import type { GapPhase, GapWork } from "../sessions/session-store.ts";
-import type {
-  SessionOpenInput,
-  SessionReadInput,
-  SessionSyscalls,
-  SessionWriteInput,
-} from "../sessions/session-syscalls.ts";
+import type { SessionSyscalls } from "../sessions/session-syscalls.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
 import { waitForClientResult, type RunSignalStore } from "../runs/run-signal-store.ts";
@@ -1155,11 +1150,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...(deps.sessionSyscalls
       ? {
           sessionSyscalls: {
-            receive: (timeoutMs?: number) => deps.sessionSyscalls!.receive?.(timeoutMs) ?? Promise.resolve([]),
-            acknowledge: (ids: string[]) => deps.sessionSyscalls!.acknowledge?.(ids) ?? Promise.resolve(),
-            open: (input: SessionOpenInput) => once(() => deps.sessionSyscalls!.open(input)),
-            write: (input: SessionWriteInput) => once(() => deps.sessionSyscalls!.write(input)),
-            read: (input: SessionReadInput) => deps.sessionSyscalls!.read(input),
+            ...deps.sessionSyscalls,
+            open: (input) => once(() => deps.sessionSyscalls!.open(input)),
+            write: (input) => once(() => deps.sessionSyscalls!.write(input)),
+            ...(deps.sessionSyscalls.start
+              ? { start: (input) => once(() => deps.sessionSyscalls!.start!(input)) }
+              : {}),
           },
         }
       : {}),

@@ -1808,7 +1808,8 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
       origin: { kind: "human" },
     } as Parameters<typeof factory.forTurn>[0]["request"],
   });
-  for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })]) assert.equal(out.ok, false);
+  for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })])
+    assert.equal(out.ok, true, JSON.stringify(out));
   const unshareable =
     "this conversation's earlier history was shared with a different audience, so it can't be forked from here.";
   const checkpoint = async (audience: string, throughSeq: number) => {
@@ -1852,5 +1853,5 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
-  assert.equal(started.length, 3);
+  assert.equal(started.length, 4);
 });
