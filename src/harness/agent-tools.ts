@@ -4090,6 +4090,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         goal.status = "active";
         goal.updatedAt = goal.activeSince = Date.now();
         delete goal.pauseReason;
+        delete goal.pausedAt;
         delete goal.governor;
         return recordCoreAuthoredResult(
           callId,

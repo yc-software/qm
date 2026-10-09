@@ -526,3 +526,34 @@ test("goal active time banks each turn and excludes idle and paused gaps", () =>
   assert.equal(goalFloorUnmet(goal, meter, resumedAt + 12 * 60_000), false);
   assert.equal(reviveGoalRecord(structuredClone(goal)).activeMs, 8 * 60_000);
 });
+
+test("the turn a governor pauses still counts toward time worked, and nothing after the pause does", () => {
+  const goal = createGoalRecord({ objective: "voice profile", now: 0 });
+  applyGovernorVerdict(goal, { verdict: "step_back", reasons: "same error three times" }, 2 * 60_000);
+  applyGovernorVerdict(goal, { verdict: "pause", reasons: "Paste some samples?" }, 3.5 * 60_000);
+  assert.equal(goal.status, "paused");
+  bankGoalTurn(goal, 0, 4 * 60_000);
+  assert.equal(goal.activeMs, 3.5 * 60_000, "worked until the pause, not 0 and not the tail after it");
+  bankGoalTurn(goal, 10 * 60_000, 15 * 60_000);
+  assert.equal(goal.activeMs, 3.5 * 60_000, "a later turn while paused adds nothing");
+  assert.equal(reviveGoalRecord(structuredClone(goal)).pausedAt, 3.5 * 60_000);
+});
+
+test("enforceGoal shows a governor verdict once, on the round right after it", async () => {
+  const goal = createGoalRecord({ objective: "deploy to styleup" });
+  const verdicts: GovernorVerdict[] = [{ verdict: "step_back", reasons: "same approval wait" }];
+  const notes: string[] = [];
+  await enforceGoal({
+    goal,
+    meter: createGrindMeter(),
+    outcome: "ok",
+    ok: "ok",
+    blocked: () => notes.length >= 2 * GOAL_GOVERNOR_ROUNDS - 1,
+    beforePrompt: () => {},
+    prompt: async (note) => (notes.push(note), "ok"),
+    govern: async () => verdicts.shift() ?? { verdict: "continue", reasons: "fine" },
+  });
+  const withStepBack = notes.filter((n) => n.includes(GOAL_STEP_BACK_PROMPT));
+  assert.equal(withStepBack.length, 1, "the step back is not repeated on every later round");
+  assert.ok(notes[GOAL_GOVERNOR_ROUNDS]!.includes(GOAL_STEP_BACK_PROMPT));
+});
