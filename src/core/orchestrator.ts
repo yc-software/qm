@@ -1378,6 +1378,38 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
 
+      const delegatedTask =
+        automatedTurn && !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      const assignSessionTitle = () => {
+        const titleText = input.displayText?.trim() || input.text;
+        const untitledUserTurn =
+          !session.title &&
+          !input.approval &&
+          !(input.proactiveOpener && !input.text.trim()) &&
+          !(automatedTurn && !delegatedTask);
+        const fallbackTitle = untitledUserTurn ? fallbackSessionTitle(titleText) : undefined;
+        if (!fallbackTitle) return;
+        const announce = async () =>
+          deps.sessionStateBus?.emit({
+            threadRef: session.threadRef,
+            sessionId: session.id,
+            participants: await deps.sessions.participantsOf(session.id),
+            state: "metadata",
+            at: Date.now(),
+          });
+        void deps.sessions
+          .updateTitle(session.id, fallbackTitle)
+          .then(announce)
+          .then(async () => {
+            if (!deps.harness.models.generateTitle) return;
+            const title = await generateAndStoreTitle(session.id, scopeId, `User:\n${stripTurnBoilerplate(titleText)}`);
+            if (title) await announce();
+          })
+          .finally(() => deps.errors?.flush())
+          .catch(swallowAs("orchestrator: session title", undefined));
+      };
+      if (!ambientTurn) assignSessionTitle();
+
       const isRetry = (input.attempt ?? 1) > 1;
       const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
         if (!input.runId || !deps.runs) return null;
@@ -2594,6 +2626,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : { status: "silent", sessionId: session.id };
           }
         }
+        if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
           if ((input.surface === "slack" || input.surface === "monitor") && input.runLeaseToken) {
@@ -3344,8 +3377,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let firstChunkAt: number | undefined;
         let lastChunkAt: number | undefined;
         const emittedEntries: SessionEntry[] = [];
-        const delegatedTask =
-          automatedTurn && !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
         const syntheticPrompt =
           (input.proactiveOpener && !input.text.trim()) ||
           (automatedTurn && !delegatedTask) ||
@@ -3361,15 +3392,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
               }
             : undefined;
-        const titleText = input.displayText?.trim() || input.text;
-        const fallbackTitle = !session.title && !syntheticPrompt ? fallbackSessionTitle(titleText) : undefined;
-        const fallbackTitleWrite = fallbackTitle ? deps.sessions.updateTitle(session.id, fallbackTitle) : undefined;
-        if (fallbackTitleWrite && deps.harness.models.generateTitle) {
-          void fallbackTitleWrite
-            .then(() => generateAndStoreTitle(session.id, scopeId, `User:\n${stripTurnBoilerplate(titleText)}`))
-            .finally(() => deps.errors?.flush())
-            .catch(swallowAs("orchestrator: session title", undefined));
-        }
         const requestedTurnWallClockMs =
           typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0 ? input.turnWallClockMs : undefined;
         const configuredTurnWallClockSec = await deps.config?.getTurnWallClockSecDurable(resolution.orgScopeId);
