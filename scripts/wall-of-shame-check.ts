@@ -58,6 +58,7 @@ export async function relevantLenses(spec: string, diff: string, apiKey: string)
     body: JSON.stringify({
       model: TRIAGE_MODEL,
       max_tokens: 500,
+      thinking: { type: "disabled" },
       messages: [{ role: "user", content: triagePrompt(spec, diff) }],
     }),
   });
