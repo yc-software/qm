@@ -259,6 +259,7 @@ const AUTOMATED_TURN_LEASE_WAIT_MS = 1_000;
 const SESSION_GONE_REASON = "this conversation is no longer available — start a new one";
 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
+const DEFAULT_TITLE_GENERATION_TIMEOUT_MS = 8_000;
 
 const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
@@ -356,7 +357,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     if (!transcript.trim()) return undefined;
     let title: string | undefined;
     try {
-      title = await deps.harness.models.generateTitle?.(transcript);
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        title = await Promise.race([
+          deps.harness.models.generateTitle?.(transcript, controller.signal),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error("title generation timed out"));
+              controller.abort();
+            }, deps.titleGenerationTimeoutMs ?? DEFAULT_TITLE_GENERATION_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
     } catch (e) {
       deps.errors?.record(
         {
