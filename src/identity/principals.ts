@@ -1,3 +1,4 @@
+import { swallowAs } from "../util/errors.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { createPgPool } from "../persistence/pg-pool.ts";
@@ -225,7 +226,7 @@ export function createPostgresPrincipalStore(connectionString: string): Principa
         if (id == null) throw new Error(`identity ${row.provider}:${row.externalId} is unlinked; link it instead`);
         return String(id);
       } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
+        await client.query("ROLLBACK").catch(swallowAs("principals: rollback", undefined));
         throw error;
       } finally {
         client.release();
@@ -259,7 +260,7 @@ export function createPostgresPrincipalStore(connectionString: string): Principa
         await combineReferences(client, keep, drop);
         await client.query("COMMIT");
       } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
+        await client.query("ROLLBACK").catch(swallowAs("principals: rollback", undefined));
         throw error;
       } finally {
         client.release();

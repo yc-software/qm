@@ -1,7 +1,7 @@
 import type { Cron, CronSchedule, Destination } from "../types.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { samePerson } from "../directory/person.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 
 export interface CronEditDetail {
@@ -90,7 +90,7 @@ export async function notifyOwnerOfCronEdit(
   if (cron.runAs !== "scopeShared") return;
   try {
     if (samePerson(args.editorId, cron.owner)) return;
-    const editor = await sink.directoryMember(args.editorId).catch(() => null);
+    const editor = await sink.directoryMember(args.editorId).catch(swallowAs("cron edit notice: editor lookup", null));
     const url = sink.cronAdminUrl(cron);
     const label = cron.title ?? "shared";
     let ref = "shared";

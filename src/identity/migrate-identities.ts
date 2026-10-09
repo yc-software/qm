@@ -1,8 +1,9 @@
+import { swallowAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { composioUserId, isPrincipalId, PRINCIPAL_MIGRATIONS, type Handle } from "./principals.ts";
 import { orgId } from "../config.ts";
-import { interleaveNotebooks, PRINCIPAL_REFS } from "./principal-refs.ts";
+import { interleaveNotebooks, PRINCIPAL_REFS, quote, tableColumns } from "./principal-refs.ts";
 
 const DEACTIVATIONS = "deactivated_principals";
 const EMAIL_KEYED = "external_members";
@@ -25,7 +26,6 @@ function legacyHandle(id: string, slackIds: ReadonlySet<string>): Handle {
   return { provider: "oidc", externalId: id };
 }
 
-const quote = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function tokenRewriter(mapping: ReadonlyMap<string, string>, prefix = ""): (s: string) => string {
@@ -71,15 +71,6 @@ class UnionFind {
   }
 }
 
-async function columnsByTable(client: PoolClient): Promise<Map<string, Set<string>>> {
-  const { rows } = await client.query<{ t: string; c: string }>(
-    "SELECT table_name AS t, column_name AS c FROM information_schema.columns WHERE table_schema = current_schema()",
-  );
-  const out = new Map<string, Set<string>>();
-  for (const r of rows) out.set(r.t, (out.get(r.t) ?? new Set()).add(r.c));
-  return out;
-}
-
 const PERSONAL = /^personal:(.+)$/;
 
 export async function runIdentityMigration(opts: {
@@ -94,7 +85,7 @@ export async function runIdentityMigration(opts: {
   const report: MigrationReport = { principals: 0, identities: 0, rewrites: {}, notebooksMerged: 0 };
   try {
     await client.query("BEGIN");
-    const columns = await columnsByTable(client);
+    const columns = await tableColumns(client);
     const has = (t: string, c: string): boolean => columns.get(t)?.has(c) ?? false;
     const uf = new UnionFind();
     const names = new Map<string, string>();
@@ -303,7 +294,7 @@ export async function runIdentityMigration(opts: {
     await client.query(opts.apply ? "COMMIT" : "ROLLBACK");
     return report;
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
+    await client.query("ROLLBACK").catch(swallowAs("identity migration: rollback", undefined));
     throw error;
   } finally {
     client.release();

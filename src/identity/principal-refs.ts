@@ -72,10 +72,9 @@ export const NOT_PRINCIPAL_COLUMNS: readonly string[] = [
   "identities.email",
 ];
 
-const quote = (name: string): string => `"${name.replace(/"/g, '""')}"`;
-const TOKEN_PATTERN = (id: string): string => `(^|[^0-9A-Za-z-])${id.replace(/[^0-9A-Za-z-]/g, "")}(?![0-9A-Za-z-])`;
+export const quote = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 
-async function tableColumns(client: PoolClient): Promise<Map<string, Set<string>>> {
+export async function tableColumns(client: PoolClient): Promise<Map<string, Set<string>>> {
   const { rows } = await client.query<{ table_name: string; column_name: string }>(
     "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()",
   );
@@ -177,7 +176,6 @@ export async function combineReferences(client: PoolClient, keep: string, drop: 
   const has = (t: string, c: string): boolean => columns.get(t)?.has(c) ?? false;
   if (has("memory_revisions", "scope_id"))
     await interleaveNotebooks(client, `personal:${keep}`, [`personal:${keep}`, `personal:${drop}`]);
-  const pattern = TOKEN_PATTERN(drop);
   for (const r of PRINCIPAL_REFS) {
     if (!has(r.table, r.column)) continue;
     const t = quote(r.table);
@@ -185,29 +183,24 @@ export async function combineReferences(client: PoolClient, keep: string, drop: 
     if (r.kind === "id") await repointEquals(client, r.table, r.column, drop, keep);
     else if (r.kind === "scope") await repointEquals(client, r.table, r.column, `personal:${drop}`, `personal:${keep}`);
     else if (r.kind === "text")
-      await client.query(`UPDATE ${t} SET ${c} = regexp_replace(${c}, $1, '\\1' || $2, 'g') WHERE ${c} ~ $1`, [
-        pattern,
+      await client.query(`UPDATE ${t} SET ${c} = replace(${c}, $1, $2) WHERE strpos(${c}, $1) > 0`, [drop, keep]);
+    else
+      await client.query(`UPDATE ${t} SET ${c} = replace(${c}::text, $1, $2)::jsonb WHERE strpos(${c}::text, $1) > 0`, [
+        drop,
         keep,
       ]);
-    else
-      await client.query(
-        `UPDATE ${t} SET ${c} = regexp_replace(${c}::text, $1, '\\1' || $2, 'g')::jsonb WHERE ${c}::text ~ $1`,
-        [pattern, keep],
-      );
   }
   for (const [table, cols] of columns) {
     if (!cols.has("id") || !cols.has("json")) continue;
     const t = quote(table);
-    const { rows } = await client.query<{ id: string }>(`SELECT id FROM ${t} WHERE id ~ $1`, [pattern]);
-    for (const { id } of rows) {
-      const next = id.replace(new RegExp(pattern, "g"), `$1${keep}`);
-      const clash = await client.query(`SELECT 1 FROM ${t} WHERE id = $1`, [next]);
-      if (clash.rowCount) await client.query(`DELETE FROM ${t} WHERE id = $1`, [id]);
-      else await client.query(`UPDATE ${t} SET id = $2 WHERE id = $1`, [id, next]);
-    }
     await client.query(
-      `UPDATE ${t} SET json = regexp_replace(json::text, $1, '\\1' || $2, 'g')::jsonb WHERE json::text ~ $1`,
-      [pattern, keep],
+      `DELETE FROM ${t} d WHERE strpos(d.id, $1) > 0 AND EXISTS (SELECT 1 FROM ${t} k WHERE k.id = replace(d.id, $1, $2))`,
+      [drop, keep],
+    );
+    await client.query(
+      `UPDATE ${t} SET id = replace(id, $1, $2), json = replace(json::text, $1, $2)::jsonb
+        WHERE strpos(id, $1) > 0 OR strpos(json::text, $1) > 0`,
+      [drop, keep],
     );
     if (columns.has("durable_map_versions"))
       await client.query(
