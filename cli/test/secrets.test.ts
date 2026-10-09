@@ -184,6 +184,16 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
   );
 });
 
+test("fly deployments require the sprites token their core template selects", () => {
+  for (const sandbox of [undefined, { backend: "sprites" as const, app: "acme-sb" }])
+    assert.ok(secretByName(makeConfig({ target: "fly", ...(sandbox ? { sandbox } : {}) }), "SPRITES_TOKEN").required);
+  assert.ok(
+    ![
+      makeConfig({ target: "fly", sandbox: { backend: "agent37" } }),
+      makeConfig({ target: "fly", env: { core: { SANDBOX_BACKEND: "agent37" } } }),
+    ].some((config) => computedSecrets(config).some((secret) => secret.name === "SPRITES_TOKEN")),
+  );
+});
 test("the Agent37 key is required for either sandbox route", () => {
   for (const config of [
     makeConfig({ env: { core: { SANDBOX_BACKEND: "agent37" } } }),
@@ -272,6 +282,11 @@ test("FLY_TEMPLATE_ENV_DEFAULTS stays in sync with deploy/core/fly.toml", () => 
       toml,
       new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
       `deploy/core/fly.toml sets ${name}="${value}"`,
+    );
+    assert.match(
+      packaged,
+      new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
+      `cli/templates/fly/core.toml sets ${name}="${value}"`,
     );
   }
   assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
