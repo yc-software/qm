@@ -101,18 +101,13 @@ test("pg directory: slackId round-trips through replace → get/list/resolve; a 
   assert.equal((await store.get("eve@acme.com"))?.slackId, "U99");
 });
 
-test("pg directory: get folds email case in BOTH directions; non-email ids stay byte-exact", { skip }, async () => {
+test("pg directory: get is exact on the principal id", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await store.replace([
     { principalId: "Eve@Acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
     { principalId: "U5", displayName: "Morgan", type: "internal" },
   ]);
-  assert.equal(
-    (await store.get("eve@acme.com"))?.principalId,
-    "Eve@Acme.com",
-    "a canonical query finds a non-canonically STORED row",
-  );
-  assert.equal((await store.get("EVE@Acme.COM"))?.principalId, "Eve@Acme.com");
+  assert.equal(await store.get("eve@acme.com"), null, "no case folding: handles resolve at edges");
   assert.equal((await store.get("Eve@Acme.com"))?.principalId, "Eve@Acme.com");
   assert.equal(await store.get("u5"), null, "a non-email id never folds");
   assert.equal((await store.get("U5"))?.displayName, "Morgan");

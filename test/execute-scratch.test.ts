@@ -191,7 +191,7 @@ async function freshApp(extra: Partial<Config> = {}) {
 
 const dm = (text: string): TurnRequest => ({
   surface: "test",
-  actor: { externalId: "U1", provider: "slack" as const },
+  actor: { externalId: "U1" },
   conversation: { kind: "dm", threadRef: "dm:U1:t1" },
   text,
 });

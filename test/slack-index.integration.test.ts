@@ -819,7 +819,7 @@ test("a failed refresh after a leave event revokes only the departing member", a
     await waitFor(() => f.core.directories.length > pushes);
     const pushed = f.core.directories.at(-1);
     assert.ok(!pushed.channelRosterIds.includes("CPX"));
-    assert.deepEqual(pushed.channelRevocations, [{ channelId: "CPX", principalId: "U1" }]);
+    assert.deepEqual(pushed.channelRevocations, [{ channelId: "CPX", principalId: "U1", provider: "slack" }]);
   } finally {
     await f.stop();
   }
@@ -833,7 +833,7 @@ test("a failed email-mode refresh revokes the departing canonical principal", as
     await f.app.emitEvent("member_left_channel", { user: "U1", channel: "CPX", event_ts: "100.7" });
     await waitFor(() => f.core.directories.length > pushes);
     assert.deepEqual(f.core.directories.at(-1).channelRevocations, [
-      { channelId: "CPX", principalId: "alice@example.com" },
+      { channelId: "CPX", principalId: "alice@example.com", provider: "email" },
     ]);
   } finally {
     await f.stop();

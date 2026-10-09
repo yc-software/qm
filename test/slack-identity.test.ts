@@ -223,7 +223,10 @@ test("allInternalChannelMembers: all-internal + complete → deduped ids; WITHHE
     { externalId: "U2", provider: "slack" as const, isExternalGuest: false },
     { externalId: "U1", provider: "slack" as const, isExternalGuest: false },
   ];
-  assert.deepEqual((allInternalChannelMembers(internal, true, { is_private: true }) ?? []).sort(), ["U1", "U2"]);
+  assert.deepEqual(
+    (allInternalChannelMembers(internal, true, { is_private: true }) ?? []).map((m) => m.externalId).sort(),
+    ["U1", "U2"],
+  );
   assert.equal(allInternalChannelMembers(internal, false, { is_private: true }), undefined, "incomplete → withheld");
   const withGuest = [
     { externalId: "U1", provider: "slack" as const, isExternalGuest: false },
@@ -255,7 +258,7 @@ test("bot accounts can hold shared-scope membership", () => {
       ],
       true,
       { is_private: true },
-    ),
+    )?.map((m) => m.externalId),
     ["U1", "B1"],
   );
 });

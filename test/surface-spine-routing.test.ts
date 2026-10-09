@@ -16,7 +16,7 @@ function freshApp() {
   return buildApp(testConfig({ dataDir }));
 }
 
-const actor = { externalId: "U1", provider: "slack" as const };
+const actor = { externalId: "U1" };
 function mention(text: string, channel: string, root: string): TurnRequest {
   return {
     surface: "slack",
@@ -236,7 +236,7 @@ test("surfaceTools with NO resolvable destination falls back to the normal auto-
   const built = freshApp();
   built.runtime.start();
   try {
-    const principal = { externalId: "U9", provider: "slack" as const };
+    const principal = { externalId: "U9" };
     const res = await built.app.turn({
       surface: "slack",
       actor: principal,

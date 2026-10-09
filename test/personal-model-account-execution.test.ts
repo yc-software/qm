@@ -35,7 +35,7 @@ for (const provider of ["anthropic", "openai"] as const) {
     await built.config.setPersonalModelAuth("U1", true, provider);
     const submitted = await built.app.turn({
       surface: "slack",
-      actor: { externalId: "U1", provider: "slack" as const },
+      actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
       text: "hello",
       liveActor: true,
@@ -64,7 +64,7 @@ test("disconnecting a queued personal account fails without invoking any main ha
   await built.config.setPersonalModelAuth("U1", true, "openai");
   const submitted = await built.app.turn({
     surface: "slack",
-    actor: { externalId: "U1", provider: "slack" as const },
+    actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "execute-disconnected-personal" },
     text: "hello",
     liveActor: true,
@@ -95,7 +95,7 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
     await built.config.setPersonalModelAuth("U1", true, account === "personal" ? undefined : account);
     const submitted = await built.app.turn({
       surface: "web",
-      actor: { externalId: "U1", provider: "slack" as const },
+      actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `web:U1:picker-${account}` },
       text: "hello",
       liveActor: true,
@@ -136,7 +136,7 @@ test("personal web selections reject wrong providers, harnesses, policy exclusio
   const submit = (model: string, harness = "pi") =>
     built.app.turn({
       surface: "web",
-      actor: { externalId: "U1", provider: "slack" as const },
+      actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `web:U1:invalid-${crypto.randomUUID()}` },
       text: "hello",
       liveActor: true,
@@ -167,7 +167,7 @@ test("a queued web selection cannot fall back to another personal provider after
   await built.config.setPersonalModelAuth("U1", true);
   const submitted = await built.app.turn({
     surface: "web",
-    actor: { externalId: "U1", provider: "slack" as const },
+    actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "web:U1:disconnect-after-pick" },
     text: "hello",
     liveActor: true,
@@ -200,7 +200,7 @@ test("web subscription selections use the namespaced model and personal OAuth on
   await built.config.setPersonalModelAuth("U1", true, "openai");
   const submitted = await built.app.turn({
     surface: "web",
-    actor: { externalId: "U1", provider: "slack" as const },
+    actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "web:U1:oauth-picker" },
     text: "hello",
     liveActor: true,
@@ -238,7 +238,7 @@ test("partial personal web choices queue the complete validated scoped runtime",
   const submit = (choice: { harness?: string; model?: string }) =>
     built.app.turn({
       surface: "web",
-      actor: { externalId: "U1", provider: "slack" as const },
+      actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `web:U1:partial-${crypto.randomUUID()}` },
       text: "hello",
       liveActor: true,
