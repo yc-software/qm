@@ -1,3 +1,4 @@
+import { testHandle } from "./support/principal.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -16,7 +17,12 @@ function freshApp() {
 }
 
 function dm(text: string, thread: string, externalId: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    surface: "test",
+    actor: { externalId, provider: testHandle(externalId).provider },
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 test("getSessionForViewer withholds metadata from a non-participant (no session-metadata IDOR)", async () => {

@@ -8,12 +8,17 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
-import { principalOf } from "./support/principal.ts";
+import { principalOf, testHandle } from "./support/principal.ts";
 
 const SECRET = "session-pins-secret-value!".repeat(2);
 
 function dm(externalId: string, text: string, thread: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    surface: "test",
+    actor: { externalId, provider: testHandle(externalId).provider },
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 describe("conversation pins self-API", async () => {

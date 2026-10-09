@@ -1,4 +1,4 @@
-import { principalOf } from "./support/principal.ts";
+import { principalOf, testHandle } from "./support/principal.ts";
 import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
@@ -15,7 +15,12 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "agent-conversations-secret".repeat(2);
 
 function dm(externalId: string, text: string, thread: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    surface: "test",
+    actor: { externalId, provider: testHandle(externalId).provider },
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 describe("agent conversations self-API", async () => {

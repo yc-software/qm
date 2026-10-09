@@ -1,3 +1,4 @@
+import { testHandle } from "./support/principal.ts";
 import { handle } from "../src/identity/principals.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
@@ -115,7 +116,7 @@ test("core route: signals for a pending run are accepted (abort, steer)", async 
 function steererRequest(externalId: string, threadRef: string, text: string, displayName?: string): TurnRequest {
   return {
     surface: "web",
-    actor: { externalId, ...(displayName ? { displayName } : {}) },
+    actor: { externalId, provider: testHandle(externalId).provider, ...(displayName ? { displayName } : {}) },
     conversation: { kind: "dm", threadRef },
     liveActor: true,
     text,

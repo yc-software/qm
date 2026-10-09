@@ -32,10 +32,34 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     await built.app.upsertDirectory([
-      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      {
+        principalId: "carol@acme.com",
+        provider: "email" as const,
+        displayName: "Carol Example",
+        type: "internal",
+        slackId: "U0CAROL",
+      },
+      {
+        principalId: "alice@acme.com",
+        provider: "email" as const,
+        displayName: "Alice",
+        type: "internal",
+        slackId: "U0ALICE",
+      },
+      {
+        principalId: "jordan@acme.com",
+        provider: "email" as const,
+        displayName: "Jordan",
+        type: "internal",
+        slackId: "U0JORDAN",
+      },
+      {
+        principalId: "joan@acme.com",
+        provider: "email" as const,
+        displayName: "Joan",
+        type: "internal",
+        slackId: "U0JOAN",
+      },
     ]);
   });
 
@@ -48,7 +72,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   it("membership reads require source authentication and report only persisted channel members", async () => {
     await built.app.upsertChannels(
       [{ channelId: "CPUBLIC", name: "public", isPrivate: false }],
-      [{ channelId: "CPUBLIC", principalId: "carol@acme.com" }],
+      [{ channelId: "CPUBLIC", principalId: "carol@acme.com", provider: "email" as const }],
     );
     const carol = await principalOf(built, "carol@acme.com");
     const alice = await principalOf(built, "alice@acme.com");
@@ -76,17 +100,43 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   });
 
   it("does not fabricate a mention id from a principal id that isn't Slack-id-shaped", async () => {
-    await built.app.upsertDirectory([{ principalId: "USER123", displayName: "Pat", type: "internal" }]);
+    await built.app.upsertDirectory([
+      { principalId: "USER123", provider: "slack" as const, displayName: "Pat", type: "internal" },
+    ]);
     const res = await get("/v1/directory/resolve?q=Pat");
     assert.equal(res.status, 200);
     const { matches } = (await res.json()) as { matches: Array<{ principalId: string; slackId?: string }> };
     assert.equal(matches.length, 1);
     assert.equal(matches[0]!.slackId, undefined, "a too-short id (U+6) must not be mistaken for a mention handle");
     await built.app.upsertDirectory([
-      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      {
+        principalId: "carol@acme.com",
+        provider: "email" as const,
+        displayName: "Carol Example",
+        type: "internal",
+        slackId: "U0CAROL",
+      },
+      {
+        principalId: "alice@acme.com",
+        provider: "email" as const,
+        displayName: "Alice",
+        type: "internal",
+        slackId: "U0ALICE",
+      },
+      {
+        principalId: "jordan@acme.com",
+        provider: "email" as const,
+        displayName: "Jordan",
+        type: "internal",
+        slackId: "U0JORDAN",
+      },
+      {
+        principalId: "joan@acme.com",
+        provider: "email" as const,
+        displayName: "Joan",
+        type: "internal",
+        slackId: "U0JOAN",
+      },
     ]);
   });
 
@@ -236,11 +286,17 @@ describe("qualification membership readiness with signed portal identity enforce
     const app = buildApp(testConfig({ signingSecret: SECRET }));
     await app.app.upsertDirectory([
       { principalId: process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice", displayName: "Admin", type: "internal" },
-      { principalId: "qa@example.com", displayName: "QA", type: "internal", slackId: "UQA" },
+      {
+        principalId: "qa@example.com",
+        provider: "email" as const,
+        displayName: "QA",
+        type: "internal",
+        slackId: "UQA",
+      },
     ]);
     await app.app.upsertChannels(
       [{ channelId: "CQA", name: "qa", isPrivate: false }],
-      [{ channelId: "CQA", principalId: "qa@example.com" }],
+      [{ channelId: "CQA", principalId: "qa@example.com", provider: "email" as const }],
     );
     const server = createServer(app.app, {
       signingSecret: SECRET,

@@ -182,13 +182,13 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
   const directory = createDirectoryStore();
   await directory.replace([
     { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
-    { principalId: "U5", displayName: "Dana", type: "internal" },
+    { principalId: "dana-principal", displayName: "Dana", type: "internal", slackId: "U5" },
   ]);
   await directory.replaceChannels(
     [{ channelId: "C1", name: "general", isPrivate: false }],
     [
       { channelId: "C1", principalId: "eve@acme.com" },
-      { channelId: "C1", principalId: "U5" },
+      { channelId: "C1", principalId: "dana-principal" },
     ],
   );
   const { crons, calls, scheduler } = harness("done", directory);
@@ -198,7 +198,7 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
     owner: "eve@acme.com",
     createdBy: "eve@acme.com",
     runAs: "scopeShared",
-    members: [member("eve@acme.com"), member("U5")],
+    members: [member("eve@acme.com"), member("dana-principal")],
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
