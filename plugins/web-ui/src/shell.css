@@ -13279,3 +13279,26 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   white-space: pre-wrap;
   min-width: 80px;
 }
+
+.btw-card header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.btw-card header span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.btw-card button {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.btw-body {
+  max-height: 220px;
+  overflow-y: auto;
+  color: var(--foreground);
+}
