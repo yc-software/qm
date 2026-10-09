@@ -12,6 +12,7 @@ const FORWARD_REQUEST_HEADERS = [
   "user-agent",
   "accept-encoding",
   "sec-fetch-dest",
+  "range",
 ];
 
 const DROP_RESPONSE_HEADERS = new Set([

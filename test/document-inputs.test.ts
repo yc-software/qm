@@ -397,3 +397,9 @@ test("output budgeting does not count native document base64 as text tokens", ()
     if (result.kind === "raised") assert.ok(result.estimatedPromptTokens < 2000);
   }
 });
+
+test("video attachments get a playable MIME type", () => {
+  assert.equal(mimeFromName("demo.mp4"), "video/mp4");
+  assert.equal(mimeFromName("demo.MOV"), "video/quicktime");
+  assert.equal(mimeFromName("demo.webm"), "video/webm");
+});
