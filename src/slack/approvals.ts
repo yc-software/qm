@@ -381,16 +381,25 @@ export function createApprovals(deps: {
     requests: readonly AgentRequestDirective[],
   ): Promise<void> {
     const run = await core.getAgentRequestRun(runId);
-    if (!run || Date.now() - run.createdAt > AGENT_REQUEST_TTL_MS) return;
-    const { request } = run;
-    if (
-      request.surface !== "slack" ||
-      request.externalSlack ||
-      request.conversation.kind === "dm" ||
-      request.conversation.channelRef !== channel ||
-      request.deliveryTarget !== encodeDeliveryTarget(channel, threadTs)
-    )
+    const skipped = (() => {
+      if (!run) return "run not found";
+      if (Date.now() - run.createdAt > AGENT_REQUEST_TTL_MS) return "run expired";
+      const { request } = run;
+      if (request.surface !== "slack" || request.conversation.kind === "dm")
+        return "source is not a Slack channel turn";
+      if (request.externalSlack) return "external Slack workspace";
+      if (
+        request.conversation.channelRef !== channel ||
+        request.deliveryTarget !== encodeDeliveryTarget(channel, threadTs)
+      )
+        return "destination does not match the source turn";
+      return undefined;
+    })();
+    if (skipped || !run) {
+      console.error(`[slack-plugin] skipped ${requests.length} agent request(s) for run ${runId}: ${skipped}`);
       return;
+    }
+    const { request } = run;
     const audience: ActorAssertion[] = [];
     const slackIdsByPrincipal = new Map<string, string>();
     for (const req of requests) {
@@ -837,7 +846,7 @@ export function createApprovals(deps: {
           await postAgentRequests(
             client,
             {
-              dedupeKey: outcome.runId ?? ctx.triggerTs ?? randomUUID(),
+              dedupeKey: outcome.runId ?? requestId,
               requesterId: ctx.requesterId,
               channel: ctx.channel,
               ...(ctx.replyThreadTs ? { replyThreadTs: ctx.replyThreadTs } : {}),
