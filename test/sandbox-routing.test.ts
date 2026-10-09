@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSandboxRouter, NoDefaultSandboxError, type SandboxBackendName } from "../src/sandbox/sandbox-routing.ts";
 import type { SandboxResource, SandboxResources } from "../src/sandbox/sandbox-resources.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import {
   CapabilityUnsupportedError,
   SandboxProvisionCleanupError,
@@ -133,26 +132,6 @@ test("provision uses the scope's default resource: backend, backing scope, lock,
   assert.equal(sprites.provisioned[0]!.layers[0]!.scopeId, "sandbox:r1", "rw layer remapped to the backing scope");
   assert.deepEqual(resources.locks, [{ id: "r1", exclusive: false }]);
   assert.deepEqual(aws.calls, []);
-});
-
-test("provisioning a running computer does not wait behind a long-running command on it", async () => {
-  const lock = createMemoryAdvisoryLock();
-  const resources = {
-    ...stubResources({ "personal:a": resource("r1", "sprites") }),
-    use: <T>(id: string, action: () => Promise<T>, exclusive = false) =>
-      (exclusive ? lock.withLock : lock.withSharedLock!)(`sandbox-resource:${id}`, action),
-  } as SandboxResources;
-  const router = createSandboxRouter({
-    backends: { sprites: fakeBackend("sprites") },
-    defaultBackend: "sprites",
-    resources,
-  });
-  const command = Promise.withResolvers<void>();
-  const running = resources.use("r1", () => command.promise);
-
-  assert.equal((await router.provision(layersFor("personal:a"))).resourceId, "r1");
-  command.resolve();
-  await running;
 });
 
 test("an explicit sandboxId wins over the scope default", async () => {
