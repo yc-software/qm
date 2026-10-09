@@ -111,3 +111,7 @@ test("MaskedExecutionError keeps the original error class, code and masked stack
   assert.match(masked.stack ?? "", /^TypeError: connect failed for <redacted:credential>\n\s+at /);
   assert.doesNotMatch(masked.stack ?? "", /s3cr3t-value/);
 });
+
+test("the speaker's git identity is not masked as a credential (#1483)", () => {
+  assert.equal(createSecretValueMasker({ GIT_AUTHOR_EMAIL: "ada@example.com" })("ada@example.com"), "ada@example.com");
+});

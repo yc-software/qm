@@ -1504,7 +1504,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (brokeredTools.some((tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool))) {
         ownerAuthAvailable = true;
       }
-      const connectorEnv: Record<string, string> = {};
+      const gitName = actor.displayName?.trim() || actor.id;
+      const connectorEnv: Record<string, string> = actor.id.includes("@")
+        ? {
+            GIT_AUTHOR_NAME: gitName,
+            GIT_AUTHOR_EMAIL: actor.id,
+            GIT_COMMITTER_NAME: gitName,
+            GIT_COMMITTER_EMAIL: actor.id,
+          }
+        : {};
       const credsStart = Date.now();
       const commandCredentials: CommandCredential[] = [];
       const credentialDescriptions: string[] = [];
