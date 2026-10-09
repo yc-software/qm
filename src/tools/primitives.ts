@@ -36,6 +36,7 @@ import type {
   SessionWriteInput,
 } from "../sessions/session-syscalls.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
+import { capPayloadStrings } from "../util/text.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
 import { waitForClientResult, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type {
@@ -610,7 +611,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     if (prior.cached) return JSON.parse(prior.output ?? "null") as T;
     const result = await produce();
     if (shouldCache(result))
-      await timed("tool_ledger", () => ledger.record(runId, attempt, index, JSON.stringify(result ?? null)));
+      await timed("tool_ledger", () =>
+        ledger.record(runId, attempt, index, JSON.stringify(capPayloadStrings(result ?? null))),
+      );
     return result;
   }
 

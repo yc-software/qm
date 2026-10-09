@@ -37,3 +37,41 @@ export function absoluteAppLinks(text: string, baseUrl: string | undefined): str
     (match, code, _fence, _ticks, label, path) => (code ? match : `[${label}](${new URL(path, baseUrl).href})`),
   );
 }
+
+export const MAX_TOOL_RESULT_CHARS = 100_000;
+const TRUNCATED_TAIL_CHARS = 10_000;
+
+export function capResultText(t: string): string {
+  if (t.length <= MAX_TOOL_RESULT_CHARS) return t;
+  const notice =
+    `\n…[truncated — full result was ${t.length} chars and the middle was dropped; ` +
+    `refetch narrower (filter or paginate the call, or redirect to a file and read it in pieces) if you need it]…\n`;
+  return (
+    headSlice(t, MAX_TOOL_RESULT_CHARS - TRUNCATED_TAIL_CHARS - notice.length) +
+    notice +
+    tailSlice(t, TRUNCATED_TAIL_CHARS)
+  );
+}
+
+export function capPayloadStrings(v: unknown): unknown {
+  if (typeof v === "string") return capResultText(v);
+  if (Array.isArray(v)) {
+    let out: unknown[] | null = null;
+    for (let i = 0; i < v.length; i++) {
+      const c = capPayloadStrings(v[i]);
+      if (c !== v[i]) (out ??= v.slice())[i] = c;
+    }
+    return out ?? v;
+  }
+  if (v && typeof v === "object") {
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return v;
+    let out: Record<string, unknown> | null = null;
+    for (const [k, x] of Object.entries(v)) {
+      const c = capPayloadStrings(x);
+      if (c !== x) (out ??= { ...(v as Record<string, unknown>) })[k] = c;
+    }
+    return out ?? v;
+  }
+  return v;
+}

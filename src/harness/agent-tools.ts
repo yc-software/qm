@@ -20,7 +20,7 @@ import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { redactSecrets } from "./redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
-import { headSlice, tailSlice } from "../util/text.ts";
+import { capPayloadStrings, capResultText, MAX_TOOL_RESULT_CHARS } from "../util/text.ts";
 import { createGoalRecord, goalFloorMeter, goalReport, type GoalRecord, type GoalVerifier } from "./goal.ts";
 import {
   toolLabelOf,
@@ -112,44 +112,7 @@ function isPolicyNotice(summary: Record<string, unknown>): boolean {
   return summary.blocked !== undefined || summary.denied !== undefined;
 }
 
-const MAX_TOOL_RESULT_CHARS = 100_000;
 const PRESSURE_WARN_FULL60 = 50;
-const TRUNCATED_TAIL_CHARS = 10_000;
-
-function capResultText(t: string): string {
-  if (t.length <= MAX_TOOL_RESULT_CHARS) return t;
-  const notice =
-    `\n…[truncated — full result was ${t.length} chars and the middle was dropped; ` +
-    `refetch narrower (filter or paginate the call, or redirect to a file and read it in pieces) if you need it]…\n`;
-  return (
-    headSlice(t, MAX_TOOL_RESULT_CHARS - TRUNCATED_TAIL_CHARS - notice.length) +
-    notice +
-    tailSlice(t, TRUNCATED_TAIL_CHARS)
-  );
-}
-
-function capPayloadStrings(v: unknown): unknown {
-  if (typeof v === "string") return capResultText(v);
-  if (Array.isArray(v)) {
-    let out: unknown[] | null = null;
-    for (let i = 0; i < v.length; i++) {
-      const c = capPayloadStrings(v[i]);
-      if (c !== v[i]) (out ??= v.slice())[i] = c;
-    }
-    return out ?? v;
-  }
-  if (v && typeof v === "object") {
-    const proto = Object.getPrototypeOf(v);
-    if (proto !== Object.prototype && proto !== null) return v;
-    let out: Record<string, unknown> | null = null;
-    for (const [k, x] of Object.entries(v)) {
-      const c = capPayloadStrings(x);
-      if (c !== x) (out ??= { ...(v as Record<string, unknown>) })[k] = c;
-    }
-    return out ?? v;
-  }
-  return v;
-}
 
 function capText(t: string): string {
   return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;

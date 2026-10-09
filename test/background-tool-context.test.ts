@@ -227,3 +227,21 @@ test("registerLogin passes through createToolContext to the tool layer", async (
   assert.deepEqual(result, { service: "demotool", captured: true });
   assert.deepEqual(calls, ["demotool:.demotool/credentials"]);
 });
+
+test("ledger stores a capped copy of a huge tool result, and replay returns that copy", async () => {
+  const { ledger, store } = memoryLedger();
+  const { broker } = recordingBroker();
+  const huge: BackgroundExecBroker = {
+    ...broker,
+    async poll(_h, processId) {
+      return { processId, chunks: "x".repeat(1_000_000), cursor: 1, status: { state: "exited", code: 0 } };
+    },
+  };
+  const first = await ctxFor({ backgroundBroker: huge, ledger, runId: "run-huge" }).backgroundPoll("p-1");
+  assert.equal(first.chunks.length, 1_000_000, "the live caller still gets the full result");
+  const stored = [...store.values()][0]!;
+  assert.ok(stored.length < 110_000, `stored ${stored.length} chars`);
+  const replay = await ctxFor({ backgroundBroker: huge, ledger, runId: "run-huge" }).backgroundPoll("p-1");
+  assert.match(replay.chunks, /truncated — full result was 1000000 chars/);
+  assert.equal(replay.status.state, "exited");
+});
