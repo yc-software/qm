@@ -1757,7 +1757,8 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     return fail(errMessage(e, "sign-in failed"));
   }
 
-  const prov = principal.prov === "email" ? "email" : OIDC.issuer === "https://slack.com" ? "slack" : "oidc";
+  const subjectProvider = OIDC.issuer === "https://slack.com" ? "slack" : "oidc";
+  const prov = principal.prov === "email" ? "email" : subjectProvider;
   setAuthenticatedSession(res, prov, principal.sub, name, principal.appOnly);
   res.writeHead(302, {
     location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),

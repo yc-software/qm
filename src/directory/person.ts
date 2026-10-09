@@ -1,4 +1,4 @@
-import { createPrincipalGraph, isPrincipalId, type IdentityProvider } from "../identity/principals.ts";
+import { createPrincipalGraph, type IdentityProvider } from "../identity/principals.ts";
 
 export interface PrincipalResolver {
   identitiesOf(principalId: string): readonly { provider: IdentityProvider; externalId: string }[];
@@ -10,10 +10,8 @@ export function installPrincipalResolver(next: PrincipalResolver | null): void {
   resolver = next ?? createPrincipalGraph();
 }
 
-/** The canonical form of a principal id, or "" when `id` is not one. Handles resolve at their edge, never here. */
 export function personKey(id: string | null | undefined): string {
-  const s = (id ?? "").trim();
-  return isPrincipalId(s) ? s.toLowerCase() : "";
+  return (id ?? "").trim();
 }
 
 export const identityOf = (id: string, provider: IdentityProvider): string | undefined =>

@@ -1430,7 +1430,7 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
 
   const adminTurn = (extra: Partial<TurnRequest> = {}): TurnRequest => ({
     surface: "test",
-    actor: { externalId: "admin-alice", provider: "slack" as const },
+    actor: { externalId: "admin-alice" },
     conversation: { kind: "dm", threadRef: "dm:admin-alice:t1" },
     text: "!run echo hi",
     liveActor: true,
@@ -1485,7 +1485,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     captured = opts;
     return realProvision(layers, opts);
   };
-  const admin = { externalId: "admin-alice", provider: "slack" as const };
+  const admin = { externalId: "admin-alice" };
 
   assert.equal(
     (

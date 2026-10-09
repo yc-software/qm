@@ -135,7 +135,7 @@ test("inviting an external user stores the record, lists it as active, audits, a
     assert.equal(d.created, true);
     assert.equal(d.member.email, "pat@partner.example");
     assert.equal(d.member.role, "member");
-    assert.equal(d.member.invitedBy, s.built.principals.principalOf(handle("slack", "admin-alice")));
+    assert.equal(d.member.invitedBy, "admin-alice");
     assert.equal(d.member.expiresAt, Date.parse(expiresAt));
     assert.equal(d.emailSent, false);
     assert.equal(d.emailProblem, INVITE_EMAIL_NOT_CONFIGURED);
@@ -443,10 +443,7 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
 
     const member = await invite(s.base, { email: "pat@partner.example", expiresAt }, cap);
     assert.equal(member.status, 200);
-    assert.equal(
-      ((await member.json()) as any).member.invitedBy,
-      s.built.principals.principalOf(handle("slack", "admin-alice")),
-    );
+    assert.equal(((await member.json()) as any).member.invitedBy, "admin-alice");
 
     const promote = await invite(s.base, { email: "boss@partner.example", role: "org_admin", expiresAt }, cap);
     assert.equal(promote.status, 403);

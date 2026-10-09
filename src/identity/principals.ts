@@ -56,17 +56,13 @@ export interface EdgeHandle {
   provider?: IdentityProvider;
 }
 
-/** Resolve an edge id. Without a provider it must already be a principal id; nothing is inferred from its shape. */
 export async function principalFromEdge(
   graph: Pick<PrincipalGraph, "act">,
   id: string,
   provider: IdentityProvider | undefined,
   opts?: ActOptions,
 ): Promise<string> {
-  if (provider) return graph.act(handle(provider, id), opts);
-  const s = id.trim();
-  if (!isPrincipalId(s)) throw new IdentityLinkError(400, "a handle needs its provider");
-  return s.toLowerCase();
+  return provider ? graph.act(handle(provider, id), opts) : id.trim();
 }
 
 /** The Composio user id an org mints for a principal (or, before principals, for a handle). */

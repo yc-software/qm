@@ -1,4 +1,3 @@
-import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -245,7 +244,7 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
         headers: { "x-admin-actor": "admin-alice@default-org" },
       })
     ).json();
-    assert.equal(d.principalId, s.built.principals.principalOf(handle("slack", "admin-alice")));
+    assert.equal(d.principalId, "admin-alice");
     assert.equal(d.admin.isAdmin, true);
     assert.equal(d.stats.sessions, 0);
     assert.equal("conversations" in d, false);

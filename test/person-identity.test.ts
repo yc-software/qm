@@ -9,18 +9,21 @@ const JORDAN = "0b6f8f1e-6a0c-4e43-9a2b-1c2d3e4f5a6b";
 const CASEY = "5d1c9a7e-2b3f-4c8d-9e0a-6f7b8c9d0e1f";
 
 describe("personKey / samePerson: the canonical same-person primitive", () => {
-  it("canonicalizes principal ids and names nobody for anything else", () => {
-    assert.equal(personKey(` ${JORDAN.toUpperCase()} `), JORDAN);
-    assert.equal(personKey("jordan@acme.test"), "", "an email is a handle, resolved at its edge, never here");
-    assert.equal(personKey("U-Jordan"), "", "a Slack id is a handle too");
+  it("treats a principal id as opaque: trimmed, never folded, never resolved through a handle", () => {
+    assert.equal(personKey(` ${JORDAN} `), JORDAN);
+    assert.equal(personKey("Jordan@Acme.test"), "Jordan@Acme.test");
     assert.equal(personKey(undefined), "");
     assert.equal(personKey(null), "");
   });
 
-  it("equates one principal in any case, never distinct principals, and never the empty id", () => {
-    assert.equal(samePerson(JORDAN.toUpperCase(), JORDAN), true);
+  it("equates one principal, never distinct ids, and never the empty id", () => {
+    assert.equal(samePerson(` ${JORDAN}`, JORDAN), true);
     assert.equal(samePerson(JORDAN, CASEY), false);
-    assert.equal(samePerson("jordan@acme.test", "jordan@acme.test"), false, "handles are not principals");
+    assert.equal(
+      samePerson("Jordan@Acme.test", "jordan@acme.test"),
+      false,
+      "no email folding: handles resolve at edges",
+    );
     assert.equal(samePerson("", ""), false, "an empty id names nobody — fail closed");
   });
 });
@@ -29,7 +32,7 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
   const cron = (over: Partial<Cron> = {}): Cron =>
     ({
       id: "c1",
-      owner: JORDAN.toUpperCase(),
+      owner: JORDAN,
       ownerScopeId: scopeId("personal", JORDAN),
       schedule: { everyMs: 1 },
       createdAt: 0,
@@ -44,14 +47,14 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
     samePerson: async (a: string, b: string) => samePerson(a, b),
   });
 
-  it("the owner passes in any case; anyone else does not", async () => {
+  it("the owner passes; anyone else does not", async () => {
     assert.equal(await canAdministerCron(appOver(), cron(), JORDAN), true);
     assert.equal(await canAdministerCron(appOver(), cron(), CASEY), false);
   });
 
   it("webhooks share the same owner rule", async () => {
     const webhook = { id: "w1", owner: JORDAN, ownerScopeId: scopeId("personal", JORDAN) } as Webhook;
-    assert.equal(await canAdministerWebhook(appOver(), webhook, JORDAN.toUpperCase()), true);
+    assert.equal(await canAdministerWebhook(appOver(), webhook, JORDAN), true);
     assert.equal(await canAdministerWebhook(appOver(), webhook, CASEY), false);
   });
 
@@ -81,7 +84,7 @@ describe("resolveRunAsChange: the owner gate is same-person, not raw id equality
   const app = { isOpenScopeMember: async () => false, samePerson: async (a: string, b: string) => samePerson(a, b) };
 
   it("the owner can change runAs", async () => {
-    const r = await resolveRunAsChange(app, shared(JORDAN.toUpperCase()), "owner", capability);
+    const r = await resolveRunAsChange(app, shared(JORDAN), "owner", capability);
     assert.equal(r.ok, true);
     if (r.ok) assert.equal(r.patch.runAs, "owner");
   });

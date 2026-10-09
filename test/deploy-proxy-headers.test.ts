@@ -1,4 +1,3 @@
-import { handle } from "../src/identity/principals.ts";
 import { createPrincipalGraph } from "../src/identity/principals.ts";
 import { installPrincipalResolver } from "../src/directory/person.ts";
 import { test } from "node:test";
@@ -447,7 +446,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
     assert.ok(
       auditEvents.some(
         (e) =>
-          e.principalId === principals.principalOf(handle("slack", "admin-alice")) &&
+          e.principalId === "admin-alice" &&
           e.action === "deployment.visit" &&
           e.resource === "d1" &&
           e.scopeLabel === "personal:U1",

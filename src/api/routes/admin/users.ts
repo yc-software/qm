@@ -89,11 +89,14 @@ function grantError(res: ApiCtx["res"], error: string, e: unknown): void {
 async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): Promise<boolean> {
   const { deps } = ctx;
   if (deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)) return true;
-  if ((deps.emailAuthPrincipals ?? []).some((principal) => samePerson(principal, email))) return true;
-  if (await deps.directory?.get(email)) return true;
+  const address = handle("email", email);
+  if ((deps.emailAuthPrincipals ?? []).some((e) => handle("email", e).externalId === address.externalId)) return true;
+  const principal = deps.identity?.principals.principalOf(address);
+  if (!principal) return false;
+  if (await deps.directory?.get(principal)) return true;
   if (!includeSessions) return false;
   const participants = (await deps.sessions?.listParticipants()) ?? [];
-  return participants.some((participant) => samePerson(participant.principalId, email));
+  return participants.some((participant) => samePerson(participant.principalId, principal));
 }
 
 export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
