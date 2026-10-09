@@ -16,6 +16,7 @@ import {
 } from "../src/sandbox/managed-agents-client.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
+import type { HomeSnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
@@ -120,6 +121,48 @@ test("a newer checkpoint replaces the previous one", async () => {
   assert.ok(second);
   assert.notEqual(first, second);
   assert.deepEqual(fake.deletedCheckpoints(), [first]);
+  assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes ?? [], []);
+});
+
+test("a failed checkpoint delete is remembered and retried without another capture", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const fast = make({ store, snapshotIntervalMs: -1 });
+  const h = await fast.provision(layers);
+  await fast.teardown(h);
+  const first = (await store.get(scope))?.checkpointId;
+  assert.ok(first);
+  fake.failNextCheckpointDelete(scopeName());
+  const again = await fast.provision(layers);
+  await fast.teardown(again);
+  assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes, [first]);
+  assert.deepEqual(fake.deletedCheckpoints(), []);
+
+  const slow = make({ store });
+  const resumed = await slow.provision(layers);
+  const captures = fake.checkpointCalls().length;
+  await slow.teardown(resumed, { homeUnchanged: true });
+  assert.equal(fake.checkpointCalls().length, captures);
+  assert.deepEqual(fake.deletedCheckpoints(), [first]);
+  assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes ?? [], []);
+});
+
+test("a failed home snapshot retries without recapturing the checkpoint", async () => {
+  const uploads: number[] = [];
+  const snapshots: HomeSnapshotStore = {
+    open: async () => null,
+    put: async () => undefined,
+    createUpload: async () => {
+      uploads.push(1);
+      throw new Error("snapshot upload failed");
+    },
+  };
+  sandbox = make({ snapshots });
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  const again = await sandbox.provision(layers);
+  await sandbox.teardown(again);
+  assert.equal(fake.checkpointCalls().length, 1);
+  assert.equal(uploads.length, 2);
 });
 
 test("teardown pauses the session and the next provision resumes it", async () => {

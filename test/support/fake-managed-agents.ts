@@ -28,6 +28,7 @@ interface FakeRecord {
   loseNextCommand: boolean;
   rejectNextCommand: boolean;
   failNextCheckpoint: boolean;
+  failNextCheckpointDelete: boolean;
 }
 
 export interface FakeManagedAgents {
@@ -46,6 +47,7 @@ export interface FakeManagedAgents {
   checkpointCalls(): Array<{ sessionId: string; checkpointId: string; label?: string }>;
   deletedCheckpoints(): string[];
   failNextCheckpoint(name: string): void;
+  failNextCheckpointDelete(name: string): void;
   cleanup(): void;
 }
 
@@ -152,6 +154,10 @@ export function installFakeManagedAgents(): FakeManagedAgents {
     },
     async deleteCheckpoint(checkpointId: string): Promise<void> {
       if (gone(r.state)) throw new ManagedAgentsSandboxGoneError(r.sessionId, `status ${r.state}`);
+      if (r.failNextCheckpointDelete) {
+        r.failNextCheckpointDelete = false;
+        throw new Error("do-managed-agents delete checkpoint: http 500 delete failed");
+      }
       deletedCheckpoints.push(checkpointId);
     },
     async pause(): Promise<void> {
@@ -191,6 +197,7 @@ export function installFakeManagedAgents(): FakeManagedAgents {
         loseNextCommand: false,
         rejectNextCommand: false,
         failNextCheckpoint: false,
+        failNextCheckpointDelete: false,
       };
       mkdirSync(r.home, { recursive: true });
       records.set(id, r);
@@ -244,6 +251,9 @@ export function installFakeManagedAgents(): FakeManagedAgents {
     deletedCheckpoints: () => [...deletedCheckpoints],
     failNextCheckpoint: (name) => {
       need(name).failNextCheckpoint = true;
+    },
+    failNextCheckpointDelete: (name) => {
+      need(name).failNextCheckpointDelete = true;
     },
     execScripts: () => [...execScripts],
     pauseCalls: () => [...pauseCalls],

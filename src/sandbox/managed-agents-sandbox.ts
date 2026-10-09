@@ -75,6 +75,7 @@ export interface StoredManagedAgentsSandbox {
   checkpointId?: string;
   checkpointAtMs?: number;
   checkpointError?: string;
+  pendingCheckpointDeletes?: string[];
 }
 
 export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
@@ -128,20 +129,43 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
     await store.merge(scope, { lastSnapshotMs: Date.now(), homeDirty: false });
   }
 
+  async function pendingDeletes(scope: string): Promise<string[]> {
+    return (await store.get(scope))?.pendingCheckpointDeletes ?? [];
+  }
+
+  async function forgetCheckpoint(scope: string, session: ManagedAgentsSession, checkpointId: string): Promise<void> {
+    try {
+      await session.deleteCheckpoint(checkpointId);
+    } catch (e) {
+      reportError("sandbox_snapshot", "checkpoint_delete_failed", errMessage(e), scope);
+      return;
+    }
+    const pending = await pendingDeletes(scope);
+    await store.merge(scope, { pendingCheckpointDeletes: pending.filter((id) => id !== checkpointId) });
+  }
+
+  async function retryPendingCheckpointDeletes(scope: string, session: ManagedAgentsSession): Promise<void> {
+    const current = (await store.get(scope))?.checkpointId;
+    for (const checkpointId of await pendingDeletes(scope)) {
+      if (checkpointId === current) continue;
+      await forgetCheckpoint(scope, session, checkpointId);
+    }
+  }
+
   async function captureCheckpoint(scope: string, session: ManagedAgentsSession): Promise<void> {
-    const previous = (await store.get(scope))?.checkpointId;
+    const stored = await store.get(scope);
+    const previous = stored?.checkpointId;
     const captured = await session.createCheckpoint(CHECKPOINT_LABEL);
+    const pending = stored?.pendingCheckpointDeletes ?? [];
+    const queued =
+      previous && previous !== captured.checkpointId && !pending.includes(previous) ? [...pending, previous] : pending;
     await store.merge(scope, {
       checkpointId: captured.checkpointId,
       checkpointAtMs: captured.createdAtMs ?? Date.now(),
       checkpointError: undefined,
+      pendingCheckpointDeletes: queued,
     });
-    if (!previous || previous === captured.checkpointId) return;
-    try {
-      await session.deleteCheckpoint(previous);
-    } catch (e) {
-      reportError("sandbox_snapshot", "checkpoint_delete_failed", errMessage(e), scope);
-    }
+    if (previous && previous !== captured.checkpointId) await forgetCheckpoint(scope, session, previous);
   }
 
   const hydrateHome = (scope: string, session: ManagedAgentsSession): Promise<boolean> =>
@@ -535,13 +559,17 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
 
     const stored = await store.get(scope);
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-    if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
+    await retryPendingCheckpointDeletes(scope, session);
+    const homeDirty = stored?.homeDirty;
+    if (snapshotDue({ lastSnapshotMs: stored?.checkpointAtMs, homeDirty }, tdOpts, snapshotIntervalMs)) {
       try {
         await captureCheckpoint(scope, session);
       } catch (e) {
         await store.merge(scope, { checkpointError: errMessage(e) });
         reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), scope);
       }
+    }
+    if (snapshotDue({ lastSnapshotMs: stored?.lastSnapshotMs, homeDirty }, tdOpts, snapshotIntervalMs)) {
       try {
         await snapshotHome(scope, session);
       } catch (e) {
