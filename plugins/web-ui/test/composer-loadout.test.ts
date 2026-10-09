@@ -6,7 +6,9 @@ import {
   loadoutModelId,
   modelLoadoutOptions,
   parseLoadout,
+  presetModelId,
   reconcileLoadout,
+  ultrafastChoice,
   upsertLoadout,
   type LoadoutEntry,
 } from "../src/composer-loadout.ts";
@@ -242,12 +244,32 @@ test("native reasoning choices require model and harness metadata and always off
   assert.deepEqual(parseLoadout(JSON.stringify(saved)), saved);
 });
 
-test("Astra speed variants share a preset and preserve a saved tier", () => {
-  const base = option("pi:gpt-6-astra");
-  const ultra = option("pi:gpt-6-astra-ultrafast");
-  const saved = entry(ultra.value, "high");
-  assert.deepEqual(modelLoadoutOptions([ultra, base], [], "pi"), [base]);
-  assert.deepEqual(modelLoadoutOptions([base, ultra], [saved], "pi"), [ultra]);
-  assert.deepEqual(modelLoadoutOptions([ultra], [], "pi"), [ultra]);
-  assert.deepEqual(upsertLoadout([entry(base.value)], saved), [saved]);
+for (const [baseId, ultraId] of [
+  ["gpt-6-astra", "gpt-6-astra-ultrafast"],
+  ["gpt-6.1-sol", "gpt-6.1-sol-ultrafast"],
+] as const) {
+  test(`${baseId} speed variants share a preset and preserve a saved tier`, () => {
+    const base = option(`pi:${baseId}`);
+    const ultra = option(`pi:${ultraId}`);
+    const saved = entry(ultra.value, "high");
+    assert.equal(presetModelId(ultra.value), baseId);
+    assert.deepEqual(modelLoadoutOptions([ultra, base], [], "pi"), [base]);
+    assert.deepEqual(modelLoadoutOptions([base, ultra], [saved], "pi"), [ultra]);
+    assert.deepEqual(modelLoadoutOptions([ultra], [], "pi"), [ultra]);
+    assert.deepEqual(upsertLoadout([entry(base.value)], saved), [saved]);
+  });
+}
+
+test("the Ultrafast switch pairs each Pi model only with its own speed variant", () => {
+  const options = ["gpt-6-astra", "gpt-6-astra-ultrafast", "gpt-6.1-sol", "gpt-6.1-sol-ultrafast", "gpt-6-sol"].map(
+    (id) => option(`pi:${id}`),
+  );
+  const target = (id: string, harness = "pi") => ultrafastChoice(options, option(`${harness}:${id}`))?.model.id;
+  assert.equal(target("gpt-6-astra"), "gpt-6-astra-ultrafast");
+  assert.equal(target("gpt-6-astra-ultrafast"), "gpt-6-astra");
+  assert.equal(target("gpt-6.1-sol"), "gpt-6.1-sol-ultrafast");
+  assert.equal(target("gpt-6.1-sol-ultrafast"), "gpt-6.1-sol");
+  assert.equal(target("gpt-6-sol"), undefined);
+  assert.equal(target("gpt-6.1-sol", "codex"), undefined);
+  assert.equal(ultrafastChoice(options.slice(0, 2), option("pi:gpt-6.1-sol")), undefined);
 });

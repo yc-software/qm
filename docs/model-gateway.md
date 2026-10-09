@@ -48,26 +48,34 @@ The managed browse runner needs browser-use 0.12.9 with
 `ChatOpenAI.default_headers` support. It never requests separate browser model
 credentials or falls back to them on account or gateway errors.
 
-## Astra Ultrafast
+## Ultrafast
 
-Pi offers `gpt-6-astra-ultrafast` as **GPT-6 Astra · Ultrafast (6× cost)**.
-This is a QM selection identifier: requests use `gpt-6-astra` with
-`service_tier: "ultrafast"` through the Responses API. Standard Astra and its
-Fast switch retain their existing behavior. Ultrafast has its own pricing card,
-including cached input, cache writes, and long-context rates.
+Pi offers two Ultrafast choices, each priced at 6× its standard model:
 
-Use an OpenAI API key or explicitly map `gpt-6-astra-ultrafast` to your gateway's
-Astra group in `MODEL_GATEWAY_MODELS`. The gateway must support Responses and
-forward `service_tier`. The choice is supported in Pi only, and is unavailable
-with ChatGPT subscription authentication. It is never selected as the default
-merely by enabling Fast.
+| QM selection ID         | Picker name                       | Request                                        |
+| ----------------------- | --------------------------------- | ---------------------------------------------- |
+| `gpt-6-astra-ultrafast` | GPT-6 Astra · Ultrafast (6× cost) | `gpt-6-astra` with `service_tier: "ultrafast"` |
+| `gpt-6.1-sol-ultrafast` | GPT-6.1 Sol · Ultrafast (6× cost) | `gpt-6.1-sol` with `service_tier: "ultrafast"` |
 
-OpenAI currently makes Astra Ultrafast broadly available with separate rate
-limits. Sol Ultrafast remains a preview and is not enabled by this choice.
+These are QM selection identifiers sent through the Responses API. The standard
+models and their Fast switch retain their existing behavior. Each Ultrafast
+choice has its own pricing card, including cached input, cache writes, and
+long-context rates.
+
+Use an OpenAI API key or explicitly map the Ultrafast ID to your gateway's
+matching model group in `MODEL_GATEWAY_MODELS`. The gateway must support
+Responses and forward `service_tier`. The choices are supported in Pi only, and
+are unavailable with ChatGPT subscription authentication. They are never
+selected as the default merely by enabling Fast.
+
+OpenAI makes Ultrafast for GPT-6 Astra and GPT-6.1 Sol available to all API
+users, with rate limits separate from Standard and Fast. GPT-5.6 Sol Ultrafast
+remains a preview and is not offered.
 See [Ultrafast availability](https://developers.openai.com/api/docs/guides/ultrafast-mode)
 and [pricing](https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast).
 
-In the web picker, select Astra and use the Ultrafast switch. The picker shows a
-distinct active badge and the 6× cost before enabling it. Fast and Ultrafast are
-mutually exclusive, and both speeds share one Astra preset. The internal model
-ID above preserves routing, authorization, pricing, and saved selections.
+In the web picker, select Astra or 6.1 Sol and use the Ultrafast switch. The
+picker shows a distinct active badge and the 6× cost before enabling it. Fast
+and Ultrafast are mutually exclusive, and both speeds of a model share one
+preset. The internal model IDs above preserve routing, authorization, pricing,
+and saved selections.

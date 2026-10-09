@@ -11,7 +11,7 @@ import {
 } from "./model-options";
 import { createModelPicker } from "./model-picker";
 import {
-  ULTRAFAST_MODEL_ID,
+  isUltrafastModelId,
   ultrafastChoice,
   loadLoadout,
   saveLoadout,
@@ -221,7 +221,8 @@ function contextPicker(scopeId: string) {
     },
     toggleFastMode: () => {
       const selected = options().find((option) => option.value === current().value);
-      const target = selected?.model.id === ULTRAFAST_MODEL_ID ? ultrafastChoice(options(), selected) : undefined;
+      const target =
+        selected && isUltrafastModelId(selected.model.id) ? ultrafastChoice(options(), selected) : undefined;
       apply({ ...current(), ...(target ? { value: target.value } : {}), fast: !current().fast });
     },
     effectiveFastMode: () => current().fast,

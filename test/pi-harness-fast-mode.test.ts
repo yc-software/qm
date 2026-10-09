@@ -351,6 +351,7 @@ async function runTurn(
             models: {
               "gpt-6-astra": "openai/gpt-6-astra",
               "gpt-6-astra-ultrafast": "openai/gpt-6-astra",
+              "gpt-6.1-sol-ultrafast": "openai/gpt-6.1-sol",
               "claude-sonnet-5": "anthropic/claude-sonnet-5",
             },
           },
@@ -468,21 +469,26 @@ test("a refusal fallback prices each step on its actual model and tier", async (
   assertUsd(rows[1]!.usage!.costUsd, 0.15);
 });
 
-for (const gateway of [true, false]) {
-  test(`Ultrafast prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`, async () => {
-    const { rows, payloads } = await runTurn(
-      `astra-ultrafast-${gateway}`,
-      "gpt-6-astra-ultrafast",
-      false,
-      () => responsesReply("done", ASTRA_WIRE_USAGE, "ultrafast"),
-      gateway,
-    );
-    assert.equal(payloads[0]?.model, gateway ? "openai/gpt-6-astra" : "gpt-6-astra");
-    assert.equal(payloads[0]?.service_tier, "ultrafast");
-    assert.equal(rows.length, 1);
-    assertUsd(rows[0]!.usage!.costUsd, 1.8);
-    assert.equal(rows[0]!.model, "gpt-6-astra-ultrafast");
-  });
+for (const [modelId, wireModel, costUsd] of [
+  ["gpt-6-astra-ultrafast", "gpt-6-astra", 1.8],
+  ["gpt-6.1-sol-ultrafast", "gpt-6.1-sol", 0.33],
+] as const) {
+  for (const gateway of [true, false]) {
+    test(`${modelId} prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`, async () => {
+      const { rows, payloads } = await runTurn(
+        `${modelId}-${gateway}`,
+        modelId,
+        false,
+        () => responsesReply("done", ASTRA_WIRE_USAGE, "ultrafast"),
+        gateway,
+      );
+      assert.equal(payloads[0]?.model, gateway ? `openai/${wireModel}` : wireModel);
+      assert.equal(payloads[0]?.service_tier, "ultrafast");
+      assert.equal(rows.length, 1);
+      assertUsd(rows[0]!.usage!.costUsd, costUsd);
+      assert.equal(rows[0]!.model, modelId);
+    });
+  }
 }
 
 test("a stop_reason refusal retries on the admin-configured fallback runtime", async () => {
