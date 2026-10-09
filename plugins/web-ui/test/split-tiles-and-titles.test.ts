@@ -21,7 +21,8 @@ test("the tile cap counts tiles and turns the overflow into a tab", () => {
   assert.ok(splitFn, "splitPane not found");
   assert.match(splitFn, /roomForAnotherPane\(\)/, "and it must bind splits too, not only tabs");
   assert.match(split, /function roomForAnotherPane\(\): boolean \{[\s\S]*?panels\.length \?\? 0\) < MAX_PANES/);
-  assert.ok(MAX_PANES > MAX_TILES * 2, "the ceiling must sit well clear of ordinary stacking");
+  assert.equal(MAX_TILES, 16);
+  assert.ok(MAX_PANES >= MAX_TILES, "the conversation ceiling must allow every tile to be used");
 });
 
 test("a revived canvas is bounded by both caps and cannot blow the stack", () => {
@@ -29,10 +30,8 @@ test("a revived canvas is bounded by both caps and cannot blow the stack", () =>
 
   const tiles = (...kids: object[]): object => ({ grid: { root: branch(...kids) } });
   assert.equal(serializedTileCount(tiles(leaf(["a", "b", "c"]), leaf(["d"]))), 2, "tabs are not tiles");
-  assert.equal(
-    serializedTileCount(tiles(branch(leaf(["a"]), leaf(["b"])), branch(leaf(["c"]), leaf(["d"])))),
-    MAX_TILES,
-  );
+  assert.equal(serializedTileCount(tiles(branch(leaf(["a"]), leaf(["b"])), branch(leaf(["c"]), leaf(["d"])))), 4);
+  assert.equal(serializedTileCount(tiles(...Array.from({ length: 16 }, (_, i) => leaf([String(i)])))), 16);
   assert.equal(serializedTileCount(null), 0);
   assert.equal(serializedTileCount({ grid: { root: { type: "branch", data: "nonsense" } } }), 0);
 

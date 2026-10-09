@@ -234,10 +234,23 @@ test("seeded chats return from another view without losing the grid or supplied 
 test("new chat replaces the focused conversation at capacity without dropping the grid", async () => {
   await withCanvas(async (canvas) => {
     await canvas.split();
-    for (let i = 2; i < 12; i++) assert.equal(canvas.newChat(), true);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [12, 3]);
+    for (let i = 2; i < 16; i++) assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [16, 3]);
     assert.ok(canvas.seededChat()?.state.agent);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [12, 3]);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [16, 3]);
+  });
+});
+
+test("explicit splitting reaches sixteen tiles and stops at capacity", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    for (let i = 2; i < 16; i++) canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [16, 16]);
+    canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [16, 16]);
+    await canvas.closeTile(0);
+    canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [16, 16]);
   });
 });
 

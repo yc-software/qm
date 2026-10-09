@@ -2,9 +2,9 @@ export type DropEdge = "left" | "right" | "top" | "bottom" | "center";
 
 export type SplitEdge = Exclude<DropEdge, "center">;
 
-export const MAX_TILES = 4;
+export const MAX_TILES = 16;
 
-export const MAX_PANES = 12;
+export const MAX_PANES = 16;
 
 const WALK_BUDGET = 10_000;
 
