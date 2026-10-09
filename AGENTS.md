@@ -69,7 +69,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
   These reviews run alongside PR work; before merging, every lens must have accepted
   and all requested changes must be resolved. They supplement the correctness,
-  security, and regression review above.
+  security, and regression review above. The `Wall of shame review` CI check fails
+  until the description's report covers every lens with an accepting verdict for the PR head.
 - **Disclose config-matrix and database-schema changes in the PR description.** Name
   added, removed, or changed settings, flags, modes, and providers, including changes to
   defaults, precedence, and supported combinations. Name changed tables, columns,
