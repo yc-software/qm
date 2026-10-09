@@ -22,16 +22,24 @@ files, origin, label and expiry come from the new save.
 `/tmp/qm-credentials.<random>/home`, points the CLI at it, captures changed files after the
 command and writes them back with `keychain.updateFiles`, which rejects stale writes and
 applies the AWS grant rules. Each execution removes its own directory in `finally`.
-Directories older than an hour are swept when the next execution starts; no execution lives
-that long, so concurrent executions never remove each other's files.
 
-There is no capture lock, background-process restriction, capture registry column or
-`register_login` tool. Nothing is restored into `$HOME` at provisioning.
+Background jobs accept the same `credentials` handles. The staging plan, credential ids,
+grant ids and baseline fingerprints (no secrets) are stored on the job's `process_sessions`
+row (`credential_files`). Whichever path first observes the exit (background poll/stop,
+monitor, reaper, reconcile on provision) takes that column atomically, re-checks the
+baseline against the keychain, writes refreshes back and removes the directory.
+
+Directories older than two hours are swept when the next credentialed execution starts,
+which is longer than any execution or background job may live, so concurrent operations never
+remove each other's files.
+
+There is no capture lock, background-process restriction or `register_login` tool. Nothing
+is restored into `$HOME` at provisioning. `/v1/keychain/use` no longer exists.
 
 ## Known gaps
 
 - The staging directory is protected by mode 0700 and a random name, not by a separate user.
   Another process running as the same user during the command can read it.
-- `/v1/keychain/use` returns 410; the `browse` skill still documents it.
+- Background job output is not masked for env credential values the way `execute` output is.
 - No proactive refresh for idle AWS sessions; the CLI refreshes only when a command runs.
 - Granted non-AWS file credentials cannot be written back.

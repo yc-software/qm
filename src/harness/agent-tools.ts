@@ -639,7 +639,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     credentials: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          "Exact authorized credential handles to materialize for this command only. Newly granted handles are accepted.",
+          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted.",
       }),
     ),
   };
@@ -1915,6 +1915,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description: "start only: exact sandbox to run on; later operations use the job’s saved target.",
         }),
       ),
+      credentials: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "start only: exact authorized credential handles, as for execute. They stay staged until the job exits, then refreshes are saved back.",
+        }),
+      ),
       timeout_seconds: Type.Optional(
         Type.Integer({
           minimum: 1,
@@ -1933,6 +1939,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         process_id: params.process_id,
         ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
         ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
+        ...(params.credentials?.length ? { credentials: params.credentials } : {}),
       });
       try {
         switch (params.action) {
@@ -1955,6 +1962,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               purpose: params.purpose,
               ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
               ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
+              ...(params.credentials?.length ? { credentials: params.credentials } : {}),
             });
             return recordResult(
               callId,
@@ -2234,7 +2242,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     set_default: ["sandbox_id"],
     retire: ["sandbox_id"],
     exec: Object.keys(schemas(execute)),
-    start_process: ["command", "sandbox_id", "timeout_seconds"],
+    start_process: ["command", "sandbox_id", "timeout_seconds", "credentials"],
     read_process: ["process_id", "since_cursor", "wait_seconds", "max_bytes"],
     write_stdin: ["process_id", "data"],
     signal_process: ["process_id", "signal"],

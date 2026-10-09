@@ -6,6 +6,7 @@ export async function reconcileProcesses(
   handle: SandboxHandle,
   registry: ProcessRegistry,
   scopeId: string,
+  onExit?: (handle: SandboxHandle, processId: string) => Promise<void>,
 ): Promise<void> {
   const records = await registry.listByScope(scopeId);
   const running = records.filter((r) => r.status === "running" && (!r.sandboxId || r.sandboxId === handle.resourceId));
@@ -17,6 +18,7 @@ export async function reconcileProcesses(
     const backend = byId.get(rec.processId);
     if (!backend || backend.status.state === "exited") {
       await registry.markStatus(rec.processId, "exited");
+      await onExit?.(handle, rec.processId);
     }
   }
 }

@@ -1,3 +1,4 @@
+import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 
 export type ProcessKind = "build" | "dev-server" | "background";
@@ -34,6 +35,7 @@ interface NewProcessRecord {
   ttlMs: number;
   sessionRef?: string;
   runId?: string;
+  credentialFiles?: ProcessCredentialFiles;
 }
 
 export interface ProcessRegistry {
@@ -43,6 +45,7 @@ export interface ProcessRegistry {
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
+  takeCredentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   listExpired(now?: number): Promise<ProcessRecord[]>;
   delete(processId: string): Promise<void>;
   close?(): void;
@@ -67,11 +70,18 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
 
 export function createMemoryProcessRegistry(): ProcessRegistry {
   const rows = new Map<string, ProcessRecord>();
+  const credentialFiles = new Map<string, ProcessCredentialFiles>();
   return {
     async register(rec) {
       const row = newRecord(rec, Date.now());
       rows.set(row.processId, row);
+      if (rec.credentialFiles) credentialFiles.set(row.processId, rec.credentialFiles);
       return { ...row };
+    },
+    async takeCredentialFiles(processId) {
+      const files = credentialFiles.get(processId) ?? null;
+      credentialFiles.delete(processId);
+      return files;
     },
     async get(processId) {
       const row = rows.get(processId);
@@ -99,6 +109,7 @@ export function createMemoryProcessRegistry(): ProcessRegistry {
     },
     async delete(processId) {
       rows.delete(processId);
+      credentialFiles.delete(processId);
     },
   };
 }
@@ -141,11 +152,17 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"],
   };
   pg.registerMigration(purposeMigration);
+  const credentialFilesMigration = {
+    id: "processes/registry/0004",
+    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"],
+  };
+  pg.registerMigration(credentialFilesMigration);
   let ready: Promise<void> | undefined;
   const q: typeof pg.q = async (...args) => {
     ready ??= pg
       .migrate(migration)
       .then(() => pg.migrate(purposeMigration))
+      .then(() => pg.migrate(credentialFilesMigration))
       .catch((error) => {
         ready = undefined;
         throw error;
@@ -157,8 +174,8 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async register(rec) {
       const row = newRecord(rec, Date.now());
       await q(
-        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose, credential_files)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           row.processId,
           row.scopeId,
@@ -171,9 +188,23 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.runId ?? null,
           row.sandboxId ?? null,
           row.purpose ?? null,
+          rec.credentialFiles ? JSON.stringify(rec.credentialFiles) : null,
         ],
       );
       return row;
+    },
+    async takeCredentialFiles(processId) {
+      const rows = await q(
+        `WITH taken AS (
+           SELECT process_id, credential_files FROM process_sessions
+           WHERE process_id = $1 AND credential_files IS NOT NULL FOR UPDATE
+         )
+         UPDATE process_sessions SET credential_files = NULL FROM taken
+         WHERE process_sessions.process_id = taken.process_id
+         RETURNING taken.credential_files`,
+        [processId],
+      );
+      return rows.length ? (rows[0]!.credential_files as ProcessCredentialFiles) : null;
     },
     async get(processId) {
       const rows = await q("SELECT * FROM process_sessions WHERE process_id = $1", [processId]);

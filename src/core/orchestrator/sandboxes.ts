@@ -6,6 +6,7 @@ import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import type { SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
+import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import {
   materializeSkillTree as laySkillTree,
   packRoot,
@@ -221,7 +222,17 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
       const procReconcileStart = Date.now();
       try {
-        await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId);
+        await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
+          finishProcessCredentials(
+            {
+              sandbox: deps.sandbox,
+              processes: deps.processes!,
+              ...(deps.keychain ? { keychain: deps.keychain } : {}),
+            },
+            exited,
+            processId,
+          ),
+        );
       } catch (err) {
         deps.errors?.record(
           {

@@ -288,14 +288,6 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       );
       return sendJson(res, 200, { asks });
     }
-
-    if (method === "POST" && pathname === "/v1/keychain/use") {
-      return sendJson(res, 410, {
-        error: "execute_credentials_required",
-        message:
-          "Request credential handles through execute.credentials. Raw credential scripts cannot persist refreshed files.",
-      });
-    }
   } catch (e) {
     if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
     throw e;
@@ -331,6 +323,5 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/grants/:id/revoke", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
-  { method: "POST", path: "/v1/keychain/use", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
 ];

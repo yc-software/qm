@@ -1,5 +1,6 @@
 import type { ProcessSandbox, ProcessState, SandboxHandle } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
+import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess, processIsGone } from "../sandbox/process-poll.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
@@ -9,6 +10,7 @@ export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
   registry: ProcessRegistry;
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
+  onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   sessionRef?: string;
   ttlMs?: number;
@@ -56,7 +58,13 @@ export interface BackgroundWriteResult {
 
 export interface BackgroundExecBroker {
   handleFor?(processId: string): Promise<SandboxHandle | null>;
-  start(handle: SandboxHandle, command: string, purpose: string, ttlMs?: number): Promise<BackgroundStartResult>;
+  start(
+    handle: SandboxHandle,
+    command: string,
+    purpose: string,
+    ttlMs?: number,
+    credentials?: { env: Record<string, string>; files?: ProcessCredentialFiles },
+  ): Promise<BackgroundStartResult>;
   poll(
     handle: SandboxHandle,
     processId: string,
@@ -85,6 +93,10 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
+  const exited = async (handle: SandboxHandle, processId: string) => {
+    await deps.registry.markStatus(processId, "exited");
+    await deps.onExit?.(handle, processId);
+  };
   return {
     async handleFor(processId) {
       const rec = await deps.registry.get(processId);
@@ -93,7 +105,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
       return deps.provisionSandbox(rec.sandboxId);
     },
-    async start(handle, command, purpose, ttlMs): Promise<BackgroundStartResult> {
+    async start(handle, command, purpose, ttlMs, credentials): Promise<BackgroundStartResult> {
       if (!purpose?.trim()) throw new Error("background start requires a short purpose describing the job");
       purpose = redactCommand(purpose.replace(/\s+/g, " ").trim(), handle.env);
       const ttl = Math.min(ttlMs ?? defaultTtlMs, maxTtlMs);
@@ -102,7 +114,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       const redacted = redactCommand(normalized, handle.env);
 
       let processId =
-        redacted === normalized
+        redacted === normalized && !credentials
           ? ((await deps.registry.listByScope(deps.scopeId)).find(
               (r) =>
                 r.kind === "background" &&
@@ -121,7 +133,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             waitMs: 0,
           });
           if (read.status.state === "exited") {
-            await deps.registry.markStatus(existingProcessId, "exited");
+            await exited(handle, existingProcessId);
             processId = null;
           }
         } catch (error) {
@@ -137,7 +149,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           maxBytes: DEFAULT_MAX_BYTES,
           waitMs: 0,
         });
-        if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
+        if (read.status.state === "exited") await exited(handle, processId);
         return { processId, output: read.chunks, cursor: read.cursor, status: read.status, reattached: true };
       }
 
@@ -151,9 +163,10 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           purpose,
           ttlMs: ttl,
           ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
+          ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
         });
       };
-      const startOptions = { env: { PYTHONUNBUFFERED: "1" } };
+      const startOptions = { env: { PYTHONUNBUFFERED: "1", ...credentials?.env } };
       if (deps.sandbox.startRegisteredProcess) {
         ({ processId } = await deps.sandbox.startRegisteredProcess(handle, command, register, startOptions));
       } else {
@@ -162,7 +175,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       }
 
       const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, { deadlineMs: POLL_MS });
-      if (status.state === "exited") await deps.registry.markStatus(processId, "exited");
+      if (status.state === "exited") await exited(handle, processId);
       return { processId, output, cursor, status, reattached: false };
     },
 
@@ -180,7 +193,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         maxBytes: opts?.maxBytes ?? DEFAULT_MAX_BYTES,
         waitMs: opts?.waitMs ?? 0,
       });
-      if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
+      if (read.status.state === "exited") await exited(handle, processId);
       return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 
@@ -195,7 +208,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       }
       await deps.sandbox.writeStdin(handle, processId, data);
       const read = await deps.sandbox.readProcess(handle, processId, { sinceCursor: 0, maxBytes: 1, waitMs: 0 });
-      if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
+      if (read.status.state === "exited") await exited(handle, processId);
       return { processId, bytes: data.length, status: read.status };
     },
 
@@ -214,7 +227,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         await deps.sandbox.signalProcess(handle, processId, "KILL");
         status = await awaitProcessExit(deps.sandbox, handle, processId, killGraceMs);
       }
-      if (status.state === "exited") await deps.registry.markStatus(processId, "exited");
+      if (status.state === "exited") await exited(handle, processId);
       return { processId, status, stopped: status.state === "exited" };
     },
 

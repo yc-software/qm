@@ -59,6 +59,7 @@ import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monit
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
 import { credentialHandle, renderKeychainManifest, type PublicServiceCredential } from "../credentials/keychain.ts";
+import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import type { DeviceFlowCutoverMode } from "../credentials/device-flow-cutover.ts";
 import {
   configuredConnectorProviders,
@@ -1541,6 +1542,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             files: materialized.files,
             save: (files: import("../credentials/keychain.ts").CredentialFile[]) =>
               deps.keychain!.updateFiles(materialized, files),
+            source: {
+              credentialId: materialized.credentialId,
+              ownerId: materialized.ownerId,
+              service: materialized.service,
+              ...(materialized.grantId ? { grantId: materialized.grantId } : {}),
+            },
           },
         };
       };
@@ -2604,6 +2611,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 sandbox: deps.sandbox,
                 registry: deps.processes,
                 provisionSandbox: provisionResource,
+                onExit: (handle, processId) =>
+                  finishProcessCredentials(
+                    {
+                      sandbox: deps.sandbox,
+                      processes: deps.processes!,
+                      ...(deps.keychain ? { keychain: deps.keychain } : {}),
+                    },
+                    handle,
+                    processId,
+                  ),
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),

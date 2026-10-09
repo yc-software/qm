@@ -378,6 +378,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
           ...(drop.destination ? { destination: drop.destination } : {}),
           ...(drop.threadRef ? { threadRef: drop.threadRef } : {}),
           ...(grantId ? { grantId } : {}),
+          ...(meta.credentialHandle ? { credentialHandle: meta.credentialHandle } : {}),
           granted: !!grantId,
           ...(pending.length ? { pendingSiblings: pending } : {}),
         });

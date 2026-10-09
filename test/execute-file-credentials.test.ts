@@ -1,7 +1,9 @@
-import { prepareExecutionFiles } from "../src/credentials/execute-files.ts";
+import { finishProcessCredentials, prepareExecutionFiles } from "../src/credentials/execute-files.ts";
+import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
+import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, writeFile, rm, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,7 +12,7 @@ import { createKeychain, type CredentialFile } from "../src/credentials/keychain
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import type { ProcessSandbox, ProcessState, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 
 const run = promisify(execFile);
@@ -92,6 +94,7 @@ async function fixture(t: TestContext) {
               files: {
                 files: materialized.files,
                 save: (updated: CredentialFile[]) => keychain.updateFiles(materialized, updated),
+                source: { credentialId: materialized.credentialId, ownerId: owner, service: "aws" },
               },
             };
           },
@@ -230,7 +233,7 @@ test("an execution sweeps only stale credential directories", async (t) => {
   const stale = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("stale"), save: async () => {} }]);
   const live = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("live"), save: async () => {} }]);
   const staleDir = stale.env.HOME!.replace(/\/home$/, "");
-  await f.sandbox.run(f.handle, `touch -d '2 hours ago' ${staleDir}`);
+  await f.sandbox.run(f.handle, `touch -d '3 hours ago' ${staleDir}`);
   await f.context().execute("true", { credentials: ["aws"] });
   await assert.rejects(access(stale.env.HOME!));
   await access(`${live.env.HOME}/.aws/sso/cache/session.json`);
@@ -260,4 +263,67 @@ test("concurrent executions keep their own credential directories", async (t) =>
   release.resolve();
   assert.equal((await held).stdout, "original");
   await assert.rejects(access(home));
+});
+
+test("background credentials stay staged until the job exits, then refreshes are saved", async (t) => {
+  const f = await fixture(t);
+  const registry = createMemoryProcessRegistry();
+  const jobs = new Map<string, { output: string; code?: number; child: ChildProcess }>();
+  const sandbox = {
+    ...f.sandbox,
+    profile: { processSessions: true },
+    async startProcess(h: SandboxHandle, command: string, opts?: { env?: Record<string, string> }) {
+      const processId = `job-${jobs.size}`;
+      const child = spawn("/bin/sh", ["-c", command], {
+        cwd: h.rootDir,
+        env: { PATH: process.env.PATH, HOME: h.homeDir, ...h.env, ...opts?.env },
+      });
+      const job: { output: string; code?: number; child: ChildProcess } = { output: "", child };
+      child.stdout!.on("data", (chunk) => (job.output += chunk));
+      child.on("exit", (code) => (job.code = code ?? 143));
+      jobs.set(processId, job);
+      return { processId };
+    },
+    async readProcess(_h: SandboxHandle, processId: string, opts?: { sinceCursor?: number; waitMs?: number }) {
+      const job = jobs.get(processId)!;
+      if (job.code === undefined && opts?.waitMs)
+        await new Promise((resolve) => setTimeout(resolve, Math.min(opts.waitMs!, 50)));
+      return {
+        chunks: job.output.slice(opts?.sinceCursor ?? 0),
+        cursor: job.output.length,
+        status: job.code === undefined ? { state: "running" as const } : { state: "exited" as const, code: job.code },
+      };
+    },
+    async writeStdin() {},
+    async signalProcess(_h: SandboxHandle, processId: string) {
+      jobs.get(processId)!.child.kill();
+    },
+    async listProcesses() {
+      return [];
+    },
+  } as unknown as ProcessSandbox;
+  const broker = createBackgroundBroker({
+    sandbox,
+    registry,
+    scopeId: scope,
+    pollMs: 10,
+    onExit: (h, processId) =>
+      finishProcessCredentials({ sandbox, processes: registry, keychain: f.keychain }, h, processId),
+  });
+  const ctx = f.context({ sandbox, backgroundBroker: broker });
+  const started = await ctx.backgroundStart(
+    'printf %s "$HOME" > staged-home; sleep 0.5; cat "$HOME/.aws/sso/cache/session.json" > seen; printf background > "$HOME/.aws/sso/cache/session.json"',
+    { purpose: "Refresh a background login", credentials: ["aws"] },
+  );
+  assert.equal(started.status.state, "running");
+  assert.equal((await ctx.execute("echo unrelated")).stdout.trim(), "unrelated");
+  let status: ProcessState = started.status;
+  while (status.state !== "exited") status = (await ctx.backgroundPoll(started.processId, { waitSeconds: 1 })).status;
+  assert.equal(await readFile(join(f.handle.rootDir, "seen"), "utf8"), "original");
+  const saved = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  assert.equal(saved.kind, "file");
+  if (saved.kind === "file")
+    assert.equal(Buffer.from(saved.files[0]!.contentBase64, "base64").toString(), "background");
+  await assert.rejects(access(await readFile(join(f.handle.rootDir, "staged-home"), "utf8")));
+  assert.equal(await registry.takeCredentialFiles(started.processId), null);
 });

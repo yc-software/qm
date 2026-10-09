@@ -388,6 +388,10 @@ interface GrantListFilter {
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<void>;
+  writebackBaseline(
+    source: FileCredentialSource,
+    fingerprint: string,
+  ): Promise<Extract<MaterializedCred, { kind: "file" }>>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
@@ -428,7 +432,6 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
     singleUse: boolean;
     commit(): Promise<void>;
   }>;
-  materialize(grantId: string, scopeId: ScopeId, usedBy: string): Promise<MaterializedCred>;
   materializeOwnById(ownerId: string, credentialId: string, scopeId: ScopeId): Promise<MaterializedCred>;
   materializeOwn(ownerId: string): Promise<MaterializedEnvCred[]>;
   materializeOwnFiles(ownerId: string): Promise<MaterializedFileCred[]>;
@@ -442,6 +445,21 @@ function fingerprintOf(secret: string): string {
 
 export function credentialHandle(credentialId: string): string {
   return `kc_${credentialId.slice(0, 12)}`;
+}
+
+export interface FileCredentialSource {
+  credentialId: string;
+  ownerId: string;
+  service: string;
+  grantId?: string;
+}
+
+export function credentialFilesFingerprint(files: CredentialFile[]): string {
+  return fileCredentialFingerprint(
+    files
+      .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
+      .sort((a, b) => homeRelativePath(a.path).localeCompare(homeRelativePath(b.path))),
+  );
 }
 
 function fileCredentialFingerprint(files: CredentialFile[]): string {
@@ -1068,12 +1086,7 @@ export function createKeychain(deps: {
         normalized = [...normalized.filter((file) => !roleCache(file)), ...materialized.files.filter(roleCache)];
       }
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
-      const fingerprint = (value: CredentialFile[]) =>
-        fileCredentialFingerprint(
-          value
-            .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
-            .sort((a, b) => a.path.localeCompare(b.path)),
-        );
+      const fingerprint = credentialFilesFingerprint;
       if (fingerprint(normalized) === fingerprint(materialized.files)) return;
       if (materialized.grantId) {
         const original = new Map(materialized.files.map((file) => [homeRelativePath(file.path), file]));
@@ -1124,6 +1137,23 @@ export function createKeychain(deps: {
         };
       });
       if (!updated) throw new KeychainError(410, "Credential was removed during execution");
+    },
+
+    async writebackBaseline(source, fingerprint) {
+      const current = await deps.creds.get(source.credentialId);
+      if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))
+        throw new KeychainError(410, "Credential was removed during execution");
+      const files = decryptToFiles(current).files;
+      if (credentialFilesFingerprint(files) !== fingerprint)
+        throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
+      return {
+        kind: "file",
+        credentialId: current.id,
+        ownerId: current.ownerId,
+        service: current.service,
+        files,
+        ...(source.grantId ? { grantId: source.grantId } : {}),
+      };
     },
 
     async listAllMetadata() {
@@ -1478,12 +1508,6 @@ export function createKeychain(deps: {
     },
     prepareMaterialize,
 
-    async materialize(grantId, scopeId, usedBy) {
-      const prepared = await prepareMaterialize(grantId, scopeId, usedBy);
-      await prepared.commit();
-      return prepared.materialized;
-    },
-
     async materializeOwnById(ownerId, credentialId, scopeId) {
       if (scopeId !== toScopeId("personal", ownerId)) {
         throw new KeychainError(
@@ -1552,9 +1576,6 @@ export function createKeychain(deps: {
   };
 }
 
-const tempCredentialPath = (rel: string): string =>
-  /^[A-Za-z0-9._@+ /-]+$/.test(rel) ? `"$__kc_dir/${rel}"` : `"$__kc_dir"${shq(`/${rel}`)}`;
-
 export function fileCredentialEnvironment(files: CredentialFile[], home: string): Record<string, string> {
   const env: Record<string, string> = { HOME: home };
   const pointers: Array<[RegExp, string, boolean?]> = [
@@ -1576,64 +1597,6 @@ export function fileCredentialEnvironment(files: CredentialFile[], home: string)
       env.GIT_SSH_COMMAND = `ssh -i ${shq(`${home}/${rel}`)} -o IdentitiesOnly=yes`;
   }
   return env;
-}
-
-const FILE_ENV_POINTERS: Array<[RegExp, (rel: string) => string]> = [
-  [/(^|\/)\.aws\/credentials$/, (rel) => `export AWS_SHARED_CREDENTIALS_FILE=${tempCredentialPath(rel)}`],
-  [/(^|\/)\.aws\/config$/, (rel) => `export AWS_CONFIG_FILE=${tempCredentialPath(rel)}`],
-  [/(^|\/)\.kube\/config$/, (rel) => `export KUBECONFIG=${tempCredentialPath(rel)}`],
-  [
-    /(^|\/)\.config\/gh\/hosts\.yml$/,
-    (rel) => `export GH_CONFIG_DIR=${tempCredentialPath(rel.replace(/\/hosts\.yml$/, ""))}`,
-  ],
-  [
-    /(^|\/)(?:\.config\/(?:glab-cli|glab)|Library\/Application Support\/glab-cli)\/config\.yml$/,
-    (rel) => `export GLAB_CONFIG_DIR=${tempCredentialPath(rel.replace(/\/config\.yml$/, ""))}`,
-  ],
-  [
-    /(^|\/)\.docker\/config\.json$/,
-    (rel) => `export DOCKER_CONFIG=${tempCredentialPath(rel.replace(/\/config\.json$/, ""))}`,
-  ],
-  [/(^|\/)\.npmrc$/, (rel) => `export NPM_CONFIG_USERCONFIG=${tempCredentialPath(rel)}`],
-  [/(^|\/)\.netrc$/, (rel) => `export NETRC=${tempCredentialPath(rel)}`],
-  [
-    /(^|\/)\.ssh\/[^/]*(id_|key)[^/]*$/,
-    (rel) =>
-      /^[A-Za-z0-9._@+ /-]+$/.test(rel)
-        ? `export GIT_SSH_COMMAND="ssh -i $__kc_dir/${rel} -o IdentitiesOnly=yes"`
-        : `export GIT_SSH_COMMAND="ssh -i $__kc_dir"${shq(`/${rel}`)}" -o IdentitiesOnly=yes"`,
-  ],
-];
-
-export function renderUseScript(m: MaterializedCred): string {
-  if (m.kind === "env") return m.env.map((e) => `export ${e.key}=${shq(e.value)}`).join("\n") + "\n";
-  const files = m.files.map((f) => ({ ...f, path: homeRelativePath(f.path) }));
-  const lines = [`__kc_dir="$(mktemp -d "\${TMPDIR:-/tmp}/keychain.XXXXXX")"`, `umask 077`];
-  for (const f of files) {
-    const parent = f.path.includes("/") ? f.path.replace(/\/[^/]*$/, "") : "";
-    if (parent) lines.push(`mkdir -p ${tempCredentialPath(parent)}`);
-    const path = tempCredentialPath(f.path);
-    lines.push(
-      `printf '%s' ${shq(f.contentBase64)} | base64 -d > ${path}`,
-      `chmod ${restoredFileMode(f.mode).toString(8)} ${path}`,
-    );
-  }
-  const pointed = new Set<RegExp>();
-  for (const f of files) {
-    for (const [re, render] of FILE_ENV_POINTERS) {
-      if (re.test(f.path) && !pointed.has(re)) {
-        pointed.add(re);
-        lines.push(render(f.path));
-      }
-    }
-  }
-  if (files.some((f) => !FILE_ENV_POINTERS.some(([re]) => re.test(f.path)))) {
-    lines.push(
-      `for __e in "$HOME"/.[!.]* "$HOME"/*; do [ -e "$__e" ] || continue; __b=\${__e##*/}; [ -e "$__kc_dir/$__b" ] || ln -s "$__e" "$__kc_dir/$__b"; done`,
-      `export HOME="$__kc_dir"`,
-    );
-  }
-  return lines.join("\n") + "\n";
 }
 
 function hoursLeft(expiresAt: number, now: number): number {

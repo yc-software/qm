@@ -617,9 +617,9 @@ const FAMILIES: AgentApiFamily[] = [
       (p === "/v1/keychain/grants" && m === "GET") ||
       (m === "POST" && p.startsWith("/v1/keychain/grants/") && p.endsWith("/revoke")) ||
       (p === "/v1/keychain/asks" && (m === "POST" || m === "GET")) ||
-      (m === "POST" && p === "/v1/keychain/drops") ||
-      (m === "POST" && p === "/v1/keychain/use"),
-    guidance: "The keychain ask→card approval→use protocol is documented in your keychain manifest when one renders.",
+      (m === "POST" && p === "/v1/keychain/drops"),
+    guidance:
+      "The keychain ask→card approval→execute.credentials protocol is documented in your keychain manifest when one renders.",
     routes: [
       {
         method: "POST|GET",
@@ -646,12 +646,6 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/keychain/drops",
         summary:
           'mint a single-use, expiring link for someone to drop a credential into the keychain via a browser (no secret in chat; hand the returned url over VERBATIM — it carries a link-bound token, so a reconstructed url will not work; declare the form inputs with fields[], e.g. [{key:"X_EMAIL",label:"Email",secret:false},{key:"X_PASSWORD",label:"Password"}] for a login, or omit for a single token; the link binds to the person who will paste the secret — pass onBehalfOf with their id when that is a teammate who spoke in this conversation rather than the person whose turn this is; refused on trigger-fired turns)',
-      },
-      {
-        method: "POST",
-        path: "/v1/keychain/use",
-        summary:
-          "retired: request authorized credential handles through execute.credentials; this endpoint returns no secrets",
       },
     ],
   },

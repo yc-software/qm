@@ -36,8 +36,9 @@ that directory to the keychain with the script shipped with this skill.
    Saving the same service again replaces that entry in place: its id, handle, owner and
    grants stay the same.
 
-4. Use the login only by naming the handle in `execute.credentials`. The files are staged
-   in a private home for that one command, and refreshes the CLI writes are saved back.
+4. Use the login only by naming the handle in `credentials` on `execute` or a background
+   start. The files are staged in a private home for that command or job, and refreshes the
+   CLI writes are saved back when it ends.
 
 Never print token files or paste their contents into the conversation. If the login fails
 or expires, delete the directory and start again.
