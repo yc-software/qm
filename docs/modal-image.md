@@ -22,7 +22,9 @@ With no `MODAL_IMAGE` set during the build, the image starts from QM's pinned No
 base and installs its usual shell, Python, Git, curl, and archive utilities. It also
 installs a pinned, checksum-verified `uv`, configures `uv pip install` to target the
 system Python without a virtual environment, and preinstalls pinned requests,
-beautifulsoup4, lxml, openpyxl, pypdf and python-docx. Packages installed later with
+beautifulsoup4, lxml, openpyxl, pypdf and python-docx, plus a pinned, checksum-verified
+AWS CLI v2 so agents don't fall back to `pip install awscli` (v1, which lacks SSO
+device-code login). Packages installed later with
 `uv pip install` land in `/usr/local`, outside home checkpoints, so they last until the
 sandbox is replaced. To extend an existing custom image, set `MODAL_IMAGE` to its
 registry reference (prefer an immutable digest) or an existing Modal image ID. Custom bases must already contain
