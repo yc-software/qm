@@ -6,7 +6,7 @@ import {
   type CredentialFile,
   type Keychain,
 } from "./keychain.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailure } from "../util/errors.ts";
 import { pathUnder } from "../util/paths.ts";
 import type { Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { makeTar, parseTar } from "../sandbox/tar.ts";
@@ -156,6 +156,37 @@ const captureScript = (groups: readonly SweepGroup[], gate: boolean): string => 
   lines.push(`printf 'TMP\\t%s\\n' "$t"`);
   return lines.join("\n");
 };
+
+export function credTransientRemoval(paths: readonly string[]): string {
+  const list = paths.filter(Boolean).map(shq).join(" ");
+  return (
+    `cd "$HOME" 2>/dev/null || exit 0; left=""; for p in ${list}; do ` +
+    `if [ -f "$p" ] && [ ! -L "$p" ]; then : > "$p" 2>/dev/null; fi; rm -rf -- "$p" 2>/dev/null; ` +
+    `if [ -e "$p" ] || [ -L "$p" ]; then left="$left $p"; fi; done; ` +
+    `[ -z "$left" ] || { printf 'left:%s\\n' "$left" >&2; exit 3; }`
+  );
+}
+
+async function removeCredTransients(
+  input: Pick<DeviceFlowPersistInput, "sandbox" | "handle" | "onAnomaly">,
+  paths: readonly string[],
+): Promise<void> {
+  if (!paths.some(Boolean)) return;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const r = await input.sandbox.run(input.handle, credTransientRemoval(paths), { timeoutMs: 30_000 });
+      if (r.code === 0) return;
+      lastError = new Error(r.stderr.trim() || `exit ${r.code}`);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  const detail = `credential temp file cleanup failed after retry; plaintext may remain until the next sweep: ${errMessage(lastError)}`;
+  console.warn(`[device-flow] ${detail}`);
+  input.onAnomaly?.("credential-cleanup", detail);
+  reportFailure("device-flow: credential temp cleanup", lastError, `sandbox=${input.handle.id}`);
+}
 
 export interface DeviceFlowPersistInput {
   sandbox: Sandbox;
@@ -308,17 +339,7 @@ export async function captureDeviceFlowLogins(input: DeviceFlowPersistInput): Pr
   const shipped = new Set<string>();
   const volatile = new Set<string>();
   const priorNotes = new Set<string>();
-  const cleanup = async (): Promise<void> => {
-    await input.sandbox
-      .run(
-        input.handle,
-        `cd "$HOME" 2>/dev/null || exit 0; rm -f ${shq(scriptRel)}${tmpRel ? ` ${shq(tmpRel)}` : ""}; :`,
-        {
-          timeoutMs: 30_000,
-        },
-      )
-      .catch(() => {});
-  };
+  const cleanup = (): Promise<void> => removeCredTransients(input, [scriptRel, tmpRel]);
   const tar = await (async () => {
     try {
       const built = await input.sandbox.run(input.handle, `sh "$HOME/${scriptRel}"`, { timeoutMs: 120_000 });
@@ -638,6 +659,7 @@ export async function materializeDeviceFlowLogins(
       { timeoutMs: 120_000 },
     );
     if (run.code !== 0) throw new Error(`device-flow credential restore failed: ${run.stderr || `exit ${run.code}`}`);
+    await removeCredTransients(input, [blobRel]);
     const restored: string[] = [];
     for (const line of run.stdout.split("\n")) {
       const [tag, service] = line.split("\t");
@@ -647,11 +669,7 @@ export async function materializeDeviceFlowLogins(
     }
     return restored;
   } catch (err) {
-    await input.sandbox
-      .run(input.handle, `cd "$HOME" 2>/dev/null || exit 0; rm -rf ${shq(blobRel)} ${shq(scriptRel)}; :`, {
-        timeoutMs: 30_000,
-      })
-      .catch(() => {});
+    await removeCredTransients(input, [blobRel, scriptRel]);
     throw err;
   }
 }
