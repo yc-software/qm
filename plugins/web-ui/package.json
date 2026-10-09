@@ -16,6 +16,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
+    "@sentry/node": "10.75.0",
+    "lru-cache": "^11.5.2"
+  },
+  "devDependencies": {
     "@codemirror/language": "6.12.4",
     "@codemirror/language-data": "6.5.2",
     "@codemirror/search": "6.7.2",
@@ -28,28 +32,24 @@
     "@lezer/highlight": "1.2.4",
     "@mariozechner/mini-lit": "^0.2.0",
     "@sentry/browser": "10.75.0",
-    "@sentry/node": "10.75.0",
     "@tanstack/ai": "0.54.0",
     "@tanstack/ai-client": "0.31.1",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^24.0.0",
+    "@types/papaparse": "5.5.2",
     "date-fns": "^4.4.0",
     "dockview-core": "^7.0.4",
     "dompurify": "^3.4.13",
+    "jsdom": "^29.1.1",
     "jszip": "^3.10.1",
+    "katex": "^0.16.47",
     "lit": "^3.3.1",
-    "lru-cache": "^11.5.2",
     "lucide": "^0.544.0",
     "marked": "^18.0.5",
     "mermaid": "^12.0.0",
     "morphdom": "2.7.8",
     "papaparse": "5.7.0",
-    "posthog-js": "1.433.10"
-  },
-  "devDependencies": {
-    "@types/jsdom": "^28.0.3",
-    "@types/node": "^24.0.0",
-    "@types/papaparse": "5.5.2",
-    "jsdom": "^29.1.1",
-    "katex": "^0.16.47",
+    "posthog-js": "1.433.10",
     "typescript": "^5.8.2",
     "vite": "^7.1.6"
   },
