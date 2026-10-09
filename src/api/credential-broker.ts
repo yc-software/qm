@@ -81,7 +81,7 @@ export function brokerPathAllowed(pathname: string, prefixes?: string[]): boolea
 }
 
 function brokerCredentialAuthHeader(rec: Pick<DecryptedServiceCredential, "secret" | "injection">): [string, string] {
-  const injHeader = rec.injection?.header?.trim() || "Authorization";
+  const injHeader = rec.injection?.header || "Authorization";
   const rawScheme = rec.injection?.scheme ?? "Bearer ";
   const injScheme = rawScheme && !/\s$/.test(rawScheme) ? `${rawScheme} ` : rawScheme;
   return [injHeader, `${injScheme}${rec.secret}`];
@@ -90,9 +90,8 @@ function brokerCredentialAuthHeader(rec: Pick<DecryptedServiceCredential, "secre
 export function gitCredentialAuthHeader(
   rec: Pick<DecryptedServiceCredential, "secret" | "injection">,
 ): [string, string] {
-  const [header, value] = brokerCredentialAuthHeader(rec);
-  if (rec.injection?.scheme !== undefined) return [header, value];
-  return [header, `Basic ${Buffer.from(`x-access-token:${rec.secret}`).toString("base64")}`];
+  if (rec.injection?.header || rec.injection?.scheme !== undefined) return brokerCredentialAuthHeader(rec);
+  return ["Authorization", `Basic ${Buffer.from(`x-access-token:${rec.secret}`).toString("base64")}`];
 }
 
 type CredentialGrant =
