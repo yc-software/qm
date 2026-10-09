@@ -58,13 +58,13 @@ export async function relevantLenses(spec: string, diff: string, apiKey: string)
     body: JSON.stringify({
       model: TRIAGE_MODEL,
       max_tokens: 500,
-      temperature: 0,
       messages: [{ role: "user", content: triagePrompt(spec, diff) }],
     }),
   });
   const body = await response.text();
   if (!response.ok) throw new Error(`triage request failed with HTTP ${response.status}: ${body}`);
-  return parseTriage(JSON.parse(body).content[0].text, wallOfShameLenses(spec));
+  const content = (JSON.parse(body) as { content: { type: string; text?: string }[] }).content;
+  return parseTriage(content.find((block) => block.type === "text")?.text ?? body, wallOfShameLenses(spec));
 }
 
 export function wallOfShameProblems(spec: string, body: string, headSha: string, required = wallOfShameLenses(spec)) {
