@@ -8,6 +8,7 @@ import {
   ManagedAgentsSandboxGoneError,
   type ManagedAgentsClient,
   type ManagedAgentsCommandResult,
+  type ManagedAgentsCheckpoint,
   type ManagedAgentsSession,
   type ManagedAgentsSessionInfo,
   type ManagedAgentsSessionState,
@@ -26,6 +27,7 @@ interface FakeRecord {
   createdAt: number;
   loseNextCommand: boolean;
   rejectNextCommand: boolean;
+  failNextCheckpoint: boolean;
 }
 
 export interface FakeManagedAgents {
@@ -41,6 +43,9 @@ export interface FakeManagedAgents {
   pauseCalls(): string[];
   resumeCalls(): string[];
   guestDisconnects(): string[];
+  checkpointCalls(): Array<{ sessionId: string; checkpointId: string; label?: string }>;
+  deletedCheckpoints(): string[];
+  failNextCheckpoint(name: string): void;
   cleanup(): void;
 }
 
@@ -51,7 +56,10 @@ export function installFakeManagedAgents(): FakeManagedAgents {
   const pauseCalls: string[] = [];
   const resumeCalls: string[] = [];
   const guestDisconnects: string[] = [];
+  const checkpointCalls: Array<{ sessionId: string; checkpointId: string; label?: string }> = [];
+  const deletedCheckpoints: string[] = [];
   let nextId = 1;
+  let nextCheckpoint = 1;
   let clock = 0;
 
   const gone = (state: ManagedAgentsSessionState): boolean =>
@@ -132,6 +140,20 @@ export function installFakeManagedAgents(): FakeManagedAgents {
       mkdirSync(dirname(hostPath), { recursive: true });
       writeFileSync(hostPath, Buffer.from(data));
     },
+    async createCheckpoint(label?: string): Promise<ManagedAgentsCheckpoint> {
+      if (gone(r.state)) throw new ManagedAgentsSandboxGoneError(r.sessionId, `status ${r.state}`);
+      if (r.failNextCheckpoint) {
+        r.failNextCheckpoint = false;
+        throw new Error("do-managed-agents create checkpoint: http 500 capture failed");
+      }
+      const checkpointId = `cp-${nextCheckpoint++}`;
+      checkpointCalls.push({ sessionId: r.sessionId, checkpointId, ...(label ? { label } : {}) });
+      return { checkpointId, status: "READY", createdAtMs: Date.now() };
+    },
+    async deleteCheckpoint(checkpointId: string): Promise<void> {
+      if (gone(r.state)) throw new ManagedAgentsSandboxGoneError(r.sessionId, `status ${r.state}`);
+      deletedCheckpoints.push(checkpointId);
+    },
     async pause(): Promise<void> {
       if (gone(r.state)) throw new ManagedAgentsSandboxGoneError(r.sessionId, `status ${r.state}`);
       guestDisconnects.push(r.sessionId);
@@ -168,6 +190,7 @@ export function installFakeManagedAgents(): FakeManagedAgents {
         createdAt: ++clock,
         loseNextCommand: false,
         rejectNextCommand: false,
+        failNextCheckpoint: false,
       };
       mkdirSync(r.home, { recursive: true });
       records.set(id, r);
@@ -216,6 +239,11 @@ export function installFakeManagedAgents(): FakeManagedAgents {
     },
     rejectNextCommand: (name) => {
       need(name).rejectNextCommand = true;
+    },
+    checkpointCalls: () => [...checkpointCalls],
+    deletedCheckpoints: () => [...deletedCheckpoints],
+    failNextCheckpoint: (name) => {
+      need(name).failNextCheckpoint = true;
     },
     execScripts: () => [...execScripts],
     pauseCalls: () => [...pauseCalls],

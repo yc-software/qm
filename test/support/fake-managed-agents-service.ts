@@ -29,6 +29,7 @@ export interface FakeManagedAgentsService {
   manifests(): string[];
   execScripts(): string[];
   home(): string;
+  checkpoints(sessionId: string): Array<{ checkpoint_id: string; label: string; status: string }>;
   setStatus(name: string, status: string): void;
   rejectPortForward(body: string | null): void;
   failNextLifecycleCalls(count: number, status: number): void;
@@ -59,6 +60,7 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
   const token = "dop_v1_test-token";
   const root = mkdtempSync(join(tmpdir(), "fake-managed-agents-guest-"));
   const rows = new Map<string, SessionRow>();
+  const checkpoints = new Map<string, Array<{ checkpoint_id: string; label: string; status: string }>>();
   const manifests: string[] = [];
   const execScripts: string[] = [];
   let tunnels = 0;
@@ -202,6 +204,47 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
       res.writeHead(204).end();
       return;
     }
+    if (req.method === "POST" && action === "checkpoints" && parts.length === 5) {
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString("utf8")));
+      req.on("end", () => {
+        const row = rows.get(id);
+        if (!row || row.status === "SESSION_STATUS_DESTROYED") {
+          json(res, 404, { error: { code: "not_found", message: "no such session" } });
+          return;
+        }
+        let label = "";
+        try {
+          label = (JSON.parse(body) as { label?: string }).label ?? "";
+        } catch {
+          label = "";
+        }
+        const checkpoint = {
+          checkpoint_id: `cp_${randomUUID().slice(0, 8)}`,
+          session_id: row.session_id,
+          status: "READY",
+          kind: "explicit",
+          label,
+          created_at: new Date().toISOString(),
+          size_bytes: 1,
+        };
+        const list = checkpoints.get(row.session_id) ?? [];
+        list.unshift(checkpoint);
+        checkpoints.set(row.session_id, list);
+        json(res, 200, { checkpoint });
+      });
+      return;
+    }
+    if (req.method === "DELETE" && action === "checkpoints" && parts.length === 6) {
+      const checkpointId = decodeURIComponent(parts[5] ?? "");
+      const list = checkpoints.get(id) ?? [];
+      checkpoints.set(
+        id,
+        list.filter((c) => c.checkpoint_id !== checkpointId),
+      );
+      json(res, 200, {});
+      return;
+    }
     if (req.method === "POST" && (action === "pause" || action === "resume")) {
       const row = rows.get(id);
       if (!row) {
@@ -266,6 +309,7 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
     manifests: () => [...manifests],
     execScripts: () => [...execScripts],
     home: () => root,
+    checkpoints: (sessionId) => [...(checkpoints.get(sessionId) ?? [])],
     setStatus: (name, status) => {
       const row = byName(name);
       if (row) row.status = status;
