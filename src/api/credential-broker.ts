@@ -80,11 +80,26 @@ export function brokerPathAllowed(pathname: string, prefixes?: string[]): boolea
   );
 }
 
-export function brokerCredentialAuthHeader(rec: DecryptedServiceCredential): [string, string] {
-  const injHeader = rec.injection?.header || "Authorization";
+export function brokerCredentialAuthHeader(
+  rec: Pick<DecryptedServiceCredential, "secret" | "injection">,
+): [string, string] {
+  const injHeader = rec.injection?.header?.trim() || "Authorization";
   const rawScheme = rec.injection?.scheme ?? "Bearer ";
   const injScheme = rawScheme && !/\s$/.test(rawScheme) ? `${rawScheme} ` : rawScheme;
   return [injHeader, `${injScheme}${rec.secret}`];
+}
+
+// GitHub's Git smart-HTTP rejects Bearer tokens; it takes them as the password of a Basic login (#1235).
+export function gitCredentialAuthHeader(
+  rec: Pick<DecryptedServiceCredential, "secret" | "injection">,
+  host: string,
+): [string, string] {
+  if (rec.injection?.scheme !== undefined || !/^(www\.)?github\.com$|\.ghe\.com$/i.test(host))
+    return brokerCredentialAuthHeader(rec);
+  return [
+    rec.injection?.header?.trim() || "Authorization",
+    `Basic ${Buffer.from(`x-access-token:${rec.secret}`).toString("base64")}`,
+  ];
 }
 
 type CredentialGrant =
