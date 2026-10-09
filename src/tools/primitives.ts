@@ -1,3 +1,8 @@
+import {
+  prepareExecutionFiles,
+  processCredentialFiles,
+  type ExecutionFileCredential,
+} from "../credentials/execute-files.ts";
 import type { MemoryCaptureMetadata } from "../memory/records.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
@@ -39,6 +44,7 @@ import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
 import { waitForClientResult, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type {
+  BackgroundCredentials,
   BackgroundExecBroker,
   BackgroundStartResult,
   BackgroundPollResult,
@@ -53,7 +59,7 @@ import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { mimeFromName } from "../core/attachments.ts";
-import { swallow, errMessage } from "../util/errors.ts";
+import { swallow, errMessage, withCleanup } from "../util/errors.ts";
 import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
@@ -178,6 +184,7 @@ export interface CommandCredential {
   resolve?: () => Promise<{
     commit?: () => Promise<void>;
     singleUse?: boolean;
+    files?: ExecutionFileCredential;
     env: Array<{ key: string; value: string; secret?: boolean }>;
   }>;
 }
@@ -200,10 +207,6 @@ export interface ToolContext extends SurfaceToolDeps {
   /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
   humanTurn?: boolean;
   commandCredentialHandles?: readonly string[];
-  registerLogin?(
-    service: string,
-    paths: readonly CredentialPathSpec[],
-  ): Promise<{ service: string; captured: boolean }>;
   execute(
     command: string,
     opts?: {
@@ -243,7 +246,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<ClientToolResult | "timeout" | "cancelled">;
   backgroundStart(
     command: string,
-    opts: { purpose: string; ttlSeconds?: number; sandboxId?: string },
+    opts: { purpose: string; ttlSeconds?: number; sandboxId?: string; credentials?: string[] },
   ): Promise<BackgroundStartResult>;
   backgroundPoll(
     processId: string,
@@ -443,13 +446,8 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 
 export interface ToolContextDeps {
   sandbox: Sandbox;
-  registerLogin?: ToolContext["registerLogin"];
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
-  commandPolicyForCredentials?: (
-    handles: readonly string[],
-    ownerAuth: boolean,
-  ) => ReturnType<ToolContextDeps["commandPolicy"]>;
   provision: () => Promise<SandboxHandle>;
   provisionScratch?: () => Promise<SandboxHandle>;
   provisionResource?: (
@@ -459,7 +457,6 @@ export interface ToolContextDeps {
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
   provisionOwnerAuth?: () => Promise<SandboxHandle>;
   ownerAuthCommand?: (command: string, env?: Record<string, string>) => string;
-  scopedCommand?: (command: string, env?: Record<string, string>) => string;
   useSkill?: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>;
   reach?: {
     resolveChannel(query: string): Promise<ReachResolution>;
@@ -632,8 +629,78 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     return cache ? once(call, cache) : call();
   }
 
+  const selectCredentials = async (handles: readonly string[], ownerAuth: boolean) => {
+    const available = new Map(
+      (
+        (handles.length ? await deps.resolveCommandCredentials?.(handles) : undefined) ??
+        deps.commandCredentials ??
+        []
+      ).map((credential) => [credential.handle, credential] as const),
+    );
+    return handles.map((handle) => {
+      const credential = available.get(handle);
+      if (!credential) throw new Error(`credential handle is not available on this turn: ${handle}`);
+      if ((credential.scope ?? "scoped") !== (ownerAuth ? "owner" : "scoped"))
+        throw new Error(`credential ${handle} requires scope:${credential.scope ?? "scoped"}`);
+      return credential;
+    });
+  };
+
+  const stageCredentials = async (
+    requested: readonly CommandCredential[],
+    handle: SandboxHandle,
+    use: "command" | "background",
+    signal?: AbortSignal,
+  ) => {
+    const commandEnv: Record<string, string> = {};
+    const prepared: Array<{
+      commit?: () => Promise<void>;
+      singleUse?: boolean;
+      files?: ExecutionFileCredential;
+      env: Array<{ key: string; value: string; secret?: boolean }>;
+    }> = [];
+    for (const credential of new Set(requested)) {
+      const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
+      prepared.push(materialized);
+      for (const { key, value } of materialized.env) {
+        if (key in commandEnv && commandEnv[key] !== value)
+          throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+        commandEnv[key] = value;
+      }
+      deps.auditLog?.record({
+        at: Date.now(),
+        principalId: deps.createdBy,
+        action: "keychain.materialize",
+        resource: `${credential.handle} (${use})`,
+        scopeLabel: writableScopeId!,
+      });
+    }
+    signal?.throwIfAborted();
+    const singleUse = prepared.filter((credential) => credential.singleUse);
+    if (singleUse.length > 1) throw new Error("An execution may use at most one single-use grant");
+    for (const credential of prepared.filter((credential) => !credential.singleUse)) await credential.commit?.();
+    signal?.throwIfAborted();
+    for (const credential of singleUse) await credential.commit?.();
+    const fileCredentials = prepared.flatMap((credential) => (credential.files ? [credential.files] : []));
+    const fileExecution = fileCredentials.length
+      ? await prepareExecutionFiles(deps.sandbox, handle, fileCredentials)
+      : undefined;
+    for (const [key, value] of Object.entries(fileExecution?.env ?? {})) {
+      if (key in commandEnv && commandEnv[key] !== value) {
+        await fileExecution!.finish();
+        throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+      }
+      commandEnv[key] = value;
+    }
+    return {
+      commandEnv,
+      secretValues: prepared.flatMap((credential) => credential.env),
+      fileExecution,
+      fileCredentials,
+    };
+  };
+
   return {
-    ...(deps.registerLogin ? { registerLogin: deps.registerLogin } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
       : {}),
@@ -738,20 +805,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         if (requestedCredentials.length && (execOpts?.reachTarget !== undefined || !writableScopeId)) {
           throw new Error("command credentials are available only on scoped, scratch, or owner computers");
         }
-        const availableCredentials = new Map(
-          (
-            (requestedCredentials.length ? await deps.resolveCommandCredentials?.(requestedCredentials) : undefined) ??
-            deps.commandCredentials ??
-            []
-          ).map((credential) => [credential.handle, credential] as const),
-        );
-        const requested = requestedCredentials.map((handle) => {
-          const credential = availableCredentials.get(handle);
-          if (!credential) throw new Error(`credential handle is not available on this turn: ${handle}`);
-          if ((credential.scope ?? "scoped") !== (ownerAuth ? "owner" : "scoped"))
-            throw new Error(`credential ${handle} requires scope:${credential.scope ?? "scoped"}`);
-          return credential;
-        });
+        const requested = await selectCredentials(requestedCredentials, ownerAuth);
         const reachTarget = execOpts?.reachTarget;
         if (
           [scratch, ownerAuth, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1
@@ -775,8 +829,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           if (target.kind === "error") throw new Error(target.message);
           reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
         }
-        const executionPolicy = () =>
-          deps.commandPolicyForCredentials?.(requestedCredentials, ownerAuth) ?? deps.commandPolicy();
+        const executionPolicy = deps.commandPolicy;
         let handle;
         if (execOpts?.sandboxId) {
           if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
@@ -816,55 +869,34 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
         return timed("exec", async () => {
           execOpts?.signal?.throwIfAborted();
-          const commandEnv: Record<string, string> = {};
-          const prepared: Array<{
-            commit?: () => Promise<void>;
-            singleUse?: boolean;
-            env: Array<{ key: string; value: string; secret?: boolean }>;
-          }> = [];
-          for (const credential of new Set(requested)) {
-            const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
-            prepared.push(materialized);
-            for (const { key, value } of materialized.env) {
-              if (key in commandEnv && commandEnv[key] !== value)
-                throw new Error(`requested credentials provide conflicting environment key: ${key}`);
-              commandEnv[key] = value;
-            }
-            deps.auditLog?.record({
-              at: Date.now(),
-              principalId: deps.createdBy,
-              action: "keychain.materialize",
-              resource: `${credential.handle} (command)`,
-              scopeLabel: writableScopeId!,
-            });
-          }
-          execOpts?.signal?.throwIfAborted();
-          const singleUse = prepared.filter((credential) => credential.singleUse);
-          if (singleUse.length > 1) throw new Error("An execution may use at most one single-use grant");
-          for (const credential of prepared.filter((credential) => !credential.singleUse)) await credential.commit?.();
-          execOpts?.signal?.throwIfAborted();
-          for (const credential of singleUse) await credential.commit?.();
-          const sandboxCommand = ownerAuth
-            ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command)
-            : (deps.scopedCommand?.(command, { ...handle.env, ...commandEnv }) ?? command);
-          const commandHandle = Object.keys(commandEnv).length
-            ? { ...handle, env: { ...handle.env, ...commandEnv } }
-            : handle;
-          const secretEnv = executionSecretEnv(
-            commandHandle.env,
-            prepared.flatMap((credential) => credential.env),
+          const { commandEnv, secretValues, fileExecution } = await stageCredentials(
+            requested,
+            handle,
+            "command",
+            execOpts?.signal,
           );
-          const mask = createExactSecretValueMasker(Object.values(secretEnv));
-          let r: ExecResult;
-          try {
-            const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
-            r = { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
-          } catch (error) {
-            const message = errMessage(error);
-            const masked = mask(message);
-            if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
-            throw error;
-          }
+          const r = await withCleanup(
+            async (): Promise<ExecResult> => {
+              const sandboxCommand = ownerAuth ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command) : command;
+              const commandHandle = Object.keys(commandEnv).length
+                ? { ...handle, env: { ...handle.env, ...commandEnv } }
+                : handle;
+              const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
+              const mask = createExactSecretValueMasker(Object.values(secretEnv));
+              try {
+                const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+                return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
+              } catch (error) {
+                const message = errMessage(error);
+                const masked = mask(message);
+                if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
+                throw error;
+              }
+            },
+            async () => {
+              await fileExecution?.finish();
+            },
+          );
           return reached ? { ...r, reached } : r;
         });
       });
@@ -1190,26 +1222,54 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async backgroundStart(
       command: string,
-      opts: { purpose: string; ttlSeconds?: number; sandboxId?: string },
+      opts: { purpose: string; ttlSeconds?: number; sandboxId?: string; credentials?: string[] },
     ): Promise<BackgroundStartResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
+      const requestedCredentials = opts.credentials ?? [];
+      if (requestedCredentials.length && !writableScopeId)
+        throw new Error("command credentials are available only on scoped computers");
+      const requested = await selectCredentials(requestedCredentials, false);
+      const policy = deps.commandPolicy;
       let handle: SandboxHandle;
       if (opts?.sandboxId) {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
         const access = await accessSandbox(opts.sandboxId);
-        handle = await deps.provisionResource(access, (current) => authorizeExecution(command, current));
+        handle = await deps.provisionResource(access, (current) => {
+          if (current.crossScope && requestedCredentials.length)
+            throw new Error("command credentials cannot be copied to another scope's computer");
+          authorizeExecution(command, current, policy());
+        });
       } else {
-        authorizeExecution(command);
+        authorizeExecution(command, undefined, policy());
         handle = await deps.provision();
       }
       return once(
-        () =>
-          deps.backgroundBroker!.start(
+        async () => {
+          const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
+          const release = async () => {
+            await staged?.fileExecution?.finish();
+          };
+          let credentials: BackgroundCredentials | undefined;
+          try {
+            credentials = staged && {
+              env: staged.commandEnv,
+              secrets: Object.values(executionSecretEnv(staged.commandEnv, staged.secretValues)),
+              ...(staged.fileExecution
+                ? { files: processCredentialFiles(staged.fileExecution.plan, staged.fileCredentials) }
+                : {}),
+              release,
+            };
+          } catch (error) {
+            return withCleanup(() => Promise.reject(error), release);
+          }
+          return deps.backgroundBroker!.start(
             handle,
-            deps.scopedCommand?.(command, handle.env) ?? command,
+            command,
             opts.purpose,
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
-          ),
+            credentials,
+          );
+        },
         () => true,
       );
     },

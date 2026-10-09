@@ -449,15 +449,15 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     maxAttempts: 1,
   });
   assert.ok(b.keychain);
-  const handles = new Map<string, string>();
+  const handles = new Map<string, string[]>();
   for (const id of [b.U1, b.U2]) {
     const credential = await b.keychain.save({ ownerId: id, service: "npm", secret: `npm_${id}`, envKey: "NPM_TOKEN" });
-    handles.set(id, credentialHandle(credential.id));
-    await b.keychain.save({
+    const login = await b.keychain.save({
       ownerId: id,
       service: "custom-cli",
       files: [{ path: ".custom-cli/auth", contentBase64: Buffer.from(`file_${id}`).toString("base64") }],
     });
+    handles.set(id, [credentialHandle(credential.id), credentialHandle(login.id)]);
     await b.keychain.setConnectorToken("gmail.googleapis.com", id, {
       accessToken: `gmail_${id}`,
       expiresAt: Date.now() + 3600000,
@@ -471,7 +471,7 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   await b.workspace.write("channel:C1", "room-only.txt", "room_data");
   const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
   const selected = (id = b.U1) =>
-    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [handles.get(id), "connector_gmail_googleapis_com_default"] })}`;
+    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [...handles.get(id)!, "connector_gmail_googleapis_com_default"] })}`;
   assert.equal(await b.turn(selected(), true), `True|True|file_${b.U1}|unset|isolated`);
   assert.equal(await b.turn(selected(b.U2), true, "U2"), `True|True|file_${b.U2}|unset|isolated`);
   for (const id of [b.U1, b.U2, b.U1]) {

@@ -59,13 +59,7 @@ import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monit
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
 import { credentialHandle, renderKeychainManifest, type PublicServiceCredential } from "../credentials/keychain.ts";
-import {
-  captureDeviceFlowLogins,
-  deviceFlowCredOwner,
-  registerLoginPaths,
-} from "../credentials/device-flow-persist.ts";
-import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
-import type { DeviceFlowCutoverMode } from "../credentials/device-flow-cutover.ts";
+import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import {
   configuredConnectorProviders,
   connectorStatusIsStale,
@@ -1455,24 +1449,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
       };
       const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
-      const credentialTools = external ? [] : (deps.credentialTools ?? brokeredTools);
-      const credentialServices = [
-        ...new Set([
-          ...credentialTools.map((tool) => tool.service),
-          ...brokeredTools.map((tool) => tool.service),
-          ...(!external ? ((await deps.deviceFlowCutover?.listServices(memoryScopeId)) ?? []) : []),
-        ]),
-      ];
-      const cutoverModes = new Map<string, DeviceFlowCutoverMode>();
-      for (const service of credentialServices) {
-        const policy = deps.deviceFlowCutover
-          ? await deps.deviceFlowCutover.resolvePolicy(memoryScopeId, service)
-          : null;
-        cutoverModes.set(service, policy?.mode ?? "legacy");
-      }
-      const cutoverModeOf = (service: string): DeviceFlowCutoverMode => cutoverModes.get(service) ?? "legacy";
-      const quarantinedServices = credentialServices.filter((service) => cutoverModeOf(service) === "ephemeral_only");
-      const credentialCutoverServices = credentialServices.filter((service) => cutoverModeOf(service) !== "legacy");
       const openSpeakerKeychain =
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
       const openAutomationKeychain =
@@ -1500,10 +1476,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external &&
         (openSpeakerKeychain ||
           (conversation.kind !== "dm" && input.origin.kind === "automation" && input.origin.useOwnerKeychain === true));
-      let ownerAuthAvailable = isolateOwnerKeychain;
-      if (brokeredTools.some((tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool))) {
-        ownerAuthAvailable = true;
-      }
+      const ownerAuthAvailable = isolateOwnerKeychain;
       const connectorEnv: Record<string, string> = {};
       const credsStart = Date.now();
       const commandCredentials: CommandCredential[] = [];
@@ -1520,8 +1493,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       const resolvedCredential = (materialized: import("../credentials/keychain.ts").MaterializedCred) => {
-        if (materialized.kind !== "env") throw new Error("File credentials require the supervised execution route");
-        return { env: materialized.env };
+        if (materialized.kind === "env") return { env: materialized.env };
+        return {
+          env: [],
+          files: {
+            files: materialized.files,
+            save: (files: import("../credentials/keychain.ts").CredentialFile[]) =>
+              deps.keychain!.updateFiles(materialized, files),
+            source: {
+              credentialId: materialized.credentialId,
+              ownerId: materialized.ownerId,
+              service: materialized.service,
+              ...(materialized.grantId ? { grantId: materialized.grantId } : {}),
+            },
+          },
+        };
       };
       const addCredentialToCatalog = (
         credential: CommandCredential,
@@ -1543,7 +1529,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (external || strictReadOnly || !deps.keychain) return;
         const keychain = deps.keychain;
         for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
-          if (credential.kind !== "env" || isBackendCredential(credential)) continue;
+          if (credential.kind === "broker" || isBackendCredential(credential)) continue;
           addCredential(
             {
               handle: credentialHandle(credential.id),
@@ -1566,7 +1552,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
         if (ownAllowed) {
           for (const credential of await keychain.listByOwner(actor.id)) {
-            if (credential.kind !== "env" || isBackendCredential(credential)) continue;
+            if (credential.kind === "broker" || isBackendCredential(credential)) continue;
             addCredential(
               {
                 handle: credentialHandle(credential.id),
@@ -1943,16 +1929,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         for (const tool of brokeredTools) {
           const broker = deps.layerBrokerFor?.(tool);
           if (!broker) continue;
-          const brokerScope = cutoverModeOf(tool.service) === "legacy" ? "scoped" : "owner";
           addCredentialToCatalog(
             {
               handle: `broker_${tool.service}`,
-              scope: brokerScope,
               resolve: async () => {
-                const policy = await deps.deviceFlowCutover?.resolvePolicy(memoryScopeId, tool.service);
-                const currentScope = !policy || policy.mode === "legacy" ? "scoped" : "owner";
-                if (currentScope !== brokerScope)
-                  throw new Error(`Broker credential scope changed: ${tool.service}; retry on the next turn`);
                 let aws;
                 try {
                   aws = await broker.credsForActor(actor.id);
@@ -1960,7 +1940,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   deps.credentialUsage?.record({
                     slug: tool.service,
                     host: "sts.amazonaws.com",
-                    status: brokerScope === "owner" ? "ephemeral_failed_closed" : "legacy_unavailable",
+                    status: "unavailable",
                     scopeLabel: scopeId,
                     principalId: actor.id,
                   });
@@ -1969,7 +1949,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 deps.credentialUsage?.record({
                   slug: tool.service,
                   host: "sts.amazonaws.com",
-                  status: brokerScope === "owner" ? "ephemeral_vended" : "legacy_vended",
+                  status: "vended",
                   scopeLabel: scopeId,
                   principalId: actor.id,
                 });
@@ -2003,15 +1983,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           swallow("gap-work emit", e);
         }
       };
-      const ephemeralOnlyTools = brokeredTools.filter((tool) => cutoverModeOf(tool.service) === "ephemeral_only");
-      const ephemeralOnlyDenyRules = ephemeralOnlyTools.map((tool) => ({
-        pattern: `(^|[\\s;&|()])${tool.binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[\\s;&|()])`,
-        decision: "deny" as const,
-        reason: `credential-bearing service ${tool.service} requires execute with its broker credential and scope:owner`,
-      }));
-      const commandPolicy = ephemeralOnlyDenyRules.length
-        ? { ...resolution.commandPolicy, rules: [...ephemeralOnlyDenyRules, ...resolution.commandPolicy.rules] }
-        : resolution.commandPolicy;
+      const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
       const reachAvailable = !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
       const turnSandboxResources = external
@@ -2038,7 +2010,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scratchBox,
         ownerAuthBox,
         ownerAuthCommand,
-        scopedCommand,
         provision,
         provisionScratch,
         accessResource,
@@ -2063,20 +2034,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        isolateOwnerKeychain,
         openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
         openResourceAccess:
           !external &&
           (liveAuthorTurn || (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true)),
         ownerAuthAvailable,
-        credentialTools,
-        credentialServices,
-        credentialCutoverServices,
-        quarantinedServices,
-        cutoverModeOf,
         visibleSkillsForTurn,
         emitGapWork,
-        perf,
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
@@ -2591,6 +2555,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 sandbox: deps.sandbox,
                 registry: deps.processes,
                 provisionSandbox: provisionResource,
+                onExit: (handle, processId) =>
+                  finishProcessCredentials(
+                    {
+                      sandbox: deps.sandbox,
+                      processes: deps.processes!,
+                      ...(deps.keychain ? { keychain: deps.keychain } : {}),
+                    },
+                    handle,
+                    processId,
+                  ),
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
@@ -2772,7 +2746,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           accessSandboxResource: accessResource,
           ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
-          ...(scopedCommand ? { scopedCommand } : {}),
           useSkill,
           ...(reachAvailable
             ? {
@@ -2785,15 +2758,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           layers: resolution.layers,
           commandPolicy: () => commandPolicy,
-          commandPolicyForCredentials: (handles, ownerAuth) => ({
-            ...resolution.commandPolicy,
-            rules: [
-              ...ephemeralOnlyDenyRules.filter(
-                (_, index) => !ownerAuth || !handles.includes(`broker_${ephemeralOnlyTools[index]!.service}`),
-              ),
-              ...resolution.commandPolicy.rules,
-            ],
-          }),
           layerCommandRules: () => layerCommandRules,
           authorizeCommand,
           grantedHandles: resolution.grantedHandles,
@@ -2854,27 +2818,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
-          ...(external || strictReadOnly || !deps.keychain
-            ? {}
-            : {
-                registerLogin: async (service: string, paths: readonly CredentialPathSpec[]) =>
-                  registerLoginPaths({
-                    sandbox: deps.sandbox,
-                    handle: await provision(),
-                    keychain: deps.keychain!,
-                    ownerId: deviceFlowCredOwner(memoryScopeId, actor.id),
-                    service,
-                    paths: [...paths],
-                    onAnomaly: (svc, detail) =>
-                      deps.errors?.record({
-                        category: "keychain",
-                        code: "device_flow_capture_skipped",
-                        message: `register_login ${svc}: ${detail}`,
-                        scopeLabel: scopeId,
-                        sessionId: session.id,
-                      }),
-                  }),
-              }),
           memory: context.memory,
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedRecords: captureDependencies() }),
           memoryScopeId,
@@ -4337,43 +4280,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const tail = async (): Promise<void> => {
           try {
-            const writable = resolution.layers.find((l) => l.mode === "rw");
-            const writtenHandle = box.used ? box.handle : null;
-            if (writable && writtenHandle) {
-              if (!external && deps.keychain) {
-                try {
-                  await captureDeviceFlowLogins({
-                    sandbox: deps.sandbox,
-                    handle: writtenHandle,
-                    keychain: deps.keychain,
-                    ownerId: deviceFlowCredOwner(memoryScopeId, actor.id),
-                    ...(credentialCutoverServices.length ? { excludeServices: credentialCutoverServices } : {}),
-                    ...(deps.deploymentLayer?.credentialPaths.length
-                      ? { credentialPaths: deps.deploymentLayer.credentialPaths }
-                      : {}),
-                    onAnomaly: (service, detail) =>
-                      deps.errors?.record({
-                        category: "keychain",
-                        code: "device_flow_capture_skipped",
-                        message: `device-flow capture skipped ${service}: ${detail}`,
-                        scopeLabel: scopeId,
-                        sessionId: session.id,
-                      }),
-                  });
-                } catch (e) {
-                  deps.errors?.record(
-                    {
-                      category: "keychain",
-                      code: "device_flow_capture_failed",
-                      message: errMessage(e),
-                      scopeLabel: scopeId,
-                      sessionId: session.id,
-                    },
-                    e,
-                  );
-                }
-              }
-            }
             if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
               await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
             }

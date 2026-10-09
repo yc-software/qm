@@ -267,14 +267,7 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import { createLivenessCache, type LivenessCache, type ScopeLivenessRecord } from "./credentials/resident-auth.ts";
 import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
-import {
-  createDeviceFlowCutoverStore,
-  type DeviceFlowCutoverPolicy,
-  type DeviceFlowCutoverReset,
-  type DeviceFlowCutoverStore,
-} from "./credentials/device-flow-cutover.ts";
 import {
   createFeatureFlagStore,
   externalAppSharingAllowed,
@@ -356,7 +349,8 @@ import { createProcessReaper, createReaperKillHook, type ProcessReaper } from ".
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller, type MonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
-import { supportsProcessSessions } from "./sandbox/sandbox.ts";
+import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
+import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
 import { createMemorySessionStateBus, type SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
@@ -408,7 +402,6 @@ import { createMemoryReplayDedupe, createPostgresReplayDedupe, type ReplayDedupe
 import {
   emptyDeploymentLayer,
   loadDeploymentLayer,
-  type LayerCredentialTool,
   type BrokeredLayerTool,
   type DeploymentLayerRuntime,
 } from "./deployment/load-layer.ts";
@@ -477,7 +470,6 @@ export interface BuiltApp {
   app: App;
   screenSecurity?: SecurityScreenProbe;
   deploymentLayer: DeploymentLayerRuntime;
-  credentialTools: readonly LayerCredentialTool[];
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: Promise<unknown>;
@@ -543,8 +535,6 @@ export interface BuiltApp {
   blobTransfer: BlobTransferStore;
   files: FileArtifactStore;
   fileUploads?: DirectFileUploads;
-  livenessCache: LivenessCache;
-  deviceFlowCutover: DeviceFlowCutoverStore;
   featureFlags: FeatureFlagStore;
   replayDedupe?: ReplayDedupe;
   brokerSessions?: BrokerSessionStore;
@@ -709,10 +699,6 @@ export function buildApp(
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const livenessCache = createLivenessCache(artifactMap<ScopeLivenessRecord>("credential_liveness"));
-  const deviceFlowCutover = createDeviceFlowCutoverStore(artifactMap<DeviceFlowCutoverPolicy>("device_flow_cutover"), {
-    resets: artifactMap<DeviceFlowCutoverReset>("device_flow_cutover_resets"),
-  });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
   const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
   const slackInstallation = createSlackInstallationStore(
@@ -724,7 +710,6 @@ export function buildApp(
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
-  const credentialTools = deploymentLayer.credentialTools;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog();
@@ -1198,6 +1183,15 @@ export function buildApp(
     ...deriveConnectorKey(keychainKeyMaterial ?? randomBytes(32), "keychain"),
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/keychain_credentials/0002-delete-auto-captured-logins",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS keychain_credentials (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS keychain_grants (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture')`,
+      `DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'`,
+    ],
+  });
   const credentialStore: Keychain = createKeychain({
     creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
     grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
@@ -1975,8 +1969,6 @@ export function buildApp(
     runs,
     tasks,
     blobTransfer,
-    livenessCache,
-    deviceFlowCutover,
     featureFlags,
     credentialUsage,
     connectorStatusCache,
@@ -2000,7 +1992,6 @@ export function buildApp(
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,
-    credentialTools,
     brokeredTools,
     deploymentLayer,
     layerBrokerFor,
@@ -2528,6 +2519,8 @@ export function buildApp(
     },
     app,
   );
+  const finishCredentials = (handle: SandboxHandle, processId: string) =>
+    finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
@@ -2543,6 +2536,7 @@ export function buildApp(
           currentScopeMembers,
           sessions,
           leaderLease,
+          onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
         })
       : null;
@@ -2593,7 +2587,9 @@ export function buildApp(
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         intervalMs: config.processReaperIntervalMs,
-        ...(supportsProcessSessions(sandbox) ? { kill: createReaperKillHook(sandbox) } : {}),
+        ...(supportsProcessSessions(sandbox)
+          ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
+          : {}),
         leaderLease,
       })
     : null;
@@ -2799,7 +2795,6 @@ export function buildApp(
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
-    credentialTools,
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
@@ -2864,8 +2859,6 @@ export function buildApp(
     blobTransfer,
     files,
     ...(fileUploads ? { fileUploads } : {}),
-    livenessCache,
-    deviceFlowCutover,
     featureFlags,
     ...(replayDedupe ? { replayDedupe } : {}),
     ...(brokerSessions ? { brokerSessions } : {}),
@@ -2969,7 +2962,6 @@ export function serverDeps(
     rateLimiter: built.rateLimiter,
     acl: built.acl,
     credentialUsage: built.credentialUsage,
-    deviceFlowCutover: built.deviceFlowCutover,
     featureFlags: built.featureFlags,
     egressAudit: built.egressAudit,
     sessions: built.sessions,
@@ -2978,7 +2970,6 @@ export function serverDeps(
     metrics: built.metrics,
     crons: built.crons,
     loops: built.loops,
-    credentialServices: () => built.credentialTools.map((tool) => tool.service),
     deploymentLayer: built.deploymentLayerStore,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),

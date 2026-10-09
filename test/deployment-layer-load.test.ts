@@ -4,8 +4,6 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emptyDeploymentLayer, loadDeploymentLayer, replaceDeploymentLayer } from "../src/deployment/load-layer.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
 import { parseToolDescriptor } from "../src/deployment/deployment-layer.ts";
 import { BASE_EPHEMERAL_CRED_LINKS, BASE_RESIDENT_AUTH_PATHS } from "../src/credentials/resident-paths.ts";
 import { evaluateCommandWithLayer } from "../src/policy/command-policy.ts";
@@ -42,9 +40,6 @@ test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () 
     layer.tools.map((t) => t.id),
     ["acmecli", "jq"],
   );
-  assert.deepEqual(layer.connectors, [
-    { id: "acmecli", label: "Acme CLI", check: "acmecli me", reauth: "acmecli login --use-device-code" },
-  ]);
   assert.deepEqual(
     layer.advertisedTools,
     ["acmecli (organization CLI)"],
@@ -57,33 +52,8 @@ test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () 
   assert.deepEqual(layer.credentialPaths, [credentialDirectory(".acmecli"), credentialDirectory(".aws")]);
 });
 
-test("credential tools resolve to service and quarantine roots", () => {
-  const layer = loadDeploymentLayer(
-    layerDir({
-      acmecli: {
-        ...ACMECLI_SHAPED,
-        auth: {
-          ...ACMECLI_SHAPED.auth,
-        },
-      },
-      jq: { id: "jq" },
-    }),
-  );
-  assert.deepEqual(
-    layer.credentialTools,
-    [
-      {
-        service: "acmecli",
-        roots: [".acmecli"],
-      },
-    ],
-    "the quarantine roots are only the paths mapping to the tool's own service — .aws stays",
-  );
-});
-
-test("loadDeploymentLayer: an authless tool contributes no connector or paths", () => {
+test("loadDeploymentLayer: an authless tool contributes no paths", () => {
   const layer = loadDeploymentLayer(layerDir({ helper: { id: "helper", advertise: "helper tool" } }));
-  assert.deepEqual(layer.connectors, []);
   assert.deepEqual(layer.credentialPaths, []);
   assert.deepEqual(layer.advertisedTools, ["helper tool"]);
 });
@@ -230,25 +200,8 @@ const BROKERED_ACME = {
   },
 };
 
-test("a layer installed after boot reaches the app that booted without one", () => {
-  const built = buildApp(testConfig({ orgId: "acme" }));
-  assert.equal(
-    built.credentialTools.length,
-    0,
-    "a deployment with no DEPLOYMENT_LAYER boots empty; the layer arrives over the API afterwards",
-  );
-  replaceDeploymentLayer(built.deploymentLayer, loadDeploymentLayer(layerDir({ acme: BROKERED_ACME })));
-  assert.equal(
-    built.credentialTools.length,
-    1,
-    "credential vending reads this array; a copy taken at boot would stay empty forever",
-  );
-  assert.equal(built.credentialTools[0]?.service, "acme");
-});
-
 test("replaceDeploymentLayer reaches every holder of the runtime arrays", () => {
   const runtime = emptyDeploymentLayer();
-  const credentialTools = runtime.credentialTools;
   const commandRules = runtime.commandRules;
   replaceDeploymentLayer(
     runtime,
@@ -258,8 +211,6 @@ test("replaceDeploymentLayer reaches every holder of the runtime arrays", () => 
       }),
     ),
   );
-  assert.equal(credentialTools.length, 1, "credential vending reads this array");
-  assert.equal(credentialTools[0]?.service, "acme");
   assert.equal(commandRules.length, 1, "the command policy reads this array, and already sees post-boot layers");
 });
 

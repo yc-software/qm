@@ -397,10 +397,12 @@ export function createMockHarness(): Harness {
             command: string;
             credentials?: string[];
             ownerAuth?: boolean;
+            sandboxId?: string;
           };
           const result = await turn.tools.execute(params.command, {
             credentials: params.credentials,
             ownerAuth: params.ownerAuth,
+            sandboxId: params.sandboxId,
           });
           await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
           turn.onProgress?.({ toolCalls: 1 });

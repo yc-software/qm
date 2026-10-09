@@ -44,62 +44,7 @@ function acmecliBrokeredLayer(binary?: string, approvals?: Array<{ pattern: stri
 }
 
 const actor = { externalId: "U_ENV_BROKER", provider: "slack" as const };
-test("selected broker credential uses isolated execute with policy before vending", async () => {
-  let assumes = 0;
-  const sentinels = {
-    access: "AKIA_CREDENTIAL_EXEC_SENTINEL",
-    secret: "credential_exec_secret_sentinel",
-    token: "credential_exec_session_sentinel",
-  };
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "dfp-credential-exec-")),
-      maxAttempts: 1,
-      signingSecret: "device-flow-test-secret",
-      deploymentLayerDir: acmecliBrokeredLayer("env"),
-    }),
-    {
-      credentialBrokers: {
-        acmecli: createAwsRoleBroker({
-          roleArn: "arn:aws:iam::123456789012:role/acmecli-broker",
-          region: "us-west-2",
-          sessionActions: ["execute-api:Invoke"],
-          assumeRole: async () => {
-            assumes++;
-            return {
-              Credentials: {
-                AccessKeyId: sentinels.access,
-                SecretAccessKey: sentinels.secret,
-                SessionToken: sentinels.token,
-                Expiration: new Date(Date.now() + 3_600_000),
-              },
-            };
-          },
-        }),
-      },
-    },
-  );
-
-  const personal = await personalScope(built, actor.externalId);
-  await selectDefaultSandbox(built, actor.externalId, personal);
-  const conversation = { kind: "dm" as const, threadRef: "dm:env-broker", audience: [actor] };
-  await built.deviceFlowCutover.set(personal, "acmecli", "ephemeral_only", "security@example.com");
-  const run = (params: object) =>
-    built.app.turn({ surface: "slack", actor, conversation, text: `!execute ${JSON.stringify(params)}` });
-  await assert.rejects(run({ command: "env", credentials: ["broker_acmecli"] }), /requires scope:owner/);
-  assert.equal(assumes, 0);
-  const selected = await run({
-    command:
-      'test "$AWS_ACCESS_KEY_ID" = AKIA_CREDENTIAL_EXEC_SENTINEL && test -z "${AGENT_API_TOKEN-}" && echo selected',
-    credentials: ["broker_acmecli"],
-    ownerAuth: true,
-  });
-  assert.equal(selected.reply, "selected");
-  assert.equal(assumes, 1);
-  assert.ok(ff.names().every((name) => !name.includes("credential-exec")));
-});
-
-test("legacy role broker vends only for explicitly selected scoped execution", async () => {
+test("role broker vends only for explicitly selected scoped execution", async () => {
   let assumes = 0;
   const built = buildApp(
     testConfig({
@@ -129,7 +74,7 @@ test("legacy role broker vends only for explicitly selected scoped execution", a
       },
     },
   );
-  const owner = scopeId("personal", actor.externalId);
+  const owner = await personalScope(built, actor.externalId);
   await selectDefaultSandbox(built, actor.externalId, owner);
   const conversation = { kind: "dm" as const, threadRef: "dm:legacy-selected", audience: [actor] };
   const run = (text: string) => built.app.turn({ surface: "slack", actor, conversation, text });
@@ -151,4 +96,77 @@ test("legacy role broker vends only for explicitly selected scoped execution", a
   assert.equal(assumes, 1);
   assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
   assert.equal(assumes, 1);
+});
+
+test("selected broker execute honors deployment approval rules before vending credentials", async () => {
+  let assumes = 0;
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "dfp-credexec-approval-")),
+      signingSecret: "device-flow-test-secret",
+      deploymentLayerDir: acmecliBrokeredLayer("env", [
+        { pattern: "\\benv\\b\\s+tool\\b", reason: "mutating subcommand" },
+      ]),
+    }),
+    {
+      credentialBrokers: {
+        acmecli: createAwsRoleBroker({
+          roleArn: "arn:aws:iam::123456789012:role/acmecli-broker",
+          region: "us-west-2",
+          sessionActions: ["execute-api:Invoke"],
+          assumeRole: async () => {
+            assumes++;
+            return {
+              Credentials: {
+                AccessKeyId: "AKIA_APPROVAL_GATE",
+                SecretAccessKey: "approval_gate_secret_value",
+                SessionToken: "approval_gate_session_token",
+                Expiration: new Date(Date.now() + 3_600_000),
+              },
+            };
+          },
+        }),
+      },
+    },
+  );
+  const personal = await personalScope(built, actor.externalId);
+  const conversation = { kind: "dm" as const, threadRef: "dm:credexec-approval", audience: [actor] };
+  await selectDefaultSandbox(built, actor.externalId, personal);
+
+  const gated = await built.app.turn({
+    surface: "slack",
+    actor,
+    conversation,
+    text: `!execute ${JSON.stringify({ command: "env tool delete", credentials: ["broker_acmecli"] })}`,
+  });
+  assert.equal(gated.status, "pending_approval");
+  assert.equal(assumes, 0, "no AssumeRole call happens for a blocked command");
+  const pending = gated.pendingApprovals![0]!;
+  assert.match(pending.reason, /mutating subcommand/);
+
+  const approved = await built.app.turn({
+    surface: "slack",
+    actor,
+    conversation,
+    text: `!execute ${JSON.stringify({ command: "env tool delete", credentials: ["broker_acmecli"] })}`,
+    approval: { requestId: pending.requestId, approved: true },
+  });
+  assert.equal(approved.status, "ok", approved.reason);
+  assert.equal(assumes, 1, "approval unblocks exactly one vended invocation");
+
+  const unrelated = await built.app.turn({
+    surface: "slack",
+    actor,
+    conversation: { ...conversation, threadRef: "dm:credexec-approval-3" },
+    text: `!execute ${JSON.stringify({ command: "env", credentials: ["broker_acmecli"] })}`,
+  });
+  assert.equal(unrelated.status, "ok", "subcommands without approval rules run without a grant");
+  assert.equal(assumes, 1, "the broker's per-actor credential cache is reused within its TTL");
+  assert.match(unrelated.reply ?? "", /<redacted:credential>/);
+  const durable = JSON.stringify(await built.sessions.getEntries(unrelated.sessionId!));
+  for (const value of ["AKIA_APPROVAL_GATE", "approval_gate_secret_value", "approval_gate_session_token"]) {
+    assert.ok(!(unrelated.reply ?? "").includes(value));
+    assert.ok(!durable.includes(value));
+  }
+  assert.deepEqual(await built.keychain!.grantsForScope(personal), []);
 });

@@ -27,7 +27,6 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { LivenessCache } from "../src/credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
@@ -69,11 +68,6 @@ function readSandbox(): Sandbox {
     teardown: async () => {},
   };
 }
-
-const livenessCache: LivenessCache = {
-  get: async () => ({ scopeId: "x", checkedAt: Date.now(), connectors: { gh: "active" } }),
-  put: async () => {},
-};
 
 const connectorStatusCache: ConnectorStatusCache = {
   get: async () => ({ principalId: actor.id, checkedAt: Date.now(), providers: { google: { connected: true } } }),
@@ -136,7 +130,6 @@ function buildOrchestrator(
     acl,
     config,
     skills,
-    livenessCache,
     connectorTokens,
     connectorStatusCache,
     resolveConnectorClient: async (provider) => {

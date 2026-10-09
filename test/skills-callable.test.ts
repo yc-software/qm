@@ -129,7 +129,7 @@ async function publishFileSkill(built: ReturnType<typeof buildApp>, name: string
   return sk;
 }
 
-test("skill files live only for the turn that loaded them", async () => {
+test("skill files stay on the computer across turns", async () => {
   const built = await withDefaultComputer(freshApp());
   const { app } = built;
   const first = await publishFileSkill(built, "helper");
@@ -141,7 +141,7 @@ test("skill files live only for the turn that loaded them", async () => {
   const ran = await app.turn({ ...request, text: "!skill-run helper cat {dir}/scripts/run.sh" } as TurnRequest);
   assert.equal(ran.reply, "printf helper");
   const next = await app.turn({ ...request, text: "!run find . -name run.sh | wc -l | tr -d ' '" } as TurnRequest);
-  assert.equal(next.reply, "0");
+  assert.equal(next.reply, "1");
   await built.skills.archive(first.id);
   assert.match((await app.turn({ ...request, text: "!skill helper" } as TurnRequest)).reply ?? "", /no skill file/);
 });

@@ -21,8 +21,6 @@ import { createExecExport, defaultExcludeAgentComputerExport } from "../src/sand
 import {
   DISPLACED_DIR_REL,
   EPHEMERAL_CRED_DIR,
-  captureRootForTarget,
-  configCredentialDirs,
   credentialServiceForPath,
   ephemeralCredLinkPaths,
   residentAuthPaths,
@@ -465,49 +463,4 @@ test("prep contains no deletion that can reach $HOME outside the quarantine", ()
     assert.ok(deletable(`${root}/`), `find -exec rm rooted at ${root} can reach $HOME`);
     assert.match(m[2]!, /-mindepth 1\b/, `find -exec rm at ${root} would also delete its own root`);
   }
-});
-
-test("captureRootForTarget: .config logins re-sweep the service dir; others their immediate parent", () => {
-  assert.deepEqual(captureRootForTarget(".config/gh/hosts.yml"), { path: ".config/gh", kind: "directory" });
-  assert.deepEqual(captureRootForTarget(".config/acmecorp/auth.json"), {
-    path: ".config/acmecorp",
-    kind: "directory",
-  });
-  assert.deepEqual(
-    captureRootForTarget(".config/standalone"),
-    { path: ".config/standalone", kind: "file" },
-    "a bare file directly in .config is a file, not a bogus directory",
-  );
-  assert.deepEqual(captureRootForTarget(".aws/sso/cache/token.json"), {
-    path: ".aws/sso/cache/token.json",
-    kind: "file",
-  });
-  assert.deepEqual(captureRootForTarget(".netrc"), { path: ".netrc", kind: "file" });
-  assert.deepEqual(
-    captureRootForTarget(".local/share/foo/token"),
-    { path: ".local/share/foo/token", kind: "file" },
-    "a deep non-.config path never widens to a directory walk",
-  );
-  assert.deepEqual(
-    captureRootForTarget("~/.fly/config.yml"),
-    { path: ".fly/config.yml", kind: "file" },
-    "legacy ~/-prefixed targets normalize instead of silently leaving the sweep",
-  );
-  assert.equal(captureRootForTarget("../escape"), undefined);
-  assert.equal(captureRootForTarget("notdot/x"), undefined);
-  assert.equal(captureRootForTarget(".config/"), undefined);
-});
-
-test("configCredentialDirs stays in lockstep with the .config links the prep layer projects", () => {
-  const fromLinks = ephemeralCredLinkPaths()
-    .filter((l) => l.rel.startsWith(".config/"))
-    .map((l) => l.rel);
-  for (const rel of fromLinks) {
-    assert.ok(configCredentialDirs().includes(rel), `${rel} is linked by prep, so it must be swept`);
-  }
-  assert.ok(
-    configCredentialDirs().includes(".config/glab-cli"),
-    "real glab writes .config/glab-cli — a fresh login must be swept without registration",
-  );
-  assert.ok(configCredentialDirs().includes(".config/glab"), "glab is swept, not just validated");
 });

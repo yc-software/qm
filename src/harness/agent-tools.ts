@@ -21,7 +21,15 @@ import { redactSecrets } from "./redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
-import { createGoalRecord, goalFloorMeter, goalReport, type GoalRecord, type GoalVerifier } from "./goal.ts";
+import {
+  applyGovernorVerdict,
+  createGoalRecord,
+  goalFloorMeter,
+  goalReport,
+  GOAL_STEP_BACK_PROMPT,
+  type GoalGovernor,
+  type GoalRecord,
+} from "./goal.ts";
 import {
   toolLabelOf,
   toolResultProvenance,
@@ -99,7 +107,9 @@ export interface ToolContextRef {
   goalRound?: number;
 
   goalMeter?: import("./grind.ts").GrindMeter;
-  verifyGoal?: GoalVerifier;
+  governGoal?: GoalGovernor;
+  /** The agent's recent work for the governor, newest last. */
+  goalRecentWork?: () => string;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string) => boolean;
 }
@@ -639,7 +649,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     credentials: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          "Exact authorized credential handles to materialize for this command only. Newly granted handles are accepted.",
+          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted.",
       }),
     ),
   };
@@ -775,12 +785,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
   const reachDescription =
     "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
-    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
+    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (scratchExec
-      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, cached logins, or local work that must continue later.\n'
+      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
       : "") +
     (ownerAuthExec
-      ? "- \"owner\": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
+      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n'
       : "") +
     "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
     "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
@@ -791,12 +801,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
     `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
-    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
+    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (ownerAuthExec
-      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n'
+      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n'
       : "") +
     (scratchExec
-      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, cached logins, or local work that must continue later.\n'
+      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
       : "") +
     "`durable` defaults to true on scoped and false on invocation-only boxes; scoped cannot discard writes, and invocation-only boxes cannot be made durable.\n" +
     FILE_SEND_GUIDANCE +
@@ -900,7 +910,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ],
             {
               description:
-                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and authorized logins; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
+                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
             },
           ),
         ),
@@ -1028,7 +1038,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "skill",
     label: "skill",
     description:
-      "Load a skill from the Skills index before relying on it. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a directory that lives for this turn and reports it; run and read them there with execute and files action read, in this turn.",
+      "Load a skill from the Skills index before relying on it. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
     parameters: Type.Object({
       name: Type.String({ description: "Skill name exactly as listed in the Skills index." }),
       path: Type.Optional(
@@ -1824,8 +1834,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "URL/code from the returned output and relay it to the user, then `watch` (or `poll`) until the " +
       "command exits — that's when the login is done. If a prompt needs an answer typed in, use " +
       "action=send_input. Never run a login with `execute` (it blocks the whole turn) and never `stop`/kill a " +
-      "login mid-flight — that throws away the pending approval and wedges it. The platform captures the " +
-      "resulting credential into your keychain automatically; you don't save anything yourself.",
+      "login mid-flight — that throws away the pending approval and wedges it. Read the `interactive-login` skill " +
+      "before starting one and run it as the skill says: under a temporary home, never this computer's $HOME, then " +
+      "saved to the keychain.",
     parameters: Type.Object({
       action: Type.Union(
         [
@@ -1901,6 +1912,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description: "start only: exact sandbox to run on; later operations use the job’s saved target.",
         }),
       ),
+      credentials: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "start only: exact authorized credential handles, as for execute. They stay staged until the job exits, then refreshes are saved back.",
+        }),
+      ),
       timeout_seconds: Type.Optional(
         Type.Integer({
           minimum: 1,
@@ -1919,6 +1936,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         process_id: params.process_id,
         ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
         ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
+        ...(params.credentials?.length ? { credentials: params.credentials } : {}),
       });
       try {
         switch (params.action) {
@@ -1941,6 +1959,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               purpose: params.purpose,
               ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
               ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
+              ...(params.credentials?.length ? { credentials: params.credentials } : {}),
             });
             return recordResult(
               callId,
@@ -2220,7 +2239,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     set_default: ["sandbox_id"],
     retire: ["sandbox_id"],
     exec: Object.keys(schemas(execute)),
-    start_process: ["command", "sandbox_id", "timeout_seconds"],
+    start_process: ["command", "sandbox_id", "timeout_seconds", "credentials"],
     read_process: ["process_id", "since_cursor", "wait_seconds", "max_bytes"],
     write_stdin: ["process_id", "data"],
     signal_process: ["process_id", "signal"],
@@ -3900,60 +3919,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const registerLogin = defineTool({
-    name: "register_login",
-    label: "register_login",
-    description:
-      "After you complete a browser/device-code login for a CLI whose files are NOT already backed up automatically " +
-      "(the common ones — gh, glab, gcloud, aws, ssh — already are), call this so the login survives this machine being " +
-      'rebuilt. Pass the service name and the file(s) or directory it wrote under $HOME (e.g. { service: "kaggle", ' +
-      'paths: [{ path: ".kaggle/kaggle.json", kind: "file" }] }). The paths are captured immediately and re-captured on ' +
-      "future turns so token rotations are kept current. Only paths under $HOME, disjoint from the built-in credential " +
-      "paths, are accepted. A restored file is byte-faithful, but some providers invalidate sessions server-side " +
-      "(npm login tokens expire in hours) — treat the CLI's own auth check as the truth after a rebuild.",
-    parameters: Type.Object({
-      service: Type.String(),
-      paths: Type.Array(
-        Type.Object({
-          path: Type.String(),
-          kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
-        }),
-        { minItems: 1 },
-      ),
-    }),
-    async execute(callId, params: { service: string; paths: { path: string; kind: "file" | "directory" }[] }) {
-      const tc = ref.current;
-      await recordCall(callId, { tool: "register_login", service: params.service, paths: params.paths });
-      if (!tc?.registerLogin) {
-        return recordResult(
-          callId,
-          { tool: "register_login", unavailable: true },
-          text("[error] register_login is unavailable on this turn (no writable computer)"),
-          true,
-        );
-      }
-      try {
-        const result = await tc.registerLogin(params.service, params.paths);
-        return recordResult(
-          callId,
-          { tool: "register_login", ...result },
-          text(
-            result.captured
-              ? `Registered ${result.service} and captured its login — it will survive a machine rebuild.`
-              : `Registered ${result.service}. Nothing was captured yet; complete the login, then it is captured automatically next turn.`,
-          ),
-        );
-      } catch (error) {
-        return recordResult(
-          callId,
-          { tool: "register_login", failed: true, reason: errMessage(error) },
-          text(`[error] ${errMessage(error)}`),
-          true,
-        );
-      }
-    },
-  });
-
   const GOAL_EVIDENCE_FILES = 5;
   const GOAL_EVIDENCE_FILE_CHARS = 20_000;
   async function goalEvidenceFiles(
@@ -3988,7 +3953,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "minMs 1200000; never subtract time already spent). Do this even when the task looks hard, slow or impossible: " +
       "the user asked for the effort, so create the goal and spend it rather than explaining why you will stop. Once registered the harness enforces it: trying to end a reply while the goal " +
       "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
-      'when the work is verifiably done, request completion (goal action update "complete"); a fresh verifier decides. ' +
+      'when the work is verifiably done, request completion (goal action update "complete"); a fresh governor decides. ' +
       "Fails if an unfinished goal exists.",
     parameters: Type.Object({
       objective: Type.String({
@@ -4073,7 +4038,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       'Request completion of the goal. Set to "complete" only when the objective has actually been achieved and no ' +
       "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
-      "you are stopping work. An independent fresh-context verifier reads only the objective, your note, and any " +
+      "you are stopping work. An independent fresh-context governor reads the objective, your recent work, your note, and any " +
       "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
       "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
       'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
@@ -4087,7 +4052,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       files: Type.Optional(
         Type.Array(Type.String(), {
           maxItems: GOAL_EVIDENCE_FILES,
-          description: "Workspace paths of the deliverables; the verifier reads them directly.",
+          description: "Workspace paths of the deliverables; the governor reads them directly.",
         }),
       ),
     }),
@@ -4124,6 +4089,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         goal.status = "active";
         goal.updatedAt = goal.activeSince = Date.now();
+        delete goal.pauseReason;
+        delete goal.governor;
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
@@ -4155,30 +4122,44 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
       }
       const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal))].join("\n");
-      const verdict = ref.verifyGoal
-        ? await ref.verifyGoal(goal.objective, evidence).catch((e: unknown) => ({
-            complete: false,
-            reasons: `the verifier failed (${errMessage(e)}); request completion again`,
-          }))
-        : { complete: false, reasons: "no independent verifier is available on this runtime; keep working" };
-      if (!verdict.complete) {
-        goal.verifierFeedback = verdict.reasons;
-        goal.updatedAt = Date.now();
+      const verdict = ref.governGoal
+        ? await ref
+            .governGoal({
+              objective: goal.objective,
+              trigger: "completion",
+              recentWork: ref.goalRecentWork?.() ?? "",
+              evidence,
+              ...(goal.governor ? { previous: goal.governor } : {}),
+            })
+            .catch((e: unknown) => ({
+              verdict: "continue" as const,
+              reasons: `the governor failed (${errMessage(e)}); request completion again`,
+            }))
+        : {
+            verdict: "continue" as const,
+            reasons: "no independent governor is available on this runtime; keep working",
+          };
+      if (verdict.verdict !== "complete") {
+        const applied = applyGovernorVerdict(goal, verdict);
+        let message = `The governor did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`;
+        if (applied.verdict === "step_back") message += `\n${GOAL_STEP_BACK_PROMPT}`;
+        if (applied.verdict === "pause")
+          message = `The governor paused the goal because it needs the user: ${verdict.reasons}\nStop working on it. End your reply with one short message to the user saying where things stand and exactly what you need; their reply resumes the goal.`;
         return recordCoreAuthoredResult(
           callId,
-          { tool: "goal", action: "update", error: "verifier_rejected", goal },
-          text(`The verifier did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`),
-          true,
+          { tool: "goal", action: "update", error: `governor_${applied.verdict}`, goal },
+          text(message),
+          applied.verdict !== "pause",
         );
       }
-      delete goal.verifierFeedback;
+      delete goal.governor;
       goal.status = "complete";
       goal.updatedAt = Date.now();
       goal.completionNote = p.note;
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "update", goal },
-        text(`The verifier accepted completion; the goal is complete. Report the outcome (and evidence) to the user.`),
+        text(`The governor accepted completion; the goal is complete. Report the outcome (and evidence) to the user.`),
       );
     },
   });
@@ -4358,7 +4339,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...(!opts?.sandboxResources && !delegateWork ? [background] : []),
     ...(opts?.sessionTools === false ? [] : [subagentTool, ...(sidebarSessions ? [sessionTool] : [])]),
     sandbox,
-    registerLogin,
     ...(controlTools
       ? [
           resourceTool("cron", {

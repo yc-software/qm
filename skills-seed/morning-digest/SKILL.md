@@ -17,7 +17,7 @@ and the available command tool for scripts.
 ## Sources
 
 Use only what this deployment actually has, and say which sources you used. Check
-**Connected apps** and **Your logins** in your prompt — those blocks are the complete
+**Connected apps** and the keychain credentials in your prompt — those blocks are the complete
 allowlist. Typically: mail and calendar (what lands today, what's unanswered), the issue
 tracker (what moved, what's assigned to them), the repositories they work in (merged,
 failing, waiting on their review), and any shared credential vended for a news or search

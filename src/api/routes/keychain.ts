@@ -1,7 +1,6 @@
 import {
   KeychainError,
   renderAskNotice,
-  renderUseScript,
   type CredentialFieldInput,
   type CredentialFile,
   type GrantMode,
@@ -289,45 +288,6 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       );
       return sendJson(res, 200, { asks });
     }
-
-    if (method === "POST" && pathname === "/v1/keychain/use") {
-      const b = body as { grant?: unknown; credential?: unknown };
-      if (typeof b.grant !== "string" && typeof b.credential !== "string") {
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: "expected { grant } or { credential } (your own, personal conversation only)",
-        });
-      }
-      let m;
-      if (typeof b.grant === "string") {
-        m = await kc.materialize(b.grant, capability.scopeId, actorId);
-      } else {
-        if (capability.liveActor !== true) {
-          return sendJson(res, 403, {
-            error: "forbidden",
-            message:
-              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
-          });
-        }
-        m = await kc.materializeOwnById(actorId, b.credential as string, capability.scopeId);
-      }
-      deps.credentialUsage?.record({
-        slug: `keychain:${m.service}:${m.credentialId}`,
-        host: m.service,
-        status: "materialized",
-        scopeLabel: capability.scopeId,
-        principalId: actorId,
-      });
-      audit(deps, {
-        principalId: actorId,
-        action: "keychain.use",
-        resource: m.grantId ? `${m.credentialId} (grant ${m.grantId})` : `${m.credentialId} (own)`,
-        scopeLabel: capability.scopeId,
-      });
-      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-      res.end(renderUseScript(m));
-      return;
-    }
   } catch (e) {
     if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
     throw e;
@@ -363,6 +323,5 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/grants/:id/revoke", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
-  { method: "POST", path: "/v1/keychain/use", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
 ];
