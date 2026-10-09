@@ -213,7 +213,7 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
           json(res, 404, { error: { code: "not_found", message: "no such session" } });
           return;
         }
-        let label = "";
+        let label: string;
         try {
           label = (JSON.parse(body) as { label?: string }).label ?? "";
         } catch {

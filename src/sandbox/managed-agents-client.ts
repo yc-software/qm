@@ -444,8 +444,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
     );
     if (!body.session) throw new Error(`do-managed-agents rollback ${sessionId}: response carried no session`);
     const restored = toInfo(body.session);
-    if (!restored.sandboxId)
-      throw new Error(`do-managed-agents rollback ${sessionId}: response carried no sandbox id`);
+    if (!restored.sandboxId) throw new Error(`do-managed-agents rollback ${sessionId}: response carried no sandbox id`);
     if (GONE_STATES.has(restored.state))
       throw new ManagedAgentsSandboxGoneError(sessionId, restored.errorMessage ?? `status ${restored.state}`);
     return restored;
