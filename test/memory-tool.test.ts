@@ -109,6 +109,24 @@ test("memoryRemember/memoryRead/memoryRewrite hit the durable MemoryService, att
   assert.doesNotMatch(body, /terse replies/, "rewrite replaces the whole notebook");
 });
 
+test("memoryRewrite refuses to overwrite facts captured after the notebook was read", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-race-")));
+  const memory = createMemoryService(workspace);
+  const personal = scopeId("personal", "U1");
+  await workspace.ensureScope(personal);
+  const ctx = ctxFor({ scope: personal, workspace, memory });
+
+  await ctx.memoryRemember(["Prefers terse replies"]);
+  const read = (await ctx.memoryRead()) ?? "";
+  await memory.capture(personal, ["Captured by another turn"], Date.now());
+  await assert.rejects(ctx.memoryRewrite(`${read}\n- curated\n`), /changed since you read it/);
+  assert.match(await memory.read(personal), /Captured by another turn/);
+
+  const fresh = (await ctx.memoryRead()) ?? "";
+  assert.equal(await ctx.memoryRewrite(`${fresh}\n- curated\n`), true);
+  assert.match(await memory.read(personal), /Captured by another turn[\s\S]*curated/);
+});
+
 type Emitted = { type: string; payload: any; scopeLabel: string };
 const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
   assert.ok(tool);
