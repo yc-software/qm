@@ -394,3 +394,149 @@ test("a quiet fire that needs nobody says so", async () => {
   const summary = await runLoopFire(loop, s, effects(s));
   assert.equal(fireNeedsAttention(summary), false);
 });
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
+}
+
+function heldWork(started: string[], release: Map<string, () => void>): LoopRunnerEffects["work"] {
+  return async ({ item }) => {
+    started.push(item.sourceKey);
+    await new Promise<void>((resolve) => release.set(item.sourceKey, resolve));
+    return { runId: `run-${item.sourceKey}` };
+  };
+}
+
+test("a concurrency cap of 2 starts a second item while the first still runs, and the third only once one finishes", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxConcurrentItems: 2 } });
+  const started: string[] = [];
+  const release = new Map<string, () => void>();
+  const fire = runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [{ sourceKey: "A" }, { sourceKey: "B" }, { sourceKey: "C" }],
+      work: heldWork(started, release),
+    }),
+  );
+  await settle();
+  assert.equal(started.length, 2);
+  release.get(started[1]!)!();
+  await settle();
+  assert.equal(started.length, 3);
+  release.get(started[0]!)!();
+  release.get(started[2]!)!();
+  const summary = await fire;
+  assert.deepEqual([...started].sort(), ["A", "B", "C"]);
+  assert.equal(summary.worked, 3);
+  assert.equal(summary.ready.length, 3);
+});
+
+test("an unset concurrency cap still starts the next item only after the previous one finishes", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxItemsPerFire: 3 } });
+  const started: string[] = [];
+  const release = new Map<string, () => void>();
+  const fire = runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [{ sourceKey: "A" }, { sourceKey: "B" }, { sourceKey: "C" }],
+      work: heldWork(started, release),
+    }),
+  );
+  await settle();
+  assert.equal(started.length, 1);
+  release.get(started[0]!)!();
+  await settle();
+  assert.equal(started.length, 2);
+  release.get(started[1]!)!();
+  await settle();
+  assert.equal(started.length, 3);
+  release.get(started[2]!)!();
+  const summary = await fire;
+  assert.deepEqual([...started].sort(), ["A", "B", "C"]);
+  assert.equal(summary.worked, 3);
+});
+
+test("an undeclared ship action parks its own item and leaves the item running beside it untouched", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxConcurrentItems: 2 } });
+  const started: string[] = [];
+  const release = new Map<string, () => void>();
+  const fire = runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [{ sourceKey: "A" }, { sourceKey: "B" }],
+      work: heldWork(started, release),
+      captureOutputs: async ({ item }) => [
+        {
+          shipAction: item.sourceKey === "A" ? "merge_pr" : "open_pr",
+          title: item.sourceKey,
+          capturedBy: "ledger",
+          externalRef: `pr-${item.sourceKey}`,
+        },
+      ],
+    }),
+  );
+  await settle();
+  assert.equal(started.length, 2);
+  release.get("A")!();
+  await settle();
+  release.get("B")!();
+  const summary = await fire;
+  const idOf = new Map((await s.items.byLoop(loop.id)).map((item) => [item.sourceKey, item.id]));
+  assert.deepEqual(summary.undeclaredShipActions, ["merge_pr"]);
+  assert.deepEqual(summary.parked, [idOf.get("A")]);
+  assert.deepEqual(summary.ready, [idOf.get("B")]);
+  assert.equal((await s.outputs.awaitingReview(loop.id)).length, 1);
+});
+
+test("a cap far larger than the batch sizes the pool to the work there is, not to the cap", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxConcurrentItems: Number.MAX_SAFE_INTEGER } });
+  const summary = await runLoopFire(loop, s, effects(s));
+  assert.equal(summary.worked, 1);
+  assert.equal(summary.ready.length, 1);
+});
+
+test("a failed claim does not reject the fire while a sibling item is still in flight", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxConcurrentItems: 2 } });
+  const started: string[] = [];
+  const release = new Map<string, () => void>();
+  const claim = s.items.claim.bind(s.items);
+  let claims = 0;
+  s.items.claim = async (id, claimedAt, expectedLoopId) => {
+    claims += 1;
+    if (claims === 2) throw new Error("ledger unavailable");
+    return claim(id, claimedAt, expectedLoopId);
+  };
+  let fireSettled = false;
+  const outcome = runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [{ sourceKey: "A" }, { sourceKey: "B" }, { sourceKey: "C" }],
+      work: heldWork(started, release),
+    }),
+  )
+    .then(
+      () => "resolved",
+      (error: Error) => error.message,
+    )
+    .finally(() => {
+      fireSettled = true;
+    });
+  await settle();
+  assert.equal(started.length, 1);
+  assert.equal(fireSettled, false);
+  release.get(started[0]!)!();
+  await settle();
+  assert.equal(started.length, 2);
+  assert.equal(fireSettled, false);
+  release.get(started[1]!)!();
+  assert.equal(await outcome, "ledger unavailable");
+});

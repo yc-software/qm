@@ -1070,3 +1070,26 @@ test("a triage dry run regroups every open item with draft instructions and writ
   assert.ok(preview.every((entry) => entry.priority === "high" && entry.groupId));
   assert.deepEqual(await s.items.byLoop(loop.id), before);
 });
+
+test("parallel items stage work and judge on their own conversation, never colliding", async () => {
+  const active = new Set<string>();
+  const busy: string[] = [];
+  const s = service(async (req) => {
+    const ref = req.conversation.threadRef!;
+    if (active.has(ref)) busy.push(ref);
+    active.add(ref);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active.delete(ref);
+    if (stage(req) === "intake")
+      return '```json\n[{"sourceKey": "A", "sourceSummary": "a"}, {"sourceKey": "B", "sourceSummary": "b"}]\n```';
+    return HAPPY(req);
+  });
+  const loop = await makeLoop(s.loops, { caps: { maxConcurrentItems: 2 } });
+  const result = await s.fire.fire(loop.id, "f1");
+  assert.equal(result.status, "ok");
+  assert.deepEqual(busy, []);
+  const refs = (kind: string) => s.turns.filter((t) => stage(t) === kind).map((t) => t.conversation.threadRef);
+  assert.equal(new Set(refs("work")).size, 2);
+  assert.deepEqual(new Set(refs("judge")), new Set(refs("work")));
+  assert.ok(!refs("work").includes(refs("intake")[0]!));
+});

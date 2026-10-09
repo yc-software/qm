@@ -166,7 +166,7 @@ function governorFromBody(value: unknown): NumericBody<Loop["governor"]> {
 function capsFromBody(value: unknown): NumericBody<Loop["caps"]> {
   if (value === undefined) return {};
   if (!isObj(value)) return { invalidField: "caps" };
-  const numbers = ["maxItemsPerFire", "maxOpenOutputs", "maxItemAttempts"] as const;
+  const numbers = ["maxItemsPerFire", "maxConcurrentItems", "maxOpenOutputs", "maxItemAttempts"] as const;
   const caps: NonNullable<Loop["caps"]> = {};
   for (const key of numbers) {
     const raw = value[key];
