@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
+import { SUBAGENT_TREE_RUN_CAP } from "../src/sessions/session-syscalls.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { ScopeId } from "../src/types.ts";
 
@@ -46,7 +47,7 @@ test("direct child enqueues share the tree cap across concurrent callers", async
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-cap-")) }));
   const root = await built.sessions.getOrCreateByThread("web:U1:root", "dm", "personal:U1");
   const children = await Promise.all(
-    Array.from({ length: 11 }, async (_, i) => {
+    Array.from({ length: SUBAGENT_TREE_RUN_CAP + 1 }, async (_, i) => {
       const child = await built.sessions.getOrCreateByThread(`agent:main:subagent:cap-${i}`, "dm", "personal:U1");
       await built.sessions.setParentSession(child.id, root.id);
       return child;
@@ -66,10 +67,10 @@ test("direct child enqueues share the tree cap across concurrent callers", async
       }),
     ),
   );
-  assert.equal(outcomes.filter((result) => result.status === "fulfilled").length, 10);
+  assert.equal(outcomes.filter((result) => result.status === "fulfilled").length, SUBAGENT_TREE_RUN_CAP);
   const rejected = outcomes.find((result) => result.status === "rejected");
   assert.ok(rejected?.status === "rejected");
-  assert.match(String(rejected.reason), /all 10 session run slots are in use/);
+  assert.match(String(rejected.reason), new RegExp(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`));
 });
 
 test("a late child steer remains pending when admission fails, then replays once", async () => {
@@ -91,7 +92,8 @@ test("a late child steer remains pending when admission fails, then replays once
   const claimed = await built.runs.claimById(run.id, "worker", 60_000);
   await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   const full = [];
-  for (let i = 0; i < 10; i++) full.push((await built.runs.enqueue({ sessionId: child.threadRef, request })).run);
+  for (let i = 0; i < SUBAGENT_TREE_RUN_CAP; i++)
+    full.push((await built.runs.enqueue({ sessionId: child.threadRef, request })).run);
   await built.signals.send(run.id, {
     kind: "steer",
     text: "late update",

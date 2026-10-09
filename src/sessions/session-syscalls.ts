@@ -98,7 +98,7 @@ export async function delegatedAuthorizationOrigin(
   }
 }
 
-export const SUBAGENT_TREE_RUN_CAP = 10;
+export const SUBAGENT_TREE_RUN_CAP = 50;
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
