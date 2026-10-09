@@ -316,7 +316,7 @@ const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICA
 async function canonicalPrincipal(sub: string): Promise<string | null> {
   const hit = canonicalCache.get(sub);
   if (hit !== undefined) return hit;
-  const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
+  const path = withSourceAuthNonce(`/v1/identities/${encodeURIComponent(sub)}/principal`, CORE_SIGNING_SECRET);
   try {
     const r = await fetch(`${CORE}${path}`, {
       headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
@@ -326,8 +326,8 @@ async function canonicalPrincipal(sub: string): Promise<string | null> {
       console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
       return null;
     }
-    const body = (await r.json()) as { canonicalId?: unknown };
-    const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
+    const body = (await r.json()) as { principalId?: unknown };
+    const canonical = typeof body.principalId === "string" && body.principalId ? body.principalId : sub;
     canonicalCache.set(sub, canonical);
     return canonical;
   } catch (error) {

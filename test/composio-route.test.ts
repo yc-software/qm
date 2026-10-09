@@ -97,6 +97,16 @@ function fixture() {
   return { invoke, own, shared, calls, replies, deps };
 }
 
+function aliasResolver() {
+  const links = new Map<string, string>();
+  return {
+    principalOf: (handle: string) => links.get(handle),
+    handlesOf: (principal: string) => [...links].filter(([, p]) => p === principal).map(([h]) => h),
+    link: (handle: string, principal: string) => void links.set(handle, principal),
+    unlink: (handle: string) => void links.delete(handle),
+  };
+}
+
 test("Composio requires a verified actor and never uses another person's key", async () => {
   const f = fixture();
   await f.own("bob");
@@ -267,17 +277,19 @@ test("connections require credential access and fail visibly on upstream errors"
 
 test("Slack connection links verified workspace identity to the web owner and persists status", async () => {
   const f = fixture();
-  await f.own();
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { createDirectoryStore } = await import("../src/directory/directory-store.ts");
-  const { installPrincipalLinks, canonicalPerson } = await import("../src/directory/person.ts");
-  f.deps.principalLinks = createPrincipalLinkService();
-  installPrincipalLinks(f.deps.principalLinks);
+  const { installPrincipalResolver, principalOf } = await import("../src/directory/person.ts");
+  const { createPrincipalGraph } = await import("../src/identity/principals.ts");
+  f.deps.principals = createPrincipalGraph();
+  const alice = await f.deps.principals.act("alice");
+  const slackPerson = await f.deps.principals.act("U123", { email: "work@example.test" });
+  installPrincipalResolver(f.deps.principals);
+  await f.own(alice);
   f.deps.slackAccounts = createMemoryMap();
   f.deps.signingSecret = "qa-slack-link-secret";
   f.deps.directory = createDirectoryStore();
   await f.deps.directory.replace([
-    { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
+    { principalId: slackPerson, slackId: "U123", displayName: "Alice", type: "internal" },
   ]);
   f.deps.slackEnvBotToken = "bot-test";
   f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
@@ -286,51 +298,41 @@ test("Slack connection links verified workspace identity to the web owner and pe
       { session_id: "trs_test" },
       { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
     );
-    const started = await f.invoke("/v1/composio/slack/authorize", {});
+    const started = await f.invoke("/v1/composio/slack/authorize", {}, alice);
     assert.equal(started.status, 200);
     const account = {
       id: "ca_test",
-      user_id: composioUserId(orgId(), "alice"),
+      user_id: composioUserId(orgId(), alice),
       toolkit: { slug: "slack" },
       status: "ACTIVE",
     };
     f.replies.push(account, { data: { ok: true, user_id: "U123", team_id: "T123", user: "alice", team: "Acme" } });
-    f.replies.push({ items: [] });
-    const linked = await f.invoke("/v1/composio/slack/complete", { ticket: started.data.ticket });
+    const linked = await f.invoke("/v1/composio/slack/complete", { ticket: started.data.ticket }, alice);
     assert.equal(linked.status, 200);
-    assert.equal(canonicalPerson("work@example.test"), "alice");
-    assert.equal((await f.deps.slackAccounts.get("alice"))?.accountId, "ca_test");
+    assert.equal(principalOf("U123"), alice);
+    assert.equal((await f.deps.principals.principals()).length, 1);
+    assert.equal((await f.deps.slackAccounts.get(alice))?.accountId, "ca_test");
     f.replies.push(account);
-    assert.equal((await f.invoke("/v1/composio/slack")).data.connected, true);
+    assert.equal((await f.invoke("/v1/composio/slack", undefined, alice)).data.connected, true);
     f.replies.push({ ...account, status: "REVOKED" });
-    assert.equal((await f.invoke("/v1/composio/slack")).data.connected, false);
+    assert.equal((await f.invoke("/v1/composio/slack", undefined, alice)).data.connected, false);
     f.replies.push(account, { data: { ok: true, user_id: "U123", team_id: "T123", user: "alice", team: "Acme" } });
-    assert.equal((await f.invoke("/v1/composio/slack/complete", { ticket: started.data.ticket })).status, 200);
+    assert.equal((await f.invoke("/v1/composio/slack/complete", { ticket: started.data.ticket }, alice)).status, 200);
   } finally {
-    installPrincipalLinks(null);
+    installPrincipalResolver(null);
   }
 });
 
 test("Slack link rejects changed browser accounts, wrong owner, bots, other workspaces and inactive connections", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { createDirectoryStore } = await import("../src/directory/directory-store.ts");
+  const { createPrincipalGraph } = await import("../src/identity/principals.ts");
   const { mintSignedPayload } = await import("../src/auth/signed-token.ts");
-  for (const scenario of [
-    "expired",
-    "other-browser",
-    "wrong-owner",
-    "bot",
-    "wrong-workspace",
-    "pending",
-    "existing-connectors",
-    "existing-key",
-    "different-project",
-  ]) {
+  for (const scenario of ["expired", "other-browser", "wrong-owner", "bot", "wrong-workspace", "pending"]) {
     const f = fixture();
     await f.own();
     await f.own("bob");
     f.deps.signingSecret = "slack-test";
-    f.deps.principalLinks = createPrincipalLinkService();
+    f.deps.principals = createPrincipalGraph();
     f.deps.slackAccounts = createMemoryMap();
     f.deps.directory = createDirectoryStore();
     await f.deps.directory.replace([
@@ -364,17 +366,13 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
         },
       },
     );
-    if (scenario === "existing-key") await f.own("work@example.test");
-    if (scenario === "different-project") await f.shared();
-    f.replies.push({ items: scenario === "existing-connectors" ? [{ id: "ca_existing" }] : [] });
-    if (scenario === "different-project") f.replies.push({ items: [{ id: "ca_company_existing" }] });
     const result = await f.invoke(
       "/v1/composio/slack/complete",
       { ticket },
       scenario === "other-browser" ? "bob" : "alice",
     );
     assert.ok(result.status >= 400, `${scenario}: ${result.status}`);
-    assert.equal((await f.deps.principalLinks.list()).length, 0);
+    assert.equal((await f.deps.principals.identities()).length, 0);
     assert.equal((await f.deps.slackAccounts.all()).length, 0);
   }
 });
@@ -593,17 +591,16 @@ test("expired callback returns are discarded after successful browser verificati
 });
 
 test("linked aliases can execute their existing accounts until the identity link is removed", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
-  const { installPrincipalLinks } = await import("../src/directory/person.ts");
+  const { installPrincipalResolver } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService();
-  installPrincipalLinks(links);
+  const links = aliasResolver();
+  installPrincipalResolver(links);
   const aliasId = "oidc:alice";
   const aliasUserId = composioUserId(orgId(), aliasId);
   const account = { ...aliceAccount, user_id: aliasUserId };
   try {
-    await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
+    links.link(aliasId, "alice");
     for (const actorId of ["alice", aliasId]) {
       f.replies.push(account, gmailTool, { successful: true, data: { emails: [] } });
       const cap = { ...privateCap, actorId, scopeId: scopeId("personal", actorId) };
@@ -615,7 +612,7 @@ test("linked aliases can execute their existing accounts until the identity link
         arguments: execution.arguments,
       });
     }
-    await links.unlink(aliasId);
+    links.unlink(aliasId);
     const before = f.calls.length;
     f.replies.push(account);
     const revoked = await f.invoke("/v1/composio/execute", execution, null, privateCap);
@@ -624,19 +621,17 @@ test("linked aliases can execute their existing accounts until the identity link
     assert.equal(f.calls.length, before + 1);
     assert.equal(f.calls.at(-1)!.init?.method, "GET");
   } finally {
-    installPrincipalLinks(null);
+    installPrincipalResolver(null);
   }
 });
 
 test("linked account discovery and Slack status preserve historical aliases without exposing other owners", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
-  const { installPrincipalLinks } = await import("../src/directory/person.ts");
+  const { installPrincipalResolver } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService();
-  f.deps.principalLinks = links;
+  const links = aliasResolver();
   f.deps.slackAccounts = createMemoryMap();
-  installPrincipalLinks(links);
+  installPrincipalResolver(links);
   const aliasId = "oidc:alice";
   const canonicalUserId = composioUserId(orgId(), "alice");
   const aliasUserId = composioUserId(orgId(), aliasId);
@@ -651,7 +646,7 @@ test("linked account discovery and Slack status preserve historical aliases with
     workspace: "Example",
   });
   try {
-    await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
+    links.link(aliasId, "alice");
     f.replies.push({
       items: [
         account,
@@ -673,31 +668,30 @@ test("linked account discovery and Slack status preserve historical aliases with
     assert.equal(query.get("cursor"), "page");
     f.replies.push(account);
     assert.equal((await f.invoke("/v1/composio/slack")).data.connected, true);
-    await links.unlink(aliasId);
+    links.unlink(aliasId);
     f.replies.push({ items: [account] });
     assert.deepEqual((await f.invoke("/v1/composio/connections")).data.items, []);
     const before = f.calls.length;
     assert.equal((await f.invoke("/v1/composio/slack")).data.connected, false);
     assert.equal(f.calls.length, before);
   } finally {
-    installPrincipalLinks(null);
+    installPrincipalResolver(null);
   }
 });
 
 test("unlinking an account owner during tool lookup prevents provider execution", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
-  const { installPrincipalLinks } = await import("../src/directory/person.ts");
+  const { installPrincipalResolver } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService();
-  installPrincipalLinks(links);
+  const links = aliasResolver();
+  installPrincipalResolver(links);
   const aliasId = "oidc:alice";
   try {
-    await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
+    links.link(aliasId, "alice");
     const original = f.deps.composioFetch!;
     f.deps.composioFetch = async (...args) => {
       const response = await original(...args);
-      if (String(args[0]).includes(`/tools/${execution.tool}?`)) await links.unlink(aliasId);
+      if (String(args[0]).includes(`/tools/${execution.tool}?`)) links.unlink(aliasId);
       return response;
     };
     f.replies.push({ ...aliceAccount, user_id: composioUserId(orgId(), aliasId) }, gmailTool);
@@ -707,22 +701,21 @@ test("unlinking an account owner during tool lookup prevents provider execution"
     assert.equal(f.calls.length, 2);
     assert.ok(f.calls.every((call) => call.init?.method === "GET"));
   } finally {
-    installPrincipalLinks(null);
+    installPrincipalResolver(null);
   }
 });
 
 test("consent and browser verification use the canonical identity when signed in through an alias", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
-  const { installPrincipalLinks } = await import("../src/directory/person.ts");
+  const { installPrincipalResolver } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService();
-  installPrincipalLinks(links);
+  const links = aliasResolver();
+  installPrincipalResolver(links);
   const aliasId = "oidc:alice";
   const userId = composioUserId(orgId(), "alice");
   const callbackUrl = "https://qm.example/s/chat?composioReturn=linked";
   try {
-    await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
+    links.link(aliasId, "alice");
     f.replies.push(
       { session_id: "trs_linked" },
       { redirect_url: "https://connect.composio.dev/link/lk_linked", connected_account_id: "ca_linked" },
@@ -737,18 +730,17 @@ test("consent and browser verification use the canonical identity when signed in
     assert.deepEqual(JSON.parse(String(f.calls.at(-1)!.init?.body)), { session_uri: "opaque", user_id: userId });
     assert.equal((await f.deps.composioReturns!.entries()).length, 0);
   } finally {
-    installPrincipalLinks(null);
+    installPrincipalResolver(null);
   }
 });
 
 test("linked identities retain provider accounts and Slack status until unlinked", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
-  const { installPrincipalLinks } = await import("../src/directory/person.ts");
+  const { installPrincipalResolver } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  f.deps.principalLinks = createPrincipalLinkService();
+  const links = aliasResolver();
   f.deps.slackAccounts = createMemoryMap();
-  installPrincipalLinks(f.deps.principalLinks);
+  installPrincipalResolver(links);
   const canonical = composioUserId(orgId(), "alice");
   const alias = composioUserId(orgId(), "oidc:alice");
   const account = { id: "ca_old", user_id: alias, status: "ACTIVE", toolkit: { slug: "slack" } };
@@ -762,12 +754,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
     workspace: "Example",
   });
   try {
-    await f.deps.principalLinks.link({
-      principalId: "oidc:alice",
-      canonicalId: "alice",
-      evidence: "test",
-      linkedBy: "admin",
-    });
+    links.link("oidc:alice", "alice");
     const identity = { userId: canonical, userIds: [canonical, alias] };
     assert.deepEqual((await f.invoke("/v1/composio/identity")).data, identity);
     assert.deepEqual(
@@ -807,12 +794,12 @@ test("linked identities retain provider accounts and Slack status until unlinked
     );
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" }, "oidc:alice")).status, 200);
     assert.equal(JSON.parse(String(f.calls[3]!.init?.body)).user_id, canonical);
-    await f.deps.principalLinks.unlink("oidc:alice");
+    links.unlink("oidc:alice");
     f.replies.push({ items: [account], next_cursor: null });
     assert.deepEqual((await f.invoke("/v1/composio/connections")).data.items, []);
     assert.equal((await f.invoke("/v1/composio/slack")).data.connected, false);
   } finally {
-    installPrincipalLinks(null);
+    installPrincipalResolver(null);
   }
 });
 

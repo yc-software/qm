@@ -2,7 +2,7 @@ import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.t
 import type { Principal } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
-import { canonicalPerson, samePerson } from "../../directory/person.ts";
+import { principalOf, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
@@ -25,7 +25,7 @@ function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor"
 
 export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
   const actor = rawAdminActor(ctx);
-  return actor ? { ...actor, id: canonicalPerson(actor.id) } : null;
+  return actor ? { ...actor, id: principalOf(actor.id) } : null;
 }
 
 export async function authorizeAdmin(

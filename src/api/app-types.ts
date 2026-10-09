@@ -1,3 +1,4 @@
+import type { PrincipalGraph } from "../identity/principals.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
@@ -616,6 +617,7 @@ export interface App {
 }
 
 export interface AppDeps {
+  principals?: Pick<PrincipalGraph, "autoLink">;
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;

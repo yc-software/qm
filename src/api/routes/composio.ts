@@ -1,8 +1,8 @@
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
-import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
-import { PrincipalLinkError } from "../../identity/principal-links.ts";
+import { personHandles, principalOf, samePerson } from "../../directory/person.ts";
+import { IdentityLinkError } from "../../identity/principals.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
@@ -22,7 +22,7 @@ export function composioUserId(org: string, principal: string): string {
 }
 
 function composioUserIds(principal: string): string[] {
-  return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
+  return [...new Set(personHandles(principal).map((id) => composioUserId(orgId(), id)))];
 }
 
 async function activeRun(ctx: ApiCtx): Promise<boolean> {
@@ -185,7 +185,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
-  if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principalLinks || ctx.actor?.imp))
+  if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principals || ctx.actor?.imp))
     return sendJson(ctx.res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   if (typeof toolkit !== "string" || !/^[a-z0-9_-]{1,100}$/.test(toolkit))
     return sendJson(ctx.res, 400, { error: "invalid_toolkit" });
@@ -208,7 +208,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(orgId(), principalOf(access.principal));
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
@@ -440,7 +440,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
   const sessionUri = (ctx.body as { sessionUri?: unknown } | null)?.sessionUri;
   if (typeof sessionUri !== "string" || !sessionUri || sessionUri.length > 8192)
     return sendJson(ctx.res, 400, { error: "invalid_session" });
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(orgId(), principalOf(access.principal));
   try {
     const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
       session_uri: sessionUri,
@@ -490,7 +490,7 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
   const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
   ctx.res.setHeader("Cache-Control", "no-store");
   let failed = false;
-  for (const id of personIds(access.principal)) {
+  for (const id of personHandles(access.principal)) {
     const record = await ctx.deps.slackAccounts?.get(id);
     if (!record || !samePerson(record.memberId, access.principal)) continue;
     try {
@@ -522,7 +522,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
   const { deps, res } = ctx;
-  if (!deps.signingSecret || !deps.principalLinks || !deps.directory || !deps.slackAccounts || ctx.actor?.imp)
+  if (!deps.signingSecret || !deps.principals || !deps.directory || !deps.slackAccounts || ctx.actor?.imp)
     return sendJson(res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   const ticket = (ctx.body as { ticket?: unknown } | null)?.ticket;
   const proof =
@@ -619,56 +619,27 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         error: "inactive_account",
         message: "An account is inactive. Ask your administrator for help.",
       });
+    let memberId = member.principalId;
     if (!samePerson(member.principalId, access.principal)) {
-      const existingCredentials = (await deps.keychain?.listByOwner(member.principalId)) ?? [];
-      const projectKeys = new Set([access.key]);
-      const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(scopeId("org", orgId()))) ?? [];
-      for (const candidate of companyCredentials) {
-        if (candidate.envKey !== "COMPOSIO_API_KEY" || !candidate.hasSecret) continue;
-        const material = await deps.serviceCreds!.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
-        if (!material?.secret) throw Error("Could not inspect existing connections");
-        projectKeys.add(material.secret);
-      }
-      let hasPriorAccounts = false;
-      for (const projectKey of projectKeys) {
-        const priorAccounts = await request(
-          ctx,
-          projectKey,
-          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(orgId(), member.principalId), limit: "1" })}`,
-        );
-        if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
-        hasPriorAccounts ||= priorAccounts.items.length > 0;
-      }
-      if (existingCredentials.length || hasPriorAccounts)
-        return sendJson(res, 409, {
-          error: "established_account",
-          message:
-            "Your Slack identity already has connected services. Ask your administrator to combine these accounts so those connections are preserved.",
-        });
-
-      if (canonicalPerson(member.principalId) !== member.principalId)
-        return sendJson(res, 409, {
-          error: "already_linked",
-          message: "This Slack identity is connected to another QM account. Ask your administrator for help.",
-        });
-      await deps.principalLinks.link({
-        principalId: member.principalId,
-        canonicalId: access.principal,
-        evidence: `Slack OAuth user ${slack.user_id} in workspace ${slack.team_id}, connection ${proof.accountId}`,
-        linkedBy: access.principal,
-      });
+      memberId = access.principal;
+      await deps.principals.attach(
+        slack.user_id!,
+        access.principal,
+        "self",
+        `Slack OAuth user ${slack.user_id} in workspace ${slack.team_id}, connection ${proof.accountId}`,
+      );
       await deps.identity?.refresh(true);
       audit(deps, {
         principalId: access.principal,
-        action: "principal_link.create",
-        resource: `${member.principalId} -> ${access.principal}`,
+        action: "identity.link",
+        resource: `slack:${slack.user_id} -> ${access.principal}`,
         scopeLabel: scopeId("org", orgId()),
       });
     }
     await deps.slackAccounts.put(access.principal, {
       principalId: access.principal,
       accountId: proof.accountId,
-      memberId: member.principalId,
+      memberId,
       userId: slack.user_id!,
       teamId: slack.team_id!,
       user: slack.user ?? member.displayName,
@@ -676,10 +647,10 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(res, 200, { connected: true, user: slack.user, workspace: slack.team });
   } catch (error) {
-    return sendJson(res, error instanceof PrincipalLinkError ? 409 : 502, {
+    return sendJson(res, error instanceof IdentityLinkError ? 409 : 502, {
       error: "slack_link_failed",
       message:
-        error instanceof PrincipalLinkError
+        error instanceof IdentityLinkError
           ? "These accounts need an administrator's help to connect. Your existing data has not been moved."
           : "Could not verify the Slack connection. Please try again.",
     });

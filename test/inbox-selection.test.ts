@@ -14,7 +14,7 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
-import { installPrincipalLinks } from "../src/directory/person.ts";
+import { installPrincipalResolver } from "../src/directory/person.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
@@ -649,8 +649,8 @@ test("inbox viewers are exactly the active candidates who can administer the loo
     return { status, data };
   };
   const candidates = ["alice", "bob-slack", "carol", "mallory"];
-  installPrincipalLinks({ canonical: (key) => (key === "bob-slack" ? "bob" : undefined), aliases: () => [] });
-  t.after(() => installPrincipalLinks(null));
+  installPrincipalResolver({ principalOf: (key: string) => (key === "bob-slack" ? "bob" : undefined) });
+  t.after(() => installPrincipalResolver(null));
   assert.deepEqual((await ask({ loopId: personal.id, candidates })).data.viewers, ["alice"]);
   assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob-slack"]);
   members.delete("alice");

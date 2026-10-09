@@ -1,5 +1,5 @@
 import { cacheHitRatio } from "../../../admin/metrics-sink.ts";
-import { canonicalPerson } from "../../../directory/person.ts";
+import { principalOf } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type ScopeId } from "../../../types.ts";
 import type { SessionOrigin, SpendRow } from "../../../sessions/session-store.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
@@ -209,7 +209,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   const orgOrigins = emptyOrigins();
   for (const row of rows) {
     const parsed = parseScopeId(row.scopeId);
-    const person = parsed.kind === "personal" && parsed.ref ? canonicalPerson(parsed.ref) : null;
+    const person = parsed.kind === "personal" && parsed.ref ? principalOf(parsed.ref) : null;
     const key = person === null ? row.scopeId : personalScope(person);
     let acc = accumulators.get(key);
     if (!acc) {

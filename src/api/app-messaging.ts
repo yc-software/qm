@@ -453,6 +453,8 @@ export function createMessagingMethods(
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;
+      for (const m of members)
+        if (m.slackId && m.principalId.includes("@")) await deps.principals?.autoLink(m.slackId, m.principalId);
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));

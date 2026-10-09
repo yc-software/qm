@@ -49,15 +49,15 @@ const upstream = createServer((req: IncomingMessage, res) => {
       JSON.stringify({ status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" }),
     );
   }
-  if (req.url?.startsWith("/v1/principals/U-admin-alias/canonical")) {
+  if (req.url?.startsWith("/v1/identities/U-admin-alias/principal")) {
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ canonicalId: "U-admin" }));
+    return void res.end(JSON.stringify({ principalId: "U-admin" }));
   }
-  if (req.url?.startsWith("/v1/principals/U-alias/canonical")) {
+  if (req.url?.startsWith("/v1/identities/U-alias/principal")) {
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ principalId: "U-alias", canonicalId: "U1" }));
+    return void res.end(JSON.stringify({ principalId: "U1" }));
   }
-  if (req.url?.startsWith("/v1/principals/U-unresolved/canonical")) {
+  if (req.url?.startsWith("/v1/identities/U-unresolved/principal")) {
     res.writeHead(500, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ error: "boom" }));
   }

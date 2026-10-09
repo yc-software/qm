@@ -32,7 +32,7 @@ import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
-import { canonicalPerson, samePerson } from "../directory/person.ts";
+import { principalOf, samePerson } from "../directory/person.ts";
 
 const safeDecode = (s: string): string => {
   try {
@@ -60,7 +60,7 @@ async function capabilityAdminDenied(
   if (pathname.startsWith("/v1/admin/impersonate")) {
     return "impersonating a user is portal-only — the agent cannot act as another person";
   }
-  if (pathname.startsWith("/v1/admin/principal-links")) {
+  if (pathname.startsWith("/v1/admin/identities") || pathname.startsWith("/v1/admin/principals")) {
     return "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
   }
   if (method === "GET" && isAdminContentRead(pathname) && parseScopeId(claims.scopeId).kind !== "personal") {
@@ -332,8 +332,12 @@ async function gate(
       )
         actor = null;
     }
-    if (actor)
-      actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
+    if (actor) {
+      const p = deps.principals
+        ? await deps.principals.act(actor.p, { email: actor.p.includes("@") ? actor.p : null, verified: true })
+        : principalOf(actor.p);
+      actor = { ...actor, p, ...(actor.imp ? { imp: principalOf(actor.imp) } : {}) };
+    }
     if (!isPublicRoute && requirePortalIdentity) {
       const webTurn =
         method === "POST" &&

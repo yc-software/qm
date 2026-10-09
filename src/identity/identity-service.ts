@@ -1,6 +1,6 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
+import { principalOf, normalizeHandle, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 
 interface IdentityProvider {
@@ -49,7 +49,7 @@ export function createIdentityService(
     isOverridden?: (externalId: string) => boolean;
     directorySyncProtected?: readonly string[];
     externalMembers?: DurableMap<ExternalMember>;
-    principalLinks?: { refresh(force?: boolean): Promise<void> };
+    principals?: { refresh(force?: boolean): Promise<void> };
   } = {},
 ): IdentityService {
   const store = backing ?? createMemoryMap<DeactivationRecord>();
@@ -64,10 +64,10 @@ export function createIdentityService(
 
   const keptByDirectorySync = (key: string): boolean =>
     directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
-  const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
+  const storeKeys = (externalId: string): string[] => [normalizeHandle(externalId)].filter(Boolean);
 
   async function load(overwrite: boolean): Promise<void> {
-    await opts.principalLinks?.refresh(true);
+    await opts.principals?.refresh(true);
     const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
     if (overwrite) {
       deactivated.clear();
@@ -85,7 +85,7 @@ export function createIdentityService(
   }
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
-    const id = canonicalPerson(externalId);
+    const id = principalOf(externalId);
     if (opts.isOverridden?.(externalId)) return { id, type: "internal" };
     const key = personKey(externalId);
     const record = deactivated.get(key);
@@ -104,7 +104,7 @@ export function createIdentityService(
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
     deactivated.set(key, record);
-    await store.put(foldPrincipalId(externalId), record);
+    await store.put(normalizeHandle(externalId), record);
   }
 
   async function reactivate(externalId: string): Promise<void> {
@@ -156,7 +156,7 @@ export function createIdentityService(
     },
     async putExternalMember(m: ExternalMember): Promise<void> {
       externals.set(personKey(m.email), m);
-      await externalStore.put(foldPrincipalId(m.email), m);
+      await externalStore.put(normalizeHandle(m.email), m);
     },
     async removeExternalMember(principalId: string): Promise<void> {
       externals.delete(personKey(principalId));

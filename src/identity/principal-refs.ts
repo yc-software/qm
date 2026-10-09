@@ -1,0 +1,206 @@
+import type { PoolClient } from "pg";
+
+/**
+ * How a column refers to a principal:
+ * - `id`    the whole value is a principal UUID
+ * - `scope` the value is a scope id such as `personal:<uuid>` (other scopes pass through)
+ * - `text`  a label or free text where the UUID appears as a whole token
+ * - `json`  a JSONB document where the UUID appears as a whole token in keys or values
+ */
+type RefKind = "id" | "scope" | "text" | "json";
+
+export interface PrincipalRef {
+  table: string;
+  column: string;
+  kind: RefKind;
+}
+
+const ref = (table: string, column: string, kind: RefKind): PrincipalRef => ({ table, column, kind });
+
+/**
+ * Every relational column that can hold a principal. `combine` and the identity migration both walk this list,
+ * and test/principal-refs.test.ts fails when a schema adds a principal-shaped column that is missing here.
+ * Durable-map tables (`id TEXT`, `json JSONB`) are found from the catalog and need no entry.
+ */
+export const PRINCIPAL_REFS: readonly PrincipalRef[] = [
+  ref("identities", "principal_id", "id"),
+  ref("participants", "principal_id", "id"),
+  ref("admin_grants", "principal_id", "id"),
+  ref("admin_grants", "scope_id", "scope"),
+  ref("admin_grants", "granted_by", "id"),
+  ref("acl_grants", "owner_scope_id", "scope"),
+  ref("acl_grants", "grantee_scope_id", "scope"),
+  ref("acl_grants", "granted_by", "id"),
+  ref("audit_log", "principal_id", "id"),
+  ref("audit_log", "scope_label", "text"),
+  ref("budget_spend", "principal_id", "id"),
+  ref("rate_limit_windows", "principal_id", "id"),
+  ref("directory_members", "principal_id", "id"),
+  ref("directory_channel_members", "principal_id", "id"),
+  ref("directory_group_members", "principal_id", "id"),
+  ref("environment_attachments", "scope_id", "scope"),
+  ref("environment_attachments", "attached_by", "id"),
+  ref("file_artifacts", "owner_scope_id", "scope"),
+  ref("file_artifacts", "created_by", "id"),
+  ref("file_artifacts", "created_in_scope", "scope"),
+  ref("file_uploads", "actor_id", "id"),
+  ref("memory_revisions", "scope_id", "scope"),
+  ref("memory_revisions", "author", "id"),
+  ref("memory_revisions", "records", "json"),
+  ref("process_sessions", "scope_id", "scope"),
+  ref("process_sessions", "session_ref", "text"),
+  ref("sessions", "scope_id", "scope"),
+  ref("sessions", "thread_ref", "text"),
+  ref("cron_fires", "thread_ref", "text"),
+  ref("deliveries", "destination", "json"),
+  ref("deliveries", "recipient_thread_ref", "text"),
+  ref("session_pins", "added_by", "id"),
+  ref("session_entry_search", "author", "id"),
+  ref("channel_policy", "set_by", "id"),
+  ref("channel_policy_history", "set_by", "id"),
+  ref("session_tape", "author", "id"),
+  ref("ambient_judgments", "asked_by", "id"),
+  ref("app_page_views", "viewer", "id"),
+  ref("run_signals", "payload", "json"),
+  ref("run_signals", "dedupe_key", "text"),
+  ref("session_entries", "scope_label", "text"),
+  ref("session_llm_requests", "scope_label", "text"),
+  ref("session_tape", "scope_label", "text"),
+  ref("turn_metrics", "scope_label", "text"),
+  ref("error_events", "scope_label", "text"),
+  ref("egress_events", "principal_id", "id"),
+  ref("egress_events", "scope_label", "text"),
+  ref("credential_usage", "principal_id", "id"),
+  ref("credential_usage", "scope_label", "text"),
+];
+
+/**
+ * Columns whose names look principal-shaped but never hold a principal. Listed so the registry test can tell an
+ * oversight from a decision.
+ */
+export const NOT_PRINCIPAL_COLUMNS: readonly string[] = [
+  "principals.principal_id",
+  "session_leases.holder",
+  "auth_broker_sessions.email",
+  "identities.linked_by",
+  "identities.email",
+];
+
+const quote = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+const TOKEN_PATTERN = (id: string): string => `(^|[^0-9A-Za-z-])${id.replace(/[^0-9A-Za-z-]/g, "")}(?![0-9A-Za-z-])`;
+
+async function tableColumns(client: PoolClient): Promise<Map<string, Set<string>>> {
+  const { rows } = await client.query<{ table_name: string; column_name: string }>(
+    "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()",
+  );
+  const out = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const set = out.get(r.table_name) ?? new Set<string>();
+    set.add(r.column_name);
+    out.set(r.table_name, set);
+  }
+  return out;
+}
+
+/** Other columns of each unique index that contains `column`, so a clash can be detected per row. */
+async function uniquePeers(client: PoolClient, table: string, column: string): Promise<string[][]> {
+  const { rows } = await client.query<{ cols: string[] }>(
+    `SELECT array_agg(a.attname::text ORDER BY a.attnum) AS cols
+       FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = current_schema()
+       JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+      WHERE c.relname = $1 AND i.indisunique
+      GROUP BY i.indexrelid`,
+    [table],
+  );
+  return rows.filter((r) => r.cols.includes(column)).map((r) => r.cols.filter((c) => c !== column));
+}
+
+async function repointEquals(client: PoolClient, table: string, column: string, from: string, to: string) {
+  for (const peers of await uniquePeers(client, table, column)) {
+    const same = peers.map((p) => `k.${quote(p)} IS NOT DISTINCT FROM d.${quote(p)}`).join(" AND ");
+    await client.query(
+      `DELETE FROM ${quote(table)} d WHERE d.${quote(column)}::text = $1 AND EXISTS (
+         SELECT 1 FROM ${quote(table)} k WHERE k.${quote(column)}::text = $2${same ? ` AND ${same}` : ""})`,
+      [from, to],
+    );
+  }
+  await client.query(`UPDATE ${quote(table)} SET ${quote(column)} = $2 WHERE ${quote(column)}::text = $1`, [from, to]);
+}
+
+async function combineMemory(client: PoolClient, keep: string, drop: string): Promise<void> {
+  const [k, d] = [`personal:${keep}`, `personal:${drop}`];
+  const { rows } = await client.query<{ max: string | null }>(
+    "SELECT max(seq)::text AS max FROM memory_revisions WHERE scope_id = $1",
+    [k],
+  );
+  const base = Number(rows[0]?.max ?? 0);
+  if (!base) return;
+  const heads = await client.query<{ scope_id: string; body: string }>(
+    `SELECT DISTINCT ON (scope_id) scope_id, body FROM memory_revisions WHERE scope_id = ANY($1) ORDER BY scope_id, seq DESC`,
+    [[k, d]],
+  );
+  const dropHead = heads.rows.find((r) => r.scope_id === d);
+  if (!dropHead) return;
+  const keepHead = heads.rows.find((r) => r.scope_id === k);
+  const moved = await client.query(
+    "UPDATE memory_revisions SET scope_id = $1, seq = seq + $2 WHERE scope_id = $3 RETURNING seq",
+    [k, base, d],
+  );
+  const last = Math.max(...moved.rows.map((r: { seq: string | number }) => Number(r.seq)));
+  await client.query(
+    "INSERT INTO memory_revisions(scope_id, seq, op, body, author, at) VALUES ($1, $2, 'combine', $3, NULL, $4)",
+    [k, last + 1, [keepHead?.body ?? "", dropHead.body].filter(Boolean).join("\n"), Date.now()],
+  );
+}
+
+/**
+ * Fold principal `drop` into `keep` inside the caller's transaction: every registered column and every durable-map
+ * row is re-pointed, singleton clashes keep `keep`'s row, `drop`'s memory history is appended after `keep`'s,
+ * `drop`'s identities move to `keep`, and `drop` is deleted.
+ */
+export async function combineReferences(client: PoolClient, keep: string, drop: string): Promise<void> {
+  const columns = await tableColumns(client);
+  const has = (t: string, c: string): boolean => columns.get(t)?.has(c) ?? false;
+  if (has("memory_revisions", "scope_id")) await combineMemory(client, keep, drop);
+  const pattern = TOKEN_PATTERN(drop);
+  for (const r of PRINCIPAL_REFS) {
+    if (!has(r.table, r.column)) continue;
+    const t = quote(r.table);
+    const c = quote(r.column);
+    if (r.kind === "id") await repointEquals(client, r.table, r.column, drop, keep);
+    else if (r.kind === "scope") await repointEquals(client, r.table, r.column, `personal:${drop}`, `personal:${keep}`);
+    else if (r.kind === "text")
+      await client.query(`UPDATE ${t} SET ${c} = regexp_replace(${c}, $1, '\\1' || $2, 'g') WHERE ${c} ~ $1`, [
+        pattern,
+        keep,
+      ]);
+    else
+      await client.query(
+        `UPDATE ${t} SET ${c} = regexp_replace(${c}::text, $1, '\\1' || $2, 'g')::jsonb WHERE ${c}::text ~ $1`,
+        [pattern, keep],
+      );
+  }
+  for (const [table, cols] of columns) {
+    if (!cols.has("id") || !cols.has("json")) continue;
+    const t = quote(table);
+    const { rows } = await client.query<{ id: string }>(`SELECT id FROM ${t} WHERE id ~ $1`, [pattern]);
+    for (const { id } of rows) {
+      const next = id.replace(new RegExp(pattern, "g"), `$1${keep}`);
+      const clash = await client.query(`SELECT 1 FROM ${t} WHERE id = $1`, [next]);
+      if (clash.rowCount) await client.query(`DELETE FROM ${t} WHERE id = $1`, [id]);
+      else await client.query(`UPDATE ${t} SET id = $2 WHERE id = $1`, [id, next]);
+    }
+    await client.query(
+      `UPDATE ${t} SET json = regexp_replace(json::text, $1, '\\1' || $2, 'g')::jsonb WHERE json::text ~ $1`,
+      [pattern, keep],
+    );
+    if (columns.has("durable_map_versions"))
+      await client.query(
+        "INSERT INTO durable_map_versions(tbl, v) VALUES ($1, 1) ON CONFLICT (tbl) DO UPDATE SET v = durable_map_versions.v + 1",
+        [table],
+      );
+  }
+  await client.query("DELETE FROM principals WHERE principal_id = $1", [drop]);
+}

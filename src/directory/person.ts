@@ -1,38 +1,41 @@
 import { swallowAs } from "../util/errors.ts";
 
-export interface PrincipalLinkResolver {
-  canonical(key: string): string | undefined;
-  aliases(key: string): readonly string[];
+export interface PrincipalResolver {
+  principalOf(handle: string): string | undefined;
+  handlesOf?(principalId: string): readonly string[];
 }
 
-let links: PrincipalLinkResolver | null = null;
+let resolver: PrincipalResolver | null = null;
 
-export function installPrincipalLinks(resolver: PrincipalLinkResolver | null): void {
-  links = resolver;
+export function installPrincipalResolver(next: PrincipalResolver | null): void {
+  resolver = next;
 }
 
-export function foldPrincipalId(id: string | null | undefined): string {
+export function normalizeHandle(id: string | null | undefined): string {
   const s = (id ?? "").trim();
   return s.includes("@") ? s.toLowerCase() : s;
 }
 
-export function canonicalPerson(id: string): string {
-  const key = foldPrincipalId(id);
+/** The principal UUID behind a handle, or the handle itself when it has never acted. */
+export function principalOf(id: string): string {
+  const key = normalizeHandle(id);
   if (!key) return id;
-  return links?.canonical(key) ?? id;
+  return resolver?.principalOf(key) ?? key;
 }
 
-export function personIds(id: string): string[] {
-  const key = foldPrincipalId(id);
-  if (!key) return [];
-  const canonical = links?.canonical(key) ?? id.trim();
-  return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
+/**
+ * A principal and every handle linked to it. Third-party accounts (Composio users, Slack connections) were keyed
+ * by whichever handle created them, so lookups try them all.
+ */
+export function personHandles(id: string): string[] {
+  const principal = principalOf(id);
+  if (!principal) return [];
+  return [...new Set([principal, ...(resolver?.handlesOf?.(principal) ?? [])])];
 }
 
 export function personKey(id: string | null | undefined): string {
-  const key = foldPrincipalId(id);
-  if (!key) return "";
-  return foldPrincipalId(links?.canonical(key) ?? key);
+  const key = normalizeHandle(id);
+  return key ? principalOf(key) : "";
 }
 
 export function samePerson(a: string | null | undefined, b: string | null | undefined): boolean {

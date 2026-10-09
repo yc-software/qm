@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installPrincipalLinks } from "../src/directory/person.ts";
+import { installPrincipalResolver } from "../src/directory/person.ts";
 import { cacheHitRatio } from "../src/admin/metrics-sink.ts";
 import type { SpendRow } from "../src/sessions/session-store.ts";
 import { spendCsv, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
@@ -363,8 +363,8 @@ for (const bucket of ["day", "week"] as const) {
 
 for (const bucket of ["day", "week"] as const) {
   test(`summarizeSpend: ${bucket} person series merges aliases and conserves shared spend`, (t) => {
-    installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
-    t.after(() => installPrincipalLinks(null));
+    installPrincipalResolver({ principalOf: (id: string) => (id === "slack-alice" ? "alice" : undefined) });
+    t.after(() => installPrincipalResolver(null));
     const rows = [
       row({ day: MON, scopeId: "personal:alice", origin: "conversation", costUsd: 1 }),
       row({ day: MON, scopeId: "personal:slack-alice", origin: "cron", costUsd: 2 }),

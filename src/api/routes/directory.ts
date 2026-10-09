@@ -1,6 +1,6 @@
 import { isPrincipalType, PRINCIPAL_TYPES, type PrincipalType } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
-import { canonicalPerson } from "../../directory/person.ts";
+import { principalOf } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -27,12 +27,16 @@ async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
 }
 
-async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
+/** Web sign-in edge: the handle acted, so resolve it to its principal, creating one if needed. */
+async function principalForHandle(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const id = ctx.params.id!;
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  const handle = ctx.params.id!;
+  if (!handle) return sendJson(res, 404, { error: "not_found" });
+  const principalId = deps.principals
+    ? await deps.principals.act(handle, { email: handle.includes("@") ? handle : null, verified: true })
+    : principalOf(handle);
   await deps.identity?.refresh(true);
-  return sendJson(res, 200, { principalId: id, canonicalId: canonicalPerson(id) });
+  return sendJson(res, 200, { principalId });
 }
 
 async function pushDirectory(ctx: ApiCtx): Promise<void> {
@@ -181,7 +185,7 @@ async function channelMembership(ctx: ApiCtx): Promise<void> {
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
   { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },
-  { method: "GET", path: "/v1/principals/:id/canonical", auth: "source", handle: canonicalPrincipal },
+  { method: "GET", path: "/v1/identities/:id/principal", auth: "source", handle: principalForHandle },
   { method: "POST", path: "/v1/directory", auth: "source", handle: pushDirectory },
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
   {
