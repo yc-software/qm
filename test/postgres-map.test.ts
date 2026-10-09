@@ -331,7 +331,7 @@ test("pg keychain: listByOwner is a per-owner projected read with no secret mate
     assert.ok(!("secretEnc" in listed[0]!));
     assert.ok(!JSON.stringify(listed).includes("ghp_a"));
 
-    const own = await keychain.materializeOwn("owner-a@x.com");
+    const own = await keychain.materializeOwn("Owner-A@X.com");
     assert.deepEqual(
       own.flatMap((m) => m.env),
       [{ key: "GITHUB_TOKEN", value: "ghp_a" }],
