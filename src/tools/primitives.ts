@@ -1147,18 +1147,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     ...(deps.humanTurn ? { humanTurn: true } : {}),
-    ...(deps.sessionSyscalls
-      ? {
-          sessionSyscalls: {
-            ...deps.sessionSyscalls,
-            open: (input) => once(() => deps.sessionSyscalls!.open(input)),
-            write: (input) => once(() => deps.sessionSyscalls!.write(input)),
-            ...(deps.sessionSyscalls.start
-              ? { start: (input) => once(() => deps.sessionSyscalls!.start!(input)) }
-              : {}),
-          },
-        }
-      : {}),
+    ...(deps.sessionSyscalls ? { sessionSyscalls: deps.sessionSyscalls } : {}),
 
     async history(q: string, limit?: number): Promise<string[]> {
       if (!deps.sessionHistory) return [];
