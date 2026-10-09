@@ -4,8 +4,8 @@ export type { EmojiRow };
 
 export function matchesQuery(row: EmojiRow, needle: string): boolean {
   if (!needle) return true;
-  if (row.n.includes(needle)) return true;
-  return (row.a ?? []).some((alias) => alias.includes(needle));
+  if (row.n.replaceAll("-", "_").includes(needle.replaceAll("-", "_"))) return true;
+  return (row.a ?? []).some((alias) => alias.replaceAll("-", "_").includes(needle.replaceAll("-", "_")));
 }
 
 export function filterEmoji(rows: readonly EmojiRow[], query: string): EmojiRow[] {
