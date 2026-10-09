@@ -798,15 +798,15 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
   built.runtime.start();
   try {
     const container = "C-solicited-roster";
-    await built.directory.replace([
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
-      { principalId: "bob@acme.com", displayName: "Bob", type: "internal", slackId: "U2" },
+    await built.app.upsertDirectory([
+      { principalId: "alice@acme.com", provider: "email", displayName: "Alice", type: "internal", slackId: "U1" },
+      { principalId: "bob@acme.com", provider: "email", displayName: "Bob", type: "internal", slackId: "U2" },
     ]);
-    await built.directory.replaceChannels(
+    await built.app.upsertChannels(
       [{ channelId: container, name: "solicited-roster", isPrivate: false }],
       [
-        { channelId: container, principalId: "alice@acme.com" },
-        { channelId: container, principalId: "bob@acme.com" },
+        { channelId: container, principalId: "alice@acme.com", provider: "email" },
+        { channelId: container, principalId: "bob@acme.com", provider: "email" },
       ],
     );
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
