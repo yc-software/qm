@@ -39,7 +39,7 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
 
   const turn = await built.app.turn({
     surface: "web",
-    actor: { externalId: "alice" },
+    actor: { externalId: "alice", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: `web:${await principalOf(built, "alice")}:dynamic-openrouter-model` },
     text: "hello",
     model: "stealth/ox-alpha",

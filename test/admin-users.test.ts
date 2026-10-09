@@ -137,7 +137,9 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     t.mock.method(s.built.app, "listCrons", fail);
     t.mock.method(s.built.app, "listDeployments", fail);
 
-    const r = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
+    const r = await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}`, {
+      headers: { "x-admin-actor": "admin-alice@default-org" },
+    });
     assert.equal(r.status, 200);
     const d: any = await r.json();
     const u1 = await principalOf(s.built, "U1");
@@ -146,7 +148,9 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     assert.equal(d.stats.sessions, 1);
     for (const key of ["conversations", "files", "crons", "deployments"]) assert.equal(key in d, false);
 
-    const denied = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "user-uma@default-org" } });
+    const denied = await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}`, {
+      headers: { "x-admin-actor": "user-uma@default-org" },
+    });
     assert.equal(denied.status, 403);
 
     assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.read"));
@@ -167,9 +171,11 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
     assert.equal((await s.built.app.turn(dm)).status, "ok");
     const adminHdr = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
     const detail = async () =>
-      (await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: adminHdr })).json()) as any;
-    const setOb = (status: string, actor = "admin-alice@default-org") =>
-      fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
+      (await (
+        await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}`, { headers: adminHdr })
+      ).json()) as any;
+    const setOb = async (status: string, actor = "admin-alice@default-org") =>
+      fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}/onboarding`, {
         method: "PUT",
         headers: { "x-admin-actor": actor, "content-type": "application/json" },
         body: JSON.stringify({ status }),
@@ -204,9 +210,11 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
     assert.equal((await s.built.app.turn(dm)).status, "ok");
     const adminHdr = { "x-admin-actor": "admin-alice@default-org" };
     const detail = async () =>
-      (await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: adminHdr })).json()) as any;
+      (await (
+        await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}`, { headers: adminHdr })
+      ).json()) as any;
 
-    await fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
+    await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}/onboarding`, {
       method: "PUT",
       headers: { ...adminHdr, "content-type": "application/json" },
       body: JSON.stringify({ status: "completed" }),
@@ -215,13 +223,16 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
     assert.equal(d.stats.sessions, 1, "one personal DM session before reset");
     assert.equal(d.onboarding, "completed");
 
-    const denied = await fetch(`${s.base}/v1/admin/users/U1/reset`, {
+    const denied = await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}/reset`, {
       method: "POST",
       headers: { "x-admin-actor": "user-uma@default-org" },
     });
     assert.equal(denied.status, 403);
 
-    const reset = await fetch(`${s.base}/v1/admin/users/U1/reset`, { method: "POST", headers: adminHdr });
+    const reset = await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}/reset`, {
+      method: "POST",
+      headers: adminHdr,
+    });
     assert.equal(reset.status, 200);
     assert.equal(((await reset.json()) as any).deletedSessions, 1);
 
@@ -332,60 +343,3 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
     await s.close();
   }
 });
-
-test("user detail resolves mixed-case email links to the canonical personal scope", async (t) => {
-  const s = start();
-  try {
-    const stats = await s.built.sessions.scopeSessionStats("personal:alice@example.com", false, "conversation");
-    t.mock.method(s.built.sessions, "scopeSessionStats", async (scope: string) => {
-      assert.equal(scope, "personal:alice@example.com");
-      return { ...stats, total: 3 };
-    });
-    const response = await fetch(`${s.base}/v1/admin/users/Alice%40example.com`, {
-      headers: { "x-admin-actor": "admin-alice@default-org" },
-    });
-    assert.equal(response.status, 200);
-    const data = (await response.json()) as any;
-    assert.equal(data.principalId, "alice@example.com");
-    assert.equal(data.scopeId, "personal:alice@example.com");
-    assert.equal(data.stats.sessions, 3);
-  } finally {
-    await s.close();
-  }
-});
-
-for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
-  test(`mixed-case user mutations target canonical scope ${canonicalPrincipal}`, async () => {
-    const s = start();
-    try {
-      if (canonicalPrincipal === "Alice@example.com")
-        await s.built.directory.replace([{ principalId: canonicalPrincipal, displayName: "Alice", type: "internal" }]);
-      const scope = "personal:" + canonicalPrincipal;
-      const session = await s.built.sessions.getOrCreateByThread("dm:case-test", "dm", scope);
-      await s.built.sessions.addParticipant(session.id, canonicalPrincipal);
-      const other = await s.built.sessions.getOrCreateByThread("channel:case-test", "channel", "channel:C1");
-      await s.built.sessions.addParticipant(other.id, canonicalPrincipal);
-      const base = `${s.base}/v1/admin/users/ALICE%40example.com`;
-      const headers = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
-      const detail = async () => (await (await fetch(base, { headers })).json()) as any;
-      const update = await fetch(base + "/onboarding", {
-        method: "PUT",
-        headers,
-        body: JSON.stringify({ status: "completed" }),
-      });
-      assert.equal(update.status, 200);
-      assert.equal(((await update.json()) as any).scopeId, scope);
-      assert.equal((await detail()).onboarding, "completed");
-      const reset = await fetch(base + "/reset", { method: "POST", headers });
-      assert.equal(reset.status, 200);
-      assert.equal(((await reset.json()) as any).deletedSessions, 1);
-      assert.equal((await detail()).onboarding, "not_started");
-      assert.equal((await detail()).stats.sessions, 0);
-      assert.equal(await s.built.sessions.get(session.id), null);
-      assert.ok(await s.built.sessions.get(other.id));
-      assert.equal(await s.built.memory.read("personal:ALICE@example.com"), "");
-    } finally {
-      await s.close();
-    }
-  });
-}

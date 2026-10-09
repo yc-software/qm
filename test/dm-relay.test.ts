@@ -60,10 +60,10 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
       }),
     );
     await built.app.upsertDirectory([
-      { principalId: "U-alice", displayName: "Alice", type: "internal" },
-      { principalId: "U-carol", displayName: "Carol", type: "internal" },
-      { principalId: "U-sam1", displayName: "Sam Lee", type: "internal" },
-      { principalId: "U-sam2", displayName: "Sam Park", type: "internal" },
+      { principalId: "U-alice", provider: "slack" as const, displayName: "Alice", type: "internal" },
+      { principalId: "U-carol", provider: "slack" as const, displayName: "Carol", type: "internal" },
+      { principalId: "U-sam1", provider: "slack" as const, displayName: "Sam Lee", type: "internal" },
+      { principalId: "U-sam2", provider: "slack" as const, displayName: "Sam Park", type: "internal" },
     ]);
     await built.app.upsertChannels(
       [
@@ -74,14 +74,14 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
         { channelId: "C-secret", name: "secret", isPrivate: true },
       ],
       [
-        { channelId: "C", principalId: "U-carol" },
-        { channelId: "C-secret", principalId: "U-carol" },
+        { channelId: "C", principalId: "U-carol", provider: "slack" as const },
+        { channelId: "C-secret", principalId: "U-carol", provider: "slack" as const },
       ],
     );
     await built.app.upsertGroups([
-      { groupId: "G-jrs", principalId: "U-carol" },
-      { groupId: "G-jrs", principalId: "U-alice" },
-      { groupId: "G-jrs", principalId: "U-sam1" },
+      { groupId: "G-jrs", principalId: "U-carol", provider: "slack" as const },
+      { groupId: "G-jrs", principalId: "U-alice", provider: "slack" as const },
+      { groupId: "G-jrs", principalId: "U-sam1", provider: "slack" as const },
     ]);
     [ALICE, CAROL, SAM1, SAM2] = (await Promise.all(names.map((h) => principalOf(built, h)))) as [
       string,

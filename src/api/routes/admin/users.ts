@@ -345,17 +345,10 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     ...adminGrants.map((g) => g.principalId),
   ]);
 
-  const members = await app.directoryMembers();
-  const namesByKey = new Map(members.map((m) => [personKey(m.principalId), m.displayName]));
-  const rosterIdByKey = new Map(members.map((m) => [personKey(m.principalId), m.principalId]));
-  const idByKey = new Map<string, string>();
-  for (const id of ids) {
-    const key = personKey(id);
-    if (!idByKey.has(key)) idByKey.set(key, rosterIdByKey.get(key) ?? id);
-  }
-  const people = [...idByKey.values()].sort().map((principalId) => ({
+  const names = new Map((await app.directoryMembers()).map((m) => [m.principalId, m.displayName]));
+  const people = [...ids].sort().map((principalId) => ({
     principalId,
-    displayName: namesByKey.get(personKey(principalId)) ?? null,
+    displayName: names.get(principalId) ?? null,
     credentialCount: credentials.filter((c) => samePerson(c.ownerId, principalId)).length,
     activeGrantCount: grants.filter(
       (g) =>
@@ -378,8 +371,8 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
 }
 
 async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
-  const member = await deps.directory?.get(requestedPrincipal);
-  return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
+  const principalId = personKey(requestedPrincipal);
+  return { member: await deps.directory?.get(principalId), principalId };
 }
 
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {

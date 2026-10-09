@@ -106,16 +106,17 @@ test("listing and per-owner reads use the store's projected select and never a f
   await k.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "ya29.u1" });
   await k.setServiceCredential(org, { slug: "stripe", name: "Stripe", secret: "sk_live", host: "api.stripe.com" });
 
-  const mine = await k.listByOwner("alice@x.COM");
-  assert.equal(mine.length, 1, "owner matching stays samePerson-compatible across email casing");
+  const mine = await k.listByOwner("Alice@X.com");
+  assert.equal(mine.length, 1, "owner matching is exact on the principal id");
+  assert.equal((await k.listByOwner("alice@x.COM")).length, 0, "no case folding: handles resolve at edges");
   assert.ok(mine.every((c) => !("secretEnc" in c)));
 
   const all = await k.listAllMetadata();
   assert.deepEqual(all.map((c) => c.ownerId).sort(), ["Alice@X.com", "U1"]);
   assert.ok(all.every((c) => !("secretEnc" in c)));
 
-  const grouped = await k.listByOwners(["ALICE@x.com", "U1"]);
-  assert.equal(grouped.get("ALICE@x.com")!.length, 1);
+  const grouped = await k.listByOwners(["Alice@X.com", "U1"]);
+  assert.equal(grouped.get("Alice@X.com")!.length, 1);
   assert.equal(grouped.get("U1")!.length, 1);
 
   const connectors = await k.listConnectorsByOwners(["U1"]);
@@ -836,7 +837,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     detectedByOwner: new Map([["U1", ["GitHub", "AWS SSO"]]]),
   });
   assert.match(detected, /Detected but NOT registered/);
-  assert.match(detected, /Alice \(U1\): AWS SSO, GitHub — signed in on their own computer/);
+  assert.match(detected, /Alice: AWS SSO, GitHub — signed in on their own computer/);
 
   const k = kc();
   const cred = await k.save(GH);
@@ -866,7 +867,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     ],
   });
   assert.match(block, /## Teammate keychains/);
-  assert.match(block, /Alice \(U1\): github/);
+  assert.match(block, /Alice: github/);
   assert.match(block, new RegExp(`credential id \`${cred.id}\``));
   assert.match(block, /STANDING grant .*gh for repo work here/);
   assert.match(block, /kc_[a-f0-9]{12}.*GITHUB_TOKEN/);
@@ -1287,7 +1288,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   const sys = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
   assert.equal(sys.status, "ok");
   assert.match(sys.reply ?? "", /## Teammate keychains/);
-  assert.match(sys.reply ?? "", new RegExp(`Alice \\(${owner}\\): github`));
+  assert.match(sys.reply ?? "", /Alice \(U_OWNER\): github/);
   assert.match(sys.reply ?? "", /no grant for this conversation/);
   assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
   await selectDefaultSandbox(built, "U_ASKER", "channel:C1");
