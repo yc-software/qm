@@ -8,7 +8,7 @@ import { headSlice } from "../util/text.ts";
 import { stripTurnBoilerplate } from "./orchestrator/turn-helpers.ts";
 import { TitleRejected } from "./turn-error.ts";
 
-export function fallbackSessionTitle(text: string): string | undefined {
+function fallbackSessionTitle(text: string): string | undefined {
   const clean = stripTurnBoilerplate(text).replace(/\s+/g, " ").trim();
   if (!clean) return undefined;
   return clean.length > 60 ? `${headSlice(clean, 59).trimEnd()}…` : clean;
