@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { principalOf } from "./support/principal.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
@@ -416,13 +417,14 @@ test("Trap 1 e2e: the reach tool_result is labeled the session scope and survive
 
 test("DM reach to a private channel the human isn't in is denied", async () => {
   const built = freshApp({ reachExecEnabled: true });
+  const [u1, u2] = await Promise.all(["U1", "U2"].map((id) => built.principals.act(handle("slack", id))));
   await built.directory.replace([
-    { principalId: "U1", displayName: "Alice", type: "internal" },
-    { principalId: "U2", displayName: "User Two", type: "internal" },
+    { principalId: u1!, displayName: "Alice", type: "internal" },
+    { principalId: u2!, displayName: "User Two", type: "internal" },
   ]);
   await built.directory.replaceChannels(
     [{ channelId: "C-sec", name: "secret", isPrivate: true }],
-    [{ channelId: "C-sec", principalId: "U2" }],
+    [{ channelId: "C-sec", principalId: u2! }],
   );
   const res = await built.app.turn(dm("!reach #secret cat x"));
   assert.match(res.reply!, /private and I can't confirm you're a member/);

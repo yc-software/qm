@@ -390,7 +390,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   });
 
   it("POST /v1/session-cap mints a REAL capability token for the portal-verified user", async () => {
-    const r = await post("/v1/session-cap", {}, { "x-portal-identity": await token("U1") });
+    const r = await post("/v1/session-cap", {}, { "x-portal-identity": await token(await principalOf(built, "U1")) });
     assert.equal(r.status, 200);
     const body = (await r.json()) as { token: unknown };
     assert.equal(typeof body.token, "string", "token must be the minted string, not a serialized Promise");

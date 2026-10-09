@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import type { BrokerSessionStore } from "../src/auth/broker-sessions.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
@@ -34,6 +35,7 @@ function start(
   brokerSessions?: BrokerSessionStore,
 ): {
   base: string;
+  built: BuiltApp;
   dedupe: ReplayDedupe;
   close: () => Promise<void>;
 } {
@@ -51,6 +53,7 @@ function start(
   server.listen(0);
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
+    built,
     dedupe: replayDedupe,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
@@ -186,7 +189,8 @@ test("broker sessions cross the production identity gate, but revocation require
   assert.equal((await post("", { email: "user@example.com", idleS: 30, absoluteS: 90 }, undefined, false)).status, 401);
   assert.equal((await post("", { email: "user@example.com", idleS: 91, absoluteS: 90 })).status, 400);
   assert.equal((await post("/revoke", { email: "user@example.com" })).status, 401);
-  assert.notEqual((await post("/revoke", { email: "other@example.com" }, "user@example.com")).status, 200);
-  assert.equal((await post("/revoke", { email: "user@example.com" }, "user@example.com")).status, 200);
+  const user = await srv.built.principals.act(handle("email", "user@example.com"));
+  assert.notEqual((await post("/revoke", { email: "other@example.com" }, user)).status, 200);
+  assert.equal((await post("/revoke", { email: "user@example.com" }, user)).status, 200);
   assert.deepEqual(revoked, ["user@example.com"]);
 });

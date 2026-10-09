@@ -179,7 +179,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     await built.app.upsertChannels([{ channelId: "C_OTHER", name: "other" }], [], 10);
     const body = {
       channels: [{ channelId: "C_LIVE", name: "live", isPrivate: true }],
-      channelMembers: [{ channelId: "C_LIVE", principalId: "U1" }],
+      channelMembers: [{ channelId: "C_LIVE", principalId: "U1", provider: "slack" }],
       channelsSyncedAt: 30,
       partialChannels: true,
     };

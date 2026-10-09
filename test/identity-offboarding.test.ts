@@ -11,11 +11,16 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { principalOf } from "./support/principal.ts";
+import { principalOf, testHandle } from "./support/principal.ts";
 
 const SECRET = "offboarding-secret".repeat(3);
 
-const member = (principalId: string) => ({ principalId, displayName: principalId, type: "internal" as const });
+const member = (principalId: string) => ({
+  principalId,
+  provider: testHandle(principalId).provider,
+  displayName: principalId,
+  type: "internal" as const,
+});
 
 describe("offboarding: directory sync and the /v1/principals routes drive deactivation (§3)", () => {
   let server: Server;
@@ -89,16 +94,16 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   });
 
   it("the deactivate/reactivate routes flip classification and are audited", async () => {
-    const off = await signedPost("/v1/principals/U-manual/deactivate");
-    assert.equal(off.status, 200);
     const manual = await principalOf(built, "U-manual");
+    const off = await signedPost(`/v1/principals/${manual}/deactivate`);
+    assert.equal(off.status, 200);
     assert.deepEqual(await off.json(), { ok: true, principalId: manual, active: false });
     assert.equal(built.identity.classify(manual).type, "guest");
 
     await built.app.upsertDirectory([member("U-manual")]);
     assert.equal(built.identity.classify(manual).type, "guest");
 
-    const on = await signedPost("/v1/principals/U-manual/reactivate");
+    const on = await signedPost(`/v1/principals/${manual}/reactivate`);
     assert.equal(on.status, 200);
     assert.deepEqual(await on.json(), { ok: true, principalId: manual, active: true });
     assert.equal(built.identity.classify(manual).type, "internal");
@@ -113,7 +118,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       { actorId: stay, scopeId: scopeId("personal", stay), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
-    const res = await fetch(`${base}/v1/principals/U-stay/deactivate`, {
+    const res = await fetch(`${base}/v1/principals/${stay}/deactivate`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": cap },
     });
