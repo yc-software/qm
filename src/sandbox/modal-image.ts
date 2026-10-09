@@ -23,7 +23,7 @@ export const MODAL_DEFAULT_IMAGE_SETUP =
   ` && uv pip install --no-cache --only-binary=:all: ${PYTHON_PACKAGES.join(" ")}` +
   ` && curl -fsSL -o /tmp/awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWSCLI_VERSION}.zip` +
   ` && echo "${AWSCLI_SHA256}  /tmp/awscliv2.zip" | sha256sum -c -` +
-  " && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip";
+  " && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip && aws --version";
 
 export async function resolveModalImage(client: ModalClient, reference?: string) {
   if (reference?.startsWith("im-")) return client.images.fromId(reference);
