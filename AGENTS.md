@@ -69,7 +69,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   the description as reviews arrive; mark pending reviews honestly and never invent
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
-  These reviews run alongside PR work; before merging, every lens must have accepted
+  These reviews run alongside PR work; before merging, every relevant lens must have accepted
   and all requested changes must be resolved. They supplement the correctness,
   security, and regression review above. The `Wall of shame review` CI check fails
   until the description's report covers every lens for the PR head: relevant lenses with
