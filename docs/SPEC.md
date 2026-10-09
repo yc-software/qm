@@ -174,7 +174,7 @@ Keeping old endpoints, data shapes, and code paths alive next to their replaceme
 
 Description and examples pending human input.
 
-### Performance (5 examples)
+### Performance (4 examples)
 
 Doing unnecessary work, repeating expensive work, or making independent work wait. Watch for hot polling loops, unbounded database reads, unstable prompt prefixes that defeat caching, and locks that serialize unrelated operations.
 
@@ -182,7 +182,14 @@ Doing unnecessary work, repeating expensive work, or making independent work wai
 - **Unbounded admin list queries:** The session list combined per-row JSON subqueries with full-history sorting and OFFSET pagination. A routine admin page could saturate Postgres and starve the shared connection pool used by actual turns. _Status:_ [qm#2076](https://github.com/yc-software/qm/pull/2076) makes the list query bounded and removes repeated work from each row.
 - **Serializing independent sandbox operations:** A single exclusive machine lock covered commands, file operations, and status checks. One long-running command blocked unrelated sessions using the same computer. _Status:_ [qm#1748](https://github.com/yc-software/qm/pull/1748) lets ordinary operations share the lock while keeping destructive lifecycle operations exclusive.
 - **Defeating prompt caching with incidental changes:** Changing countdowns, fresh sandbox/job snapshots, and inventories rendered in discovery order kept changing otherwise reusable prompt prefixes. _Status:_ [qm#1618](https://github.com/yc-software/qm/pull/1618) stabilizes snapshots and timestamps; [qm#1690](https://github.com/yc-software/qm/pull/1690) fixes the remaining inventory-order churn.
-- **Re-sending unneeded context every turn:** The turn context assembled in `src/core/orchestrator.ts` (system prompt plus `<environment>` note) carries the full skills index, every credential (listed twice: as execute handles and again as keychains), the shared-files list, and scheduled-work snapshots on every turn, whether or not the request needs them. Memory is worse: the whole notebook is sent at session start, then as deltas. On a long-lived DM that is hundreds of bullets, many repeated verbatim across scopes; the spec describes vector recall, but the whole notebook is sent. Caching softens the price, not the attention cost. Per-turn context should be small by default and fetched on demand. _Status:_ still present on main.
+
+### Hot-path context bloat (3 examples)
+
+Anything sent to the model on every turn is paid for on every turn, in money and in attention. Text in the system prompt and per-turn context must earn its place: no duplicates, no inventories the request doesn't need, no boilerplate repeated per item. Default to small and let the agent fetch the rest on demand.
+
+- **Per-turn `<environment>` note:** Memory, scheduled-work snapshots, and time blocks ride along with every turn whether or not the request needs them. The whole memory notebook is sent at session start and after compaction, then as deltas; on a long-lived DM that is hundreds of bullets. The spec describes vector recall, but the whole notebook is sent. _Status:_ still present on main.
+- **Redundant system prompt:** The same instructions appear more than once: an org persona/policy block repeated verbatim as lower-scope guidance, every credential listed twice (as execute handles and again as keychains), plus a full skills index and hundreds of shared-file names. Caching softens the price, not the attention cost. _Status:_ still present on main.
+- **Per-fact provenance in memory:** Each remembered fact carries its own date and scope tag, and the same fact recalled from two scopes is printed twice, so the boilerplate grows linearly with the notebook. Group by scope once and let consolidation merge duplicates. _Status:_ still present on main.
 
 ### Honorable mentions
 
