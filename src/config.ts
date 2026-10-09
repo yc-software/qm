@@ -21,7 +21,7 @@ import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strat
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
-import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
+import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import {
   parseSecurityPosture,
@@ -127,6 +127,7 @@ export interface Config {
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
+  spendExportToken?: string;
   buildSha?: string;
   monitorPollMs: number;
   skillSyncPollMs: number;
@@ -1143,6 +1144,17 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  if (env.SPEND_EXPORT_TOKEN) {
+    const reused = [
+      ...CORE_SECRET_SPECS.map((spec) => spec.name),
+      "PORTAL_SESSION_SECRET",
+      "DEPLOY_APPS_SESSION_SECRET",
+      "SECURITY_SCREEN_PROXY_TOKEN",
+      "MODEL_GATEWAY_API_KEY",
+    ].some((name) => env[name] === env.SPEND_EXPORT_TOKEN);
+    if (!isStrongSigningSecret(env.SPEND_EXPORT_TOKEN) || reused)
+      throw new Error("SPEND_EXPORT_TOKEN must be at least 32 characters and differ from every other core secret");
+  }
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
     if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
       throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
@@ -1560,6 +1572,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.BACKGROUND_DEPLOYMENT_ID
       ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
       : {}),
+    ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
     skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,

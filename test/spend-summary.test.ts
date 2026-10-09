@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import { cacheHitRatio } from "../src/admin/metrics-sink.ts";
 import type { SpendRow } from "../src/sessions/session-store.ts";
-import { spendCsv, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
+import { spendCsv, spendExportRows, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
 
 const DAY = 86_400_000;
 const MON = 20353;
@@ -409,3 +409,40 @@ for (const bucket of ["day", "week"] as const) {
     assert.deepEqual(summarize(rows.toReversed(), { bucket, to: (MON + 8) * DAY }).series, report.series);
   });
 }
+
+test("spendExportRows keeps the ledger grain, merging principal aliases into one person per day, origin and model", (t) => {
+  installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
+  const labels = new Map([
+    ["personal:slack-alice", "Alice"],
+    ["channel:C1", "#general"],
+  ]);
+  const ledger = [
+    row({ day: TUE, scopeId: "channel:C1", origin: "cron", model: "m1", costUsd: 8, calls: 2 }),
+    row({ day: MON, scopeId: "personal:slack-alice", origin: "conversation", model: "m1", costUsd: 2, input: 5 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: "m1", costUsd: 1, input: 3 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "monitor", model: "m1", costUsd: 4 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "webhook", model: "m1", costUsd: 16 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: null, costUsd: 32 }),
+  ];
+  const rows = spendExportRows(ledger, (id) => labels.get(id) ?? "");
+  assert.deepEqual(
+    rows.map((r) => [r.day, r.scopeId, r.kind, r.principalId, r.displayName, r.origin, r.model, r.costUsd, r.calls]),
+    [
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", null, 32, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "m1", 3, 2],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "m1", 20, 2],
+      ["2025-09-23", "channel:C1", "channel", null, "#general", "cron", "m1", 8, 2],
+    ],
+  );
+  assert.equal(rows[1]!.input, 8);
+  const report = summarize(ledger, { bucket: "day", to: (TUE + 1) * DAY });
+  assert.equal(
+    rows.reduce((sum, r) => sum + r.costUsd, 0),
+    report.org.costUsd,
+  );
+  assert.equal(
+    rows.filter((r) => r.principalId === "alice").reduce((sum, r) => sum + r.costUsd, 0),
+    report.people.find((p) => p.principalId === "alice")!.costUsd,
+  );
+});

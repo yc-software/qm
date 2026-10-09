@@ -68,6 +68,10 @@ The proxy endpoint receives one or more HTTPS `POST`s per bounded classification
 
 A chunk whose score is at or above its threshold resolves to Strict, and any Strict chunk makes the whole classification Strict. When chunks agree, the highest-scoring result supplies the diagnostics. The configured provider is an audit label and metadata namespace, not a built-in adapter name, so any service implementing this contract can be selected. Throttled requests retry with bounded backoff inside the classification deadline. Invalid responses, timeouts, redirects, and other provider errors are unavailable classifications, audited as `error`. Observe mode changes authority, not disclosure: it still sends the full screened content to the configured endpoint, so operators must trust that provider with external messages, files, and surface results.
 
+## Spend export
+
+`secretEnv.core.SPEND_EXPORT_TOKEN` (at least 32 characters, distinct from every other core secret) turns on `GET /v1/spend/export?from=YYYY-MM-DD&to=YYYY-MM-DD` for an external spend or chargeback system. Requests send `Authorization: Bearer <token>`; the window is whole UTC days, half-open, and at most 93 days long. The response carries `scopeId`, the `window`, `asOf` when the report is served from saved daily totals, and `rows` at the Spend page's ledger grain — one per UTC day, scope, origin (`live`, `cron`, `background`) and model — each with `scopeId`, `kind`, `principalId` (people only, after identity links), `displayName`, `calls`, `costUsd` and the four token counts. `costUsd` is the same estimate the admin Spend page shows, not a provider bill. Without the secret the route answers 404, and every export is audited as `spend.export`. Portal does not forward the route, so callers use the origin that reaches core directly.
+
 ## Secrets
 
 First-party services publish a typed `SecretSpec` schema. The CLI combines the enabled services and feature predicates with plugin `secrets` and `sandbox.secretEnv` to form the computed secret set. That same schema determines which task receives each secret. Core validates its own required runtime secrets at production boot.
