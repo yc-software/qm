@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "./support/principal.ts";
 import { createSecurityClassifier } from "../src/core/orchestrator/security-screen.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
@@ -137,7 +138,7 @@ test("screenings from real turns become the replay corpus, verbatim", async () =
   for (const [i, securityScreenData] of screened.entries()) {
     const result = await built.app.turn({
       surface: "webhook",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: `dm:U1:x${i}` },
       text: "summarize this",
       triggered: true,
@@ -148,9 +149,10 @@ test("screenings from real turns become the replay corpus, verbatim", async () =
   assert.deepEqual(outcomes, ["ok", "pending_approval", "ok"], "the live screen flags the injected instruction");
 
   const samples = await built.sessions.listScreenSamples(50);
+  const u1Scope = await personalScope(built, "U1");
   assert.equal(samples.length, 3, "every screening a turn performed is replayable");
   assert.ok(
-    samples.every((sample) => sample.model === "mock-security" && sample.scopeLabel === "personal:U1"),
+    samples.every((sample) => sample.model === "mock-security" && sample.scopeLabel === u1Scope),
     "samples carry the model and scope they were screened under",
   );
   for (const payload of screened) {

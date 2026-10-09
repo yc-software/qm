@@ -132,7 +132,7 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
 export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
-  const actor = adminActorFrom(ctx);
+  const actor = await adminActorFrom(ctx);
   if (!actor || !(await activePrincipal(deps, actor.id)))
     return sendJson(res, 200, { isAdmin: false, permissions: [] });
   const status = await deps.admin.adminStatusOf(actor);

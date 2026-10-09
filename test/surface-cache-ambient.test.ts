@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -765,13 +766,12 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
   const built = freshApp();
   built.runtime.start();
   try {
+    const alice = await principalOf(built, "U1");
     const container = "C-solicited";
-    await built.directory.replace([
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
-    ]);
+    await built.directory.replace([{ principalId: alice, displayName: "Alice", type: "internal", slackId: "U1" }]);
     await built.directory.replaceChannels(
       [{ channelId: container, name: "solicited-chan", isPrivate: false }],
-      [{ channelId: container, principalId: "alice@acme.com" }],
+      [{ channelId: container, principalId: alice }],
     );
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
@@ -783,7 +783,7 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
     const session = await built.sessions.getByThread(`slack:${container}:ambient:300.1`);
     assert.ok(session, "the worker session exists");
     const participants = await built.sessions.participantsOf(session!.id);
-    assert.deepEqual(participants, ["alice@acme.com"], "the turn ran as the asking person");
+    assert.deepEqual(participants, [alice], "the turn ran as the asking person");
     const rows = await built.ambientJudgments!.list({ container });
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.askedBy, "300.1", "asked_by is a first-class judgment field");
@@ -798,15 +798,15 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
   built.runtime.start();
   try {
     const container = "C-solicited-roster";
-    await built.directory.replace([
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
-      { principalId: "bob@acme.com", displayName: "Bob", type: "internal", slackId: "U2" },
+    await built.app.upsertDirectory([
+      { principalId: "alice@acme.com", provider: "email", displayName: "Alice", type: "internal", slackId: "U1" },
+      { principalId: "bob@acme.com", provider: "email", displayName: "Bob", type: "internal", slackId: "U2" },
     ]);
-    await built.directory.replaceChannels(
+    await built.app.upsertChannels(
       [{ channelId: container, name: "solicited-roster", isPrivate: false }],
       [
-        { channelId: container, principalId: "alice@acme.com" },
-        { channelId: container, principalId: "bob@acme.com" },
+        { channelId: container, principalId: "alice@acme.com", provider: "email" },
+        { channelId: container, principalId: "bob@acme.com", provider: "email" },
       ],
     );
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
@@ -855,11 +855,10 @@ test("a solicited ask in a group DM runs as the asking person via group-membersh
   const built = freshApp();
   built.runtime.start();
   try {
+    const alice = await principalOf(built, "U1");
     const container = "C-mpim-solicited";
-    await built.directory.replace([
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
-    ]);
-    await built.directory.replaceGroups([{ groupId: container, principalId: "alice@acme.com" }]);
+    await built.directory.replace([{ principalId: alice, displayName: "Alice", type: "internal", slackId: "U1" }]);
+    await built.directory.replaceGroups([{ groupId: container, principalId: alice }]);
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
@@ -879,7 +878,7 @@ test("a solicited ask in a group DM runs as the asking person via group-membersh
     assert.ok(session, "the worker session exists");
     assert.equal(session!.scopeId, `group:${container}`, "and it lives at the group scope");
     const participants = await built.sessions.participantsOf(session!.id);
-    assert.deepEqual(participants, ["alice@acme.com"], "the turn ran as the asking person, not the system actor");
+    assert.deepEqual(participants, [alice], "the turn ran as the asking person, not the system actor");
   } finally {
     await built.runtime.stop();
   }
@@ -954,13 +953,12 @@ test("a solicited wake in a private channel requires the asker in the pre-pushed
   const built = freshApp();
   built.runtime.start();
   try {
+    const alice = await principalOf(built, "U1");
     const container = "C-private";
-    await built.directory.replace([
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
-    ]);
+    await built.directory.replace([{ principalId: alice, displayName: "Alice", type: "internal", slackId: "U1" }]);
     await built.directory.replaceChannels(
       [{ channelId: container, name: "private-chan", isPrivate: true }],
-      [{ channelId: container, principalId: "alice@acme.com" }],
+      [{ channelId: container, principalId: alice }],
     );
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
@@ -971,7 +969,7 @@ test("a solicited wake in a private channel requires the asker in the pre-pushed
     assert.match(pending[0].text, /^private reply/);
     const session = await built.sessions.getByThread(`slack:${container}:ambient:600.1`);
     const participants = await built.sessions.participantsOf(session!.id);
-    assert.deepEqual(participants, ["alice@acme.com"], "attested private room confers the asker's authority");
+    assert.deepEqual(participants, [alice], "attested private room confers the asker's authority");
   } finally {
     await built.runtime.stop();
   }

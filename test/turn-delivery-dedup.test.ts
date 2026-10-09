@@ -14,7 +14,7 @@ function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 
 function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnRequest {
   return {

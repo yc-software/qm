@@ -175,7 +175,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     clientSecret: "google-secret",
   });
   const { app } = built;
-  const actor = { externalId: "U1" };
+  const actor = { externalId: "U1", provider: "slack" as const };
   const sys = await app.turn({
     surface: "test",
     actor,

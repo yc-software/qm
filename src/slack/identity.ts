@@ -1,7 +1,9 @@
+import type { IdentityProvider } from "../identity/principals.ts";
 import { LRUCache } from "lru-cache";
 
 export interface ActorAssertion {
   externalId: string;
+  provider?: IdentityProvider;
   isExternalGuest?: boolean;
   isBot?: boolean;
   displayName?: string;
@@ -53,13 +55,17 @@ export function classifyUser(
   );
   const displayName = user.profile?.display_name || user.real_name || user.name || user.id || "";
   let externalId = String(user.id ?? "");
+  let provider: IdentityProvider = "slack";
   if (identity === "email" && !user.is_bot) {
     const email = (user.profile?.email ?? "").trim().toLowerCase();
-    if (email.includes("@")) externalId = email;
-    else isGuest = true;
+    if (email.includes("@")) {
+      externalId = email;
+      provider = "email";
+    } else isGuest = true;
   }
   return {
     externalId,
+    provider,
     isExternalGuest: isGuest,
     ...(user.is_bot ? { isBot: true } : {}),
     ...(displayName ? { displayName } : {}),
@@ -160,18 +166,18 @@ export function allInternalChannelMembers(
   members: ActorAssertion[],
   complete: boolean,
   info: ChannelMeta | undefined,
-): string[] | undefined {
+): ActorAssertion[] | undefined {
   if (!complete) return undefined;
   if (isExternallyShared(info)) return undefined;
   if (members.some((m) => m.isExternalGuest)) return undefined;
   return internalChannelMembers(members, true);
 }
 
-export function internalChannelMembers(members: ActorAssertion[], complete: boolean): string[] | undefined {
+export function internalChannelMembers(members: ActorAssertion[], complete: boolean): ActorAssertion[] | undefined {
   if (!complete) return undefined;
-  const ids = new Set<string>();
-  for (const m of members) if (m.externalId && !m.isExternalGuest) ids.add(m.externalId);
-  return [...ids];
+  const byId = new Map<string, ActorAssertion>();
+  for (const m of members) if (m.externalId && !m.isExternalGuest && !byId.has(m.externalId)) byId.set(m.externalId, m);
+  return [...byId.values()];
 }
 
 export async function resolveChannelMembership(opts: {

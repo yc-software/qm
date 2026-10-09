@@ -17,8 +17,8 @@ function freshApp(slackContextSource?: "live" | "shadow" | "mirror") {
   return buildApp(testConfig({ dataDir, ...(slackContextSource ? { slackContextSource } : {}) }));
 }
 
-const actor = { externalId: "U1", displayName: "Ada" };
-const mate = { externalId: "U2", displayName: "Bob", type: "internal" as const };
+const actor = { externalId: "U1", provider: "slack" as const, displayName: "Ada" };
+const mate = { externalId: "U2", provider: "slack" as const, displayName: "Bob", type: "internal" as const };
 
 function mention(text: string, channel: string, root: string): TurnRequest {
   return {

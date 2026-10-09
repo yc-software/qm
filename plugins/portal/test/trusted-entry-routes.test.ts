@@ -1,3 +1,4 @@
+import { answerPrincipalLookup } from "./principal-stub.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -17,6 +18,7 @@ const codes = new Map<string, { nonce: string; challenge: string }>();
 const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
 let issuer = "";
 const upstream = createServer((req, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   void (async () => {
     const url = new URL(req.url!, issuer);
     res.setHeader("content-type", "application/json");

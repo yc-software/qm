@@ -48,7 +48,7 @@ test("a principal over budget is refused by the app", async () => {
   const { app } = buildApp(config);
   const dm = (text: string): TurnRequest => ({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "dm:U1:t1" },
     text,
   });

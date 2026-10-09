@@ -200,12 +200,12 @@ test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn 
   const turnBody = (text: string, extra: Record<string, unknown> = {}): string =>
     JSON.stringify({
       surface: "slack",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: {
         kind: "channel",
         channelRef: "C-spawn-guard",
         threadRef: "ch:C-spawn-guard:1.0",
-        audience: [{ externalId: "U1" }],
+        audience: [{ externalId: "U1", provider: "slack" as const }],
       },
       text,
       liveActor: true,
@@ -230,8 +230,13 @@ test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack'
   const turnBody = (threadRef: string): string =>
     JSON.stringify({
       surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "channel", channelRef: "C-rd", threadRef, audience: [{ externalId: "U1" }] },
+      actor: { externalId: "U1", provider: "slack" as const },
+      conversation: {
+        kind: "channel",
+        channelRef: "C-rd",
+        threadRef,
+        audience: [{ externalId: "U1", provider: "slack" as const }],
+      },
       text: "hello",
       async: true,
       redeliveryKey: "slack:B1:C-rd:1.0",
@@ -258,7 +263,7 @@ test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack'
 test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: namespace", async () => {
   const body = JSON.stringify({
     surface: "web",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "web:U1:reserved" },
     text: "hi",
     async: true,

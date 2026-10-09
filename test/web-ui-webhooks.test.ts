@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const PUBLIC = "https://core.public.example";
@@ -105,44 +106,47 @@ test("create scopes the webhook to the user; list, disable, and re-enable are ow
 });
 
 test("removed Project members cannot list or disable their former Project webhook", async () => {
+  const PROJECT_OWNER_ID = await principalOf(built, "project-owner");
+  const HOOK_OWNER_ID = await principalOf(built, "hook-owner");
+  const PROJECT_TEAMMATE_ID = await principalOf(built, "project-teammate");
   await built.app.upsertDirectory([
-    { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
-    { principalId: "hook-owner", displayName: "Hook Owner", type: "internal" },
-    { principalId: "project-teammate", displayName: "Project Teammate", type: "internal" },
+    { principalId: PROJECT_OWNER_ID, displayName: "Project Owner", type: "internal" },
+    { principalId: HOOK_OWNER_ID, displayName: "Hook Owner", type: "internal" },
+    { principalId: PROJECT_TEAMMATE_ID, displayName: "Project Teammate", type: "internal" },
   ]);
-  const project = await built.app.createProject("project-owner", "Webhook access");
+  const project = await built.app.createProject(PROJECT_OWNER_ID, "Webhook access");
   assert.ok(project);
-  assert.equal((await built.app.addProjectMember(project.id, "project-owner", "hook-owner")).status, "ok");
-  assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-teammate")).status, "ok");
+  assert.equal((await built.app.addProjectMember(project.id, PROJECT_OWNER_ID, HOOK_OWNER_ID)).status, "ok");
+  assert.equal((await built.app.addProjectMember(project.id, PROJECT_OWNER_ID, PROJECT_TEAMMATE_ID)).status, "ok");
   const webhook = await built.app.createWebhook({
     ownerScopeId: project.scopeId,
-    owner: "hook-owner",
-    createdBy: "hook-owner",
+    owner: HOOK_OWNER_ID,
+    createdBy: HOOK_OWNER_ID,
     action: "project hook",
     verification: { scheme: "github", secret: "project-secret" },
   });
 
-  const before = (await (await fetch(`${webBase}/api/webhooks`, asUser("hook-owner"))).json()) as {
+  const before = (await (await fetch(`${webBase}/api/webhooks`, asUser(HOOK_OWNER_ID))).json()) as {
     webhooks: Array<{ id: string }>;
   };
   assert.ok(before.webhooks.some((candidate) => candidate.id === webhook.id));
-  const teammateList = (await (await fetch(`${webBase}/api/webhooks`, asUser("project-teammate"))).json()) as {
+  const teammateList = (await (await fetch(`${webBase}/api/webhooks`, asUser(PROJECT_TEAMMATE_ID))).json()) as {
     webhooks: Array<{ id: string }>;
   };
   assert.ok(teammateList.webhooks.some((candidate) => candidate.id === webhook.id));
 
-  assert.equal((await built.app.removeProjectMember(project.id, "project-owner", "hook-owner")).status, "ok");
-  const after = (await (await fetch(`${webBase}/api/webhooks`, asUser("hook-owner"))).json()) as {
+  assert.equal((await built.app.removeProjectMember(project.id, PROJECT_OWNER_ID, HOOK_OWNER_ID)).status, "ok");
+  const after = (await (await fetch(`${webBase}/api/webhooks`, asUser(HOOK_OWNER_ID))).json()) as {
     webhooks: Array<{ id: string }>;
   };
   assert.ok(!after.webhooks.some((candidate) => candidate.id === webhook.id));
   assert.equal(
-    (await fetch(`${webBase}/api/webhooks/${webhook.id}/disable`, asUser("hook-owner", { method: "POST" }))).status,
+    (await fetch(`${webBase}/api/webhooks/${webhook.id}/disable`, asUser(HOOK_OWNER_ID, { method: "POST" }))).status,
     404,
   );
   assert.equal((await built.app.listWebhooks()).find((candidate) => candidate.id === webhook.id)?.enabled, true);
   assert.equal(
-    (await fetch(`${webBase}/api/webhooks/${webhook.id}/disable`, asUser("project-teammate", { method: "POST" })))
+    (await fetch(`${webBase}/api/webhooks/${webhook.id}/disable`, asUser(PROJECT_TEAMMATE_ID, { method: "POST" })))
       .status,
     200,
   );

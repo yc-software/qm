@@ -8,7 +8,7 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { selectLiteralDefaultSandbox } from "./support/default-sandbox.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -23,7 +23,7 @@ async function setup() {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "own-cred-automation-")), signingSecret: "own-cred-test" }),
   );
-  await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"), scopeId("channel", "C1"));
+  await selectLiteralDefaultSandbox(built, "U1", scopeId("personal", "U1"), scopeId("channel", "C1"));
   const credential = await built.keychain!.save({
     ownerId: "U1",
     service: "aws",

@@ -1,3 +1,4 @@
+import { slackUserOf } from "../../directory/person.ts";
 import type {
   Conversation,
   DeliveryProvenance,
@@ -92,10 +93,10 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
+  const human = input.origin?.kind === "human" && currentDestination.type === "slack" && currentDestination.target;
+  const slackUser = human ? slackUserOf(actor.id) : undefined;
   const rateLimitRecipient =
-    input.origin?.kind === "human" && currentDestination.type === "slack" && currentDestination.target
-      ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
-      : {};
+    human && slackUser ? { rateLimitRecipient: { target: currentDestination.target, user: slackUser } } : {};
   let editRefConsumed = false;
   const resolveDestination = async (
     target?: {

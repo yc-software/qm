@@ -51,7 +51,7 @@ for (const scenario of [
       const request: TurnRequest = {
         surface: "slack",
         liveActor: true,
-        actor: { externalId: "U1" },
+        actor: { externalId: "U1", provider: "slack" as const },
         ...scenario,
         conversation: {
           kind: "dm",
@@ -100,7 +100,7 @@ for (const action of ["read", "react", "post"] as const) {
       const queued = await built.app.turn({
         surface: "slack",
         liveActor: true,
-        actor: { externalId: "U1" },
+        actor: { externalId: "U1", provider: "slack" as const },
         conversation: { kind: "dm", threadRef: `surface-${action}` },
         text: "Build a website",
         surfaceTools: true,

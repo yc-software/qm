@@ -37,5 +37,6 @@ export function createApp(deps: AppDeps): App {
     }
   };
   Object.assign(app, methods);
+  Object.defineProperty(app, "principals", { get: () => deps.identity.principals });
   return Object.assign(app, createSearchMethods(deps, app, helpers), createResourceSearchMethods(deps, app, helpers));
 }

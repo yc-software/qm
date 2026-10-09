@@ -38,7 +38,7 @@ test("seal/open round-trips a payload and rejects tampering", () => {
 
 test("domain-separated keys make session and tmp tokens non-interchangeable", () => {
   const now = Math.floor(Date.now() / 1000);
-  const session: SessionClaims = { k: "session", sub: "U1", org: "acme", iat: now, exp: now + 3600 };
+  const session: SessionClaims = { k: "session", prov: "oidc", sub: "U1", org: "acme", iat: now, exp: now + 3600 };
   const sealed = seal(session, sessionKey);
   assert.equal(open(sealed, tmpKey), null);
 });
@@ -46,7 +46,7 @@ test("domain-separated keys make session and tmp tokens non-interchangeable", ()
 test("openSession enforces kind, sub, and expiry", () => {
   const now = Math.floor(Date.now() / 1000);
   const good = seal(
-    { k: "session", sub: "U1", org: "acme", iat: now, exp: now + 60 } satisfies SessionClaims,
+    { k: "session", prov: "oidc", sub: "U1", org: "acme", iat: now, exp: now + 60 } satisfies SessionClaims,
     sessionKey,
   );
   assert.equal(openSession(good, sessionKey, Date.now())?.sub, "U1");
@@ -54,7 +54,7 @@ test("openSession enforces kind, sub, and expiry", () => {
   assert.equal(openSession(good, sessionKey, Date.now(), "other-org"), null);
 
   const expired = seal(
-    { k: "session", sub: "U1", org: "acme", iat: now - 120, exp: now - 60 } satisfies SessionClaims,
+    { k: "session", prov: "oidc", sub: "U1", org: "acme", iat: now - 120, exp: now - 60 } satisfies SessionClaims,
     sessionKey,
   );
   assert.equal(openSession(expired, sessionKey, Date.now()), null);
@@ -71,6 +71,7 @@ test("openSession enforces an absolute session lifetime", () => {
   const current = seal(
     {
       k: "session",
+      prov: "oidc",
       sub: "U1",
       org: "acme",
       auth: now - 300,
@@ -84,6 +85,7 @@ test("openSession enforces an absolute session lifetime", () => {
   const tooOld = seal(
     {
       k: "session",
+      prov: "oidc",
       sub: "U1",
       org: "acme",
       auth: now - 601,
@@ -113,7 +115,7 @@ test("openTmp enforces kind and required fields", () => {
   assert.equal(opened?.state, "abc");
   assert.equal(opened?.nonce, "xyz");
   const session = seal(
-    { k: "session", sub: "U1", org: "acme", iat: now, exp: now + 600 } satisfies SessionClaims,
+    { k: "session", prov: "oidc", sub: "U1", org: "acme", iat: now, exp: now + 600 } satisfies SessionClaims,
     tmpKey,
   );
   assert.equal(openTmp(session, tmpKey, Date.now()), null);
@@ -150,7 +152,7 @@ test("openImpersonation enforces kind, actor, target, and expiry; key is domain-
   assert.equal(openImpersonation(expired, impersonateKey, Date.now()), null);
 
   const session = seal(
-    { k: "session", sub: "U-admin", org: "acme", iat: now, exp: now + 3600 } satisfies SessionClaims,
+    { k: "session", prov: "oidc", sub: "U-admin", org: "acme", iat: now, exp: now + 3600 } satisfies SessionClaims,
     impersonateKey,
   );
   assert.equal(openImpersonation(session, impersonateKey, Date.now()), null);
@@ -290,7 +292,7 @@ test("the framed session twin falls back to Lax on a non-https origin", () => {
 
 test("openSession preserves signed app-only authority and rejects malformed markers", () => {
   const now = Math.floor(Date.now() / 1000);
-  const claims = { k: "session", sub: "guest@partner.test", org: "acme", iat: now, exp: now + 3600 };
+  const claims = { k: "session", prov: "oidc", sub: "guest@partner.test", org: "acme", iat: now, exp: now + 3600 };
   assert.equal(openSession(seal({ ...claims, appOnly: true }, sessionKey), sessionKey, Date.now())?.appOnly, true);
   assert.equal(openSession(seal(claims, sessionKey), sessionKey, Date.now())?.appOnly, undefined);
   for (const appOnly of ["true", "false", 1, 0, null, {}]) {

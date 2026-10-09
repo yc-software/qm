@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   if (req.url === "/api/whoami") {
     const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
     const sub = m ? decodeURIComponent(m[1] ?? "") : "";

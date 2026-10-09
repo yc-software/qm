@@ -9,7 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 
 function slackTurn(text: string, ts: string, threadRef = "ch:C1:t1"): TurnRequest {
   return {

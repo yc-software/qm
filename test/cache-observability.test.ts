@@ -97,19 +97,19 @@ test("metrics: the cache aggregate reflects warm turns and flags a stable-prefix
   try {
     const warm1: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:w1" },
       text: "hello there",
     };
     const warm2: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U2" },
+      actor: { externalId: "U2", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U2:w2" },
       text: "how are you",
     };
     const miss: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U3" },
+      actor: { externalId: "U3", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U3:m1" },
       text: "!cachemiss",
     };
@@ -155,7 +155,7 @@ test("history /llm: per-call usage (cacheRead/cacheWrite) is plumbed through to 
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:llm" },
       text: "what's the weather",
     };

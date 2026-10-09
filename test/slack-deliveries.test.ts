@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
+import { installPrincipalResolver } from "../src/directory/person.ts";
 
 const mixedFiles = [
   { name: "first.png", mimetype: "image/png", sizeBytes: 2, blobId: "B1" },
@@ -91,7 +92,12 @@ async function deliver(
     clientForIdentity: () => client,
   });
 
-  await poller.pollDeliveries(client);
+  installPrincipalResolver({ identitiesOf: () => [{ provider: "slack", externalId: "T1:U_TARGET" }] });
+  try {
+    await poller.pollDeliveries(client);
+  } finally {
+    installPrincipalResolver(null);
+  }
   return { acknowledgements, uploads, posts, marks, probes, conversationsOpened };
 }
 
@@ -303,7 +309,7 @@ test("delegated approvals recover native buttons from durable records", async ()
     command: "publish",
     reason: "approval",
     grantModes: { session: false, always: false },
-    request: { actor: { externalId: "U1" } },
+    request: { actor: { externalId: "U1", provider: "slack" as const } },
   };
   const history: Record<string, unknown>[] = [];
   const destination = { type: "principal", target: "U1", commandApprovalId: "A1" };
@@ -325,7 +331,10 @@ test("delegated approvals recover native buttons from durable records", async ()
   assert.deepEqual(second.acknowledgements, ["D1"]);
 });
 
-for (const approval of [null, { requestId: "A1", command: "publish", request: { actor: { externalId: "U2" } } }]) {
+for (const approval of [
+  null,
+  { requestId: "A1", command: "publish", request: { actor: { externalId: "U2", provider: "slack" as const } } },
+]) {
   test(`delegated approvals discard ${approval ? "mismatched" : "expired"} records`, async () => {
     const out = await deliver(
       { type: "principal", target: "U1", commandApprovalId: "A1" },
@@ -340,7 +349,12 @@ for (const approval of [null, { requestId: "A1", command: "publish", request: { 
 }
 
 test("a stale queued approval cannot render a newer request for the same command", async () => {
-  const approval = { requestId: "A1", createdAt: 99, command: "publish", request: { actor: { externalId: "U1" } } };
+  const approval = {
+    requestId: "A1",
+    createdAt: 99,
+    command: "publish",
+    request: { actor: { externalId: "U1", provider: "slack" as const } },
+  };
   const out = await deliver(
     { type: "principal", target: "U1", commandApprovalId: "A1" },
     undefined,

@@ -1,8 +1,15 @@
+import { handle } from "../src/identity/principals.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryPrincipalStore, createPrincipalGraph } from "../src/identity/principals.ts";
+
+function sharedPrincipals() {
+  const store = createMemoryPrincipalStore();
+  return () => ({ principals: createPrincipalGraph(store) });
+}
 
 const id = createIdentityService();
 
@@ -18,8 +25,8 @@ test("classifies a flagged Slack Connect user as guest", () => {
   assert.equal(id.isInternal(p), false);
 });
 
-test("resolves bot assertions as internal automation callers", () => {
-  const p = id.resolve({ externalId: "B1", isBot: true });
+test("resolves bot assertions as internal automation callers", async () => {
+  const p = await id.actor({ externalId: "B1", provider: "slack" as const, isBot: true });
   assert.equal(p.type, "internal");
   assert.equal(id.isInternal(p), true);
 });
@@ -48,11 +55,11 @@ test("a deactivated principal classifies as non-internal (fail-closed source, §
 
 test("deactivation folds email case: a leaver stays out under any casing of their address", async () => {
   const svc = createIdentityService();
-  await svc.deactivate("Alice@Corp.com");
-  assert.equal(svc.classify("alice@corp.com").type, "guest");
-  assert.equal(svc.classify("ALICE@CORP.COM").type, "guest");
-  await svc.reactivate("alice@corp.com");
-  assert.equal(svc.classify("Alice@Corp.com").type, "internal");
+  await svc.deactivate(await svc.principals.act(handle("email", "Alice@Corp.com")));
+  assert.equal(svc.classify(svc.principals.principalOf(handle("email", "alice@corp.com"))!).type, "guest");
+  assert.equal(svc.classify(svc.principals.principalOf(handle("email", "ALICE@CORP.COM"))!).type, "guest");
+  await svc.reactivate(svc.principals.principalOf(handle("email", "alice@corp.com"))!);
+  assert.equal(svc.classify(svc.principals.principalOf(handle("email", "Alice@Corp.com"))!).type, "internal");
 });
 
 test("case fold does not merge distinct emails or touch non-email ids", async () => {
@@ -65,19 +72,21 @@ test("case fold does not merge distinct emails or touch non-email ids", async ()
 
 test("durable rehydration folds a cased stored deactivation", async () => {
   const backing = createMemoryMap<DeactivationRecord>();
-  const first = createIdentityService(backing);
-  await first.deactivate("Carol@Corp.com");
-  const second = createIdentityService(backing);
+  const deployment = sharedPrincipals();
+  const first = createIdentityService(backing, deployment());
+  await first.deactivate(await first.principals.act(handle("email", "Carol@Corp.com")));
+  const second = createIdentityService(backing, deployment());
   await second.hydrate();
-  assert.equal(second.classify("carol@corp.com").type, "guest");
+  assert.equal(second.classify(second.principals.principalOf(handle("email", "carol@corp.com"))!).type, "guest");
 });
 
 test("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
   const backing = createMemoryMap<DeactivationRecord>();
-  const first = createIdentityService(backing);
+  const deployment = sharedPrincipals();
+  const first = createIdentityService(backing, deployment());
   await first.deactivate("U-leaver");
 
-  const second = createIdentityService(backing);
+  const second = createIdentityService(backing, deployment());
   assert.equal(second.classify("U-leaver").type, "internal");
   await second.hydrate();
   assert.equal(second.classify("U-leaver").type, "guest");
@@ -85,8 +94,9 @@ test("deactivation is durable: a fresh service over the same backing rehydrates 
 
 test("a running instance refreshes deactivations written by another instance", async () => {
   const backing = createMemoryMap<DeactivationRecord>();
-  const writer = createIdentityService(backing);
-  const reader = createIdentityService(backing);
+  const deployment = sharedPrincipals();
+  const writer = createIdentityService(backing, deployment());
+  const reader = createIdentityService(backing, deployment());
   await reader.hydrate();
   await writer.deactivate("U-leaver");
   assert.equal(reader.classify("U-leaver").type, "internal");
@@ -96,8 +106,10 @@ test("a running instance refreshes deactivations written by another instance", a
 
 test("external members written by one instance reach another over the same backing", async () => {
   const externalMembers = createMemoryMap<ExternalMember>();
-  const writer = createIdentityService(undefined, { externalMembers });
-  const reader = createIdentityService(undefined, { externalMembers });
+  const deployment = sharedPrincipals();
+  const writer = createIdentityService(undefined, { externalMembers, ...deployment() });
+  const reader = createIdentityService(undefined, { externalMembers, ...deployment() });
+  const pat = await reader.principals.act(handle("email", "pat@partner.example"));
   await reader.hydrate();
   const now = Date.now();
   const member = (expiresAt: number): ExternalMember => ({
@@ -112,16 +124,16 @@ test("external members written by one instance reach another over the same backi
   assert.equal(reader.externalMember("pat@partner.example"), undefined);
   await reader.refresh();
   assert.equal(reader.externalMember("Pat@Partner.example")?.expiresAt, now + 60_000);
-  assert.equal(reader.classify("pat@partner.example").type, "internal");
+  assert.equal(reader.classify(pat).type, "internal");
 
   await writer.putExternalMember(member(now - 1));
   await reader.refresh();
-  assert.equal(reader.classify("pat@partner.example").type, "internal", "within the TTL the cache is served");
+  assert.equal(reader.classify(pat).type, "internal", "within the TTL the cache is served");
   await reader.refresh(true);
-  assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
-  const late = createIdentityService(undefined, { externalMembers });
+  assert.equal(reader.classify(pat).type, "guest", "a forced refresh reads the store");
+  const late = createIdentityService(undefined, { externalMembers, ...deployment() });
   await late.hydrate();
-  assert.equal(late.classify("pat@partner.example").type, "guest");
+  assert.equal(late.classify(pat).type, "guest");
 });
 
 test("a directory sync deactivates dropped members and self-heals when they reappear", async () => {
@@ -148,12 +160,13 @@ test("a manual deactivation survives roster churn — only reactivate() clears i
 });
 
 test("an overridden principal classifies internal even when flagged guest or deactivated", async () => {
-  const overrides = new Set(["u-contractor"]);
+  const overrides = new Set(["contractor@corp.com"]);
   const svc = createIdentityService(createMemoryMap<DeactivationRecord>(), {
-    isOverridden: (externalId) => overrides.has(externalId.trim().toLowerCase()),
+    isOverridden: (email) => overrides.has(email),
   });
-  assert.equal(svc.classify("U-CONTRACTOR", true).type, "internal");
-  await svc.deactivate("U-CONTRACTOR");
-  assert.equal(svc.classify("U-CONTRACTOR").type, "internal");
-  assert.equal(svc.classify("U-OTHER", true).type, "guest");
+  const contractor = await svc.principals.act(handle("email", "Contractor@Corp.com"));
+  assert.equal(svc.classify(contractor, true).type, "internal");
+  await svc.deactivate(contractor);
+  assert.equal(svc.classify(contractor).type, "internal");
+  assert.equal(svc.classify(await svc.principals.act(handle("email", "other@corp.com")), true).type, "guest");
 });

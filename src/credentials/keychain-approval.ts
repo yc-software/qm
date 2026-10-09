@@ -100,7 +100,7 @@ export function createKeychainApprovals(deps: {
     },
     async decide(id, assertion, decision) {
       await identity.refresh(true);
-      const actor = identity.resolve(assertion);
+      const actor = await identity.actor(assertion);
       const current = await get(id, actor.id);
       if (!identity.isInternal(actor) || !current)
         throw new KeychainError(403, "Only the credential owner can decide this request.");

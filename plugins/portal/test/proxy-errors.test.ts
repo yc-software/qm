@@ -5,11 +5,13 @@ import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { format } from "node:util";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 let whoamiMode: "ok" | "down" | "fail-once" | "malformed" = "ok";
 let whoamiRequests = 0;
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   if (req.url === "/api/whoami") {
     whoamiRequests++;
     if (whoamiMode === "down" || (whoamiMode === "fail-once" && whoamiRequests === 1)) {
@@ -65,7 +67,7 @@ const base = `http://localhost:${port}`;
 const sessionKey = deriveKey("proxy-errors-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, name?: string): string {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 3600, ...(name ? { name } : {}) }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", prov: "oidc", sub, org: "acme", iat: now, exp: now + 3600, ...(name ? { name } : {}) }, sessionKey))}`;
 }
 
 test.after(() => {

@@ -20,7 +20,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   await built.app.turn({
     surface: "test",
     surfaceTools: true,
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef },
     text: "hello",
   });

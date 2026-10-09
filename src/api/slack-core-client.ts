@@ -1,3 +1,4 @@
+import { principalFromEdge, type EdgeHandle } from "../identity/principals.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
   createSlackSessionStatus,
@@ -85,12 +86,12 @@ interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
 }
 
 interface DirectoryPush {
-  members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string }>;
+  members?: Array<EdgeHandle & { displayName: string; type: "internal"; slackId?: string; email?: string }>;
   channels?: Array<{ channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean }>;
-  channelMembers?: Array<{ channelId: string; principalId: string }>;
+  channelMembers?: Array<EdgeHandle & { channelId: string }>;
   channelRosterIds?: string[];
-  channelRevocations?: Array<{ channelId: string; principalId: string }>;
-  groupMembers?: Array<{ groupId: string; principalId: string }>;
+  channelRevocations?: Array<EdgeHandle & { channelId: string }>;
+  groupMembers?: Array<EdgeHandle & { groupId: string }>;
   groupIds?: string[];
   groupRosterIds?: string[];
   workspaceUrl?: string;
@@ -111,6 +112,7 @@ export interface SlackCoreClient {
   ackEmojiOverride(): Promise<string[] | null>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
+  personalScopeOf(actor: ActorAssertion): Promise<ScopeId>;
   channelHeaderPinEnabled(scope: ScopeId): Promise<boolean>;
   onScopeModelChanged(listener: (scope: ScopeId) => void): void;
   onChannelHeaderPinChanged(listener: (scope: ScopeId) => void): void;
@@ -286,6 +288,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async publishEmojiCatalog(emoji) {
       deps.config.setSlackEmojiCatalog(orgScope, emoji);
+    },
+
+    async personalScopeOf(actor) {
+      return scopeId("personal", await principalFromEdge(deps.identity.principals, actor.externalId, actor.provider));
     },
 
     async surfaceHeaderFacts(scope) {

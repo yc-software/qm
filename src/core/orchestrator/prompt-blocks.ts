@@ -1,3 +1,4 @@
+import { personLabel } from "../../directory/person.ts";
 import type { CandidateDestination, Cron, Monitor, Webhook } from "../../types.ts";
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 
@@ -95,7 +96,7 @@ const ROSTER_CAP = 20;
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
   const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
-  const lines = shown.map((m) => `- ${m.displayName} (${m.principalId})`);
+  const lines = shown.map((m) => `- ${personLabel({ id: m.principalId, displayName: m.displayName })}`);
   const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
   return (
     [

@@ -1,3 +1,4 @@
+import { answerPrincipalLookup } from "./principal-stub.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -12,6 +13,7 @@ const sessionSecret = "invite-route-session-secret";
 const origin = "http://127.0.0.1:19997";
 const requests: { path: string; body: string; signature: string | undefined; timestamp: string | undefined }[] = [];
 const upstream = createServer((req, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   void (async () => {
     let body = "";
     for await (const chunk of req) body += chunk;

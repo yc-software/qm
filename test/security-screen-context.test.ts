@@ -32,7 +32,7 @@ for (const surface of ["web", "slack", "swarm"]) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             surface,
-            actor: { externalId: "U1" },
+            actor: { externalId: "U1", provider: "slack" as const },
             conversation: { kind: "dm", threadRef: `${surface}-context` },
             text,
             ...(surface === "swarm" ? { triggered: true, securityScreenData: "assigned task" } : { liveActor: true }),

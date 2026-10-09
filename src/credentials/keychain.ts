@@ -6,7 +6,7 @@ import { CAPABILITY_CURL_AUTH } from "../api/contract.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
+import { personKey, personLabel, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
@@ -514,7 +514,7 @@ function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: strin
 }
 
 function byOwners(ownerIds: string[]): { field: "ownerId"; anyOfFold: string[] } {
-  return { field: "ownerId", anyOfFold: ownerIds.flatMap((id) => personIds(id)) };
+  return { field: "ownerId", anyOfFold: ownerIds };
 }
 
 function bucketByOwner<C extends { ownerId: string }, T>(
@@ -908,7 +908,7 @@ export function createKeychain(deps: {
         .map((f) => f.envKey)
         .sort()
         .join(",")}`;
-    const ownerId = canonicalPerson(input.ownerId);
+    const ownerId = input.ownerId;
     const id = credId(ownerId, service, slot);
     const buildRec = (prior?: KeychainCredential | null): KeychainCredential => {
       return {
@@ -1638,7 +1638,7 @@ function credLine(
   now: number,
   own: boolean,
 ): string {
-  const who = owner.displayName ? `${owner.displayName} (${owner.id})` : owner.id;
+  const who = personLabel(owner);
   if (isBackendCredential(c))
     return `- ${who}: Composio backend access — use the composio skill and /v1/composio; this key cannot be loaded into a computer`;
   let slot = `files ${(c.targets ?? [c.target]).filter(Boolean).sort().join(", ")}`;
@@ -1660,7 +1660,7 @@ function connectorLine(
   grantNote: string,
   own: boolean,
 ): string {
-  const who = owner.displayName ? `${owner.displayName} (${owner.id})` : owner.id;
+  const who = personLabel(owner);
   const account = cm.accountType ? `, ${cm.accountType}` : "";
   let status = "";
   if (cm.needsReconnect) {
@@ -1726,7 +1726,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service));
     const services = (input.detectedByOwner?.get(member.id) ?? []).filter((s) => !registered.has(s.toLowerCase()));
     if (!services.length) continue;
-    const who = member.displayName ? `${member.displayName} (${member.id})` : member.id;
+    const who = personLabel(member);
     detectedLines.push(
       `- ${who}: ${services.sort().join(", ")} — signed in on their own computer, not in the keychain`,
     );

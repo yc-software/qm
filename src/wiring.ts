@@ -67,16 +67,18 @@ import type { ServerDeps } from "./api/deps.ts";
 import {
   actorAssertionActive,
   createIdentityService,
+  emailInternal,
   type DeactivationRecord,
   type IdentityService,
 } from "./identity/identity-service.ts";
 import {
-  createPrincipalLinkService,
-  type PrincipalLink,
-  type PrincipalLinkService,
-} from "./identity/principal-links.ts";
+  createMemoryPrincipalStore,
+  createPostgresPrincipalStore,
+  createPrincipalGraph,
+  type PrincipalGraph,
+} from "./identity/principals.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
-import { installPrincipalLinks } from "./directory/person.ts";
+import { installPrincipalResolver } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { createResendMailer } from "./admin/invite-email.ts";
 import {
@@ -516,7 +518,7 @@ export interface BuiltApp {
   credentialUsage: CredentialUsageSink;
   egressAudit: EgressAuditSink;
   identity: IdentityService;
-  principalLinks: PrincipalLinkService;
+  principals: PrincipalGraph;
   slackAccounts: DurableMap<SlackAccountLink>;
   composioReturns: DurableMap<ComposioReturn>;
   keychain?: Keychain;
@@ -643,13 +645,15 @@ export function buildApp(
   const advisoryLock: AdvisoryLock = pgArtifactMap
     ? createPostgresAdvisoryLock(pgArtifactMap.pool)
     : createMemoryAdvisoryLock();
-  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
-  installPrincipalLinks(principalLinks);
+  const principals = createPrincipalGraph(
+    config.databaseUrl ? createPostgresPrincipalStore(config.databaseUrl) : createMemoryPrincipalStore(),
+  );
+  installPrincipalResolver(principals);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
-    isOverridden: (id) => configStore.getInternalMemberOverrides().includes(id.trim().toLowerCase()),
+    isOverridden: (handle) => configStore.getInternalMemberOverrides().includes(handle.toLowerCase()),
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
-    principalLinks,
+    principals,
   });
   void identity.hydrate().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = pgArtifactMap
@@ -1707,6 +1711,7 @@ export function buildApp(
     sessions,
   );
   const deployService = createDeployService({
+    principals,
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
     publicWebUrl: config.publicWebUrl,
@@ -1724,7 +1729,7 @@ export function buildApp(
     canManageEmail: async (email) => {
       await identity.refresh();
       return (
-        identity.isInternal(identity.classify(email)) &&
+        emailInternal(identity, email) &&
         ((await directory.get(email))?.type === "internal" ||
           config.emailAuthPrincipals?.includes(email) ||
           Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
@@ -2138,9 +2143,10 @@ export function buildApp(
     directory,
     ...(config.emailAuthPrincipals?.length
       ? {
-          emailAuthMembers: config.emailAuthPrincipals.map((principalId) => ({
-            principalId,
-            displayName: principalId,
+          emailAuthMembers: config.emailAuthPrincipals.map((email) => ({
+            principalId: email,
+            provider: "email" as const,
+            displayName: email,
             type: "internal" as const,
           })),
         }
@@ -2836,7 +2842,7 @@ export function buildApp(
     credentialUsage,
     egressAudit,
     identity,
-    principalLinks,
+    principals,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     composioReturns,
     workspace,
@@ -2976,7 +2982,7 @@ export function serverDeps(
     webhookReceiver: built.webhookReceiver,
     loopIngress: built.loopIngress,
     identity: built.identity,
-    principalLinks: built.principalLinks,
+    principals: built.principals,
     slackAccounts: built.slackAccounts,
     composioReturns: built.composioReturns,
     ...(built.keychain ? { keychain: built.keychain } : {}),

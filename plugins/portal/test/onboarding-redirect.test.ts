@@ -2,10 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 let providerConfigured = false;
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   if (req.url?.startsWith("/v1/surface-config")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(
@@ -39,7 +41,7 @@ const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 const sessionKey = deriveKey("onboarding-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string): string {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 28800 }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", prov: "oidc", sub, org: "acme", iat: now, exp: now + 28800 }, sessionKey))}`;
 }
 
 test.after(() => {

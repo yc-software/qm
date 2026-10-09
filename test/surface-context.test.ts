@@ -11,6 +11,7 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
@@ -18,11 +19,14 @@ describe("surface-context pulls", async () => {
   let server: Server;
   let base: string;
   let built: BuiltApp;
+  let u1 = "";
+  let member = "";
+  let ghost = "";
 
   const cap = (overrides: Record<string, unknown> = {}) =>
     mintCapabilityToken(
       {
-        actorId: "U1",
+        actorId: u1,
         scopeId: scopeId("channel", "C9"),
         destination: { type: "slack", target: "C9:1700.0001", audienceScopeId: scopeId("channel", "C9") },
         exp: Date.now() + CAPABILITY_TTL_MS,
@@ -75,9 +79,12 @@ describe("surface-context pulls", async () => {
     server = createServer(built.app, { signingSecret: SECRET });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    u1 = await principalOf(built, "U1");
+    member = await principalOf(built, "U-member");
+    ghost = await principalOf(built, "U-ghost");
     await built.app.upsertDirectory([
-      { principalId: "U1", displayName: "Una", type: "internal" },
-      { principalId: "U-member", displayName: "Mia", type: "internal" },
+      { principalId: u1, displayName: "Una", type: "internal", slackId: "U1" },
+      { principalId: member, displayName: "Mia", type: "internal" },
     ]);
     await built.app.upsertChannels(
       [
@@ -87,10 +94,10 @@ describe("surface-context pulls", async () => {
         { channelId: "C-SECRET", name: "warroom", isPrivate: true },
       ],
       [
-        { channelId: "C9", principalId: "U1" },
-        { channelId: "C9", principalId: "U-ghost" },
-        { channelId: "C9", principalId: "U-member" },
-        { channelId: "C-SECRET", principalId: "U-member" },
+        { channelId: "C9", principalId: u1 },
+        { channelId: "C9", principalId: ghost },
+        { channelId: "C9", principalId: member },
+        { channelId: "C-SECRET", principalId: member },
       ],
     );
   });
@@ -188,7 +195,7 @@ describe("surface-context pulls", async () => {
     const res = await post(
       "/v1/surface-context",
       { channel: "warroom" },
-      { "x-agent-capability": await cap({ actorId: "U-ghost" }) },
+      { "x-agent-capability": await cap({ actorId: ghost }) },
     );
     assert.equal(res.status, 403);
     assert.equal(((await res.json()) as any).error, "identity_unverified");
@@ -198,7 +205,7 @@ describe("surface-context pulls", async () => {
     const asking = post(
       "/v1/surface-context",
       { channel: "warroom" },
-      { "x-agent-capability": await cap({ actorId: "U-member" }) },
+      { "x-agent-capability": await cap({ actorId: member }) },
     );
     const query = await fulfillNext(() => ({ messages: [{ ts: "1699.9", author: "Bob", text: "in the warroom" }] }));
     assert.equal(query.channelId, "C-SECRET");
@@ -218,7 +225,7 @@ describe("surface-context pulls", async () => {
     const asking = post(
       "/v1/surface-context",
       { channel: "C-SECRET" },
-      { "x-agent-capability": await cap({ actorId: "U-member" }) },
+      { "x-agent-capability": await cap({ actorId: member }) },
     );
     const query = await fulfillNext(() => ({ messages: [] }));
     assert.equal(query.channelId, "C-SECRET");
@@ -323,7 +330,7 @@ describe("surface-context pulls", async () => {
     const asking = post(
       "/v1/surface-file",
       { channel: "warroom", ts: "1.0" },
-      { "x-agent-capability": await cap({ actorId: "U-member" }) },
+      { "x-agent-capability": await cap({ actorId: member }) },
     );
     const query = await fulfillNext(() => ({ file: { blobId: "b3", name: "secret.pdf", sizeBytes: 1 } }));
     assert.equal(query.channelId, "C-SECRET");

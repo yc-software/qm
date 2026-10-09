@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 let whoamiProbes = 0;
 let lastConsentClicker: string | null = null;
@@ -49,18 +50,19 @@ const upstream = createServer((req: IncomingMessage, res) => {
       JSON.stringify({ status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" }),
     );
   }
-  if (req.url?.startsWith("/v1/principals/U-admin-alias/canonical")) {
+  if (req.url?.startsWith("/v1/identities/oidc/U-admin-alias/principal")) {
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ canonicalId: "U-admin" }));
+    return void res.end(JSON.stringify({ principalId: "U-admin" }));
   }
-  if (req.url?.startsWith("/v1/principals/U-alias/canonical")) {
+  if (req.url?.startsWith("/v1/identities/oidc/U-alias/principal")) {
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ principalId: "U-alias", canonicalId: "U1" }));
+    return void res.end(JSON.stringify({ principalId: "U1" }));
   }
-  if (req.url?.startsWith("/v1/principals/U-unresolved/canonical")) {
+  if (req.url?.startsWith("/v1/identities/oidc/U-unresolved/principal")) {
     res.writeHead(500, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ error: "boom" }));
   }
+  if (answerPrincipalLookup(req, res)) return;
   if (req.url === "/api/whoami") {
     whoamiProbes++;
     const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
@@ -123,7 +125,7 @@ const sessionKey = deriveKey("router-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, ageS = 0): string {
   const now = Math.floor(Date.now() / 1000);
   const iat = now - ageS;
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", prov: "oidc", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 test.after(() => {
@@ -197,7 +199,7 @@ test("valid session: upstream receives ONLY the synthesized cookie, prefix strip
   assert.equal(body.headers["x-admin-actor"], undefined);
 });
 
-test("a session whose subject core links to another principal is proxied as that canonical principal", async () => {
+test("a session is proxied as the principal core resolves its subject to", async () => {
   const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-alias") } });
   assert.equal(r.status, 200);
   const body = (await r.json()) as { cookie: string };

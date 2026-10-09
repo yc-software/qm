@@ -104,7 +104,10 @@ export function registerSlackEvents(
   const eventIdentity = async (
     client: any,
     event: { user?: string; bot_id?: string },
-  ): Promise<{ userId: string; actor?: { externalId: string; isBot: true; displayName?: string } }> => {
+  ): Promise<{
+    userId: string;
+    actor?: { externalId: string; provider: "slack"; isBot: true; displayName?: string };
+  }> => {
     if (event.user) return { userId: event.user };
     if (!event.bot_id) return { userId: "" };
     try {
@@ -115,6 +118,7 @@ export function registerSlackEvents(
           userId: event.bot_id,
           actor: {
             externalId: event.bot_id,
+            provider: "slack",
             isBot: true,
             ...(bot.name ? { displayName: String(bot.name) } : {}),
           },
@@ -394,8 +398,8 @@ export function registerSlackEvents(
   app.event("member_left_channel", async ({ event, body, client }: EventArgs) => {
     const e = parseLifecycleEvent(event);
     if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }))) return;
-    const principalId = e.user ? (await directory.classifyUserCached(client, e.user)).actor.externalId : undefined;
-    await forceDirectorySync(client, e.channel, principalId);
+    const member = e.user ? (await directory.classifyUserCached(client, e.user)).actor : undefined;
+    await forceDirectorySync(client, e.channel, member);
   });
 
   app.event("assistant_thread_started", async () => {});

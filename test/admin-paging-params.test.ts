@@ -37,7 +37,7 @@ test("admin list endpoints accept fractional limit values", { skip: !URL }, asyn
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:paging" },
       text: "hello",
     };

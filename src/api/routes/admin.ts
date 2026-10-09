@@ -56,7 +56,13 @@ import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./a
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
-import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
+import {
+  combinePrincipals,
+  linkIdentity,
+  listIdentities,
+  setPrincipalEmails,
+  unlinkIdentity,
+} from "./admin/identities.ts";
 
 const timed =
   (handle: (ctx: ApiCtx) => void | Promise<void>) =>
@@ -157,9 +163,11 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/users/:principalId", auth: "either", handle: getUserDetail },
   { method: "PUT", path: "/v1/admin/users/:principalId/onboarding", auth: "either", handle: setUserOnboarding },
   { method: "POST", path: "/v1/admin/users/:principalId/reset", auth: "either", handle: resetUserToBrandNew },
-  { method: "GET", path: "/v1/admin/principal-links", auth: "either", handle: listPrincipalLinks },
-  { method: "POST", path: "/v1/admin/principal-links", auth: "either", handle: createPrincipalLink },
-  { method: "DELETE", path: "/v1/admin/principal-links/:principalId", auth: "either", handle: deletePrincipalLink },
+  { method: "GET", path: "/v1/admin/identities", auth: "either", handle: listIdentities },
+  { method: "POST", path: "/v1/admin/identities/link", auth: "either", handle: linkIdentity },
+  { method: "POST", path: "/v1/admin/identities/unlink", auth: "either", handle: unlinkIdentity },
+  { method: "PUT", path: "/v1/admin/principals/:principalId/emails", auth: "either", handle: setPrincipalEmails },
+  { method: "POST", path: "/v1/admin/principals/combine", auth: "either", handle: combinePrincipals },
   { method: "POST", path: "/v1/admin/grants", auth: "either", handle: createAdminGrant },
   { method: "DELETE", path: "/v1/admin/grants/:principalId", auth: "either", handle: revokeAdminGrant },
   { method: "POST", path: "/v1/admin/users/invite", auth: "either", handle: inviteTeammate },

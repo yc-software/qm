@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { resolveAgentRequestTarget } from "../src/slack/approval-context.ts";
 import type { ActorAssertion } from "../src/slack/lib.ts";
 
-const TEAMMATE: ActorAssertion = { externalId: "dana@acme.com", displayName: "Dana" };
-const REQUESTER: ActorAssertion = { externalId: "amy@acme.com", displayName: "Amy" };
+const TEAMMATE: ActorAssertion = { externalId: "dana@acme.com", provider: "email" as const, displayName: "Dana" };
+const REQUESTER: ActorAssertion = { externalId: "amy@acme.com", provider: "email" as const, displayName: "Amy" };
 const DIRECTIVE_TARGET = "U_DANA";
 const emailBridge = new Map<string, string>([
   ["amy@acme.com", "U_AMY"],
@@ -22,7 +22,12 @@ test("email mode: dropping the map leaves the same teammate unresolvable (the re
 });
 
 test("slack-id mode: a bot/member whose externalId is already the Slack id resolves without a map", () => {
-  const bot: ActorAssertion = { externalId: "B_HELPER", isBot: true, displayName: "Helper" };
+  const bot: ActorAssertion = {
+    externalId: "B_HELPER",
+    provider: "slack" as const,
+    isBot: true,
+    displayName: "Helper",
+  };
   assert.equal(resolveAgentRequestTarget([REQUESTER, bot], "B_HELPER"), bot);
 });
 

@@ -1,3 +1,5 @@
+import type { EdgeHandle } from "../identity/principals.ts";
+import type { PrincipalGraph } from "../identity/principals.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
@@ -276,6 +278,7 @@ export interface SessionSearchHit {
 
 export interface App {
   swarms?: SwarmService;
+  readonly principals: PrincipalGraph;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
@@ -497,17 +500,17 @@ export interface App {
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
-  upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
+  upsertDirectory(members: (DirectoryMember & EdgeHandle & { email?: string })[], syncedAt?: number): Promise<boolean>;
   upsertChannels(
     channels: DirectoryChannel[],
-    channelMembers?: ChannelMembership[],
+    channelMembers?: (ChannelMembership & EdgeHandle)[],
     syncedAt?: number,
     channelRosterIds?: string[],
-    revocations?: ChannelMembership[],
+    revocations?: (ChannelMembership & EdgeHandle)[],
     partial?: boolean,
   ): Promise<boolean>;
   upsertGroups(
-    groupMembers: GroupMembership[],
+    groupMembers: (GroupMembership & EdgeHandle)[],
     syncedAt?: number,
     groupIds?: string[],
     groupRosterIds?: string[],
@@ -596,6 +599,7 @@ export interface App {
     email: string,
     actorId: string,
   ): Promise<{
+    scope: ScopeId;
     grantees: DeploymentGrantee[];
     invitation: DeploymentInvitation;
   }>;
@@ -659,7 +663,7 @@ export interface AppDeps {
   webhooks: WebhookStore;
   deliveries: DeliveryStore;
   directory: DirectoryStore;
-  emailAuthMembers?: DirectoryMember[];
+  emailAuthMembers?: (DirectoryMember & EdgeHandle)[];
   projects?: ProjectStore;
   deploy: DeployService;
   deployAppsDomain?: string;

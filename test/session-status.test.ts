@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { isSessionStatus } from "../src/sessions/session-status.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 
 test("status accepts compound emoji and rejects multiple emoji, shortcodes, and empty text", () => {
@@ -18,22 +19,24 @@ test("status changes notify viewers without changing run state; former participa
   const built = buildApp(testConfig({}));
   const turn = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "status-notify" },
     text: "hello",
   });
   const id = turn.sessionId!;
-  await built.sessions.addParticipant(id, "U2");
+  const p1 = await principalOf(built, "U1");
+  const p2 = await principalOf(built, "U2");
+  await built.sessions.addParticipant(id, p2);
   const events: SessionStateEvent[] = [];
   const unsub = built.app.subscribeSessionStates((e) => events.push(e));
   const status = { emoji: "✅", text: "PR merged" };
-  assert.deepEqual((await built.app.updateSession(id, "U1", { status }))?.status, status);
+  assert.deepEqual((await built.app.updateSession(id, p1, { status }))?.status, status);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(events.length, 1);
   assert.equal(events[0]?.state, "metadata");
-  assert.ok(events[0]?.participants?.includes("U2"));
-  await built.sessions.removeParticipant(id, "U2");
-  assert.equal(await built.app.updateSession(id, "U2", { status: null }), null);
+  assert.ok(events[0]?.participants?.includes(p2));
+  await built.sessions.removeParticipant(id, p2);
+  assert.equal(await built.app.updateSession(id, p2, { status: null }), null);
   assert.deepEqual((await built.sessions.get(id))?.status, status);
   unsub();
 });

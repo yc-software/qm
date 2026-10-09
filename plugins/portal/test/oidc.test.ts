@@ -176,7 +176,7 @@ test("verifyIdToken requires a valid signature, issuer, audience, subject, nonce
 test("resolvePrincipal claim=sub returns the subject untouched", async () => {
   assert.deepEqual(
     await resolvePrincipal({ claim: "sub" }, { sub: "U1", claims: {}, userinfo: { email: "a@b.com" } }),
-    { sub: "U1" },
+    { sub: "U1", prov: "sub" },
   );
 });
 
@@ -185,7 +185,7 @@ test("resolvePrincipal claim=email returns the verified email, normalized", asyn
     { claim: "email" },
     { sub: "g-123", claims: {}, userinfo: { email: " Alice@Example.com ", email_verified: true } },
   );
-  assert.deepEqual(got, { sub: "alice@example.com" });
+  assert.deepEqual(got, { sub: "alice@example.com", prov: "email" });
 });
 
 test("resolvePrincipal claim=email requires the verified userinfo response", async () => {
@@ -220,7 +220,7 @@ test("resolvePrincipal allowedEmailDomain gates the email suffix and the hd clai
     claims: {},
     userinfo: { email: "a@example.com", email_verified: true, hd: "example.com" },
   });
-  assert.deepEqual(ok, { sub: "a@example.com" });
+  assert.deepEqual(ok, { sub: "a@example.com", prov: "email" });
   await assert.rejects(
     resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "a@gmail.com", email_verified: true } }),
     /permitted domain/,
@@ -251,7 +251,7 @@ test("resolvePrincipal allowedEmails permits only the seeded verified addresses"
       claims: {},
       userinfo: { email: "admin@example.com", email_verified: true },
     }),
-    { sub: "admin@example.com" },
+    { sub: "admin@example.com", prov: "email" },
   );
   await assert.rejects(
     resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "other@example.com", email_verified: true } }),
@@ -272,16 +272,20 @@ test("resolvePrincipal admits an invited external address that the env rules rej
     userinfo: { email, email_verified: true, ...extra },
   });
 
-  assert.deepEqual(await resolvePrincipal(rule, verified("Admin@Example.com"), invited), { sub: "admin@example.com" });
+  assert.deepEqual(await resolvePrincipal(rule, verified("Admin@Example.com"), invited), {
+    sub: "admin@example.com",
+    prov: "email",
+  });
   assert.deepEqual(asked, [], "an address the env rules permit never consults core");
 
   assert.deepEqual(await resolvePrincipal(rule, verified(" Guest@Partner.test "), invited), {
     sub: "guest@partner.test",
+    prov: "email",
   });
   assert.deepEqual(asked, ["guest@partner.test"], "core is asked with the normalized address");
   assert.deepEqual(
     await resolvePrincipal(rule, verified("guest@partner.test", { hd: "partner.test" }), invited),
-    { sub: "guest@partner.test" },
+    { sub: "guest@partner.test", prov: "email" },
     "a foreign hd claim does not block an invited address",
   );
 
@@ -317,10 +321,12 @@ test("resolvePrincipal preserves deployment-only admission and fails closed for 
     const rule = { claim, requireCoreAdmission: true };
     assert.deepEqual(await resolvePrincipal(rule, args, async () => ({ allowed: true, appOnly: true })), {
       sub: "guest@partner.test",
+      prov: "email",
       appOnly: true,
     });
     assert.deepEqual(await resolvePrincipal(rule, args, async () => ({ allowed: true })), {
       sub: claim === "sub" ? "idp-subject" : "guest@partner.test",
+      prov: claim === "sub" ? "sub" : "email",
     });
     await assert.rejects(
       resolvePrincipal(rule, args, async () => ({ allowed: false })),
@@ -338,6 +344,6 @@ test("resolvePrincipal preserves deployment-only admission and fails closed for 
       allowed: true,
       appOnly: true,
     })),
-    { sub: "guest@partner.test", appOnly: true },
+    { sub: "guest@partner.test", prov: "email", appOnly: true },
   );
 });

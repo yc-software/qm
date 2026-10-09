@@ -90,7 +90,7 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         surface: "http-e2e",
-        actor: { externalId: "U1" },
+        actor: { externalId: "U1", provider: "slack" as const },
         conversation: { kind: "dm", threadRef },
         text,
       }),

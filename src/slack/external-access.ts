@@ -49,6 +49,7 @@ export function companySlackActor(user: SlackUser | undefined, policy: ExternalS
   );
   return {
     externalId: internal ? email : String(user?.id ?? "slack-unknown"),
+    provider: internal ? ("email" as const) : ("slack" as const),
     isExternalGuest: !internal,
     ...(user?.is_bot ? { isBot: true } : {}),
     ...(user?.profile?.display_name || user?.real_name || user?.name

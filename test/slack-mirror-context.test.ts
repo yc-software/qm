@@ -126,7 +126,7 @@ test("external audience is rejected before reading mirror or Slack", async () =>
   const result = await serializer.serializeSlackConversation(
     {},
     { kind: "channel", channel: "C1", ts: "1", files: [] },
-    { audience: [{ externalId: "U1", isExternalGuest: true }] },
+    { audience: [{ externalId: "U1", provider: "slack" as const, isExternalGuest: true }] },
   );
   assert.deepEqual(result.view.messages, []);
 });

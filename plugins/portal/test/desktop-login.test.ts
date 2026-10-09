@@ -15,6 +15,7 @@ const state = randomBytes(32).toString("base64url");
 const now = Math.floor(Date.now() / 1000);
 const browser: SessionClaims = {
   k: "session",
+  prov: "oidc",
   sub: "person@example.test",
   org: "desktop-test",
   auth: now - 60,

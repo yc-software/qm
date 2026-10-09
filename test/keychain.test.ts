@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { principalOf } from "./support/principal.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -105,16 +106,17 @@ test("listing and per-owner reads use the store's projected select and never a f
   await k.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "ya29.u1" });
   await k.setServiceCredential(org, { slug: "stripe", name: "Stripe", secret: "sk_live", host: "api.stripe.com" });
 
-  const mine = await k.listByOwner("alice@x.COM");
-  assert.equal(mine.length, 1, "owner matching stays samePerson-compatible across email casing");
+  const mine = await k.listByOwner("Alice@X.com");
+  assert.equal(mine.length, 1, "owner matching is exact on the principal id");
+  assert.equal((await k.listByOwner("alice@x.COM")).length, 0, "no case folding: handles resolve at edges");
   assert.ok(mine.every((c) => !("secretEnc" in c)));
 
   const all = await k.listAllMetadata();
   assert.deepEqual(all.map((c) => c.ownerId).sort(), ["Alice@X.com", "U1"]);
   assert.ok(all.every((c) => !("secretEnc" in c)));
 
-  const grouped = await k.listByOwners(["ALICE@x.com", "U1"]);
-  assert.equal(grouped.get("ALICE@x.com")!.length, 1);
+  const grouped = await k.listByOwners(["Alice@X.com", "U1"]);
+  assert.equal(grouped.get("Alice@X.com")!.length, 1);
   assert.equal(grouped.get("U1")!.length, 1);
 
   const connectors = await k.listConnectorsByOwners(["U1"]);
@@ -835,7 +837,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     detectedByOwner: new Map([["U1", ["GitHub", "AWS SSO"]]]),
   });
   assert.match(detected, /Detected but NOT registered/);
-  assert.match(detected, /Alice \(U1\): AWS SSO, GitHub — signed in on their own computer/);
+  assert.match(detected, /Alice: AWS SSO, GitHub — signed in on their own computer/);
 
   const k = kc();
   const cred = await k.save(GH);
@@ -865,7 +867,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     ],
   });
   assert.match(block, /## Teammate keychains/);
-  assert.match(block, /Alice \(U1\): github/);
+  assert.match(block, /Alice: github/);
   assert.match(block, new RegExp(`credential id \`${cred.id}\``));
   assert.match(block, /STANDING grant .*gh for repo work here/);
   assert.match(block, /kc_[a-f0-9]{12}.*GITHUB_TOKEN/);
@@ -1270,15 +1272,19 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     resolved.push(args[1]);
     return materializeOwnById(...args);
   };
+  const owner = await principalOf(built, "U_OWNER");
   const cred = await built.keychain!.save({
-    ownerId: "U_OWNER",
+    ownerId: owner,
     service: "github",
     secret: "ghp_e2e",
     envKey: "GITHUB_TOKEN",
     accountLabel: "AliceBell",
   });
 
-  const audience = [{ externalId: "U_ASKER" }, { externalId: "U_OWNER", displayName: "Alice" }];
+  const audience = [
+    { externalId: "U_ASKER", provider: "slack" as const },
+    { externalId: "U_OWNER", provider: "slack" as const, displayName: "Alice" },
+  ];
   const sys = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
   assert.equal(sys.status, "ok");
   assert.match(sys.reply ?? "", /## Teammate keychains/);
@@ -1293,7 +1299,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
 
   await built.keychain!.createGrant({
     credentialId: cred.id,
-    ownerId: "U_OWNER",
+    ownerId: owner,
     audienceScopeId: "channel:C1",
     mode: "standing",
     purpose: "use my gh here for repo work",
@@ -1311,8 +1317,12 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   mark = fakeSprites.execScripts().length;
   const dm: TurnRequest = {
     surface: "test",
-    actor: { externalId: "U_OWNER" },
-    conversation: { kind: "dm", threadRef: "dm:U_OWNER", audience: [{ externalId: "U_OWNER" }] },
+    actor: { externalId: "U_OWNER", provider: "slack" as const },
+    conversation: {
+      kind: "dm",
+      threadRef: "dm:U_OWNER",
+      audience: [{ externalId: "U_OWNER", provider: "slack" as const }],
+    },
     origin: { kind: "human" },
     text: "!run true",
   } as TurnRequest;

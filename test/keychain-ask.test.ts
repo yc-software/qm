@@ -832,12 +832,12 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const seeded = await built.app.turn({
       surface: "slack",
-      actor: { externalId: "U_BOB" },
+      actor: { externalId: "U_BOB", provider: "slack" as const },
       conversation: {
         kind: "channel",
         threadRef: "ch:C_INFRA-thread",
         channelRef: "C_INFRA",
-        audience: [{ externalId: "U_BOB" }],
+        audience: [{ externalId: "U_BOB", provider: "slack" as const }],
       },
       text: "waiting on alice",
     } as TurnRequest);
@@ -976,7 +976,10 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
             kind: kind === "channel" ? "channel" : "group",
             threadRef,
             channelRef: scope.slice(scope.indexOf(":") + 1),
-            audience: [{ externalId: "U_ALICE" }, { externalId: "U_BOB" }],
+            audience: [
+              { externalId: "U_ALICE", provider: "slack" as const },
+              { externalId: "U_BOB", provider: "slack" as const },
+            ],
           },
           text: "waiting for permission for a synthetic shared job",
         } as TurnRequest);
@@ -1082,7 +1085,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       ).json()) as any;
       const seed = await built.app.turn({
         surface: "slack",
-        actor: { externalId: "U_ALICE" },
+        actor: { externalId: "U_ALICE", provider: "slack" as const },
         conversation: { kind: "dm", threadRef },
         text: "waiting for scheduled credential approval",
       } as TurnRequest);
@@ -1225,8 +1228,13 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
   const turn = (triggered: boolean): TurnRequest =>
     ({
       surface: triggered ? "keychain-ask" : "slack",
-      actor: { externalId: "U_ALICE" },
-      conversation: { kind: "channel", threadRef: "ch:C9-t", channelRef: "C9", audience: [{ externalId: "U_ALICE" }] },
+      actor: { externalId: "U_ALICE", provider: "slack" as const },
+      conversation: {
+        kind: "channel",
+        threadRef: "ch:C9-t",
+        channelRef: "C9",
+        audience: [{ externalId: "U_ALICE", provider: "slack" as const }],
+      },
       text: "!run true",
       ...(triggered ? { triggered: true } : {}),
     }) as TurnRequest;

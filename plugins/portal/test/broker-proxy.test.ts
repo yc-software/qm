@@ -238,7 +238,7 @@ test("logout clears the remembered cookie and everywhere requires an authenticat
   assert.equal(unsigned.status, 401);
   const now = Date.now();
   const cookie = seal(
-    { k: "session", sub: "user@example.com", org: "acme", iat: now, exp: now + 60000 },
+    { k: "session", prov: "oidc", sub: "user@example.com", org: "acme", iat: now, exp: now + 60000 },
     deriveKey(process.env.PORTAL_SESSION_SECRET!, "portal.session.v1"),
   );
   const signed = await fetch(`${base}/auth/logout?everywhere=1`, {

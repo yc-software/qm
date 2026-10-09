@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { installPrincipalResolver } from "../src/directory/person.ts";
 
 const TS = "1723497600.123456";
 
@@ -10,7 +11,7 @@ test("a threaded principal delivery posts and records the DM thread", async () =
   let claimed = false;
   const delivery = {
     id: "delivery-1",
-    destination: { type: "principal", target: "U-alice", threadTs: TS },
+    destination: { type: "principal", target: "alice-principal", threadTs: TS },
     text: "in the DM thread",
     idempotencyKey: "reach:1",
     createdAt: Date.now(),
@@ -40,7 +41,14 @@ test("a threaded principal delivery posts and records the DM thread", async () =
     clientForIdentity: () => client,
   });
 
-  await poller.pollDeliveries(client);
+  installPrincipalResolver({
+    identitiesOf: (id) => (id === "alice-principal" ? [{ provider: "slack", externalId: "U-alice" }] : []),
+  });
+  try {
+    await poller.pollDeliveries(client);
+  } finally {
+    installPrincipalResolver(null);
+  }
 
   assert.equal(posts.length, 1);
   assert.equal(posts[0]!.channel, "D-alice");

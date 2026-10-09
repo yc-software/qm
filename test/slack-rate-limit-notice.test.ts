@@ -104,6 +104,10 @@ test("shared URL propagates for managed and own-app accounts without installatio
 
 test("explicit read tools notify only for human Slack turns, using their original destination", async () => {
   const { createSurfaceToolDeps } = await import("../src/core/orchestrator/surface-tools.ts");
+  const { installPrincipalResolver } = await import("../src/directory/person.ts");
+  installPrincipalResolver({
+    identitiesOf: (id) => (id === "reader-principal" ? [{ provider: "slack", externalId: "T1:U_READER" }] : []),
+  });
   for (const kind of ["human", "ambient", "automation"] as const) {
     const queries: any[] = [];
     const tools = createSurfaceToolDeps({
@@ -117,7 +121,7 @@ test("explicit read tools notify only for human Slack turns, using their origina
         },
       },
       input: { surface: "slack", surfaceTools: true, origin: { kind }, background: true },
-      actor: { id: "reader@example.com" },
+      actor: { id: "reader-principal" },
       conversation: { kind: "channel" },
       defaultDestination: { type: "slack", target: "C1:1700.1" },
     } as any)!;
@@ -128,9 +132,10 @@ test("explicit read tools notify only for human Slack turns, using their origina
     for (const query of queries)
       assert.deepEqual(
         query.rateLimitRecipient,
-        kind === "human" ? { target: "C1:1700.1", user: "reader@example.com" } : undefined,
+        kind === "human" ? { target: "C1:1700.1", user: "U_READER" } : undefined,
       );
   }
+  installPrincipalResolver(null);
 });
 
 test("automatic and tool reads share a cooldown after normalizing the requester, without suppressing other people", async (t) => {

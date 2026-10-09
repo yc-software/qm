@@ -46,7 +46,7 @@ describe("HTTP e2e (live Pi over the API)", { skip: NO_KEY ? "set ANTHROPIC_API_
     return { http: res.status, json: await res.json() };
   }
 
-  const actor = { externalId: "U1" };
+  const actor = { externalId: "U1", provider: "slack" as const };
   const dm = (text: string, threadRef = "t1") => ({
     surface: "http-e2e",
     actor,

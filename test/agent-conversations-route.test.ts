@@ -1,3 +1,5 @@
+import { principalOf, testHandle } from "./support/principal.ts";
+import { handle } from "../src/identity/principals.ts";
 import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -13,7 +15,12 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "agent-conversations-secret".repeat(2);
 
 function dm(externalId: string, text: string, thread: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    surface: "test",
+    actor: { externalId, provider: testHandle(externalId).provider },
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 describe("agent conversations self-API", async () => {
@@ -23,11 +30,20 @@ describe("agent conversations self-API", async () => {
   let mineId: string;
   let theirsId: string;
 
-  const capFor = (actorId: string, scope = scopeId("personal", actorId), live = true) =>
-    mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS, liveActor: live },
+  const P = { U1: "", U2: "", U3: "", U4: "" };
+  const capFor = async (handle: string, scope?: string, live = true) => {
+    const actorId = await principalOf(built, handle);
+    return mintCapabilityToken(
+      {
+        actorId,
+        scopeId: scope ?? scopeId("personal", actorId),
+        aud: CONTROL_PLANE_AUD,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        liveActor: live,
+      },
       SECRET,
     );
+  };
 
   const get = async (path: string, token?: string) =>
     fetch(`${base}${path}`, { headers: token ? { "x-agent-capability": token } : {} });
@@ -49,6 +65,7 @@ describe("agent conversations self-API", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    for (const h of ["U1", "U2", "U3", "U4"] as const) P[h] = await built.principals.act(handle("slack", h));
     mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
     theirsId = (await built.app.turn(dm("U2", "someone else's chat", "web:U2:c1"))).sessionId!;
   });
@@ -59,7 +76,7 @@ describe("agent conversations self-API", async () => {
 
   it("sets, replaces, lists and clears a shared session status", async () => {
     const token = await capFor("U1");
-    await built.sessions.addParticipant(mineId, "U3");
+    await built.sessions.addParticipant(mineId, P.U3);
     for (const status of [{ emoji: "✅", text: "PR merged" }, { emoji: "🚀", text: "Live in production" }, null]) {
       const res = await post(`/v1/conversations/${mineId}`, { status }, token);
       assert.equal(res.status, 200);
@@ -67,7 +84,7 @@ describe("agent conversations self-API", async () => {
         ((await res.json()) as { conversation: { status: SessionStatus | null } }).conversation.status,
         status,
       );
-      assert.deepEqual((await built.app.getSessionForViewer(mineId, "U3"))?.session.status ?? null, status);
+      assert.deepEqual((await built.app.getSessionForViewer(mineId, P.U3))?.session.status ?? null, status);
       const list = await get("/v1/conversations", token);
       assert.deepEqual(
         (
@@ -101,8 +118,8 @@ describe("agent conversations self-API", async () => {
   it("refuses conversation status from Slack turns while other updates still apply", async () => {
     const slack = await mintCapabilityToken(
       {
-        actorId: "U1",
-        scopeId: scopeId("personal", "U1"),
+        actorId: P.U1,
+        scopeId: scopeId("personal", P.U1),
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
         liveActor: true,
@@ -110,18 +127,18 @@ describe("agent conversations self-API", async () => {
       },
       SECRET,
     );
-    const before = (await built.app.getSessionForViewer(mineId, "U1"))?.session.status ?? null;
+    const before = (await built.app.getSessionForViewer(mineId, P.U1))?.session.status ?? null;
     const refused = await post(`/v1/conversations/${mineId}`, { status: { emoji: "👍", text: "Cleared" } }, slack);
     assert.equal(refused.status, 403);
-    assert.deepEqual((await built.app.getSessionForViewer(mineId, "U1"))?.session.status ?? null, before);
+    assert.deepEqual((await built.app.getSessionForViewer(mineId, P.U1))?.session.status ?? null, before);
     const renamed = await post(`/v1/conversations/${mineId}`, { title: "Launch plan" }, slack);
     assert.equal(renamed.status, 200);
     assert.equal(((await renamed.json()) as { conversation: { title: string } }).conversation.title, "Launch plan");
   });
 
   it("new sessions start clean with only the seed text", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
+    const out = await startSession(built.app, built.sessions, P.U1, {
+      scopeId: scopeId("personal", P.U1),
       text: "investigate the flaky test",
       title: "Flaky test hunt",
     });
@@ -133,17 +150,17 @@ describe("agent conversations self-API", async () => {
     assert.equal(run?.request.surface, "web");
     const entries = await built.sessions.getEntries(out.session.id);
     assert.ok(!entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
-    const listed = await built.app.listSessions("U1");
+    const listed = await built.app.listSessions(P.U1);
     assert.ok(listed.some((s) => s.id === out.session.id));
   });
 
   it("new sessions in a channel seed their turn on that channel", async () => {
-    await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
+    await built.app.upsertDirectory([{ principalId: P.U1, displayName: "User One", type: "internal" }]);
     await built.app.upsertChannels(
       [{ channelId: "C1", name: "engineering", isPrivate: true }],
-      [{ channelId: "C1", principalId: "U1" }],
+      [{ channelId: "C1", principalId: P.U1 }],
     );
-    const out = await startSession(built.app, built.sessions, "U1", {
+    const out = await startSession(built.app, built.sessions, P.U1, {
       scopeId: scopeId("channel", "C1"),
       text: "investigate the channel deployment",
     });
@@ -161,15 +178,15 @@ describe("agent conversations self-API", async () => {
           ? { status: "refused", reason: "project membership changed" }
           : built.app.turn(req),
     };
-    const ids = async () => (await built.app.listSessions("U1")).map((s) => s.id).sort();
+    const ids = async () => (await built.app.listSessions(P.U1)).map((s) => s.id).sort();
     const before = await ids();
     assert.deepEqual(
-      await startSession(raced, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), text: "refused" }),
+      await startSession(raced, built.sessions, P.U1, { scopeId: scopeId("personal", P.U1), text: "refused" }),
       { error: "project membership changed" },
     );
     assert.deepEqual(await ids(), before);
-    const forked = await startSession(raced, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
+    const forked = await startSession(raced, built.sessions, P.U1, {
+      scopeId: scopeId("personal", P.U1),
       forkOf: mineId,
       text: "refused",
     });
@@ -180,11 +197,11 @@ describe("agent conversations self-API", async () => {
   it("refuses a scope or fork source the actor can't use", async () => {
     assert.ok(
       "error" in
-        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U2"), text: "peek" })),
+        (await startSession(built.app, built.sessions, P.U1, { scopeId: scopeId("personal", P.U2), text: "peek" })),
     );
     assert.ok(
       "error" in
-        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), forkOf: theirsId })),
+        (await startSession(built.app, built.sessions, P.U1, { scopeId: scopeId("personal", P.U1), forkOf: theirsId })),
     );
   });
 
@@ -217,7 +234,7 @@ describe("agent conversations self-API", async () => {
   it("archiving is per-participant view state, not visible to the other viewer's list semantics", async () => {
     const token = await capFor("U1");
     await post(`/v1/conversations/${mineId}`, { archived: true }, token);
-    const other = await built.app.listSessions("U2");
+    const other = await built.app.listSessions(P.U2);
     assert.ok(!other.some((s) => s.id === mineId && s.archived), "U1's archive never marks U2's view");
     await post(`/v1/conversations/${mineId}`, { archived: false }, token);
   });
@@ -256,15 +273,15 @@ describe("agent conversations self-API", async () => {
   });
 
   it("forks carry the source transcript into a new sidebar session", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
+    const out = await startSession(built.app, built.sessions, P.U1, {
+      scopeId: scopeId("personal", P.U1),
       forkOf: mineId,
     });
     assert.ok("session" in out);
     assert.notEqual(out.session.id, mineId);
     const entries = await built.sessions.getEntries(out.session.id);
     assert.ok(entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
-    assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
+    assert.ok((await built.app.listSessions(P.U1)).some((s) => s.id === out.session.id));
   });
 
   it("refuses to color a conversation the actor can't see", async () => {

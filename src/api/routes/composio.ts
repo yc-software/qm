@@ -1,9 +1,8 @@
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
-import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
-import { PrincipalLinkError } from "../../identity/principal-links.ts";
-import { createHash } from "node:crypto";
+import { samePerson } from "../../directory/person.ts";
+import { composioUserId, handle, IdentityLinkError, type PrincipalGraph } from "../../identity/principals.ts";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
@@ -12,17 +11,24 @@ import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../harness/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
-import { activePrincipal, audit } from "./shared.ts";
+import { activePrincipal, audit, principalGraph } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
-export function composioUserId(org: string, principal: string): string {
-  return `qm_${createHash("sha256")
-    .update(JSON.stringify([org, principal]))
-    .digest("hex")}`;
+function composioUserIds(graph: PrincipalGraph, principal: string): string[] {
+  return graph
+    .identitiesOf(principal)
+    .filter((i) => i.provider === "composio")
+    .map((i) => i.externalId);
 }
 
-function composioUserIds(principal: string): string[] {
-  return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
+const ownsComposioUser = (graph: PrincipalGraph, principal: string, userId: unknown): boolean =>
+  typeof userId === "string" && graph.principalOf(handle("composio", userId)) === principal;
+
+async function claimComposioUser(graph: PrincipalGraph, principal: string): Promise<string> {
+  const userId = composioUserId(orgId(), principal);
+  if (graph.principalOf(handle("composio", userId)) !== principal)
+    await graph.attach(handle("composio", userId), principal, "self", "Composio user id derived from this principal");
+  return userId;
 }
 
 async function activeRun(ctx: ApiCtx): Promise<boolean> {
@@ -185,7 +191,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
-  if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principalLinks || ctx.actor?.imp))
+  if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principals || ctx.actor?.imp))
     return sendJson(ctx.res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   if (typeof toolkit !== "string" || !/^[a-z0-9_-]{1,100}$/.test(toolkit))
     return sendJson(ctx.res, 400, { error: "invalid_toolkit" });
@@ -208,7 +214,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = await claimComposioUser(principalGraph(ctx), access.principal);
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
@@ -279,7 +285,8 @@ async function connections(ctx: ApiCtx): Promise<void> {
   if (!access) return;
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
-  const userIds = composioUserIds(access.principal);
+  const userIds = composioUserIds(principalGraph(ctx), access.principal);
+  if (!userIds.length) return sendJson(ctx.res, 200, { items: [], nextCursor: null });
   const query = new URLSearchParams({ user_ids: userIds.join(","), statuses: "ACTIVE", limit: "100" });
   if (cursor) query.set("cursor", cursor);
   try {
@@ -374,7 +381,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     if (
       account.id !== body.accountId ||
       typeof account.user_id !== "string" ||
-      !composioUserIds(access.principal).includes(account.user_id) ||
+      !ownsComposioUser(principalGraph(ctx), access.principal, account.user_id) ||
       account.status !== "ACTIVE" ||
       account.is_disabled === true ||
       !toolkit ||
@@ -393,7 +400,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     )
       return sendJson(ctx.res, 403, { error: "tool_not_authorized" });
     if (!(await activeRun(ctx))) return;
-    if (!composioUserIds(access.principal).includes(account.user_id))
+    if (!ownsComposioUser(principalGraph(ctx), access.principal, account.user_id))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     audit(ctx.deps, {
       principalId: access.principal,
@@ -440,7 +447,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
   const sessionUri = (ctx.body as { sessionUri?: unknown } | null)?.sessionUri;
   if (typeof sessionUri !== "string" || !sessionUri || sessionUri.length > 8192)
     return sendJson(ctx.res, 400, { error: "invalid_session" });
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(orgId(), access.principal);
   try {
     const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
       session_uri: sessionUri,
@@ -469,8 +476,9 @@ async function identity(ctx: ApiCtx): Promise<void> {
   const principal = ctx.actor?.p ?? ctx.capability?.actorId;
   if (!principal || !(await activePrincipal(ctx.deps, principal)))
     return sendJson(ctx.res, 403, { error: "forbidden" });
-  const userIds = composioUserIds(principal);
-  return sendJson(ctx.res, 200, { userId: userIds[0], userIds });
+  const graph = principalGraph(ctx);
+  const userId = await claimComposioUser(graph, principal);
+  return sendJson(ctx.res, 200, { userId, userIds: composioUserIds(graph, principal) });
 }
 
 export interface SlackAccountLink {
@@ -490,15 +498,14 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
   const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
   ctx.res.setHeader("Cache-Control", "no-store");
   let failed = false;
-  for (const id of personIds(access.principal)) {
-    const record = await ctx.deps.slackAccounts?.get(id);
-    if (!record || !samePerson(record.memberId, access.principal)) continue;
+  const record = await ctx.deps.slackAccounts?.get(access.principal);
+  if (record && samePerson(record.memberId, access.principal)) {
     try {
       const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
       const toolkit = account.toolkit as { slug?: string } | undefined;
       if (
         account.id === record.accountId &&
-        composioUserIds(access.principal).includes(String(account.user_id)) &&
+        ownsComposioUser(principalGraph(ctx), access.principal, account.user_id) &&
         toolkit?.slug === "slack" &&
         account.status === "ACTIVE" &&
         account.is_disabled !== true
@@ -522,7 +529,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
   const { deps, res } = ctx;
-  if (!deps.signingSecret || !deps.principalLinks || !deps.directory || !deps.slackAccounts || ctx.actor?.imp)
+  if (!deps.signingSecret || !deps.principals || !deps.directory || !deps.slackAccounts || ctx.actor?.imp)
     return sendJson(res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   const ticket = (ctx.body as { ticket?: unknown } | null)?.ticket;
   const proof =
@@ -549,7 +556,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     const toolkit = account.toolkit as { slug?: string } | undefined;
     if (
       account.id !== proof.accountId ||
-      !composioUserIds(access.principal).includes(String(account.user_id)) ||
+      !ownsComposioUser(principalGraph(ctx), access.principal, account.user_id) ||
       toolkit?.slug !== "slack" ||
       account.is_disabled === true
     )
@@ -603,9 +610,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         error: "wrong_workspace",
         message: "Connect the Slack workspace where your company uses QM.",
       });
-    const members = (await deps.directory.list()).filter(
-      (m) => m.slackId === slack.user_id || m.principalId === slack.user_id,
-    );
+    const members = (await deps.directory.list()).filter((m) => m.slackId === slack.user_id);
     if (members.length !== 1 || members[0]!.type !== "internal")
       return sendJson(res, 409, {
         error: "member_unavailable",
@@ -619,56 +624,27 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         error: "inactive_account",
         message: "An account is inactive. Ask your administrator for help.",
       });
+    let memberId = member.principalId;
     if (!samePerson(member.principalId, access.principal)) {
-      const existingCredentials = (await deps.keychain?.listByOwner(member.principalId)) ?? [];
-      const projectKeys = new Set([access.key]);
-      const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(scopeId("org", orgId()))) ?? [];
-      for (const candidate of companyCredentials) {
-        if (candidate.envKey !== "COMPOSIO_API_KEY" || !candidate.hasSecret) continue;
-        const material = await deps.serviceCreds!.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
-        if (!material?.secret) throw Error("Could not inspect existing connections");
-        projectKeys.add(material.secret);
-      }
-      let hasPriorAccounts = false;
-      for (const projectKey of projectKeys) {
-        const priorAccounts = await request(
-          ctx,
-          projectKey,
-          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(orgId(), member.principalId), limit: "1" })}`,
-        );
-        if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
-        hasPriorAccounts ||= priorAccounts.items.length > 0;
-      }
-      if (existingCredentials.length || hasPriorAccounts)
-        return sendJson(res, 409, {
-          error: "established_account",
-          message:
-            "Your Slack identity already has connected services. Ask your administrator to combine these accounts so those connections are preserved.",
-        });
-
-      if (canonicalPerson(member.principalId) !== member.principalId)
-        return sendJson(res, 409, {
-          error: "already_linked",
-          message: "This Slack identity is connected to another QM account. Ask your administrator for help.",
-        });
-      await deps.principalLinks.link({
-        principalId: member.principalId,
-        canonicalId: access.principal,
-        evidence: `Slack OAuth user ${slack.user_id} in workspace ${slack.team_id}, connection ${proof.accountId}`,
-        linkedBy: access.principal,
-      });
+      memberId = access.principal;
+      await deps.principals.attach(
+        handle("slack", slack.user_id!),
+        access.principal,
+        "self",
+        `Slack OAuth user ${slack.user_id} in workspace ${slack.team_id}, connection ${proof.accountId}`,
+      );
       await deps.identity?.refresh(true);
       audit(deps, {
         principalId: access.principal,
-        action: "principal_link.create",
-        resource: `${member.principalId} -> ${access.principal}`,
+        action: "identity.link",
+        resource: `slack:${slack.user_id} -> ${access.principal}`,
         scopeLabel: scopeId("org", orgId()),
       });
     }
     await deps.slackAccounts.put(access.principal, {
       principalId: access.principal,
       accountId: proof.accountId,
-      memberId: member.principalId,
+      memberId,
       userId: slack.user_id!,
       teamId: slack.team_id!,
       user: slack.user ?? member.displayName,
@@ -676,10 +652,10 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(res, 200, { connected: true, user: slack.user, workspace: slack.team });
   } catch (error) {
-    return sendJson(res, error instanceof PrincipalLinkError ? 409 : 502, {
+    return sendJson(res, error instanceof IdentityLinkError ? 409 : 502, {
       error: "slack_link_failed",
       message:
-        error instanceof PrincipalLinkError
+        error instanceof IdentityLinkError
           ? "These accounts need an administrator's help to connect. Your existing data has not been moved."
           : "Could not verify the Slack connection. Please try again.",
     });

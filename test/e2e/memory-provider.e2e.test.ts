@@ -141,7 +141,7 @@ describe("memory provider e2e (live Pi + stub MCP)", { skip: NO_KEY ? "set ANTHR
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         surface: "http-e2e",
-        actor: { externalId: "U1" },
+        actor: { externalId: "U1", provider: "slack" as const },
         conversation: { kind: "dm", threadRef },
         text,
       }),

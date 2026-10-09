@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
+import { principalOf } from "./support/principal.ts";
 import { jsonbStringify } from "../src/persistence/durable-map.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -16,7 +17,7 @@ function freshApp(securityScreener?: SecurityScreener) {
   return buildApp(testConfig({ dataDir }), securityScreener ? { securityScreener } : {});
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 function mention(text: string, channel: string, root: string): TurnRequest {
   return {
     surface: "slack",
@@ -32,7 +33,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
 function overheard(text: string, channel: string, root: string): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "U2" },
+    actor: { externalId: "U2", provider: "slack" as const },
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text,
@@ -58,11 +59,12 @@ function dm(text: string, channel: string): TurnRequest {
 // message QUEUES by default — it is submitted as its own turn and waits for the session lock —
 // and steering is a separate, explicit act on the queued row. So a turn that reaches core mid-run
 // must stay a real second run; folding it into the live one would be the bug.
-function web(text: string, threadRef: string): TurnRequest {
+function web(text: string, threadRef: string, principal: string): TurnRequest {
+  const webActor = { externalId: principal };
   return {
     surface: "web",
-    actor,
-    conversation: { kind: "dm", threadRef, audience: [actor] },
+    actor: webActor,
+    conversation: { kind: "dm", threadRef, audience: [webActor] },
     text,
     liveActor: true,
     async: true,
@@ -99,7 +101,7 @@ test("a mid-turn message from a DIFFERENT person is attributed and its author du
 
   const second = await built.app.turn({
     ...mention("you can use my linear key", channel, root),
-    actor: { externalId: "U_PAUL", displayName: "Paul" },
+    actor: { externalId: "U_PAUL", provider: "slack" as const, displayName: "Paul" },
   });
   assert.equal(second.runId, liveRunId);
   assert.equal(second.steered, true);
@@ -108,7 +110,7 @@ test("a mid-turn message from a DIFFERENT person is attributed and its author du
   assert.equal(signals[0]!.text, "Paul: you can use my linear key", "a foreign human steer names its author");
   assert.deepEqual(
     await built.signals.steerAuthors(liveRunId),
-    ["U_PAUL"],
+    [await principalOf(built, "U_PAUL")],
     "the steer author is durably recorded so keychain onBehalfOf can verify them",
   );
 
@@ -405,7 +407,7 @@ test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run 
 
   const synthetic: TurnRequest = {
     surface: "slack",
-    actor: { externalId: "U2" },
+    actor: { externalId: "U2", provider: "slack" as const },
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text: "bot posted: build finished",
@@ -422,7 +424,7 @@ test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run 
 function spawnedWorker(channel: string, askTs: string): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "jordan@acme.test", displayName: "Jordan" },
+    actor: { externalId: "jordan@acme.test", provider: "email" as const, displayName: "Jordan" },
     conversation: { kind: "channel", threadRef: `slack:${channel}:ambient:${askTs}`, channelRef: channel },
     deliveryTarget: channel,
     text: "can you check the deploy?",
@@ -535,7 +537,11 @@ for (const personalSide of ["ambient", "mention"] as const) {
     const channel = `C-account-${personalSide}`;
     const askTs = "1600.2";
     const ambientRef = `slack:${channel}:ambient:${askTs}`;
-    await built.config.setPersonalModelAuth(personalSide === "ambient" ? "jordan@acme.test" : "U1", true, "openai");
+    await built.config.setPersonalModelAuth(
+      await principalOf(built, personalSide === "ambient" ? "jordan@acme.test" : "U1"),
+      true,
+      "openai",
+    );
     await built.sessions.getOrCreateByThread(ambientRef, "channel", `channel:${channel}`);
     const ambient = await built.app.turn(spawnedWorker(channel, askTs));
     const second = await built.app.turn({ ...mention("@bot continue", channel, askTs), triggerTs: askTs });
@@ -564,9 +570,10 @@ test("spine ON: the FIRST message (no live run) engages normally — no steer", 
 
 test("web is excluded from core-side steering: a mid-turn message forks a SECOND run, never a signal", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:default";
-  const first = await built.app.turn(web("summarize the incident", threadRef));
-  const second = await built.app.turn(web("actually, just the timeline", threadRef));
+  const me = await principalOf(built, "U1");
+  const threadRef = `web:${me}:default`;
+  const first = await built.app.turn(web("summarize the incident", threadRef, me));
+  const second = await built.app.turn(web("actually, just the timeline", threadRef, me));
 
   assert.notEqual(second.runId, first.runId!, "web must fork its own run, not attach to the live one");
   assert.equal(
@@ -580,9 +587,10 @@ test("web is excluded from core-side steering: a mid-turn message forks a SECOND
 
 test("web's queued second run waits for the lock: not claimable until the live run finishes", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:queued";
-  const first = await built.app.turn(web("summarize the incident", threadRef));
-  const second = await built.app.turn(web("actually, just the timeline", threadRef));
+  const me = await principalOf(built, "U1");
+  const threadRef = `web:${me}:queued`;
+  const first = await built.app.turn(web("summarize the incident", threadRef, me));
+  const second = await built.app.turn(web("actually, just the timeline", threadRef, me));
   const queued = [first.runId!, second.runId!];
   assert.equal(
     (await built.runs.list()).filter((r) => r.sessionId === threadRef).length,
@@ -605,11 +613,12 @@ test("web's queued second run waits for the lock: not claimable until the live r
 
 test("web's queue is durable and readable: core names the live run, then what waits behind it", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:visible";
-  const first = await built.app.turn(web("summarize the incident", threadRef));
+  const me = await principalOf(built, "U1");
+  const threadRef = `web:${me}:visible`;
+  const first = await built.app.turn(web("summarize the incident", threadRef, me));
   await built.runs.claimById(first.runId!, "w1", 30_000);
-  const second = await built.app.turn(web("then the timeline", threadRef));
-  const third = await built.app.turn(web("and who was paged", threadRef));
+  const second = await built.app.turn(web("then the timeline", threadRef, me));
+  const third = await built.app.turn(web("and who was paged", threadRef, me));
 
   const active = await built.app.activeRunForThread(threadRef);
   assert.equal(active?.runId, first.runId, "the live run is the head, not the newest message");
@@ -639,8 +648,9 @@ test("web's queue is durable and readable: core names the live run, then what wa
 
 test("an automation wake queued behind a live turn stays out of the composer queue", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:wake";
-  const first = await built.app.turn(web("summarize the incident", threadRef));
+  const me = await principalOf(built, "U1");
+  const threadRef = `web:${me}:wake`;
+  const first = await built.app.turn(web("summarize the incident", threadRef, me));
   await built.runs.claimById(first.runId!, "w1", 30_000);
   const wake = await built.app.turn({
     surface: "monitor",
@@ -650,7 +660,7 @@ test("an automation wake queued behind a live turn stays out of the composer que
     triggered: true,
     async: true,
   });
-  const typed = await built.app.turn(web("and who was paged", threadRef));
+  const typed = await built.app.turn(web("and who was paged", threadRef, me));
 
   assert.notEqual(wake.runId, first.runId, "the wake is its own run, waiting behind the live turn");
   assert.deepEqual(
@@ -662,10 +672,11 @@ test("an automation wake queued behind a live turn stays out of the composer que
 
 test("a queued web turn runs on its own — the sender's client need never come back", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:unattended";
-  const first = await built.app.turn(web("the long one", threadRef));
+  const me = await principalOf(built, "U1");
+  const threadRef = `web:${me}:unattended`;
+  const first = await built.app.turn(web("the long one", threadRef, me));
   const live = await built.runs.claimById(first.runId!, "w1", 30_000);
-  const queued = await built.app.turn(web("the queued one", threadRef));
+  const queued = await built.app.turn(web("the queued one", threadRef, me));
 
   await built.runs.complete(live!.id, live!.leaseToken!, { status: "ok", reply: "done" });
   const next = await built.runs.claim("w2", 30_000);
@@ -847,10 +858,11 @@ test("screening off delivers ambient updates to the existing run without a class
 
 test("queued web edits require the author and preserve queue identity", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:edit";
-  const first = await built.app.turn(web("first", threadRef));
+  const me = await principalOf(built, "U1");
+  const threadRef = `web:${me}:edit`;
+  const first = await built.app.turn(web("first", threadRef, me));
   await built.runs.claimById(first.runId!, "worker", 30000);
-  const second = await built.app.turn(web("second", threadRef));
+  const second = await built.app.turn(web("second", threadRef, me));
   const owner = (await built.runs.get(second.runId!))!.request.actor.id;
   assert.deepEqual(await built.app.editQueuedRun(second.runId!, "edited", "second", "internal:other"), {
     edited: false,
@@ -876,8 +888,9 @@ test("queued web edits require the author and preserve queue identity", async ()
 
 test("run snapshots expose authorized durable web input with safe attachment metadata", async () => {
   const built = freshApp();
+  const me = await principalOf(built, "U1");
   const turn = await built.app.turn({
-    ...web("pending input", "web:U1:pending-input"),
+    ...web("pending input", `web:${me}:pending-input`, me),
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 50, blobId: "private-blob" }],
   });
   const run = (await built.runs.get(turn.runId!))!;

@@ -1,3 +1,5 @@
+import { createPrincipalGraph } from "../src/identity/principals.ts";
+import { installPrincipalResolver } from "../src/directory/person.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
@@ -390,7 +392,10 @@ test("/d/ proxy sends no extra headers when the endpoint declares none", async (
   }
 });
 
-test("admin deployment proxy bypasses deployment ACL after admin auth and audits the visit", async () => {
+test("admin deployment proxy bypasses deployment ACL after admin auth and audits the visit", async (t) => {
+  const principals = createPrincipalGraph();
+  installPrincipalResolver(principals);
+  t.after(() => installPrincipalResolver(null));
   let upstreamUrl = "";
   const upstream = createHttpServer((req, res) => {
     upstreamUrl = req.url ?? "";
@@ -402,6 +407,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   const auditEvents: Array<{ principalId: string; action: string; resource: string; scopeLabel: string }> = [];
   let bypassAcl: boolean | undefined;
   const app = {
+    principals,
     listDeployments: async () => [{ id: "d1", ownerScopeId: "personal:U1" }],
     reachDeployment: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
       bypassAcl = opts?.bypassAcl;

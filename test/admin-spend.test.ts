@@ -162,7 +162,8 @@ test("spend: a mock-harness turn shows zero dollars with its tokens intact", asy
   try {
     assert.equal((await s.built.app.turn(dm("codexlike", "hello there"))).status, "ok");
     const body = await getJson(s.base, "/v1/admin/spend");
-    const row = body.people.find((p: any) => p.principalId === "codexlike");
+    const codexlike = "codexlike";
+    const row = body.people.find((p: any) => p.principalId === codexlike);
     assert.ok(row, "a scope whose harness books no dollars is still listed");
     assert.equal(row.costUsd, 0);
     assert.ok(row.tokens > 0, "tokens are a separate column, so $0 turns stay visible");

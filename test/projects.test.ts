@@ -765,8 +765,14 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
   const threadRef = "web:owner:tape-tenure";
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "PRE_JOIN_SECRET" }))
-      .status,
+    (
+      await built.app.turn({
+        surface: "web",
+        actor: { externalId: "owner" },
+        conversation,
+        text: "PRE_JOIN_SECRET",
+      })
+    ).status,
     "ok",
   );
   assert.equal((await built.app.addProjectMember(project.id, "owner", "late-member")).status, "ok");
@@ -889,8 +895,14 @@ test("a member added to a Project inherits the chats that predate them", async (
   const threadRef = "web:owner:pre-join";
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "BEFORE_JOIN_TOPIC" }))
-      .status,
+    (
+      await built.app.turn({
+        surface: "web",
+        actor: { externalId: "owner" },
+        conversation,
+        text: "BEFORE_JOIN_TOPIC",
+      })
+    ).status,
     "ok",
   );
   const session = await built.sessions.getByThread(threadRef);
@@ -933,16 +945,28 @@ test("leaving a Project still cuts off everything after the member left", async 
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "WHILE_A_MEMBER" }))
-      .status,
+    (
+      await built.app.turn({
+        surface: "web",
+        actor: { externalId: "owner" },
+        conversation,
+        text: "WHILE_A_MEMBER",
+      })
+    ).status,
     "ok",
   );
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "AFTER_THEY_LEFT" }))
-      .status,
+    (
+      await built.app.turn({
+        surface: "web",
+        actor: { externalId: "owner" },
+        conversation,
+        text: "AFTER_THEY_LEFT",
+      })
+    ).status,
     "ok",
   );
   assert.equal(await built.app.getSessionForViewer(session.id, "member"), null);

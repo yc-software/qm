@@ -32,6 +32,7 @@ import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store
 
 import type { App, AppDeps } from "./app-types.ts";
 import { toFileItem, type ScopeDeployment, type SessionPinView, type SessionSearchHit } from "./app-types.ts";
+import { emailInternal } from "../identity/identity-service.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
 const MAX_SESSION_PINS = 50;
@@ -1044,17 +1045,17 @@ export function createSessionMethods(
 
     async grant(g) {
       if (parseRef(g.ref).kind === "deploy") {
+        await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
         g = {
           ...g,
           granteeScopeId: await deploymentShareScope(
             g.granteeScopeId,
             g.permission,
+            deps.identity.principals,
             async (email) =>
-              deps.identity.isInternal(deps.identity.classify(email)) &&
-              (await h.directoryMember(email))?.type === "internal",
+              emailInternal(deps.identity, email) && (await h.directoryMember(email))?.type === "internal",
           ),
         };
-        await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
       }
       await deps.acl.grant(g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record({

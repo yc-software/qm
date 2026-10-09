@@ -11,11 +11,15 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
 
-function start(signingSecret?: string, publicUrl?: string): { base: string; close: () => Promise<void> } {
+function start(
+  signingSecret?: string,
+  publicUrl?: string,
+): { built: ReturnType<typeof buildApp>; base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
   const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
   const server = signingSecret
@@ -23,6 +27,7 @@ function start(signingSecret?: string, publicUrl?: string): { base: string; clos
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   return {
+    built,
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
@@ -39,9 +44,9 @@ function sign(method: string, pathWithQuery: string, body: string): Record<strin
 
 const githubSig = (rawBody: string) => "sha256=" + createHmac("sha256", HOOK_SECRET).update(rawBody).digest("hex");
 
-const regBody = (owner = "U1", createdBy = "U1") =>
+const regBody = (owner = "U1", createdBy = "U1", scopeOwner = "U1") =>
   JSON.stringify({
-    ownerScopeId: "personal:U1",
+    ownerScopeId: `personal:${scopeOwner}`,
     owner,
     createdBy,
     action: "triage",
@@ -243,7 +248,9 @@ test("inbound per-webhook auth holds even in core dev mode (no core secret)", as
 test("signed webhook history enforces viewer permissions and links to an owner-readable worklog", async () => {
   const srv = start(SECRET);
   try {
-    const body = regBody();
+    const u1 = await principalOf(srv.built, "U1");
+    const u2 = await principalOf(srv.built, "U2");
+    const body = regBody(u1, u1, u1);
     const created = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
       headers: sign("POST", "/v1/webhooks", body),
@@ -251,8 +258,8 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     });
     const { webhook } = (await created.json()) as { webhook: { id: string } };
     for (const [suffix, status] of [
-      ["?viewer=U1", 200],
-      ["?viewer=U2", 404],
+      [`?viewer=${u1}`, 200],
+      [`?viewer=${u2}`, 404],
       ["", 404],
     ] as const) {
       const path = `/v1/webhooks/${webhook.id}/events${suffix}`;
@@ -260,7 +267,7 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
       assert.equal(res.status, status);
       if (status === 200) assert.deepEqual(await res.json(), { events: [] });
     }
-    assert.equal((await fetch(`${srv.base}/v1/webhooks/${webhook.id}/events?viewer=U1`)).status, 401);
+    assert.equal((await fetch(`${srv.base}/v1/webhooks/${webhook.id}/events?viewer=${u1}`)).status, 401);
     const eventBody = JSON.stringify({ message: "agent message for worklog" });
     const accepted = await fetch(`${srv.base}/v1/webhooks/incoming/${webhook.id}`, {
       method: "POST",
@@ -268,7 +275,7 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
       body: eventBody,
     });
     assert.equal(accepted.status, 202);
-    const historyPath = `/v1/webhooks/${webhook.id}/events?viewer=U1`;
+    const historyPath = `/v1/webhooks/${webhook.id}/events?viewer=${u1}`;
     let events: Array<{ sessionId?: string; payload: string }> = [];
     for (let i = 0; i < 100; i++) {
       const history = await fetch(`${srv.base}${historyPath}`, { headers: sign("GET", historyPath, "") });
@@ -279,11 +286,11 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     assert.equal(events.length, 1);
     assert.ok(events[0]?.sessionId);
     assert.match(events[0]!.payload, /agent message for worklog/);
-    const sessionPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U1`;
+    const sessionPath = `/v1/sessions/${events[0]!.sessionId}?viewer=${u1}`;
     const worklog = await fetch(`${srv.base}${sessionPath}`, { headers: sign("GET", sessionPath, "") });
     assert.equal(worklog.status, 200);
     assert.match(JSON.stringify(await worklog.json()), /agent message for worklog/);
-    const otherPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U2`;
+    const otherPath = `/v1/sessions/${events[0]!.sessionId}?viewer=${u2}`;
     assert.equal((await fetch(`${srv.base}${otherPath}`, { headers: sign("GET", otherPath, "") })).status, 404);
   } finally {
     await srv.close();

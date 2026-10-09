@@ -298,7 +298,8 @@ async function coreWhoami(principal: string): Promise<{ isAdmin: boolean; role?:
 
 const WRITES = new Map<string, string[]>([
   ["grants", ["POST", "DELETE"]],
-  ["principal-links", ["POST", "DELETE"]],
+  ["identities", ["POST"]],
+  ["principals", ["PUT", "POST"]],
   ["external-users", ["POST", "DELETE"]],
   ["memory", ["PUT"]],
   ["crons", ["PUT"]],
@@ -337,7 +338,7 @@ const READS = [
   "model-providers",
   "model-registry",
   "custom-providers",
-  "principal-links",
+  "identities",
 ];
 
 export async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {

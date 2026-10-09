@@ -11,14 +11,16 @@ import { cronIsActive } from "../src/cron/cron-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const THREAD = "web:U1:watching";
+let U1 = "";
 
 function claims(extra: Partial<CapabilityClaims> = {}): CapabilityClaims {
   return {
-    actorId: "U1",
-    scopeId: scopeId("personal", "U1"),
-    destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
+    actorId: U1,
+    scopeId: scopeId("personal", U1),
+    destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", U1) },
     exp: Date.now() + CAPABILITY_TTL_MS,
     threadRef: THREAD,
     ...extra,
@@ -26,12 +28,18 @@ function claims(extra: Partial<CapabilityClaims> = {}): CapabilityClaims {
 }
 
 function dm(text: string, threadRef: string): TurnRequest {
-  return { surface: "test", actor: { externalId: "U1" }, conversation: { kind: "dm", threadRef }, text };
+  return {
+    surface: "test",
+    actor: { externalId: "U1", provider: "slack" as const },
+    conversation: { kind: "dm", threadRef },
+    text,
+  };
 }
 
 async function setup() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-session-")) }));
   const control = createControlService(built.app, built.scheduler, built.admin);
+  U1 = await principalOf(built, "U1");
   const session = await built.app.turn(dm("watch CI for me", THREAD));
   await built.app.turn(dm("unrelated", "web:U1:other"));
   return { built, control, sessionId: session.sessionId! };
@@ -46,7 +54,7 @@ test("a cron created from a live session is tied to it and shows as that session
   assert.equal(created.cron.sessionRef, THREAD);
   assert.equal(created.cron.destination?.target, "D1", "delivery stays where it was addressed");
 
-  const list = await built.app.listSessions("U1");
+  const list = await built.app.listSessions(U1);
   assert.equal(list.find((s) => s.threadRef === THREAD)?.crons, 1);
   assert.ok(!list.find((s) => s.threadRef === "web:U1:other")?.crons);
 
@@ -56,7 +64,7 @@ test("a cron created from a live session is tied to it and shows as that session
     firedAt: 1_000,
     status: "ok",
   });
-  const bg = await built.app.sessionBackground(sessionId, "U1");
+  const bg = await built.app.sessionBackground(sessionId, U1);
   assert.deepEqual(bg?.crons, [
     {
       id: created.cron.id,
@@ -67,7 +75,7 @@ test("a cron created from a live session is tied to it and shows as that session
   ]);
 
   await control.patchCron(created.cron.id, { enabled: false }, claims());
-  assert.ok(!(await built.app.listSessions("U1")).find((s) => s.threadRef === THREAD)?.crons, "paused crons drop off");
+  assert.ok(!(await built.app.listSessions(U1)).find((s) => s.threadRef === THREAD)?.crons, "paused crons drop off");
 });
 
 test("session:false and triggered turns leave a cron untied, and patch ties or unties it", async () => {
@@ -91,7 +99,7 @@ test("session:false and triggered turns leave a cron untied, and patch ties or u
   assert.equal(refused.ok ? "" : refused.code, "bad_request");
   const cleared = await control.patchCron(untied.cron.id, { session: false }, claims());
   assert.ok(cleared.ok && cleared.cron.sessionRef === undefined);
-  assert.ok(!(await built.app.listSessions("U1")).find((s) => s.threadRef === THREAD)?.crons);
+  assert.ok(!(await built.app.listSessions(U1)).find((s) => s.threadRef === THREAD)?.crons);
 });
 
 test("a one-shot cron stops counting as active once it has fired", () => {

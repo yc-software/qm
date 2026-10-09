@@ -1,8 +1,9 @@
+import { handle } from "../../../identity/principals.ts";
 import { randomUUID } from "node:crypto";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
-import { personKey, samePerson } from "../../../directory/person.ts";
+import { personKey, personLabel, samePerson } from "../../../directory/person.ts";
 import type { AdminRole } from "../../../admin/admin-grant-store.ts";
 import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { computeUsers } from "../../../admin/users.ts";
@@ -44,13 +45,14 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
     );
   for (const member of externalUsers.filter((m) => m.kind === "teammate" && m.status === "active")) {
-    if (!users.some((u) => samePerson(u.principalId, member.email)))
+    const principalId = deps.identity?.principals.principalOf(handle("email", member.email));
+    if (principalId && !users.some((u) => samePerson(u.principalId, principalId)))
       users.push({
-        principalId: member.email,
+        principalId,
         sessionCount: 0,
         turnCount: 0,
         lastSeenAt: null,
-        admin: adminStatusFromGrants(grants, member.email),
+        admin: adminStatusFromGrants(grants, principalId),
       });
   }
   const signInUrl = signInUrlOf(deps);
@@ -88,11 +90,14 @@ function grantError(res: ApiCtx["res"], error: string, e: unknown): void {
 async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): Promise<boolean> {
   const { deps } = ctx;
   if (deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)) return true;
-  if ((deps.emailAuthPrincipals ?? []).some((principal) => samePerson(principal, email))) return true;
-  if (await deps.directory?.get(email)) return true;
+  const address = handle("email", email);
+  if ((deps.emailAuthPrincipals ?? []).some((e) => handle("email", e).externalId === address.externalId)) return true;
+  const principal = deps.identity?.principals.principalOf(address);
+  if (!principal) return false;
+  if (await deps.directory?.get(principal)) return true;
   if (!includeSessions) return false;
   const participants = (await deps.sessions?.listParticipants()) ?? [];
-  return participants.some((participant) => samePerson(participant.principalId, email));
+  return participants.some((participant) => samePerson(participant.principalId, principal));
 }
 
 export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
@@ -130,14 +135,15 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if ((!teammate && expiry.value === undefined) || (expiry.value !== undefined && expiry.value <= now))
     return bad("expiresAt is required and must be in the future");
   await deps.identity.refresh(true);
-  if (teammate && deps.identity.deactivationSource(email) === "manual")
+  const principal = await deps.identity.principals.act(handle("email", email), { email });
+  if (teammate && deps.identity.deactivationSource(principal) === "manual")
     return sendJson(res, 409, {
       error: "conflict",
       message: "This account is manually deactivated. Reactivate it before inviting them.",
     });
   const existing = deps.identity.externalMember(email);
   if (!teammate && existing?.kind === "teammate") return bad("Manage this teammate in Users.");
-  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), email).isAdmin;
+  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), principal).isAdmin;
   const ownsGrant = existing?.role === "org_admin";
   if (!teammate && ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))))
     return sendJson(res, 409, { error: "conflict", message: ALREADY_A_MEMBER });
@@ -151,8 +157,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   else if (!teammate && role === "member" && holdsGrant) grantChange = "grant.revoke";
   try {
     if (grantChange === "grant.create")
-      await deps.admin!.createGrant(actor, { principalId: email, role: "org_admin", scopeId: scope });
-    else if (grantChange === "grant.revoke") await deps.admin!.revokeGrant(actor, email, scope, "org_admin");
+      await deps.admin!.createGrant(actor, { principalId: principal, role: "org_admin", scopeId: scope });
+    else if (grantChange === "grant.revoke") await deps.admin!.revokeGrant(actor, principal, scope, "org_admin");
   } catch (e) {
     return grantError(res, "grant_failed", e);
   }
@@ -208,7 +214,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
           ...renderInviteEmail({
             to: email,
             brandName: branding.selfLabel ?? "qm",
-            invitedBy: actor.id,
+            invitedBy: personLabel({ id: actor.id, displayName: deps.identity.principals.displayName(actor.id) }),
             signInUrl,
             expiresAt: member.expiresAt,
             magicLink: teammate,
@@ -239,7 +245,8 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   await deps.identity.refresh(true);
   const existing = deps.identity.externalMember(params.email ?? "");
   if (!existing) return sendJson(res, 404, { error: "not_found", message: "external user not found" });
-  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), existing.email).isAdmin;
+  const principal = deps.identity.principals.principalOf(handle("email", existing.email)) ?? "";
+  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), principal).isAdmin;
   const ownsGrant = existing.role === "org_admin";
   if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant)) {
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
@@ -247,7 +254,7 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   if (holdsGrant && !ownsGrant) return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   if (holdsGrant) {
     try {
-      await deps.admin!.revokeGrant(actor, existing.email, scope, "org_admin");
+      await deps.admin!.revokeGrant(actor, principal, scope, "org_admin");
     } catch (e) {
       return grantError(res, "revoke_failed", e);
     }
@@ -338,17 +345,10 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     ...adminGrants.map((g) => g.principalId),
   ]);
 
-  const members = await app.directoryMembers();
-  const namesByKey = new Map(members.map((m) => [personKey(m.principalId), m.displayName]));
-  const rosterIdByKey = new Map(members.map((m) => [personKey(m.principalId), m.principalId]));
-  const idByKey = new Map<string, string>();
-  for (const id of ids) {
-    const key = personKey(id);
-    if (!idByKey.has(key)) idByKey.set(key, rosterIdByKey.get(key) ?? id);
-  }
-  const people = [...idByKey.values()].sort().map((principalId) => ({
+  const names = new Map((await app.directoryMembers()).map((m) => [m.principalId, m.displayName]));
+  const people = [...ids].sort().map((principalId) => ({
     principalId,
-    displayName: namesByKey.get(personKey(principalId)) ?? null,
+    displayName: names.get(principalId) ?? null,
     credentialCount: credentials.filter((c) => samePerson(c.ownerId, principalId)).length,
     activeGrantCount: grants.filter(
       (g) =>
@@ -371,8 +371,8 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
 }
 
 async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
-  const member = await deps.directory?.get(requestedPrincipal);
-  return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
+  const principalId = personKey(requestedPrincipal);
+  return { member: await deps.directory?.get(principalId), principalId };
 }
 
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {
@@ -419,7 +419,8 @@ export async function startImpersonation(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
   if (!target) return sendJson(res, 400, { error: "bad_request", message: "target principal required" });
-  if (target === actor.id) return sendJson(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
+  if (samePerson(target, actor.id))
+    return sendJson(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
   const member = await app.directoryMember(target);
   audit(deps, { principalId: actor.id, action: "impersonate.start", resource: target, scopeLabel: org });
   return sendJson(res, 200, { ok: true, target, displayName: member?.displayName ?? target });

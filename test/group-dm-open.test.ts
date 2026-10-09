@@ -1,10 +1,13 @@
-import { describe, it } from "node:test";
+import { handle } from "../src/identity/principals.ts";
+import { describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 
 import { openGroupViaSurface, resolveReachTarget, type ReachDirectory } from "../src/reach/reach.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
+import { installPrincipalResolver } from "../src/directory/person.ts";
+import { createPrincipalGraph } from "../src/identity/principals.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/types.ts";
 
 const MEMBERS = [
@@ -220,6 +223,13 @@ describe("openGroupViaSurface", () => {
 });
 
 describe("the Slack surface opening a group DM", () => {
+  async function emailPrincipals(t: TestContext): Promise<string[]> {
+    const graph = createPrincipalGraph();
+    installPrincipalResolver(graph);
+    t.after(() => installPrincipalResolver(null));
+    return Promise.all(["alice@acme.dev", "kai@acme.dev"].map((email) => graph.act(handle("email", email))));
+  }
+
   function fulfiller(open: (args: { users: string }) => Promise<unknown>, syncs: string[] = []) {
     const fulfilled: Array<{ id: string; outcome: unknown }> = [];
     const core = {
@@ -246,7 +256,7 @@ describe("the Slack surface opening a group DM", () => {
     return { f, client, fulfilled };
   }
 
-  it("maps principals to Slack ids and opens one conversation for all of them", async () => {
+  it("maps principals to Slack ids and opens one conversation for all of them", async (t) => {
     const calls: Array<{ users: string }> = [];
     const syncs: string[] = [];
     const { f, client, fulfilled } = fulfiller(async (args) => {
@@ -259,7 +269,7 @@ describe("the Slack surface opening a group DM", () => {
       source: "slack",
       createdAt: Date.now(),
       status: "pending",
-      query: { count: 1, openGroup: { participants: ["alice@acme.dev", "kai@acme.dev"] } },
+      query: { count: 1, openGroup: { participants: await emailPrincipals(t) } },
     });
 
     assert.deepEqual(calls, [{ users: "U-alice,U-kai" }]);
@@ -267,7 +277,7 @@ describe("the Slack surface opening a group DM", () => {
     assert.deepEqual(syncs, ["sync"], "the surface resyncs so its cached roster keeps the new group");
   });
 
-  it("reports Slack's refusal instead of pretending the group is missing", async () => {
+  it("reports Slack's refusal instead of pretending the group is missing", async (t) => {
     const { f, client, fulfilled } = fulfiller(async () => {
       const err = new Error("user_not_found") as Error & { data: { error: string } };
       err.data = { error: "user_not_found" };
@@ -279,7 +289,7 @@ describe("the Slack surface opening a group DM", () => {
       source: "slack",
       createdAt: Date.now(),
       status: "pending",
-      query: { count: 1, openGroup: { participants: ["alice@acme.dev", "kai@acme.dev"] } },
+      query: { count: 1, openGroup: { participants: await emailPrincipals(t) } },
     });
 
     assert.match(String((fulfilled[0]!.outcome as any).error), /user_not_found/);
@@ -418,7 +428,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     });
 
-    await dir.forceDirectorySync(client, "C1", "kai@x.com");
+    await dir.forceDirectorySync(client, "C1", { externalId: "kai@x.com", provider: "email" });
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(pushes.length, 0, "nothing lands while the lease is held elsewhere");
 
@@ -427,7 +437,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     while (!pushes.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
 
     const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
-    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
+    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com", provider: "email" }]);
   });
 
   it("retries a push the store refused as stale until the revocation actually lands", async () => {
@@ -472,13 +482,13 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     });
 
-    await dir.forceDirectorySync(client, "C1", "kai@x.com");
+    await dir.forceDirectorySync(client, "C1", { externalId: "kai@x.com", provider: "email" });
     const deadline = Date.now() + 2000;
     while (pushes.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
 
     assert.ok(pushes.length >= 2, "the refused push is retried");
     const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
-    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
+    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com", provider: "email" }]);
   });
 
   it("discards a crawl whose lease was lost mid-flight instead of pushing it", async () => {

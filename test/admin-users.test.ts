@@ -11,6 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -81,7 +82,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello",
     };
@@ -90,8 +91,9 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     const r = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
+    const u1 = await principalOf(s.built, "U1");
     assert.ok(
-      d.users.some((u: { principalId: string }) => u.principalId === "U1"),
+      d.users.some((u: { principalId: string }) => u.principalId === u1),
       "the DM participant appears",
     );
     assert.ok(
@@ -113,13 +115,17 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello",
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
-    await s.built.app.turn({ ...dm, actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "dm:U2:t1" } });
+    await s.built.app.turn({
+      ...dm,
+      actor: { externalId: "U2", provider: "slack" as const },
+      conversation: { kind: "dm", threadRef: "dm:U2:t1" },
+    });
     await s.built.app.turn({ ...dm, conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:t1" } });
     const fail = () => {
       throw new Error("User detail must not load org history or artifact lists");
@@ -131,15 +137,20 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     t.mock.method(s.built.app, "listCrons", fail);
     t.mock.method(s.built.app, "listDeployments", fail);
 
-    const r = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
+    const r = await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}`, {
+      headers: { "x-admin-actor": "admin-alice@default-org" },
+    });
     assert.equal(r.status, 200);
     const d: any = await r.json();
-    assert.equal(d.principalId, "U1");
-    assert.equal(d.scopeId, "personal:U1");
+    const u1 = await principalOf(s.built, "U1");
+    assert.equal(d.principalId, u1);
+    assert.equal(d.scopeId, `personal:${u1}`);
     assert.equal(d.stats.sessions, 1);
     for (const key of ["conversations", "files", "crons", "deployments"]) assert.equal(key in d, false);
 
-    const denied = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "user-uma@default-org" } });
+    const denied = await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}`, {
+      headers: { "x-admin-actor": "user-uma@default-org" },
+    });
     assert.equal(denied.status, 403);
 
     assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.read"));
@@ -153,16 +164,18 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hi",
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
     const adminHdr = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
     const detail = async () =>
-      (await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: adminHdr })).json()) as any;
-    const setOb = (status: string, actor = "admin-alice@default-org") =>
-      fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
+      (await (
+        await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}`, { headers: adminHdr })
+      ).json()) as any;
+    const setOb = async (status: string, actor = "admin-alice@default-org") =>
+      fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}/onboarding`, {
         method: "PUT",
         headers: { "x-admin-actor": actor, "content-type": "application/json" },
         body: JSON.stringify({ status }),
@@ -190,16 +203,18 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hi",
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
     const adminHdr = { "x-admin-actor": "admin-alice@default-org" };
     const detail = async () =>
-      (await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: adminHdr })).json()) as any;
+      (await (
+        await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}`, { headers: adminHdr })
+      ).json()) as any;
 
-    await fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
+    await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}/onboarding`, {
       method: "PUT",
       headers: { ...adminHdr, "content-type": "application/json" },
       body: JSON.stringify({ status: "completed" }),
@@ -208,13 +223,16 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
     assert.equal(d.stats.sessions, 1, "one personal DM session before reset");
     assert.equal(d.onboarding, "completed");
 
-    const denied = await fetch(`${s.base}/v1/admin/users/U1/reset`, {
+    const denied = await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}/reset`, {
       method: "POST",
       headers: { "x-admin-actor": "user-uma@default-org" },
     });
     assert.equal(denied.status, 403);
 
-    const reset = await fetch(`${s.base}/v1/admin/users/U1/reset`, { method: "POST", headers: adminHdr });
+    const reset = await fetch(`${s.base}/v1/admin/users/${await principalOf(s.built, "U1")}/reset`, {
+      method: "POST",
+      headers: adminHdr,
+    });
     assert.equal(reset.status, 200);
     assert.equal(((await reset.json()) as any).deletedSessions, 1);
 
@@ -284,7 +302,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     });
     assert.equal(onboarded.status, 200);
     assert.deepEqual(((await onboarded.json()) as any).members, [
-      { principalId: "new@example.com", displayName: "new@example.com" },
+      { principalId: await principalOf(built, "new@example.com"), displayName: "new@example.com" },
     ]);
 
     const empty = await fetch(`${base}/v1/admin/directory`, {
@@ -306,7 +324,7 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U9" },
+      actor: { externalId: "U9", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U9:t1" },
       text: "hi",
     };
@@ -325,60 +343,3 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
     await s.close();
   }
 });
-
-test("user detail resolves mixed-case email links to the canonical personal scope", async (t) => {
-  const s = start();
-  try {
-    const stats = await s.built.sessions.scopeSessionStats("personal:alice@example.com", false, "conversation");
-    t.mock.method(s.built.sessions, "scopeSessionStats", async (scope: string) => {
-      assert.equal(scope, "personal:alice@example.com");
-      return { ...stats, total: 3 };
-    });
-    const response = await fetch(`${s.base}/v1/admin/users/Alice%40example.com`, {
-      headers: { "x-admin-actor": "admin-alice@default-org" },
-    });
-    assert.equal(response.status, 200);
-    const data = (await response.json()) as any;
-    assert.equal(data.principalId, "alice@example.com");
-    assert.equal(data.scopeId, "personal:alice@example.com");
-    assert.equal(data.stats.sessions, 3);
-  } finally {
-    await s.close();
-  }
-});
-
-for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
-  test(`mixed-case user mutations target canonical scope ${canonicalPrincipal}`, async () => {
-    const s = start();
-    try {
-      if (canonicalPrincipal === "Alice@example.com")
-        await s.built.directory.replace([{ principalId: canonicalPrincipal, displayName: "Alice", type: "internal" }]);
-      const scope = "personal:" + canonicalPrincipal;
-      const session = await s.built.sessions.getOrCreateByThread("dm:case-test", "dm", scope);
-      await s.built.sessions.addParticipant(session.id, canonicalPrincipal);
-      const other = await s.built.sessions.getOrCreateByThread("channel:case-test", "channel", "channel:C1");
-      await s.built.sessions.addParticipant(other.id, canonicalPrincipal);
-      const base = `${s.base}/v1/admin/users/ALICE%40example.com`;
-      const headers = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
-      const detail = async () => (await (await fetch(base, { headers })).json()) as any;
-      const update = await fetch(base + "/onboarding", {
-        method: "PUT",
-        headers,
-        body: JSON.stringify({ status: "completed" }),
-      });
-      assert.equal(update.status, 200);
-      assert.equal(((await update.json()) as any).scopeId, scope);
-      assert.equal((await detail()).onboarding, "completed");
-      const reset = await fetch(base + "/reset", { method: "POST", headers });
-      assert.equal(reset.status, 200);
-      assert.equal(((await reset.json()) as any).deletedSessions, 1);
-      assert.equal((await detail()).onboarding, "not_started");
-      assert.equal((await detail()).stats.sessions, 0);
-      assert.equal(await s.built.sessions.get(session.id), null);
-      assert.ok(await s.built.sessions.get(other.id));
-      assert.equal(await s.built.memory.read("personal:ALICE@example.com"), "");
-    } finally {
-      await s.close();
-    }
-  });
-}

@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
@@ -24,12 +25,16 @@ const externalSharingOn = { enabled: async () => true } as unknown as FeatureFla
 const secret = "app-only-gateway-test-secret-long-enough";
 const guest = "guest@partner.test";
 const key = deriveKey(secret, "portal.session.v1");
-function token(appOnly: unknown = true) {
+function token(appOnly: unknown = true, pid = "guest-principal") {
   const now = Math.floor(Date.now() / 1000);
-  return seal({ k: "session", sub: guest, org: "acme", iat: now, exp: now + 3600, appOnly }, key);
+  return seal({ k: "session", sub: guest, pid, org: "acme", iat: now, exp: now + 3600, appOnly }, key);
 }
 test("gateway parser keeps app-only authority and rejects malformed signed markers", () => {
-  assert.deepEqual(portalSession(`portal_session=${token()}`, secret), { sub: guest, appOnly: true });
+  assert.deepEqual(portalSession(`portal_session=${token()}`, secret), {
+    sub: guest,
+    pid: "guest-principal",
+    appOnly: true,
+  });
   for (const marker of ["false", null, 0, {}])
     assert.equal(portalSession(`portal_session=${token(marker)}`, secret), null);
 });
@@ -44,7 +49,9 @@ test("app-only gateway checks exact current personal read grants without inherit
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const acl = createAclStore();
+  const identity = createIdentityService();
   const deploy = createDeployService({
+    principals: identity.principals,
     externalSharingAllowed: async () => true,
     deployStore: createDeployStore({ git: { repoRoot: join(dir, "repos") } }),
     provider: {
@@ -56,7 +63,8 @@ test("app-only gateway checks exact current personal read grants without inherit
     acl,
     deployDir: join(dir, "deploy"),
   });
-  const identity = createIdentityService();
+  const guestPrincipal = await identity.principals.act(handle("email", guest), { email: guest });
+  const guestScope = scopeId("personal", guestPrincipal);
   const app = createApp({
     deploy,
     acl,
@@ -96,7 +104,7 @@ test("app-only gateway checks exact current personal read grants without inherit
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
-  const cookie = `portal_session=${token()}`;
+  const cookie = `portal_session=${token(true, guestPrincipal)}`;
   const get = (name: string, path = "/", method = "GET") =>
     new Promise<{ status: number; body: string }>((resolve, reject) => {
       const req = request(
@@ -140,7 +148,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     await acl.grant({
       ownerScopeId,
       ref: encodeRef(deployRef(shared.id)),
-      granteeScopeId: scopeId("personal", guest),
+      granteeScopeId: guestScope,
       permission: "write",
       grantedBy: "owner@example.test",
     });
@@ -153,9 +161,9 @@ test("app-only gateway checks exact current personal read grants without inherit
     assert.notEqual(JSON.parse(granted.body)["x-portal-identity"], "forged");
     assert.equal((await get("shared", "/__claw__/version")).status, 200, "request goes to app, never management shell");
     assert.equal((await get("org-app")).status, 403, "grant is for one deployment only");
-    await identity.deactivate(guest, "manual");
+    await identity.deactivate(await identity.principals.act(handle("email", guest)), "manual");
     assert.equal((await get("shared")).status, 403, "manual deactivation overrides the current direct grant");
-    await identity.reactivate(guest);
+    await identity.reactivate(await identity.principals.act(handle("email", guest)));
     await app.shareDeployment(shared.id, scopeId("personal", guest), null, { createdBy: "owner@example.test" });
     assert.equal((await get("shared")).status, 403, "same session is refused immediately after revoke");
     await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });

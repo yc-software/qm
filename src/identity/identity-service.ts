@@ -1,12 +1,7 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
-
-interface IdentityProvider {
-  resolve(actor: ActorAssertion): Principal;
-  classify(externalId: string, isExternalGuest?: boolean): Principal;
-}
+import { createPrincipalGraph, handle, principalFromEdge, type PrincipalGraph } from "./principals.ts";
 
 type DeactivationSource = "manual" | "directory-sync";
 
@@ -21,17 +16,20 @@ interface DirectorySyncOutcome {
   reactivated: string[];
 }
 
-export interface IdentityService extends IdentityProvider {
+export interface IdentityService {
+  readonly principals: PrincipalGraph;
+  actor(actor: ActorAssertion): Promise<Principal>;
+  classify(id: string, isExternalGuest?: boolean): Principal;
   isInternal(p: Principal): boolean;
   audienceIsAllInternal(audience: Principal[]): boolean;
-  deactivate(externalId: string, source?: DeactivationSource): Promise<void>;
-  deactivationSource(externalId: string): DeactivationSource | undefined;
-  reactivate(externalId: string): Promise<void>;
+  deactivate(id: string, source?: DeactivationSource): Promise<void>;
+  deactivationSource(id: string): DeactivationSource | undefined;
+  reactivate(id: string): Promise<void>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
-  externalMember(principalId: string): ExternalMember | undefined;
+  externalMember(id: string): ExternalMember | undefined;
   putExternalMember(m: ExternalMember): Promise<void>;
-  removeExternalMember(principalId: string): Promise<void>;
+  removeExternalMember(email: string): Promise<void>;
   hydrate(): Promise<void>;
   refresh(force?: boolean): Promise<void>;
 }
@@ -46,14 +44,15 @@ export function actorAssertionActive(
 export function createIdentityService(
   backing?: DurableMap<DeactivationRecord>,
   opts: {
-    isOverridden?: (externalId: string) => boolean;
+    isOverridden?: (handle: string) => boolean;
     directorySyncProtected?: readonly string[];
     externalMembers?: DurableMap<ExternalMember>;
-    principalLinks?: { refresh(force?: boolean): Promise<void> };
+    principals?: PrincipalGraph;
   } = {},
 ): IdentityService {
   const store = backing ?? createMemoryMap<DeactivationRecord>();
   const externalStore = opts.externalMembers ?? createMemoryMap<ExternalMember>();
+  const graph = opts.principals ?? createPrincipalGraph();
   const deactivated = new Map<string, DeactivationRecord>();
   const externals = new Map<string, ExternalMember>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
@@ -62,54 +61,55 @@ export function createIdentityService(
   let refreshP: Promise<void> | null = null;
   let hydrateP: Promise<void> | null = null;
 
-  const keptByDirectorySync = (key: string): boolean =>
-    directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
-  const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
+  const emailKey = (email: string): string => handle("email", email).externalId;
+  const emailsOf = (principalId: string): string[] =>
+    graph
+      .identitiesOf(principalId)
+      .filter((i) => i.provider === "email")
+      .map((i) => i.externalId);
+  const externalFor = (principalId: string): ExternalMember | undefined =>
+    emailsOf(principalId)
+      .map((e) => externals.get(e))
+      .find(Boolean);
+  const overridden = (principalId: string): boolean =>
+    !!opts.isOverridden && graph.identitiesOf(principalId).some((i) => opts.isOverridden!(i.externalId));
+  const keptByDirectorySync = (principalId: string): boolean =>
+    directorySyncProtected.some((e) => graph.principalOf(handle("email", e)) === principalId) ||
+    externalFor(principalId) !== undefined;
 
   async function load(overwrite: boolean): Promise<void> {
-    await opts.principalLinks?.refresh(true);
+    await graph.refresh(true);
     const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
     if (overwrite) {
       deactivated.clear();
       externals.clear();
     }
-    for (const r of deactivations) {
-      const key = personKey(r.principalId);
-      if (deactivated.get(key)?.source !== "manual" && (r.source === "manual" || overwrite || !deactivated.has(key)))
-        deactivated.set(key, r);
-    }
-    for (const m of members) {
-      const key = personKey(m.email);
-      if (overwrite || !externals.has(key)) externals.set(key, m);
-    }
+    for (const r of deactivations) if (overwrite || !deactivated.has(r.principalId)) deactivated.set(r.principalId, r);
+    for (const m of members) if (overwrite || !externals.has(emailKey(m.email))) externals.set(emailKey(m.email), m);
   }
 
-  function classify(externalId: string, isExternalGuest?: boolean): Principal {
-    const id = canonicalPerson(externalId);
-    if (opts.isOverridden?.(externalId)) return { id, type: "internal" };
-    const key = personKey(externalId);
-    const record = deactivated.get(key);
-    const external = externals.get(key);
+  function classify(principalId: string, isExternalGuest?: boolean): Principal {
+    if (overridden(principalId)) return { id: principalId, type: "internal" };
+    const record = deactivated.get(principalId);
+    const external = externalFor(principalId);
     const inactive =
       record?.source === "manual" ||
-      (record?.source === "directory-sync" && !keptByDirectorySync(key)) ||
+      (record?.source === "directory-sync" && !keptByDirectorySync(principalId)) ||
       (external !== undefined && !externalMemberActive(external));
-    const type: Principal["type"] = inactive || isExternalGuest ? "guest" : "internal";
-    return { id, type };
+    return { id: principalId, type: inactive || isExternalGuest ? "guest" : "internal" };
   }
 
-  async function deactivate(externalId: string, source: DeactivationSource = "manual"): Promise<void> {
-    const key = personKey(externalId);
-    const existing = deactivated.get(key);
+  async function deactivate(principalId: string, source: DeactivationSource = "manual"): Promise<void> {
+    const existing = deactivated.get(principalId);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
-    const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
-    deactivated.set(key, record);
-    await store.put(foldPrincipalId(externalId), record);
+    const record: DeactivationRecord = { principalId, source, at: Date.now() };
+    deactivated.set(principalId, record);
+    await store.put(principalId, record);
   }
 
-  async function reactivate(externalId: string): Promise<void> {
-    deactivated.delete(personKey(externalId));
-    for (const key of storeKeys(externalId)) await store.delete(key);
+  async function reactivate(principalId: string): Promise<void> {
+    deactivated.delete(principalId);
+    await store.delete(principalId);
   }
 
   async function refresh(force = false): Promise<void> {
@@ -127,21 +127,30 @@ export function createIdentityService(
   }
 
   return {
+    principals: graph,
+    async actor(actor: ActorAssertion): Promise<Principal> {
+      const p = classify((await asPrincipal(graph, actor)).externalId, actor.isExternalGuest);
+      return {
+        ...p,
+        ...(actor.teamIds ? { teamIds: actor.teamIds } : {}),
+        ...(actor.displayName ? { displayName: actor.displayName } : {}),
+      };
+    },
     classify,
     deactivate,
-    deactivationSource(externalId: string): DeactivationSource | undefined {
-      return deactivated.get(personKey(externalId))?.source;
+    deactivationSource(principalId: string): DeactivationSource | undefined {
+      return deactivated.get(principalId)?.source;
     },
     reactivate,
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {
       const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
       for (const id of removedIds) {
-        if (keptByDirectorySync(personKey(id)) || deactivated.has(personKey(id))) continue;
+        if (keptByDirectorySync(id) || deactivated.has(id)) continue;
         await deactivate(id, "directory-sync");
         outcome.deactivated.push(id);
       }
       for (const id of presentIds) {
-        if (deactivated.get(personKey(id))?.source !== "directory-sync") continue;
+        if (deactivated.get(id)?.source !== "directory-sync") continue;
         await reactivate(id);
         outcome.reactivated.push(id);
       }
@@ -151,30 +160,22 @@ export function createIdentityService(
       await refresh();
       return [...externals.values()];
     },
-    externalMember(principalId: string): ExternalMember | undefined {
-      return externals.get(personKey(principalId));
+    externalMember(email: string): ExternalMember | undefined {
+      return externals.get(emailKey(email));
     },
     async putExternalMember(m: ExternalMember): Promise<void> {
-      externals.set(personKey(m.email), m);
-      await externalStore.put(foldPrincipalId(m.email), m);
+      externals.set(emailKey(m.email), m);
+      await externalStore.put(emailKey(m.email), m);
     },
-    async removeExternalMember(principalId: string): Promise<void> {
-      externals.delete(personKey(principalId));
-      for (const key of storeKeys(principalId)) await externalStore.delete(key);
+    async removeExternalMember(email: string): Promise<void> {
+      externals.delete(emailKey(email));
+      await externalStore.delete(emailKey(email));
     },
     hydrate(): Promise<void> {
       if (!hydrateP) hydrateP = load(false);
       return hydrateP;
     },
     refresh,
-    resolve(actor: ActorAssertion): Principal {
-      const p = classify(actor.externalId, actor.isExternalGuest);
-      return {
-        ...p,
-        ...(actor.teamIds ? { teamIds: actor.teamIds } : {}),
-        ...(actor.displayName ? { displayName: actor.displayName } : {}),
-      };
-    },
     isInternal(p: Principal): boolean {
       return p.type === "internal";
     },
@@ -182,4 +183,57 @@ export function createIdentityService(
       return audience.length > 0 && audience.every((p) => p.type === "internal");
     },
   };
+}
+
+async function asPrincipal(graph: PrincipalGraph, a: ActorAssertion): Promise<ActorAssertion> {
+  if (a.isExternalGuest) {
+    const { provider: _edge, ...guest } = a;
+    return guest;
+  }
+  const kind = a.isBot ? "agent" : "person";
+  const { provider, ...rest } = a;
+  return {
+    ...rest,
+    externalId: await principalFromEdge(graph, a.externalId, provider, {
+      kind,
+      ...(a.displayName ? { displayName: a.displayName } : {}),
+    }),
+  };
+}
+
+type AssertedRequest = {
+  actor: ActorAssertion;
+  conversation: { audience?: ActorAssertion[]; publishMembers?: ActorAssertion[] };
+};
+
+export async function principalRequest<R extends AssertedRequest>(
+  identity: Pick<IdentityService, "principals">,
+  req: R,
+): Promise<R> {
+  const one = (a: ActorAssertion): Promise<ActorAssertion> => asPrincipal(identity.principals, a);
+  const many = async (list: ActorAssertion[] | undefined) => (list ? Promise.all(list.map(one)) : undefined);
+  const [actor, audience, publishMembers] = await Promise.all([
+    one(req.actor),
+    many(req.conversation.audience),
+    many(req.conversation.publishMembers),
+  ]);
+  return {
+    ...req,
+    actor,
+    conversation: {
+      ...req.conversation,
+      ...(audience ? { audience } : {}),
+      ...(publishMembers ? { publishMembers } : {}),
+    },
+  };
+}
+
+export function emailInternal(
+  identity: Pick<IdentityService, "principals" | "classify" | "externalMember">,
+  email: string,
+): boolean {
+  const principal = identity.principals.principalOf(handle("email", email));
+  if (principal) return identity.classify(principal).type === "internal";
+  const member = identity.externalMember(email);
+  return !member || externalMemberActive(member);
 }

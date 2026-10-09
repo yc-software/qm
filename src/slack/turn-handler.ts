@@ -284,8 +284,12 @@ export function createTurnHandler(deps: {
       threadRef = dmThreadRef(inc.channel, inc.threadTs);
       if (deps.externalAccess) threadRef = `slack-account:${ids.ownTeamId}:${threadRef}`;
       replyThreadTs = inc.threadTs;
-      if (!actor.isBot && !actor.isExternalGuest)
-        deps.ensureHeader?.(client, inc.channel, `personal:${actor.externalId}`, "dm");
+      const ensureHeader = deps.ensureHeader;
+      if (ensureHeader && !actor.isBot && !actor.isExternalGuest)
+        void core
+          .personalScopeOf(actor)
+          .then((scope) => ensureHeader(client, inc.channel, scope, "dm"))
+          .catch(swallowAs("slack: dm header scope", undefined));
     } else {
       channelRef = inc.channel;
       channelObservedAt = Date.now();

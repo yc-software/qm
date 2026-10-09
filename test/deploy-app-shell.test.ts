@@ -111,7 +111,7 @@ function mintPortalSession(sub: string, expiresInSeconds = 3600): string {
   const key = createHmac("sha256", "portal-session-secret").update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
-    JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + expiresInSeconds }),
+    JSON.stringify({ k: "session", sub, pid: sub, org: "acme", iat: now, exp: now + expiresInSeconds }),
   ).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }

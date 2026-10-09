@@ -549,7 +549,11 @@ test("reaction turns preserve the reacted message in the mirror", async () => {
         return { status: "silent" };
       },
     },
-    directory: { classifyUserCached: async () => ({ actor: { externalId: "U1", displayName: "Teammate" } }) },
+    directory: {
+      classifyUserCached: async () => ({
+        actor: { externalId: "U1", provider: "slack" as const, displayName: "Teammate" },
+      }),
+    },
     mirror: f.mirror,
     ids,
     threads: createThreadTracker(),
@@ -689,7 +693,10 @@ test("untyped attachment-only updates and deletions resolve room kind without di
       directory: {
         getChannelInfo: async () => info,
         allInternalRosters: async () => new Map([["C1", []]]),
-        classifyUserCached: async () => ({ ok: true, actor: { externalId: "UBOT", displayName: "QM" } }),
+        classifyUserCached: async () => ({
+          ok: true,
+          actor: { externalId: "UBOT", provider: "slack" as const, displayName: "QM" },
+        }),
         forceDirectorySync: async () => {},
       },
       ingest: async (events) => {

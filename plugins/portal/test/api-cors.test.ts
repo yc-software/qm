@@ -4,10 +4,12 @@ import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { isChatApiRoute, parseAllowedOrigins } from "../src/cors.ts";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 const upstream = createServer((req: IncomingMessage, res) => {
   req.resume();
   req.on("end", () => {
+    if (answerPrincipalLookup(req, res)) return;
     if (req.url === "/api/whoami") {
       res.writeHead(200, { "content-type": "application/json" });
       return void res.end(JSON.stringify({ isAdmin: (req.headers.cookie ?? "").includes("admin=U-admin") }));
@@ -41,7 +43,7 @@ const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 const sessionKey = deriveKey("api-cors-test-portal-secret-0123456789", "portal.session.v1");
 function sessionCookie(sub: string): string {
   const iat = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", prov: "oidc", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 function impersonating(actor: string, target: string): string {

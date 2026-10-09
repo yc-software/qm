@@ -1,7 +1,7 @@
 import type { Cron, CronSchedule, Destination } from "../types.ts";
 import { principalDestination } from "../reach/reach.ts";
-import { personKeys } from "../directory/person.ts";
-import { errMessage } from "../util/errors.ts";
+import { samePerson } from "../directory/person.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 
 export interface CronEditDetail {
@@ -89,12 +89,8 @@ export async function notifyOwnerOfCronEdit(
   const { cron } = args;
   if (cron.runAs !== "scopeShared") return;
   try {
-    const [editor, owner] = await Promise.all([
-      sink.directoryMember(args.editorId).catch(() => null),
-      sink.directoryMember(cron.owner).catch(() => null),
-    ]);
-    const ownerKeys = personKeys(owner, cron.owner);
-    if ([...personKeys(editor, args.editorId)].some((k) => ownerKeys.has(k))) return;
+    if (samePerson(args.editorId, cron.owner)) return;
+    const editor = await sink.directoryMember(args.editorId).catch(swallowAs("cron edit notice: editor lookup", null));
     const url = sink.cronAdminUrl(cron);
     const label = cron.title ?? "shared";
     let ref = "shared";
@@ -108,7 +104,7 @@ export async function notifyOwnerOfCronEdit(
     await sink.enqueueDelivery({
       destination: principalDestination(cron.owner, args.editorId),
       text: composeCronEditNotice({
-        editorName: editor?.displayName ?? args.editorId,
+        editorName: editor?.displayName ?? "A teammate",
         ref,
         ...(place ? { place } : {}),
         changes: args.changeSummary,

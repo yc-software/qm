@@ -1,3 +1,4 @@
+import { handle } from "../../identity/principals.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
@@ -5,8 +6,9 @@ import { AdminError } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
 import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
-import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
+import { isObj, authorizeAdmin, orgScope, audit, activePrincipal, principalGraph } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { emailInternal } from "../../identity/identity-service.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -59,15 +61,16 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   if (!validEmail(email)) return sendJson(res, 400, { error: "bad_request", message: "email required" });
   if (!deps.identity) return sendJson(res, 200, { allowed: false });
   await deps.identity.refresh();
-  if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
+  const principal = principalGraph(ctx).principalOf(handle("email", email));
+  if (principal && deps.identity.deactivationSource(principal) === "manual")
+    return sendJson(res, 200, { allowed: false });
   const member = deps.identity.externalMember(email);
   const configured =
     deps.emailAuthPrincipals?.includes(email) ||
     Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
-  const allowed =
-    deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
+  const allowed = emailInternal(deps.identity, email) && (member ? externalMemberActive(member) : configured);
   if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
-  const grants = (await deps.acl?.list()) ?? [];
+  const grants = principal ? ((await deps.acl?.list()) ?? []) : [];
   const deployments = await app.listDeployments();
   const granted = deployments.filter(
     (d) =>
@@ -76,7 +79,7 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
         (g) =>
           g.ownerScopeId === d.ownerScopeId &&
           g.ref === encodeRef(deployRef(d.id)) &&
-          g.granteeScopeId === `personal:${email}` &&
+          g.granteeScopeId === `personal:${principal}` &&
           g.permission === "read",
       ),
   );
@@ -100,7 +103,8 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "invalid_email" });
   const email = b.email.trim().toLowerCase();
   if (ctx.pathname.endsWith("/revoke")) {
-    if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, orgScope()))) return;
+    const own = !!ctx.actor && principalGraph(ctx).principalOf(handle("email", email)) === ctx.actor.p;
+    if (!own && !(await authorizeAdmin(ctx, orgScope()))) return;
     await deps.brokerSessions.revoke(email);
     audit(deps, {
       principalId: ctx.actor?.p ?? "admin",
@@ -204,7 +208,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
     !member.inviteId ||
     member.inviteId !== claims.inviteId ||
     !externalMemberActive(member) ||
-    deps.identity.classify(claims.email).type !== "internal"
+    !emailInternal(deps.identity, claims.email)
   )
     return sendJson(res, 403, { error: "invitation_revoked" });
   if (!(await deps.replayDedupe.claim(`teammate-invite:${claims.jti}`, claims.exp)))

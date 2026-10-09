@@ -7,10 +7,12 @@ import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope, principalOf } from "./support/principal.ts";
 
 let executions = 0;
 let observedRelease = "";
 let failRelease = false;
+let sharedSourceScope = "personal:U1";
 mock.module("../src/harness/mock-harness.ts", {
   namedExports: {
     createMockHarness() {
@@ -36,7 +38,7 @@ mock.module("../src/harness/mock-harness.ts", {
           current: {
             ...turn.tools,
             async read() {
-              return { content: "SCREENING_FIXTURE_BLOCK", sourceScopeId: "personal:U1", shared: true };
+              return { content: "SCREENING_FIXTURE_BLOCK", sourceScopeId: sharedSourceScope, shared: true };
             },
             async execute() {
               executions++;
@@ -71,7 +73,12 @@ mock.module("../src/harness/mock-harness.ts", {
 const { buildApp } = await import("../src/wiring.ts");
 
 function request(threadRef = "fixture-thread"): TurnRequest {
-  return { surface: "test", actor: { externalId: "U1" }, conversation: { kind: "dm", threadRef }, text: "run fixture" };
+  return {
+    surface: "test",
+    actor: { externalId: "U1", provider: "slack" as const },
+    conversation: { kind: "dm", threadRef },
+    text: "run fixture",
+  };
 }
 
 for (const securityPosture of ["auto", "strict"] as const) {
@@ -154,10 +161,16 @@ test("released shared content retains scope and survives a failed continuation",
       },
     },
   });
+  sharedSourceScope = await personalScope(built, "U1");
   const req: TurnRequest = {
     ...request(),
     text: "run fixture shared",
-    conversation: { kind: "channel", threadRef: "shared-fixture", channelRef: "C", audience: [{ externalId: "U1" }] },
+    conversation: {
+      kind: "channel",
+      threadRef: "shared-fixture",
+      channelRef: "C",
+      audience: [{ externalId: "U1", provider: "slack" as const }],
+    },
   };
   const blocked = await built.app.turn(req);
   const approval = { requestId: blocked.pendingApprovals![0]!.requestId, approved: true };
@@ -174,10 +187,15 @@ test("released shared content retains scope and survives a failed continuation",
       (entry.payload as { securityReleaseRequestId?: string }).securityReleaseRequestId === approval.requestId,
   );
   assert.equal(released.length, 1);
-  assert.equal(released[0]!.scopeLabel, "personal:U1");
+  assert.equal(released[0]!.scopeLabel, sharedSourceScope);
   assert.match(JSON.stringify(released[0]!.payload), /SCREENING_FIXTURE_BLOCK/);
   assert.equal(
-    filterHistoryForAudience(released, [{ id: "U2", type: "internal" }], "channel:C", "org:default-org").length,
+    filterHistoryForAudience(
+      released,
+      [{ id: await principalOf(built, "U2"), type: "internal" }],
+      "channel:C",
+      "org:default-org",
+    ).length,
     0,
   );
   const replay = await built.app.turn({ ...req, approval });

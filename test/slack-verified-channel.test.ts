@@ -60,7 +60,15 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
   });
   const observe = (
     info: import("../src/slack/identity.ts").ChannelMeta | undefined = { name: "room", is_private: true },
-  ) => directory.channelMembership(client, "C_ONE", { externalId: "U_ONE" }, "U_ONE", info, Date.now());
+  ) =>
+    directory.channelMembership(
+      client,
+      "C_ONE",
+      { externalId: "U_ONE", provider: "slack" as const },
+      "U_ONE",
+      info,
+      Date.now(),
+    );
   return { store, state, observe };
 }
 

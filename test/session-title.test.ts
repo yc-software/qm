@@ -11,6 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 function freshApp() {
@@ -19,7 +20,7 @@ function freshApp() {
   return buildApp(config);
 }
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }
@@ -103,7 +104,9 @@ test("a rejected title answer is recorded with the rule that rejected it before 
 });
 
 test("POST /v1/sessions/:id/title answers 200 with the fallback title and records why the answer was rejected", async () => {
-  const { app, errors, config, admin, auditLog } = freshApp();
+  const built = freshApp();
+  const { app, errors, config, admin, auditLog } = built;
+  const p_u1 = await principalOf(built, "U1");
   const server = createInsecureTestServer(app, { config, admin, auditLog });
   server.listen(0);
   try {
@@ -112,7 +115,7 @@ test("POST /v1/sessions/:id/title answers 200 with the fallback title and record
     const res = await fetch(`http://localhost:${port}/v1/sessions/${turn.sessionId!}/title`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1" }),
+      body: JSON.stringify({ principalId: p_u1 }),
     });
 
     assert.equal(res.status, 200);
@@ -144,7 +147,9 @@ test("the durable fallback strips turn boilerplate and stays within the generate
 });
 
 test("the shared fallback covers approval pauses and manual regeneration", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
+  const p_u1 = await principalOf(built, "U1");
   const turn = await app.turn(dm("!paused-approval Simulate four-way title outage deploy", "web:U1:title-paused"));
 
   assert.ok(turn.pendingApprovals?.length);
@@ -153,7 +158,7 @@ test("the shared fallback covers approval pauses and manual regeneration", async
     "!paused-approval Simulate four-way title outage deploy",
   );
   assert.equal(
-    (await app.regenerateTitle(turn.sessionId!, "U1"))?.title,
+    (await app.regenerateTitle(turn.sessionId!, p_u1))?.title,
     "!paused-approval Simulate four-way title outage deploy",
   );
 });
@@ -182,26 +187,30 @@ test("the title ignores assembled-turn boilerplate (conversation header / manife
 });
 
 test("a per-participant rename overrides the LLM title, and clearing it reveals the LLM title again", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
+  const p_u1 = await principalOf(built, "U1");
   const r = await app.turn(dm("Set up the staging database", "web:U1:t4"));
   const sid = r.sessionId!;
   const llm = (await app.getSession(sid))?.session.title;
   assert.ok(llm, "first turn sets the global LLM title");
 
-  const renamed = await app.updateSession(sid, "U1", { title: "Staging DB" });
+  const renamed = await app.updateSession(sid, p_u1, { title: "Staging DB" });
   assert.equal(renamed?.title, "Staging DB");
-  const cleared = await app.updateSession(sid, "U1", { title: null });
+  const cleared = await app.updateSession(sid, p_u1, { title: null });
   assert.equal(cleared?.title, llm);
 });
 
 test("regenerateTitle retitles from the visible transcript; a stranger gets null", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
+  const p_u1 = await principalOf(built, "U1");
   const r = await app.turn(dm("Investigate the flaky CI job", "web:U1:t3"));
   const sid = r.sessionId!;
-  const refreshed = await app.regenerateTitle(sid, "U1");
+  const refreshed = await app.regenerateTitle(sid, p_u1);
   assert.equal(refreshed?.title, "Chat: Investigate the flaky CI job");
   assert.equal(await app.regenerateTitle(sid, "intruder"), null);
-  assert.equal(await app.regenerateTitle("does-not-exist", "U1"), null);
+  assert.equal(await app.regenerateTitle("does-not-exist", p_u1), null);
 });
 
 test("the title lands even when the turn pauses on approval (early titling off the first message)", async () => {

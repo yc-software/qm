@@ -309,29 +309,33 @@ async function isAdmin(sub: string): Promise<boolean> {
   return (await adminProbe(sub)).isAdmin;
 }
 
-const CANONICAL_TTL_MS = 60_000;
-const CANONICAL_TIMEOUT_MS = 4_000;
-const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
+const PRINCIPAL_TTL_MS = 60_000;
+const PRINCIPAL_TIMEOUT_MS = 4_000;
+const principalCache = new LRUCache<string, string>({ max: 10_000, ttl: PRINCIPAL_TTL_MS });
 
-async function canonicalPrincipal(sub: string): Promise<string | null> {
-  const hit = canonicalCache.get(sub);
+async function principalFor(prov: NonNullable<SessionClaims["prov"]>, sub: string): Promise<string | null> {
+  const cacheKey = `${prov}\u0000${sub}`;
+  const hit = principalCache.get(cacheKey);
   if (hit !== undefined) return hit;
-  const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
+  const path = withSourceAuthNonce(`/v1/identities/${prov}/${encodeURIComponent(sub)}/principal`, CORE_SIGNING_SECRET);
   try {
     const r = await fetch(`${CORE}${path}`, {
       headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
+      signal: AbortSignal.timeout(PRINCIPAL_TIMEOUT_MS),
     });
     if (!r.ok) {
-      console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
+      console.warn(`[portal] principal lookup returned HTTP ${r.status}`);
       return null;
     }
-    const body = (await r.json()) as { canonicalId?: unknown };
-    const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
-    canonicalCache.set(sub, canonical);
-    return canonical;
+    const body = (await r.json()) as { principalId?: unknown };
+    if (typeof body.principalId !== "string" || !body.principalId) {
+      console.warn("[portal] principal lookup returned no principal");
+      return null;
+    }
+    principalCache.set(cacheKey, body.principalId);
+    return body.principalId;
   } catch (error) {
-    console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+    console.warn(`[portal] principal lookup failed: ${errMessage(error)}`);
     return null;
   }
 }
@@ -461,7 +465,7 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
+  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, prov: "oidc", org: ORG, iat: now, exp: now + SESSION_TTL_S };
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
@@ -939,6 +943,25 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
   return session;
 }
 
+// Cookies sealed before principals carry a bare handle and no prov/pid. Resolve
+// the handle once through the identities table and re-seal, so the user stays
+// signed in.
+function legacyProvider(sub: string): NonNullable<SessionClaims["prov"]> {
+  if (/^(T[A-Z0-9]+:)?[UW][A-Z0-9]+$/.test(sub)) return "slack";
+  if (sub.includes("@") && !sub.startsWith("oidc:")) return "email";
+  return "oidc";
+}
+
+async function upgradeLegacySession(res: ServerResponse, session: SessionClaims): Promise<SessionClaims | null> {
+  const prov = legacyProvider(session.sub);
+  const sub = prov === "email" ? session.sub.toLowerCase() : session.sub;
+  const pid = await principalFor(prov, sub);
+  if (pid === null) return null;
+  const upgraded: SessionClaims = { ...session, sub, prov, pid };
+  setSession(res, sessionCookieSet(seal(upgraded, sessionKey), upgraded.sub));
+  return upgraded;
+}
+
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
   const session = openSession(
     readCookie(req.headers.cookie, "portal_session"),
@@ -1128,10 +1151,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = renewSessionCookie(req, res) ?? currentSession(req);
   const authenticatedPrincipal = session?.sub;
+  if (session && !session.anon && !session.prov) {
+    session = await upgradeLegacySession(res, session);
+    if (!session) return identityUnavailable(req, res);
+  }
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
-    const canonical = await canonicalPrincipal(session.sub);
-    if (canonical === null) return identityUnavailable(req, res);
-    session = { ...session, sub: canonical };
+    const principal = await principalFor(session.prov!, session.sub);
+    if (principal === null) return identityUnavailable(req, res);
+    session = { ...session, sub: principal };
   }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
@@ -1140,8 +1167,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await canonicalPrincipal(target)) === session.sub)
-      return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
+    if (target === session.sub) return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
       const status = result.status === 403 || result.status === 400 ? result.status : 502;
@@ -1532,7 +1558,7 @@ async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<v
         ),
       );
     const data = (await r.json()) as { email: string };
-    setAuthenticatedSession(res, data.email);
+    if (!(await setAuthenticatedSession(res, "email", data.email))) return identityUnavailable(req, res);
     res.writeHead(303, { location: "/", "cache-control": "no-store" });
     res.end();
   } catch {
@@ -1590,7 +1616,7 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
     }
     throw error;
   }
-  setAuthenticatedSession(res, claims.email);
+  if (!(await setAuthenticatedSession(res, "email", claims.email))) return identityUnavailable(req, res);
   res.writeHead(303, { location: "/admin/", "cache-control": "no-store" });
   res.end();
 }
@@ -1635,7 +1661,8 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       );
       adminCache.delete(identity.sub);
     }
-    setAuthenticatedSession(res, identity.sub, identity.name);
+    if (!(await setAuthenticatedSession(res, "oidc", identity.sub, identity.name)))
+      return identityUnavailable(req, res);
     res.writeHead(302, {
       location: sanitizeReturnTo(identity.returnTo, PUBLIC_URL, APPS_DOMAIN),
       "cache-control": "no-store",
@@ -1650,11 +1677,21 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   }
 }
 
-function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", appOnly = false): void {
+async function setAuthenticatedSession(
+  res: ServerResponse,
+  prov: NonNullable<SessionClaims["prov"]>,
+  sub: string,
+  name = "",
+  appOnly = false,
+): Promise<boolean> {
+  const pid = await principalFor(prov, sub);
+  if (pid === null) return false;
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
     sub,
+    prov,
+    pid,
     org: ORG,
     auth: now,
     iat: now,
@@ -1668,6 +1705,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
     clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
     clearCookie("portal_impersonate", "/", SECURE_COOKIES),
   ]);
+  return true;
 }
 
 function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
@@ -1724,7 +1762,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
   if (!consumeState(tmp.state)) return fail("login already used, please try again");
 
-  let principal: { sub: string; appOnly?: true };
+  let principal: { sub: string; prov: "email" | "sub"; appOnly?: true };
   let name = "";
   try {
     const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
@@ -1746,7 +1784,10 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     return fail(errMessage(e, "sign-in failed"));
   }
 
-  setAuthenticatedSession(res, principal.sub, name, principal.appOnly);
+  const subjectProvider = OIDC.issuer === "https://slack.com" ? "slack" : "oidc";
+  const prov = principal.prov === "email" ? "email" : subjectProvider;
+  if (!(await setAuthenticatedSession(res, prov, principal.sub, name, principal.appOnly)))
+    return identityUnavailable(req, res);
   res.writeHead(302, {
     location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),
     "cache-control": "no-store",

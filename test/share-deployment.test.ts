@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
@@ -7,7 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, deploymentView } from "../src/api/app.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createIdentityService, type IdentityService } from "../src/identity/identity-service.ts";
 import { createToolContext, type ToolContext } from "../src/tools/primitives.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
@@ -26,7 +27,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
@@ -36,8 +37,15 @@ type Dir = { resolve: (orgId: string, q: string) => Promise<RecipientResolution>
 function makeDeploy(
   canManageEmail?: (email: string) => Promise<boolean>,
   externalSharing = true,
-): { deploy: DeployService; acl: AclStore } {
+): {
+  deploy: DeployService;
+  acl: AclStore;
+  identity: IdentityService;
+  emailScope: (email: string) => Promise<ScopeId>;
+} {
   const acl: AclStore = createAclStore();
+  const identity = createIdentityService();
+  const emailPrincipal = (email: string) => identity.principals.act(handle("email", email), { email });
   const deploy = createDeployService({
     deployStore: createDeployStore(),
     provider: {
@@ -47,21 +55,27 @@ function makeDeploy(
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
+    principals: identity.principals,
     ...(canManageEmail ? { canManageEmail } : {}),
     externalSharingAllowed: async () => externalSharing,
     deployDir: mkdtempSync(join(tmpdir(), "share-api-")),
   });
-  return { deploy, acl };
+  return {
+    deploy,
+    acl,
+    identity,
+    emailScope: async (email) => scopeId("personal", await emailPrincipal(email)),
+  };
 }
 
 function apiHarness(directory?: Dir) {
-  const { deploy, acl } = makeDeploy();
+  const { deploy, acl, identity, emailScope } = makeDeploy();
   const app = createApp({
     deploy,
-    identity: createIdentityService(),
+    identity,
     ...(directory ? { directory } : {}),
   } as unknown as Parameters<typeof createApp>[0]);
-  return { app, deploy, acl };
+  return { app, deploy, acl, emailScope };
 }
 
 const cap = (actorId: string, orgId = "acme"): CapabilityClaims =>
@@ -567,8 +581,8 @@ test("deployment public access is explicit, owner-only, and reversible", async (
 });
 
 test("with external app sharing off, public links and outside emails are refused while org sharing still works", async () => {
-  const { deploy } = makeDeploy(async (email) => email.endsWith("@acme.test"), false);
-  const app = createApp({ deploy, identity: createIdentityService() } as unknown as Parameters<typeof createApp>[0]);
+  const { deploy, identity, emailScope } = makeDeploy(async (email) => email.endsWith("@acme.test"), false);
+  const app = createApp({ deploy, identity } as unknown as Parameters<typeof createApp>[0]);
   const off = { enabled: async () => false } as unknown as FeatureFlagStore;
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -597,7 +611,7 @@ test("with external app sharing off, public links and outside emails are refused
   assert.equal(org.status, 200);
   assert.deepEqual((await deploy.deploymentGrantees("locked")).map((g) => g.scope).sort(), [
     "org:default-org",
-    "personal:teammate@acme.test",
+    await emailScope("teammate@acme.test"),
   ]);
 
   const d = (await app.getDeployment("locked"))!;
@@ -611,7 +625,12 @@ test("with external app sharing off, public links and outside emails are refused
     }),
     /external_app_sharing/,
   );
-  assert.ok(!(await deploy.deploymentGrantees("locked")).some((g) => g.scope === "personal:guest@elsewhere.test"));
+  const guestScope = await emailScope("guest@elsewhere.test");
+  assert.ok(
+    !(await deploy.deploymentGrantees("locked")).some(
+      (g) => g.scope === "personal:guest@elsewhere.test" || g.scope === guestScope,
+    ),
+  );
 });
 
 test("deployment permissions are visible only to the owner, including for managers", async () => {
@@ -635,17 +654,19 @@ test("deployment permissions are visible only to the owner, including for manage
 });
 
 test("app email grants normalize, dedupe, revoke, and reject external manage without changing the grant", async () => {
-  const { app, deploy } = apiHarness();
+  const { app, deploy, emailScope } = apiHarness();
+  const invitee = await emailScope("invitee@example.com");
+  const other = await emailScope("other@example.com");
   await app.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [], name: "email-app" });
   for (const email of ["  Invitee@Example.com  ", "invitee@example.com"]) {
     const r = await callShare(app, cap("U1"), "email-app", { email });
     assert.equal(r.status, 200);
-    assert.equal(r.body.target.scope, "personal:invitee@example.com");
+    assert.equal(r.body.target.scope, invitee);
   }
-  const expected = [{ scope: "personal:invitee@example.com", permission: "read" }];
+  const expected = [{ scope: invitee, permission: "read" }];
   assert.deepEqual(await deploy.deploymentGrantees("email-app"), expected);
-  assert.equal((await deploy.reachDeployment("email-app", "invitee@example.com")).status, "ok");
-  assert.equal((await deploy.reachDeployment("email-app", "other@example.com")).status, "denied");
+  assert.equal((await deploy.reachDeployment("email-app", invitee.slice("personal:".length))).status, "ok");
+  assert.equal((await deploy.reachDeployment("email-app", other.slice("personal:".length))).status, "denied");
   for (const body of [
     { email: "invitee@example.com", access: "manage" },
     { scope: "personal:invitee@example.com", access: "manage" },
@@ -666,18 +687,16 @@ test("app email grants normalize, dedupe, revoke, and reject external manage wit
 });
 
 test("directory email recipients retain manage access", async () => {
-  const { deploy } = makeDeploy(async (email) => email === "member@example.com");
+  const { deploy, emailScope } = makeDeploy(async (email) => email === "member@example.com");
+  const member = await emailScope("member@example.com");
   const d = await deploy.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [] });
   await deploy.shareDeployment(d.id, "personal:Member@Example.com", "write", { createdBy: "U1" });
-  assert.deepEqual(await deploy.deploymentGrantees(d.id), [
-    { scope: "personal:member@example.com", permission: "write" },
-  ]);
-  assert.equal(await deploy.canManageDeployment(d.id, "member@example.com"), true);
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), [{ scope: member, permission: "write" }]);
+  assert.equal(await deploy.canManageDeployment(d.id, member.slice("personal:".length)), true);
 });
 
 test("exact email read grants admit app-only login and guest reach without membership or source access", async () => {
-  const { deploy, acl } = makeDeploy();
-  const identity = createIdentityService();
+  const { deploy, acl, identity, emailScope } = makeDeploy();
   const directory = createDirectoryStore();
   const app = createApp({ deploy, acl, identity, directory, auditLog: { record() {} } } as unknown as Parameters<
     typeof createApp
@@ -690,8 +709,9 @@ test("exact email read grants admit app-only login and guest reach without membe
     name: "invite-test",
   });
   const email = "invitee@example.com";
-  await identity.deactivate(email, "directory-sync");
-  assert.equal(identity.classify(email).type, "guest");
+  const invitee = await identity.principals.act(handle("email", email));
+  await identity.deactivate(invitee, "directory-sync");
+  assert.equal(identity.classify(invitee).type, "guest");
   const allowed = async (email: string, featureFlags = externalSharingOn) => {
     let status: number | undefined;
     let body: unknown;
@@ -722,26 +742,27 @@ test("exact email read grants admit app-only login and guest reach without membe
     "existing outside grants stop admitting sign-in while external sharing is off",
   );
   assert.deepEqual(await allowed("other@example.com"), { allowed: false });
-  assert.equal(await app.effectiveDeploymentPermission(d, "Invitee@Example.com"), "read");
-  assert.equal(await app.effectiveDeploymentPermission(d, "other@example.com"), null);
-  assert.equal(await app.deploymentGitPermissionFor(d.id, email), null);
-  assert.equal((await app.reachDeployment(d.id, email)).status, "ok");
+  const other = (await emailScope("other@example.com")).slice("personal:".length);
+  assert.equal(await app.effectiveDeploymentPermission(d, invitee), "read");
+  assert.equal(await app.effectiveDeploymentPermission(d, other), null);
+  assert.equal(await app.deploymentGitPermissionFor(d.id, invitee), null);
+  assert.equal((await app.reachDeployment(d.id, invitee)).status, "ok");
   assert.equal(await app.directoryMember(email), null);
   assert.equal(identity.externalMember(email), undefined);
-  assert.equal(identity.classify(email).type, "guest");
+  assert.equal(identity.classify(invitee).type, "guest");
   await app.archiveDeployment(d.id);
   assert.deepEqual(await allowed(email), { allowed: false });
   await app.restoreDeployment(d.id, "U1");
-  await identity.deactivate(email);
+  await identity.deactivate(invitee);
   assert.deepEqual(await allowed(email), { allowed: false });
-  assert.equal(await app.effectiveDeploymentPermission(d, email), null);
-  await identity.reactivate(email);
+  assert.equal(await app.effectiveDeploymentPermission(d, invitee), null);
+  await identity.reactivate(invitee);
   await app.shareDeployment(d.id, `personal:${email}`, null, { createdBy: "U1" });
   assert.deepEqual(await allowed(email), { allowed: false });
-  assert.equal(await app.effectiveDeploymentPermission(d, email), null);
+  assert.equal(await app.effectiveDeploymentPermission(d, invitee), null);
   for (const grant of [
-    { ref: `deployment:${d.id}`, granteeScopeId: `personal:${email}`, permission: "write" as const },
-    { ref: "deployment:missing", granteeScopeId: `personal:${email}`, permission: "read" as const },
+    { ref: `deployment:${d.id}`, granteeScopeId: `personal:${invitee}` as const, permission: "write" as const },
+    { ref: "deployment:missing", granteeScopeId: `personal:${invitee}` as const, permission: "read" as const },
     { ref: `deployment:${d.id}`, granteeScopeId: "org:default-org" as const, permission: "read" as const },
   ])
     await acl.grant({ ownerScopeId: "personal:U1", grantedBy: "U1", ...grant });
@@ -753,11 +774,12 @@ test("exact email read grants admit app-only login and guest reach without membe
 });
 
 test("uniform app share accepts exact emails and enforces view-only outside the directory", async () => {
-  const { deploy, acl } = makeDeploy();
+  const { deploy, acl, identity, emailScope } = makeDeploy();
+  const invitee = await emailScope("invitee@example.com");
   const app = createApp({
     deploy,
     acl,
-    identity: createIdentityService(),
+    identity,
     directory: createDirectoryStore(),
     auditLog: { record() {} },
   } as unknown as Parameters<typeof createApp>[0]);
@@ -765,15 +787,13 @@ test("uniform app share accepts exact emails and enforces view-only outside the 
   const control = createControlService(app);
   const r = await control.shareArtifact({ type: "deploy", id: d.id, email: "Invitee@Example.com" }, cap("U1"));
   assert.ok(r.ok, JSON.stringify(r));
-  assert.equal(r.target.scope, "personal:invitee@example.com");
+  assert.equal(r.target.scope, invitee);
   const blocked = await control.shareArtifact(
     { type: "deploy", id: d.id, email: "invitee@example.com", permission: "write" },
     cap("U1"),
   );
   assert.equal(blocked.ok, false);
-  assert.deepEqual(await deploy.deploymentGrantees(d.id), [
-    { scope: "personal:invitee@example.com", permission: "read" },
-  ]);
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), [{ scope: invitee, permission: "read" }]);
   const moved = await control.shareArtifact(
     { type: "deploy", id: d.id, email: "invitee@example.com", move: true },
     cap("U1"),
@@ -782,12 +802,12 @@ test("uniform app share accepts exact emails and enforces view-only outside the 
 });
 
 test("new email grants send an app-specific invitation once; re-adds and revocations send nothing", async () => {
-  const { deploy, acl } = makeDeploy();
+  const { deploy, acl, identity } = makeDeploy();
   const sent: Array<{ to: string; subject: string; text: string; html: string }> = [];
   const app = createApp({
     deploy,
     acl,
-    identity: createIdentityService(),
+    identity,
     deployAppsDomain: "apps.example.com",
     inviteMailer: {
       async send(message: (typeof sent)[number]) {
@@ -837,11 +857,11 @@ test("failed invitation delivery leaves the grant and reports the failure and ma
       },
     },
   ]) {
-    const { deploy, acl } = makeDeploy();
+    const { deploy, acl, identity, emailScope } = makeDeploy();
     const app = createApp({
       deploy,
       acl,
-      identity: createIdentityService(),
+      identity,
       deployAppsDomain: "apps.example.com",
       inviteMailer: mailer,
     } as unknown as Parameters<typeof createApp>[0]);
@@ -858,18 +878,18 @@ test("failed invitation delivery leaves the grant and reports the failure and ma
     assert.match(added.body.invitation.emailProblem, mailer ? /mail unavailable/ : /not configured/);
     assert.equal(added.body.invitation.appUrl, "https://status-page.apps.example.com/");
     assert.deepEqual(await deploy.deploymentGrantees(d.id), [
-      { scope: "personal:invitee@example.com", permission: "read" },
+      { scope: await emailScope("invitee@example.com"), permission: "read" },
     ]);
   }
 });
 
 test("uniform app share uses the same invitation sender", async () => {
-  const { deploy, acl } = makeDeploy();
+  const { deploy, acl, identity } = makeDeploy();
   const sent: string[] = [];
   const app = createApp({
     deploy,
     acl,
-    identity: createIdentityService(),
+    identity,
     directory: createDirectoryStore(),
     deployAppsDomain: "apps.example.com",
     inviteMailer: {

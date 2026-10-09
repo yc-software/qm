@@ -15,8 +15,9 @@ import {
   PROACTIVE_OPENER_PROMPT,
 } from "../src/onboarding/onboarding.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
-const actor = { externalId: "U1" };
+const actor = { externalId: "U1", provider: "slack" as const };
 const onboardingSkillDir = join(process.cwd(), "plugins/onboarding/skills");
 
 function freshApp(overrides: Partial<Config> = {}) {
@@ -84,9 +85,11 @@ test("a new personal DM gets the high-priority pending onboarding prompt", async
 });
 
 test("completed or dismissed onboarding markers suppress the pending prompt", async () => {
-  const { app, skills, memory } = freshApp();
+  const built = freshApp();
+  const { app, skills, memory } = built;
+  const p_u1 = await principalOf(built, "U1");
   await waitForOnboardingSkill(skills);
-  await memory.replace(scopeId("personal", "U1"), "## Onboarding\n\n- Onboarding: completed v2 on 2026-06-09.\n");
+  await memory.replace(scopeId("personal", p_u1), "## Onboarding\n\n- Onboarding: completed v2 on 2026-06-09.\n");
 
   const completed = await app.turn({
     surface: "test",
@@ -96,7 +99,7 @@ test("completed or dismissed onboarding markers suppress the pending prompt", as
   } as TurnRequest);
   assert.doesNotMatch(completed.reply ?? "", /## Pending Onboarding/);
 
-  await memory.replace(scopeId("personal", "U1"), "## Onboarding\n\n- Onboarding: dismissed v2 on 2026-06-09.\n");
+  await memory.replace(scopeId("personal", p_u1), "## Onboarding\n\n- Onboarding: dismissed v2 on 2026-06-09.\n");
   const dismissed = await app.turn({
     surface: "test",
     actor,
@@ -129,9 +132,11 @@ test("the opener defers Slack setup until status can be checked without requirin
 });
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {
-  const { app, skills, memory } = freshApp();
+  const built = freshApp();
+  const { app, skills, memory } = built;
+  const p_u1 = await principalOf(built, "U1");
   await waitForOnboardingSkill(skills);
-  const threadRef = "web:U1:ideas:12345678-1234-4123-8123-123456789abc";
+  const threadRef = `web:${p_u1}:ideas:12345678-1234-4123-8123-123456789abc`;
   for (let i = 0; i < 2; i++) {
     const sys = await app.turn({
       surface: "web",
@@ -142,11 +147,11 @@ test("ideas web conversations bypass onboarding on every turn without completing
     assert.doesNotMatch(sys.reply ?? "", /## Pending Onboarding/);
     assert.match(sys.reply ?? "", /Skip the onboarding skill and setup flow for this entire conversation/);
   }
-  assert.equal(detectOnboardingStatus(await memory.read(scopeId("personal", "U1"))), "not_started");
+  assert.equal(detectOnboardingStatus(await memory.read(scopeId("personal", p_u1))), "not_started");
   const ordinary = await app.turn({
     surface: "web",
     actor,
-    conversation: { kind: "dm", threadRef: "web:U1:ordinary" },
+    conversation: { kind: "dm", threadRef: `web:${p_u1}:ordinary` },
     text: "!sysprompt",
   } as TurnRequest);
   assert.match(ordinary.reply ?? "", /## Pending Onboarding/);
@@ -161,9 +166,11 @@ test("ideas web conversations bypass onboarding on every turn without completing
 
 for (const initialStatus of ["not_started", "pending"] as const) {
   test(`three personal chats durably dismiss ${initialStatus} onboarding`, async () => {
-    const { app, skills, memory, sessions } = freshApp();
+    const built = freshApp();
+    const { app, skills, memory, sessions } = built;
+    const p_u1 = await principalOf(built, "U1");
     await waitForOnboardingSkill(skills);
-    const scope = scopeId("personal", "U1");
+    const scope = scopeId("personal", p_u1);
     await memory.replace(scope, setOnboardingStatus("## Notes\n\nKeep my preferences.\n", initialStatus, "2026-09-17"));
     const prompt = async () =>
       (

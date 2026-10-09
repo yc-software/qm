@@ -1139,7 +1139,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars = {
           botName,
           userName: cleanBrandingLabel(actor.displayName, 80) ?? "there",
-          userEmail: actor.id.includes("@") ? actor.id : undefined,
+          userEmail: deps.identity.principals.identitiesOf(actor.id).find((i) => i.provider === "email")?.externalId,
           surfaceLabel: isWeb ? `the ${botName} web app` : "Slack",
           slack: isSlack,
         };

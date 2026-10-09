@@ -516,11 +516,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const grants = (await deps.acl?.grantsFor(d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => [])) ?? [];
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
-      if (
-        g.permission === "read" &&
-        principalId.includes("@") &&
-        g.granteeScopeId === `personal:${principalId.trim().toLowerCase()}`
-      ) {
+      if (g.permission === "read" && g.granteeScopeId === scopeId("personal", principalId)) {
         best = "read";
         continue;
       }

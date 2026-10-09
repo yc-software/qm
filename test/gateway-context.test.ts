@@ -9,6 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 test("renders gateway + location + identifier lines", () => {
   const out = renderGatewayContext("slack", {
@@ -68,7 +69,7 @@ test("gateway context flows into the system prompt the harness sees", async () =
   const { app } = freshApp();
   const res = await app.turn({
     surface: "slack",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "dm:U1:t1" },
     text: "!sysprompt",
     gatewayContext: { location: "a direct message with the user", details: { channel: "D9" } },
@@ -83,7 +84,7 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
   const { app } = freshApp();
   const res = await app.turn({
     surface: "slack",
-    actor: { externalId: "U2" },
+    actor: { externalId: "U2", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "dm:U2:t1" },
     text: "!sysprompt",
   });
@@ -93,11 +94,12 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
 });
 
 test("web prompt tells cron creators to use a real notification destination", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
   const res = await app.turn({
     surface: "web",
-    actor: { externalId: "U3" },
-    conversation: { kind: "dm", threadRef: "web:U3:t1" },
+    actor: { externalId: "U3", provider: "slack" as const },
+    conversation: { kind: "dm", threadRef: `web:${await principalOf(built, "U3")}:t1` },
     text: "!sysprompt",
   });
   assert.equal(res.status, "ok");
@@ -109,7 +111,7 @@ test("triggered destination turns tell the agent to return the deliverable, not 
   const { app } = freshApp();
   const res = await app.turn({
     surface: "cron",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "cron:c1:slot" },
     text: "!sysprompt",
     triggered: true,

@@ -145,7 +145,10 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
   )
     return;
   const deployment = (await app.listDeployments()).find((d) => d.id === parts.id);
-  const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
+  const actor = await authorizeAdmin(
+    { req, res, deps, app, capability: null },
+    deployment?.ownerScopeId ?? orgScope(deps),
+  );
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   audit(deps, {
@@ -856,7 +859,8 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (!session && sessionSecret && embedAncestors.length) {
     session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
   }
-  const sub = session?.sub;
+  const login = session?.sub;
+  const sub = session?.pid;
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));
   if (!isPublic && (!sessionSecret || !loginUrl)) {
     sendJson(res, 503, { error: "unavailable", message: "sign-in is not configured for deployment subdomains" });
@@ -890,11 +894,13 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (sub && deployment) {
     if (session?.appOnly) {
       await deps.identity?.refresh();
+      const principal = sub;
       if (
         externalAllowed &&
-        deps.identity?.deactivationSource(sub) !== "manual" &&
+        principal !== undefined &&
+        deps.identity?.deactivationSource(principal) !== "manual" &&
         (await app.deploymentGrantees(deployment.id)).some(
-          (grant) => grant.scope === scopeId("personal", sub.trim().toLowerCase()) && grant.permission === "read",
+          (grant) => grant.scope === scopeId("personal", principal) && grant.permission === "read",
         )
       )
         authenticatedPermission = "read";
@@ -1016,7 +1022,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
     });
-    res.end(notSharedHtml(viewer));
+    res.end(notSharedHtml(login ?? viewer));
     return true;
   }
   if (reach.status === "ok" && signInAttempted && ctx.method === "GET") {
@@ -1677,7 +1683,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
     const deployment = await app.getDeployment(params.id!);
     return sendJson(res, 200, {
       ok: true,
-      target: { scope: target.scope, label: target.label },
+      target: { scope: invite?.scope ?? target.scope, label: target.label },
       access,
       reach,
       ...(invite ? { invitation: invite.invitation } : {}),

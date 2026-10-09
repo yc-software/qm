@@ -43,12 +43,12 @@ for (const warm of [false, true]) {
     }) as typeof fetch;
     const base: TurnRequest = {
       surface: "slack",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: {
         kind: "channel",
         threadRef: `ch:C1:${warm ? "existing" : "fresh"}`,
         channelRef: "C1",
-        audience: [{ externalId: "U1" }],
+        audience: [{ externalId: "U1", provider: "slack" as const }],
       },
       origin: { kind: "human" },
       text: "go",

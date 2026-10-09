@@ -106,6 +106,7 @@ test("sliding renewal preserves the anon flag", async () => {
   const now = Math.floor(Date.now() / 1000);
   const aged: SessionClaims = {
     k: "session",
+    prov: "oidc",
     sub: "playground-deadbeef",
     org: process.env.CORE_ORG_ID ?? "acme",
     name: "Guest",

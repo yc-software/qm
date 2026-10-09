@@ -554,7 +554,7 @@ test("steering forwards prepared images and file paths while retaining the origi
   const runId = "run-steer-files";
   const request = {
     surface: "web",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm" as const, threadRef: "files" },
     text: "check this",
     attachments: [{ name: "photo.png", mimetype: "image/png", sizeBytes: 3, blobId: "b1" }],

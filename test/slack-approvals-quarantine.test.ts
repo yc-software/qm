@@ -22,8 +22,8 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
   } as unknown as SlackCoreClient;
   const flow = createTurnFlow(core);
   const directory = {
-    classifyActor: async () => ({ externalId: "U1", displayName: "Alice" }),
-    classifyUserCached: async () => ({ actor: { externalId: "U1", displayName: "Alice" } }),
+    classifyActor: async () => ({ externalId: "U1", provider: "slack" as const, displayName: "Alice" }),
+    classifyUserCached: async () => ({ actor: { externalId: "U1", provider: "slack" as const, displayName: "Alice" } }),
   } as never;
   const approvals = createApprovals({ core, flow, directory, threads: createThreadTracker(), ids: {} as never });
   const handlers: Array<{ pattern: RegExp; handler: ActionHandler }> = [];
@@ -34,8 +34,8 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
     approvalChannel: "D1",
     threadOnly: false,
     turn: {
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:D1", audience: [{ externalId: "U1" }] },
+      actor: { externalId: "U1", provider: "slack" as const },
+      conversation: { kind: "dm", threadRef: "dm:D1", audience: [{ externalId: "U1", provider: "slack" as const }] },
       deliveryTarget: "D1",
       text: "please run it",
     },

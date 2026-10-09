@@ -1,3 +1,4 @@
+import { answerPrincipalLookup } from "./principal-stub.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
@@ -18,6 +19,7 @@ let nonce = "";
 const email = "guest@partner.test";
 const seen: Array<{ path: string; headers: Record<string, unknown> }> = [];
 const upstream = createServer((req, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   void (async () => {
     const path = new URL(req.url!, origin).pathname;
     res.setHeader("content-type", "application/json");
@@ -82,7 +84,7 @@ test.after(() => {
 
 function appCookie() {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${seal({ k: "session", sub: email, org: "acme", appOnly: true, iat: now - 7200, exp: now + 3600 }, sessionKey)}`;
+  return `portal_session=${seal({ k: "session", prov: "oidc", sub: email, org: "acme", appOnly: true, iat: now - 7200, exp: now + 3600 }, sessionKey)}`;
 }
 async function signIn(cookie = "") {
   const login = await fetch(`${base}/auth/login?returnTo=${encodeURIComponent("https://demo.apps.example.test/")}`, {

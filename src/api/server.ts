@@ -32,7 +32,7 @@ import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
-import { canonicalPerson, samePerson } from "../directory/person.ts";
+import { personKey } from "../directory/person.ts";
 
 const safeDecode = (s: string): string => {
   try {
@@ -60,7 +60,7 @@ async function capabilityAdminDenied(
   if (pathname.startsWith("/v1/admin/impersonate")) {
     return "impersonating a user is portal-only — the agent cannot act as another person";
   }
-  if (pathname.startsWith("/v1/admin/principal-links")) {
+  if (pathname.startsWith("/v1/admin/identities") || pathname.startsWith("/v1/admin/principals")) {
     return "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
   }
   if (method === "GET" && isAdminContentRead(pathname) && parseScopeId(claims.scopeId).kind !== "personal") {
@@ -322,18 +322,23 @@ async function gate(
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
+    if (actor) {
+      const [p, imp, authenticatedAs] = [actor.p, actor.imp, actor.authenticatedAs].map(personKey);
+      actor =
+        p && (!actor.imp || imp) && (!actor.authenticatedAs || authenticatedAs)
+          ? { ...actor, p, ...(imp ? { imp } : {}), ...(authenticatedAs ? { authenticatedAs } : {}) }
+          : null;
+    }
     if (actor && deps.identity) {
       await deps.identity.refresh(Boolean(actor.authenticatedAs));
       if (
         deps.identity.classify(actor.p).type !== "internal" ||
         (actor.authenticatedAs &&
           (deps.identity.classify(actor.authenticatedAs).type !== "internal" ||
-            !samePerson(actor.authenticatedAs, actor.imp ?? actor.p)))
+            actor.authenticatedAs !== (actor.imp ?? actor.p)))
       )
         actor = null;
     }
-    if (actor)
-      actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
     if (!isPublicRoute && requirePortalIdentity) {
       const webTurn =
         method === "POST" &&
@@ -356,7 +361,7 @@ async function gate(
         if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
         else if (field) asserted = assertedActor(field, url, body, req);
         const actorId = actor.p;
-        const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
+        const matchesActor = (value: unknown): boolean => typeof value === "string" && personKey(value) === actorId;
         if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;

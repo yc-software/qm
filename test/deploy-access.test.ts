@@ -1,3 +1,4 @@
+import { handle } from "../src/identity/principals.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -41,16 +42,20 @@ async function fixture(t: { after(fn: () => void): void }) {
   const auditLog = createAuditLog();
   const deliveries = createDeliveryStore();
   const identity = createIdentityService();
+  const act = (email: string) => identity.principals.act(handle("email", email), { email });
+  const p = { owner: await act(owner), requester: await act(requester), carol: await act("carol@example.com") };
   const directory = createDirectoryStore();
   await directory.replace(
-    [owner, requester, "carol@example.com"].map((principalId) => ({
-      principalId,
-      displayName: principalId,
+    [owner, requester, "carol@example.com"].map((email) => ({
+      principalId: identity.principals.principalOf(handle("email", email))!,
+      displayName: email,
       type: "internal" as const,
     })),
   );
   const deploy = createDeployService({
-    canManageEmail: async (email) => (await directory.get(email))?.type === "internal",
+    principals: identity.principals,
+    canManageEmail: async (email) =>
+      (await directory.get(identity.principals.principalOf(handle("email", email)) ?? email))?.type === "internal",
     deliveries,
     deployAppsDomain: "apps.example.com",
     deployStore: createDeployStore(),
@@ -73,11 +78,12 @@ async function fixture(t: { after(fn: () => void): void }) {
     sessions: createMemorySessionStore(),
     deployAppsDomain: "apps.example.com",
   } as unknown as Parameters<typeof createApp>[0]);
-  const d = await app.deploy(publishInput());
-  const value = JSON.stringify({ deploymentId: d.id, requesterId: requester });
-  const share = (permission: Permission | null, scope = person(requester)) =>
-    app.shareDeployment(d.id, scope, permission, { createdBy: owner });
+  const d = await app.deploy(publishInput(p.owner));
+  const value = JSON.stringify({ deploymentId: d.id, requesterId: p.requester });
+  const share = (permission: Permission | null, scope = person(p.requester)) =>
+    app.shareDeployment(d.id, scope, permission, { createdBy: p.owner });
   return {
+    p,
     share,
     grants: () => app.deploymentGrantees(d.id),
     notices: () => deliveries.pending("principal"),
@@ -90,7 +96,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     value,
     auditLog,
     decide: (id = owner, approve = true, extra: Partial<ActorAssertion> = {}) =>
-      decideDeploymentAccess(app, identity, value, { externalId: id, ...extra }, approve),
+      decideDeploymentAccess(app, identity, value, { externalId: id, provider: "email", ...extra }, approve),
   };
 }
 
@@ -132,10 +138,10 @@ test("approve is audited and idempotent, preserves manage access, and respects t
   const f = await fixture(t);
   assert.match(await f.decide(), /^Approved\./);
   await f.decide();
-  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
+  assert.deepEqual(await f.grants(), [{ scope: person(f.p.requester), permission: "read" }]);
   const notices = await f.notices();
   assert.equal(notices.length, 1);
-  assert.equal(notices[0]!.destination.target, requester);
+  assert.equal(notices[0]!.destination.target, f.p.requester);
   assert.match(notices[0]!.text, /gave you access.*https:\/\/mysite.apps.example.com\//);
   assert.ok((await f.auditLog.events()).some((e) => e.action === "grant"));
   await f.share(null);
@@ -146,9 +152,9 @@ test("approve is audited and idempotent, preserves manage access, and respects t
   assert.equal((await f.notices()).length, 1);
   await f.share("write");
   await f.decide();
-  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "write" }]);
+  assert.deepEqual(await f.grants(), [{ scope: person(f.p.requester), permission: "write" }]);
   assert.equal((await f.notices()).length, 2);
-  await f.app.moveArtifactHome("deploy", f.d.id, person(requester), owner);
+  await f.app.moveArtifactHome("deploy", f.d.id, person(f.p.requester), f.p.owner);
   await assert.rejects(f.decide(), /owner/);
   await assert.rejects(f.decide(owner, false), /owner/);
 });
@@ -159,7 +165,7 @@ test("requester, stranger, guest and deactivated owner cannot approve or decline
     for (const id of [requester, "carol@example.com"]) await assert.rejects(f.decide(id, approve), /owner/);
     await assert.rejects(f.decide(owner, approve, { isExternalGuest: true }), /owner/);
   }
-  await f.identity.deactivate(owner);
+  await f.identity.deactivate(await f.identity.principals.act(handle("email", owner)));
   await assert.rejects(f.decide(), /owner/);
   await assert.rejects(f.decide(owner, false), /owner/);
   assert.deepEqual(await f.grants(), []);
@@ -168,7 +174,7 @@ test("requester, stranger, guest and deactivated owner cannot approve or decline
 
 test("tampering the deployment ID cannot authorize another owner's app", async (t) => {
   const f = await fixture(t);
-  const other = await f.app.deploy(publishInput(requester, "other"));
+  const other = await f.app.deploy(publishInput(f.p.requester, "other"));
   const value = JSON.stringify({ ...request, deploymentId: other.id });
   for (const approve of [true, false])
     await assert.rejects(decideDeploymentAccess(f.app, f.identity, value, { externalId: owner }, approve), /owner/);
@@ -187,20 +193,20 @@ test("decline only notifies and leaves access unchanged; duplicate clicks dedupe
 test("direct share paths notify only after successful grants; org, self and revoke stay silent", async (t) => {
   const f = await fixture(t);
   await f.share(null);
-  await f.share("read", person(owner));
+  await f.share("read", person(f.p.owner));
   await f.share("read", scopeId("org", "acme"));
   const control = createControlService(f.app);
   const cap = (actorId: string) => ({ actorId, scopeId: person(actorId), liveActor: true }) as CapabilityClaims;
-  const request = { type: "deploy" as const, id: f.d.id, scope: person(requester) };
-  assert.equal((await control.shareArtifact(request, cap(requester))).ok, false);
+  const request = { type: "deploy" as const, id: f.d.id, scope: person(f.p.requester) };
+  assert.equal((await control.shareArtifact(request, cap(f.p.requester))).ok, false);
   assert.deepEqual(await f.notices(), []);
-  assert.equal((await control.shareArtifact(request, cap(owner))).ok, true);
+  assert.equal((await control.shareArtifact(request, cap(f.p.owner))).ok, true);
   await f.share("read");
   assert.equal((await f.notices()).length, 1);
   f.deliveries.enqueue = async () => {
     throw new Error("outbox unavailable");
   };
-  assert.equal((await f.share("write")).find((g) => g.scope === person(requester))?.permission, "write");
+  assert.equal((await f.share("write")).find((g) => g.scope === person(f.p.requester))?.permission, "write");
 });
 
 test("button dispatch classifies the clicker, settles the card, and keeps failed cards actionable", async (t) => {
@@ -216,7 +222,7 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
       },
     },
     {
-      directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id }) } as never,
+      directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id, provider: "email" }) } as never,
       core: {
         decideDeploymentAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
           decideDeploymentAccess(f.app, f.identity, value, actor, approve),
@@ -249,8 +255,8 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
 
 test("shared-home members can approve and decline, outsiders cannot", async (t) => {
   const f = await fixture(t);
-  await f.directory.upsertGroup("G1", [owner, "carol@example.com"]);
-  await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), owner);
+  await f.directory.upsertGroup("G1", [f.p.owner, f.p.carol]);
+  await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), f.p.owner);
   assert.match(await f.decide("carol@example.com", false), /^Declined\./);
   assert.match(await f.decide("carol@example.com"), /^Approved\./);
   await assert.rejects(f.decide(requester, false), /owner/);

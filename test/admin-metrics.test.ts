@@ -35,7 +35,7 @@ test("metrics: TTFT + latency populate after a driven turn, org-wide", async () 
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello there",
     };
@@ -94,7 +94,7 @@ test("metrics: turn anatomy splits no-sandbox (Trace A) from sandbox (Trace B) t
   try {
     const chat: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U1:chat" },
       text: "hello there",
     };
@@ -102,7 +102,7 @@ test("metrics: turn anatomy splits no-sandbox (Trace A) from sandbox (Trace B) t
     await selectDefaultSandbox(s.built, "U2", "personal:U2");
     const tool: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U2" },
+      actor: { externalId: "U2", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U2:tool" },
       text: "!run echo hi",
     };
@@ -167,7 +167,7 @@ test("metrics: session+lease measured per turn; detached post-turn capture recor
   try {
     const dm: TurnRequest = {
       surface: "test",
-      actor: { externalId: "U9" },
+      actor: { externalId: "U9", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "dm:U9:cap" },
       text: "remember my favorite color is blue",
     };

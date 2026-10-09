@@ -5,21 +5,25 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
   built.config.setApprovedHarnesses(["pi", "codex"]);
+  const owner = await principalOf(built, "owner");
+  const sender = await principalOf(built, "sender");
+  const newMember = await principalOf(built, "new-member");
   await built.app.upsertDirectory(
-    ["owner", "sender", "new-member"].map((principalId) => ({
+    [owner, sender, newMember].map((principalId) => ({
       principalId,
       displayName: principalId,
       type: "internal" as const,
     })),
   );
-  const project = await built.app.createProject("owner", "Replay receipt");
+  const project = await built.app.createProject(owner, "Replay receipt");
   assert.ok(project);
   built.config.setWebuiModels(`org:${project.orgId}`, ["gpt-5.5"]);
-  assert.equal((await built.app.addProjectMember(project.id, "owner", "sender")).status, "ok");
+  assert.equal((await built.app.addProjectMember(project.id, owner, sender)).status, "ok");
   const channelRef = projectGroupRef(project.id);
   const version = await built.projects.version(channelRef);
   assert.ok(version);
@@ -28,14 +32,14 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
     "group",
     project.scopeId,
   );
-  const actor: Principal = { id: "owner", type: "internal" };
+  const actor: Principal = { id: owner, type: "internal" };
   const conversation: Conversation = {
     kind: "group",
     channelRef,
     threadRef: child.threadRef,
-    audience: [actor, { id: "sender", type: "internal" }],
+    audience: [actor, { id: sender, type: "internal" }],
   };
-  for (const id of ["owner", "sender"]) await built.sessions.addParticipant(child.id, id);
+  for (const id of [owner, sender]) await built.sessions.addParticipant(child.id, id);
   await built.sessions.setSpawnMeta(child.id, { surface: "web", actor, conversation });
   const options = {
     model: "gpt-5.5",
@@ -52,7 +56,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
       text: "Original delegated task",
       origin: { kind: "direct" },
       scopeVersion: version,
-      sessionParticipantIds: ["owner", "sender"],
+      sessionParticipantIds: [owner, sender],
       ...options,
     },
   });
@@ -64,7 +68,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
     text: "Please continue the investigation",
     request: {
       surface: "web",
-      actor: { externalId: "sender" },
+      actor: { externalId: "sender", provider: "slack" as const },
       conversation: {
         kind: "group",
         channelRef,
@@ -84,12 +88,12 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
   const [firstReplay, unexpected] = await built.runs.inFlightForThread(child.threadRef);
   assert.ok(firstReplay);
   assert.equal(unexpected, undefined);
-  assert.equal(firstReplay.request.actor.id, "sender");
+  assert.equal(firstReplay.request.actor.id, sender);
   assert.equal(firstReplay.request.scopeVersion, version);
   for (const [key, value] of Object.entries(options))
     assert.equal(firstReplay.request[key as keyof typeof options], value, key);
   assert.equal((await built.signals.pending(run.id)).length, 1);
-  assert.equal((await built.app.addProjectMember(project.id, "owner", "new-member")).status, "ok");
+  assert.equal((await built.app.addProjectMember(project.id, owner, newMember)).status, "ok");
   assert.notEqual(await built.projects.version(channelRef), version);
   built.signals.acknowledge = acknowledge;
   await built.app.replayOrphanedRunSignals(run.id);

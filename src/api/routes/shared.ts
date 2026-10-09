@@ -1,8 +1,10 @@
+import { personKey } from "../../directory/person.ts";
 import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.ts";
 import type { Principal } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
-import { canonicalPerson, samePerson } from "../../directory/person.ts";
+import { samePerson } from "../../directory/person.ts";
+import type { PrincipalGraph } from "../../identity/principals.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
@@ -23,13 +25,20 @@ function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor"
   return ctx.deps.admin?.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
 }
 
-export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
+export function principalGraph(ctx: Pick<ApiCtx, "deps" | "app">): PrincipalGraph {
+  return ctx.deps.principals ?? ctx.app.principals;
+}
+
+export async function adminActorFrom(
+  ctx: Pick<ApiCtx, "req" | "deps" | "app" | "capability" | "actor">,
+): Promise<Principal | null> {
   const actor = rawAdminActor(ctx);
-  return actor ? { ...actor, id: canonicalPerson(actor.id) } : null;
+  const id = personKey(actor?.id);
+  return actor && id ? { ...actor, id } : null;
 }
 
 export async function authorizeAdmin(
-  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor">,
+  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "app" | "capability" | "actor">,
   _scope: string,
 ): Promise<Principal | null> {
   const { res, deps } = ctx;
@@ -38,7 +47,7 @@ export async function authorizeAdmin(
     return null;
   }
   const grants = await deps.admin.listGrants();
-  const actor = adminActorFrom(ctx);
+  const actor = await adminActorFrom(ctx);
   if (actor && !(await activePrincipal(deps, actor.id))) {
     sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
     return null;
@@ -55,7 +64,7 @@ export async function activePrincipal(deps: ServerDeps, principalId: string): Pr
 }
 
 export async function requireScopedAdmin(
-  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "url">,
+  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "app" | "capability" | "actor" | "url">,
 ): Promise<{ actor: Principal; scope: string } | null> {
   const scope = ctx.url.searchParams.get("scope") ?? "";
   if (!scope) {

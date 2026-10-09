@@ -80,6 +80,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
   const app = {
     swarms: fixture.service,
     authorizesCapabilityScope: async () => true,
+    principals: { act: async (handle: string) => handle, principalOf: (handle: string) => handle },
     getSessionForViewer: async (id: string, actorId: string) => {
       const session = await fixture.sessions.getForParticipant(id, actorId);
       return session ? { session, entries: [] } : null;

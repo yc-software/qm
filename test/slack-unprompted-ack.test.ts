@@ -6,7 +6,7 @@ import { createThreadTracker, createDeduper } from "../src/slack/lib.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
-const actor = { externalId: "U1", displayName: "Teammate" };
+const actor = { externalId: "U1", provider: "slack" as const, displayName: "Teammate" };
 const directory = {
   classifyUserCached: async () => ({ actor }),
 } as unknown as Directory;

@@ -111,7 +111,7 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
     assert.equal((await s.put({ harnessId: "pi", modelId: "gpt-5.6-terra" })).status, 400);
     const refused = await s.built.app.turn({
       surface: "web",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "web:U1:excluded-saved-model" },
       text: "hello",
       liveActor: true,

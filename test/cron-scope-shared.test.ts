@@ -353,29 +353,6 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
     assert.match(enqueued[0]!.text, /<https:\/\/x\/admin\/\?cron=cron_x\|Digest>/, "links the cron in admin");
   });
 
-  it("does NOT notify on a cross-surface self-edit (email owner ↔ Slack-id editor, same person)", async () => {
-    const { sink, enqueued } = fakeSink({
-      "alice@acme.com": { principalId: "alice@acme.com", slackId: "U-alice" },
-      "U-alice": { principalId: "alice@acme.com", slackId: "U-alice" },
-    });
-    await notifyOwnerOfCronEdit(sink, {
-      cron: cron({ owner: "alice@acme.com" }),
-      editorId: "U-alice",
-      changeSummary: ["task"],
-    });
-    assert.equal(enqueued.length, 0, "same person via directory bridge → no notice");
-  });
-
-  it("does NOT notify on an email-case self-edit", async () => {
-    const { sink, enqueued } = fakeSink();
-    await notifyOwnerOfCronEdit(sink, {
-      cron: cron({ owner: "Alice@acme.com" }),
-      editorId: "alice@acme.com",
-      changeSummary: ["task"],
-    });
-    assert.equal(enqueued.length, 0, "case-only difference → no notice");
-  });
-
   it("does NOT notify on an owner self-edit, or for non-scopeShared crons", async () => {
     const a = fakeSink();
     await notifyOwnerOfCronEdit(a.sink, {

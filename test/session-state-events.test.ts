@@ -12,13 +12,14 @@ import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
+import { principalOf } from "./support/principal.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-state-"));
   return buildApp(testConfig({ dataDir, orgId: "acme" }));
 }
 
-const actor = { externalId: "U1", orgId: "acme" };
+const actor = { externalId: "U1", provider: "slack" as const, orgId: "acme" };
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }
@@ -87,12 +88,13 @@ test("a COLLECTED (non-blocking) approval settles idle — push and snapshot agr
 
 test("the settle event derives from the durable approvals store, exactly what listSessions reads", async () => {
   const built = freshApp();
+  const p_u1 = await principalOf(built, "U1");
   const got = record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:agree"));
   assert.equal(r.status, "pending_approval");
   const states = statesFor(got, "web:U1:agree");
   assert.equal(states[states.length - 1], "awaiting_approval");
-  const row = (await built.app.listSessions("U1")).find((s) => s.id === r.sessionId);
+  const row = (await built.app.listSessions(p_u1)).find((s) => s.id === r.sessionId);
   assert.equal(row?.awaitingInput, true, "snapshot agrees with the pushed state");
 });
 
@@ -108,6 +110,7 @@ test("the events carry the session UUID and a timestamp", async () => {
 
 test("a shed-participants event is rehydrated from the session store before subscribers see it", async () => {
   const built = freshApp();
+  const p_u1 = await principalOf(built, "U1");
   const thread = "web:U1:shed";
   const turned = await built.app.turn(dm("hello", thread));
   const got: SessionStateEvent[] = [];
@@ -120,7 +123,7 @@ test("a shed-participants event is rehydrated from the session store before subs
     participantsShed: true,
   });
   assert.ok(await waitFor(() => got.length > 0), "the flagged event reached the subscriber");
-  assert.deepEqual(got[0]!.participants, ["U1"], "the routing field is rebuilt from durable session membership");
+  assert.deepEqual(got[0]!.participants, [p_u1], "the routing field is rebuilt from durable session membership");
   assert.equal(got[0]!.participantsShed, undefined, "the internal shed flag never leaves the app");
   assert.equal(got[0]!.state, "working");
 });
@@ -197,7 +200,13 @@ test("GET /v1/session-state/events streams transitions as SSE frames", async () 
 function resolvedDm(text: string, thread: string): OrchestratorInput {
   return {
     surface: "test",
-    actor: { id: "user:U1", type: "user", orgId: "acme", externalId: "U1" } as unknown as OrchestratorInput["actor"],
+    actor: {
+      id: "user:U1",
+      type: "user",
+      orgId: "acme",
+      externalId: "U1",
+      provider: "slack" as const,
+    } as unknown as OrchestratorInput["actor"],
     conversation: { kind: "dm", threadRef: thread, audience: [] },
     origin: { kind: "direct" },
     text,
@@ -283,6 +292,7 @@ test("a settle frame is stamped with the run's durable finishedAt — a later en
 
 test("a parent stays working while a subagent runs after its own turn ends — push and snapshot agree", async () => {
   const built = freshApp();
+  const p_u1 = await principalOf(built, "U1");
   const parentThread = "web:U1:parent";
   const childThread = "web:U1:parent-child";
   const got = record(built.sessionStateBus);
@@ -308,7 +318,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
   await built.runs.complete(parentRun.id, leasedParent!.leaseToken!, { status: "ok", reply: "delegated" });
   await new Promise((r) => setTimeout(r, 150));
   assert.deepEqual(statesFor(got, parentThread), ["working", "working"], "the subagent keeps its parent working");
-  const working = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  const working = (await built.app.listSessions(p_u1)).find((s) => s.id === parent.sessionId);
   assert.equal(working?.working, true, "the sidebar snapshot shows the parent working too");
 
   const leasedChild = await built.runs.claimById(childRun.id, "w1", 30_000);
@@ -318,7 +328,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
     "the last subagent run settles the parent",
   );
   assert.deepEqual(statesFor(got, childThread), ["working", "idle"]);
-  const settled = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  const settled = (await built.app.listSessions(p_u1)).find((s) => s.id === parent.sessionId);
   assert.ok(!settled?.working, "the snapshot settles with the push");
 });
 
@@ -345,6 +355,7 @@ test("a parent parked on a blocking approval keeps awaiting while its subagent r
 
 test("a parent whose own turn parks on an approval while its subagent runs settles awaiting at once", async () => {
   const built = freshApp();
+  const p_u1 = await principalOf(built, "U1");
   const parentThread = "web:U1:parks-mid-tree";
   const childThread = "web:U1:parks-mid-tree-child";
   const parent = await built.app.turn(dm("hello", parentThread));
@@ -359,7 +370,7 @@ test("a parent whose own turn parks on an approval while its subagent runs settl
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
   assert.equal(parked.status, "pending_approval");
   assert.ok(await waitFor(() => statesFor(got, parentThread).includes("awaiting_approval")));
-  const row = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  const row = (await built.app.listSessions(p_u1)).find((s) => s.id === parent.sessionId);
   assert.equal(row?.awaitingInput, true);
   assert.ok(!row?.working, "the snapshot ranks the pending approval above subagent work, like the push");
   const leased = await built.runs.claimById(run.id, "w1", 30_000);

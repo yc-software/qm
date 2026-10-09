@@ -385,7 +385,7 @@ test("shutdown mid-turn through the harness leaves no stop marker, and the resum
   const threadRef = "harness-shutdown-resume";
   const queued = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef },
     text: "!work-until-shutdown",
     async: true,
@@ -508,14 +508,14 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
   );
   const a = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "t1" },
     text: "first",
     async: true,
   });
   const b = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "t2" },
     text: "second",
     async: true,
@@ -546,7 +546,7 @@ test("a worker pool drains a queued run end-to-end", async () => {
   try {
     const ack = await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t1" },
       text: "hello",
       async: true,
@@ -576,7 +576,7 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
   try {
     const ack = await built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef: "t1" },
       text: "hello",
       async: true,
@@ -692,7 +692,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
   const enqueue = (threadRef: string) =>
     built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef },
       text: "hello",
       async: true,
@@ -755,7 +755,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
   const turn = (threadRef: string, async = false) =>
     built.app.turn({
       surface: "test",
-      actor: { externalId: "U1" },
+      actor: { externalId: "U1", provider: "slack" as const },
       conversation: { kind: "dm", threadRef },
       text: "hello",
       async,
@@ -807,7 +807,7 @@ test("final shutdown waits for an already-started completion instead of releasin
   };
   const queued = await built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "bounded-worker" },
     text: "hello",
     async: true,
@@ -868,7 +868,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
       for (const status of ["ok", "failed"] as const) {
         const admitted = await built.app.turn({
           surface: "web",
-          actor: { externalId: "U1" },
+          actor: { externalId: "U1", provider: "slack" as const },
           conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
           text: "test message",
           liveActor: true,
@@ -906,7 +906,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
   };
   const inline = built.app.turn({
     surface: "test",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: "inline-shutdown" },
     text: "hello",
   });

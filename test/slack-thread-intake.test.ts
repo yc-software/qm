@@ -8,7 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 function message(threadTs?: string, text = "Continue", key = crypto.randomUUID()): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "U1" },
+    actor: { externalId: "U1", provider: "slack" as const },
     conversation: { kind: "dm", threadRef: `dm:D1${threadTs ? `:${threadTs}` : ""}` },
     deliveryTarget: `D1${threadTs ? `:${threadTs}` : ""}`,
     text,

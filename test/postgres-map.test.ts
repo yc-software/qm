@@ -324,13 +324,14 @@ test("pg keychain: listByOwner is a per-owner projected read with no secret mate
     assert.equal(turkish.length, 1, "an owner id where SQL and JS case folding diverge still lists its credentials");
     assert.equal(turkish[0]!.service, "gitlab");
 
-    const listed = await keychain.listByOwner("owner-a@x.COM");
+    assert.equal((await keychain.listByOwner("owner-a@x.COM")).length, 0, "principal ids are exact");
+    const listed = await keychain.listByOwner("Owner-A@X.com");
     assert.equal(listed.length, 1);
     assert.equal(listed[0]!.service, "github");
     assert.ok(!("secretEnc" in listed[0]!));
     assert.ok(!JSON.stringify(listed).includes("ghp_a"));
 
-    const own = await keychain.materializeOwn("owner-a@x.com");
+    const own = await keychain.materializeOwn("Owner-A@X.com");
     assert.deepEqual(
       own.flatMap((m) => m.env),
       [{ key: "GITHUB_TOKEN", value: "ghp_a" }],

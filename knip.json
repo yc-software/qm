@@ -28,6 +28,7 @@
         "scripts/dev/twin-multiws-check.ts",
         "scripts/dev/twin-pump.ts",
         "scripts/migrate-principals-to-email.mjs",
+        "scripts/migrate-identities.mjs",
         "scripts/mine-slack-scenarios.ts",
         "scripts/skills-materialize-smoke.ts",
         "scripts/slack-user-token.ts",

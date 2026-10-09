@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -221,9 +222,12 @@ test("list splits owned crons from ones visible through shared scopes, and visib
 });
 
 test("a private-channel MEMBER may manage a shared cron via the web; a public-channel member and a non-member may not", async () => {
+  const ALICE_ID = await principalOf(built, "alice");
+  const BOB_ID = await principalOf(built, "bob");
+  const CAROL_ID = await principalOf(built, "carol");
   await built.app.upsertDirectory([
-    { principalId: "alice", displayName: "Alice", type: "internal" },
-    { principalId: "bob", displayName: "Bob", type: "internal" },
+    { principalId: ALICE_ID, displayName: "Alice", type: "internal" },
+    { principalId: BOB_ID, displayName: "Bob", type: "internal" },
   ]);
   await built.app.upsertChannels(
     [
@@ -231,37 +235,37 @@ test("a private-channel MEMBER may manage a shared cron via the web; a public-ch
       { channelId: "PRIV", name: "secret", isPrivate: true },
     ],
     [
-      { channelId: "PRIV", principalId: "alice" },
-      { channelId: "PRIV", principalId: "bob" },
+      { channelId: "PRIV", principalId: ALICE_ID },
+      { channelId: "PRIV", principalId: BOB_ID },
     ],
   );
   const privCron = await built.app.createCron({
     schedule: { everyMs: 3_600_000 },
     action: "tick",
-    owner: "bob",
-    createdBy: "bob",
+    owner: BOB_ID,
+    createdBy: BOB_ID,
     ownerScopeId: "channel:PRIV",
   } as never);
   const pubCron = await built.app.createCron({
     schedule: { everyMs: 3_600_000 },
     action: "tick",
-    owner: "bob",
-    createdBy: "bob",
+    owner: BOB_ID,
+    createdBy: BOB_ID,
     ownerScopeId: "channel:PUB",
   } as never);
 
-  const aliceDisable = await fetch(`${webBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
+  const aliceDisable = await fetch(`${webBase}/api/crons/${privCron.id}/disable`, asUser(ALICE_ID, { method: "POST" }));
   assert.equal(aliceDisable.status, 200, "a private-channel member manages the scope's cron");
   assert.equal((await built.app.getCron(privCron.id))!.enabled, false);
-  assert.equal((await built.app.getCron(privCron.id))!.createdBy, "bob");
-  const aliceList = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  assert.equal((await built.app.getCron(privCron.id))!.createdBy, BOB_ID);
+  const aliceList = (await (await fetch(`${webBase}/api/crons`, asUser(ALICE_ID))).json()) as {
     visible: Array<{ id: string; permission?: string }>;
   };
   assert.equal(aliceList.visible.find((candidate) => candidate.id === privCron.id)?.permission, "manage");
 
-  const carolPub = await fetch(`${webBase}/api/crons/${pubCron.id}/disable`, asUser("carol", { method: "POST" }));
+  const carolPub = await fetch(`${webBase}/api/crons/${pubCron.id}/disable`, asUser(CAROL_ID, { method: "POST" }));
   assert.equal(carolPub.status, 404, "a public channel stays owner-only");
-  const carolPriv = await fetch(`${webBase}/api/crons/${privCron.id}`, asUser("carol", { method: "DELETE" }));
+  const carolPriv = await fetch(`${webBase}/api/crons/${privCron.id}`, asUser(CAROL_ID, { method: "DELETE" }));
   assert.equal(carolPriv.status, 404, "a non-member is denied");
 
   for (const id of [privCron.id, pubCron.id]) await built.app.deleteCron(id);
