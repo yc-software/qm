@@ -37,8 +37,10 @@ Directories older than two hours are swept when the next credentialed execution 
 which is longer than any execution or background job may live, so concurrent operations never
 remove each other's files.
 
-There is no capture lock, background-process restriction or `register_login` tool. Nothing
-is restored into `$HOME` at provisioning. `/v1/keychain/use` no longer exists.
+There is no capture lock, background-process restriction, `register_login` tool or
+per-service cutover mode. Nothing is restored into `$HOME` at provisioning, and logins saved
+by the old automatic capture (origin `device-flow-auto-capture`) are never listed or
+loaded; re-run the login skill to replace them.
 
 ## Known gaps
 

@@ -265,13 +265,7 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import { createLivenessCache, type LivenessCache, type ScopeLivenessRecord } from "./credentials/resident-auth.ts";
 import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
-import {
-  createDeviceFlowCutoverStore,
-  type DeviceFlowCutoverPolicy,
-  type DeviceFlowCutoverStore,
-} from "./credentials/device-flow-cutover.ts";
 import {
   createFeatureFlagStore,
   externalAppSharingAllowed,
@@ -406,7 +400,6 @@ import { createMemoryReplayDedupe, createPostgresReplayDedupe, type ReplayDedupe
 import {
   emptyDeploymentLayer,
   loadDeploymentLayer,
-  type LayerCredentialTool,
   type BrokeredLayerTool,
   type DeploymentLayerRuntime,
 } from "./deployment/load-layer.ts";
@@ -475,7 +468,6 @@ export interface BuiltApp {
   app: App;
   screenSecurity?: SecurityScreenProbe;
   deploymentLayer: DeploymentLayerRuntime;
-  credentialTools: readonly LayerCredentialTool[];
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: Promise<unknown>;
@@ -541,8 +533,6 @@ export interface BuiltApp {
   blobTransfer: BlobTransferStore;
   files: FileArtifactStore;
   fileUploads?: DirectFileUploads;
-  livenessCache: LivenessCache;
-  deviceFlowCutover: DeviceFlowCutoverStore;
   featureFlags: FeatureFlagStore;
   replayDedupe?: ReplayDedupe;
   brokerSessions?: BrokerSessionStore;
@@ -705,8 +695,6 @@ export function buildApp(
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const livenessCache = createLivenessCache(artifactMap<ScopeLivenessRecord>("credential_liveness"));
-  const deviceFlowCutover = createDeviceFlowCutoverStore(artifactMap<DeviceFlowCutoverPolicy>("device_flow_cutover"));
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
   const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
   const slackInstallation = createSlackInstallationStore(
@@ -718,7 +706,6 @@ export function buildApp(
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
-  const credentialTools = deploymentLayer.credentialTools;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog();
@@ -1966,8 +1953,6 @@ export function buildApp(
     runs,
     tasks,
     blobTransfer,
-    livenessCache,
-    deviceFlowCutover,
     featureFlags,
     credentialUsage,
     connectorStatusCache,
@@ -1991,7 +1976,6 @@ export function buildApp(
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,
-    credentialTools,
     brokeredTools,
     deploymentLayer,
     layerBrokerFor,
@@ -2794,7 +2778,6 @@ export function buildApp(
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
-    credentialTools,
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
@@ -2859,8 +2842,6 @@ export function buildApp(
     blobTransfer,
     files,
     ...(fileUploads ? { fileUploads } : {}),
-    livenessCache,
-    deviceFlowCutover,
     featureFlags,
     ...(replayDedupe ? { replayDedupe } : {}),
     ...(brokerSessions ? { brokerSessions } : {}),
@@ -2964,7 +2945,6 @@ export function serverDeps(
     rateLimiter: built.rateLimiter,
     acl: built.acl,
     credentialUsage: built.credentialUsage,
-    deviceFlowCutover: built.deviceFlowCutover,
     featureFlags: built.featureFlags,
     egressAudit: built.egressAudit,
     sessions: built.sessions,
@@ -2973,7 +2953,6 @@ export function serverDeps(
     metrics: built.metrics,
     crons: built.crons,
     loops: built.loops,
-    credentialServices: () => built.credentialTools.map((tool) => tool.service),
     deploymentLayer: built.deploymentLayerStore,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),

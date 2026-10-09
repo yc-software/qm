@@ -1,5 +1,4 @@
 import type { AgentComputerSpec } from "../sandbox/sandbox.ts";
-import type { ResidentAuthConnector, ScopeLivenessRecord } from "../credentials/resident-auth.ts";
 import { connectorLabel, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
 
 export interface WorkspaceLayoutInfo {
@@ -32,31 +31,6 @@ export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout:
   }
   lines.push(ws.join(" "));
 
-  return lines.join("\n");
-}
-
-export function renderResidentLoginsBlock(
-  record: ScopeLivenessRecord | null,
-  connectors: readonly ResidentAuthConnector[],
-): string {
-  if (!record) return "";
-  const present = connectors.filter((c) => {
-    const s = record.connectors[c.id];
-    return s === "active" || s === "inactive";
-  });
-  if (!present.length) return "";
-  const lines = [
-    "## Your logins",
-    "Native logins on your computer (resident — each tool authenticates with its own; checked recently):",
-    "These exist only on this computer and are never saved automatically. To (re)log in durably, follow the `interactive-login` skill: it saves the login to your keychain, and commands use it through execute.credentials.",
-  ];
-  for (const c of present.sort((a, b) => a.id.localeCompare(b.id))) {
-    if (record.connectors[c.id] === "active") {
-      lines.push(`- ${c.label} — ✓ signed in`);
-    } else {
-      lines.push(`- ${c.label} — ✗ not signed in; to use it: start \`${c.reauth}\` as a background process`);
-    }
-  }
   return lines.join("\n");
 }
 

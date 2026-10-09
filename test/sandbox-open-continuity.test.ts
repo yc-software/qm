@@ -15,7 +15,6 @@ function fixture(
     open: true,
     member: true,
     allowed: true,
-    cutoverMode: "legacy",
     liveJobs: [] as Array<{ sandboxId: string; scopeId: string }>,
     targetPolicy: { mode: "denylist", rules: [] } as import("../src/types.ts").CommandPolicy,
     targetEgress: { allowedHosts: [], deniedHosts: [] } as import("../src/types.ts").EgressPolicy,
@@ -27,8 +26,6 @@ function fixture(
   const runs: SandboxHandle[] = [];
   const commands: string[] = [];
   const released: unknown[][] = [];
-  const credentialOwners: string[] = [];
-  const restored: Uint8Array[] = [];
   const starts: SandboxHandle[] = [];
   const resource = { id: "personal-box", ownerScopeId: target };
   const commandUses = new Map<string, number>();
@@ -63,9 +60,6 @@ function fixture(
     listDir: async () => [],
     teardown: async (...args: unknown[]) => {
       released.push(args);
-    },
-    writeFileBytes: async (_handle: unknown, _path: string, bytes: Uint8Array) => {
-      restored.push(bytes);
     },
   };
   const roomSkill = {
@@ -104,27 +98,6 @@ function fixture(
       sandbox,
       sandboxResources: resources,
       processes: { listLive: async () => state.liveJobs },
-      deviceFlowCutover: {
-        listServices: async () => ["custom-login"],
-        resolvePolicy: async () => ({ mode: state.cutoverMode }),
-      },
-      keychain: {
-        listByOwner: async () => [
-          { kind: "file", service: "custom-login", origin: "manual", targets: [".custom-login/token"] },
-        ],
-        materializeOwnFiles: async (owner: string) => {
-          credentialOwners.push(owner);
-          return [
-            {
-              service: "custom-login",
-              origin: "manual",
-              files: [
-                { path: ".custom-login/token", contentBase64: Buffer.from("synthetic-own-file").toString("base64") },
-              ],
-            },
-          ];
-        },
-      },
       config,
       isCurrentSharedScopeMember: async () => state.member,
     },
@@ -142,17 +115,12 @@ function fixture(
     scopeId: source,
     memoryScopeId: source,
     openResourceAccess: authority,
-    credentialServices: [],
-    credentialTools: [],
-    quarantinedServices: [],
-    cutoverModeOf: () => "legacy",
     egressTokenForTurn: "synthetic-source-egress",
     egressTokenForPolicy: async (policy: unknown) => {
       egressClaims.push(policy);
       return "synthetic-narrow-egress";
     },
     connectorEnv: { AGENT_API_TOKEN: "synthetic-room-capability", SHARED_SECRET: "synthetic-room-secret" },
-    credentialCutoverServices: [],
     ownerAuthAvailable: false,
     turnSessionDir: "turn/session",
     turnFilesDir: "turn/session/fire",
@@ -201,8 +169,6 @@ function fixture(
     writes,
     runs,
     starts,
-    credentialOwners,
-    restored,
     egressClaims,
     approvalCalls,
     released,
@@ -219,9 +185,7 @@ test("Open shared requests execute on the owner's personal machine without movin
   assert.equal(f.provisions.length, 1);
   assert.equal(JSON.stringify(f.provisions).includes("synthetic-room"), false);
   assert.deepEqual(f.writes, []);
-  assert.deepEqual(f.credentialOwners, []);
   assert.equal(f.runs.at(-1)?.env?.OWN_SECRET, undefined);
-  assert.deepEqual(f.restored, []);
   assert.equal(JSON.stringify(f.provisions).includes("team:private"), false);
   const skill = await f.tools.skill("room-tool", { sandboxId: "personal-box" });
   assert.match(skill.content ?? "", /synthetic-room-skill/);
@@ -306,8 +270,6 @@ test("Open personal credentials never flow into another shared computer", async 
   await f.tools.execute("pwd", { sandboxId: "personal-box" });
   assert.equal(JSON.stringify(f.provisions).includes("synthetic-own"), false);
   assert.equal(JSON.stringify(f.provisions).includes("synthetic-room"), false);
-  assert.deepEqual(f.credentialOwners, []);
-  assert.deepEqual(f.restored, []);
 });
 
 test("background starts use the authorized personal target and recheck revocation", async () => {
@@ -454,22 +416,17 @@ test("cross-scope credential handles are refused without resolving or consuming 
   assert.deepEqual(f.provisions, []);
 });
 
-test("credential-specific source policy still restricts an explicit cross-scope target", async () => {
-  const calls: unknown[] = [];
+test("source policy still restricts an explicit cross-scope target", async () => {
   const f = fixture("group:project", "personal:alice", true, {
-    commandPolicyForCredentials: (handles, ownerAuth) => {
-      calls.push([handles, ownerAuth]);
-      return { mode: "denylist", rules: [{ pattern: "protected", decision: "deny" }] };
-    },
+    commandPolicy: () => ({ mode: "denylist", rules: [{ pattern: "protected", decision: "deny" }] }),
   });
   await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), /denied/);
-  assert.deepEqual(calls, [[[], false]]);
   assert.deepEqual(f.provisions, []);
 });
 
-test("credential-specific source approval intersects target policy without consuming approval on target denial", async () => {
+test("source approval intersects target policy without consuming approval on target denial", async () => {
   const f = fixture("group:project", "personal:alice", true, {
-    commandPolicyForCredentials: () => ({
+    commandPolicy: () => ({
       mode: "denylist",
       rules: [{ pattern: "protected", decision: "require_approval" }],
     }),
@@ -492,12 +449,10 @@ test("credential-specific source approval intersects target policy without consu
   await assert.rejects(f.tools.execute("protected command", { sandboxId: "personal-box" }), NeedsApproval);
 });
 
-test("same-scope explicit execution prepares credentials only after provisioning and wraps the effective env", async () => {
+test("same-scope explicit execution prepares credentials only after provisioning", async () => {
   const events: string[] = [];
   const f: ReturnType<typeof fixture> = fixture("group:project", "group:project", true, {
-    commandPolicyForCredentials: (handles, ownerAuth) => {
-      assert.deepEqual(handles, ["lazy"]);
-      assert.equal(ownerAuth, false);
+    commandPolicy: () => {
       events.push("policy");
       return { mode: "denylist", rules: [] };
     },
@@ -517,14 +472,8 @@ test("same-scope explicit execution prepares credentials only after provisioning
         },
       },
     ],
-    scopedCommand: (command, env) => {
-      events.push("wrap");
-      assert.equal(env?.TOKEN, "synthetic-command-secret");
-      assert.equal(env?.SHARED_SECRET, "synthetic-room-secret");
-      return command;
-    },
   });
   await f.tools.execute("pwd", { sandboxId: "personal-box", credentials: ["lazy"] });
-  assert.deepEqual(events, ["policy", "resolve", "commit", "wrap"]);
+  assert.deepEqual(events, ["policy", "resolve", "commit"]);
   assert.equal(f.runs.at(-1)?.env?.TOKEN, "synthetic-command-secret");
 });

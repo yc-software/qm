@@ -448,10 +448,6 @@ export interface ToolContextDeps {
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
-  commandPolicyForCredentials?: (
-    handles: readonly string[],
-    ownerAuth: boolean,
-  ) => ReturnType<ToolContextDeps["commandPolicy"]>;
   provision: () => Promise<SandboxHandle>;
   provisionScratch?: () => Promise<SandboxHandle>;
   provisionResource?: (
@@ -461,7 +457,6 @@ export interface ToolContextDeps {
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
   provisionOwnerAuth?: () => Promise<SandboxHandle>;
   ownerAuthCommand?: (command: string, env?: Record<string, string>) => string;
-  scopedCommand?: (command: string, env?: Record<string, string>) => string;
   useSkill?: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>;
   reach?: {
     resolveChannel(query: string): Promise<ReachResolution>;
@@ -834,8 +829,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           if (target.kind === "error") throw new Error(target.message);
           reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
         }
-        const executionPolicy = () =>
-          deps.commandPolicyForCredentials?.(requestedCredentials, ownerAuth) ?? deps.commandPolicy();
+        const executionPolicy = deps.commandPolicy;
         let handle;
         if (execOpts?.sandboxId) {
           if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
@@ -883,9 +877,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           );
           let r: ExecResult;
           try {
-            const sandboxCommand = ownerAuth
-              ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command)
-              : (deps.scopedCommand?.(command, { ...handle.env, ...commandEnv }) ?? command);
+            const sandboxCommand = ownerAuth ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command) : command;
             const commandHandle = Object.keys(commandEnv).length
               ? { ...handle, env: { ...handle.env, ...commandEnv } }
               : handle;
@@ -1235,7 +1227,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (requestedCredentials.length && !writableScopeId)
         throw new Error("command credentials are available only on scoped computers");
       const requested = await selectCredentials(requestedCredentials, false);
-      const policy = () => deps.commandPolicyForCredentials?.(requestedCredentials, false) ?? deps.commandPolicy();
+      const policy = deps.commandPolicy;
       let handle: SandboxHandle;
       if (opts?.sandboxId) {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
@@ -1271,7 +1263,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           }
           return deps.backgroundBroker!.start(
             handle,
-            deps.scopedCommand?.(command, { ...handle.env, ...staged?.commandEnv }) ?? command,
+            command,
             opts.purpose,
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
             credentials,

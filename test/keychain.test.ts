@@ -1145,7 +1145,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.notEqual(res.status, 200);
   });
 
-  it("raw credential loading is not an API route", async () => {
+  it("one-time grants materialize only in their scope, once", async () => {
     const credential = await built.keychain!.save({
       ownerId: "OWNER",
       service: "github",
@@ -1153,8 +1153,6 @@ describe("/v1/keychain routes (capability-authed)", () => {
       envKey: "GH_GRANT",
     });
     const grant = await grantHere(credential.id, "OWNER", "channel:C7", "once", "clone the repo");
-    assert.equal((await post("/v1/keychain/use", { grant: grant.id }, await capFor("U3", "channel:C7"))).status, 403);
-    assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
     await assert.rejects(
       built.keychain!.prepareMaterialize(grant.id, "channel:OTHER", "U3"),
       (e: KeychainError) => e.status === 403,

@@ -43,7 +43,6 @@ export interface TurnSandboxContext {
   openSpeakerKeychain?: boolean;
   openResourceAccess?: boolean;
   ownerAuthAvailable: boolean;
-  credentialCutoverServices: string[];
   visibleSkillsForTurn: () => Promise<SkillResolution[]>;
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
 }
@@ -66,7 +65,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     openSpeakerKeychain,
     openResourceAccess,
     ownerAuthAvailable,
-    credentialCutoverServices,
     visibleSkillsForTurn,
     emitGapWork,
   } = ctx;
@@ -83,9 +81,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const keys = brokerEnvKeys.filter((key) => !(key in env));
     return keys.length ? `unset ${keys.join(" ")}; ` : "";
   };
-  const scopedCommand = credentialCutoverServices.length
-    ? (command: string, env = connectorEnv): string => `${unsetBrokerEnv(env)}${command}`
-    : undefined;
   if (ownerAuthAvailable) {
     ownerAuthCommand = (command, env = {}) => {
       if (openSpeakerKeychain)
@@ -689,7 +684,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     scratchBox,
     ownerAuthBox,
     ownerAuthCommand,
-    scopedCommand,
     provision,
     provisionScratch,
     accessResource,

@@ -214,7 +214,6 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     turnFilesDir: "turn/s/t",
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
     ownerAuthAvailable: false,
-    credentialCutoverServices: [],
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
     emitGapWork: () => {},

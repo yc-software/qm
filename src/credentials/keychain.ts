@@ -1157,14 +1157,12 @@ export function createKeychain(deps: {
     },
 
     async listAllMetadata() {
-      return (await deps.creds.select({ omit: ["secretEnc"] }))
-        .filter((c) => !c.managed && c.kind !== "broker")
-        .map(toMeta);
+      return (await deps.creds.select({ omit: ["secretEnc"] })).filter(listed).map(toMeta);
     },
 
     async listByOwner(ownerId) {
       return (await deps.creds.select({ omit: ["secretEnc"], where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && !c.managed && c.kind !== "broker")
+        .filter((c) => samePerson(c.ownerId, ownerId) && listed(c))
         .map(toMeta);
     },
 
@@ -1172,7 +1170,7 @@ export function createKeychain(deps: {
       return bucketByOwner(
         await deps.creds.select({ omit: ["secretEnc"], where: byOwners(ownerIds) }),
         ownerIds,
-        (c) => !c.managed && c.kind !== "broker",
+        listed,
         toMeta,
       );
     },
@@ -1242,7 +1240,11 @@ export function createKeychain(deps: {
       const out: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }> = [];
       for (const grant of await activeGrantsFor(scopeId)) {
         const cred = await deps.creds.get(grant.credentialId);
-        if (cred && (cred.managed === "connector" || !credExpired(cred, now())))
+        if (
+          cred &&
+          cred.origin !== "device-flow-auto-capture" &&
+          (cred.managed === "connector" || !credExpired(cred, now()))
+        )
           out.push({ grant, credential: toMeta(cred) });
       }
       return out;
@@ -1542,7 +1544,7 @@ export function createKeychain(deps: {
 
     async materializeOwnFiles(ownerId) {
       return (await deps.creds.select({ where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && !c.managed)
+        .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && listed(c))
         .map((c) => tryDecrypt(c, decryptToFiles))
         .filter((c): c is MaterializedFileCred => c !== null);
     },
@@ -1707,6 +1709,10 @@ function connectorLine(
       : ", NEEDS RECONNECT — owner must reconnect the app before a grant can be used";
   }
   return `- ${who}: connected app ${cm.host}${account}${status} — credential id \`${cm.credentialId}\` — ${grantNote}`;
+}
+
+function listed(c: Pick<KeychainCredential, "managed" | "kind" | "origin">): boolean {
+  return !c.managed && c.kind !== "broker" && c.origin !== "device-flow-auto-capture";
 }
 
 export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {

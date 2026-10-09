@@ -44,7 +44,6 @@ import {
 } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
-import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 
@@ -136,17 +135,6 @@ const orgOnly = (scope: string, label: string): { error: string } | null =>
   parseScopeId(scope).kind === "org" ? null : { error: `${label}; target an org scope` };
 
 const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
-
-const credentialServices = async (
-  deps: Pick<ServerDeps, "credentialServices" | "brokeredServices" | "deviceFlowCutover">,
-  scope: ScopeId,
-): Promise<string[]> => [
-  ...new Set([
-    ...(deps.credentialServices?.() ?? []),
-    ...(deps.brokeredServices?.() ?? []),
-    ...((await deps.deviceFlowCutover?.listServices(scope)) ?? []),
-  ]),
-];
 
 const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
@@ -370,62 +358,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         principalId: actor.id,
         action: "feature-flag.update",
         resource: `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
-        scopeLabel: scope,
-      });
-      return { ok: true };
-    },
-  },
-  {
-    id: "device-flow-cutover",
-    kind: "custom",
-    target: "any",
-    readKey: "deviceFlowCutover",
-    label:
-      "Credential-file migration by service. legacy restores resident files; prefer_ephemeral retains resident files without capturing replacements; ephemeral_only quarantines the stored legacy copy without deleting it; inherit clears a scope override.",
-    get: async (deps, scope) => {
-      if (!deps.deviceFlowCutover) return undefined;
-      const out: Record<string, unknown> = {};
-      for (const service of await credentialServices(deps, scope)) {
-        out[service] = {
-          configured: await deps.deviceFlowCutover.get(scope, service),
-          effective: await deps.deviceFlowCutover.resolve(scope, service),
-        };
-      }
-      return out;
-    },
-    apply: async (ctx, actor, scope) => {
-      if (!ctx.deps.deviceFlowCutover) return { error: "not available on this deployment", status: 404 };
-      const body = (ctx.body ?? {}) as { service?: unknown; mode?: unknown };
-      if (typeof body.service !== "string" || !body.service.trim()) {
-        return {
-          error: "device-flow-cutover requires { service: string, mode: legacy | prefer_ephemeral | ephemeral_only }",
-        };
-      }
-      const service = body.service;
-      if (body.mode !== "inherit" && !(await credentialServices(ctx.deps, scope)).includes(service)) {
-        return { error: `device-flow-cutover has no credential paths for service: ${service}` };
-      }
-      const beforeConfigured = await ctx.deps.deviceFlowCutover.get(scope, service);
-      const beforeEffective = await ctx.deps.deviceFlowCutover.resolve(scope, service);
-      if (body.mode === "inherit") {
-        await ctx.deps.deviceFlowCutover.clear(scope, service);
-        const effective = await ctx.deps.deviceFlowCutover.resolve(scope, service);
-        audit(ctx.deps, {
-          principalId: actor.id,
-          action: "credential.cutover.update",
-          resource: `${service}:${beforeConfigured?.mode ?? "inherit"}/${beforeEffective}->inherit/${effective}`,
-          scopeLabel: scope,
-        });
-        return { ok: true };
-      }
-      if (typeof body.mode !== "string" || !(DEVICE_FLOW_CUTOVER_MODES as readonly string[]).includes(body.mode)) {
-        return { error: `device-flow-cutover mode must be one of: ${DEVICE_FLOW_CUTOVER_MODES.join(", ")}, inherit` };
-      }
-      await ctx.deps.deviceFlowCutover.set(scope, service, body.mode as DeviceFlowCutoverMode, actor.id);
-      audit(ctx.deps, {
-        principalId: actor.id,
-        action: "credential.cutover.update",
-        resource: `${service}:${beforeConfigured?.mode ?? "inherit"}/${beforeEffective}->${body.mode}/${body.mode}`,
         scopeLabel: scope,
       });
       return { ok: true };
