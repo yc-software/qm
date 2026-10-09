@@ -185,12 +185,14 @@ test("allowlist present => non-matching host is 403 not_allowlisted, matching ho
   }
 });
 
-test("NO token asks for proxy credentials by default, so clients that wait for a challenge can send them", async () => {
+test("NO token asks for proxy credentials by default and is audited as unknown", async () => {
   const { server, records } = boot();
   const port = await listen(server);
   try {
     assert.equal(await check(port, "example.com:443"), 407);
-    assert.equal(records.length, 0);
+    assert.equal(records.at(-1)?.verdict, "denied");
+    assert.equal(records.at(-1)?.scopeLabel, "unknown");
+    assert.equal(records.at(-1)?.principalId, "unknown");
   } finally {
     await close(server);
   }

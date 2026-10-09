@@ -1,7 +1,7 @@
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackHistoryReader } from "./history.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
 import {
   type RecentMessage,
@@ -222,7 +222,11 @@ export function createSurfaceContextFulfiller(deps: {
       if (q.openGroup) return await post(await openGroupDm(client, q.openGroup.participants ?? []));
       if (q.askAgent) {
         if (!deps.handoffs) return await post({ error: "personal-agent handoffs aren't available here" });
-        return await post({ messages: [], ...(await deps.handoffs.askFromRun(client, q.askAgent)) });
+        const outcome = await deps.handoffs.askFromRun(client, q.askAgent).catch((err: unknown) => {
+          swallow("slack: ask-agent", err);
+          return { error: `couldn't send the request: ${errMessage(err)}` };
+        });
+        return await post({ messages: [], ...outcome });
       }
       if (typeof q.searchAll === "string" && q.searchAll) {
         return fulfillLiveSearch(

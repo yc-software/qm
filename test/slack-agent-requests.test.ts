@@ -66,6 +66,9 @@ function durableFixture(
     ackRunDelivery: async () => {},
     reportRunEditRef: async () => {},
     getApproval: async (id: string) => storedApprovals.get(id) ?? null,
+    reserveAgentRequest: async (id: string, record: SlackAgentRequestContext) =>
+      store.get(id) ?? (store.set(id, record), record),
+    dropAgentRequest: async (id: string) => void store.delete(id),
     putAgentRequest: async (id: string, record: SlackAgentRequestContext) => void store.set(id, record),
     getAgentRequest: async (id: string) => store.get(id) ?? null,
     takeAgentRequest: async (id: string) => {
@@ -338,7 +341,11 @@ test("the agent-request store expires stale records and sweeps them on put", asy
   assert.equal((await store.getAgentRequest("fresh"))?.requestId, "fresh");
   assert.equal((await store.agentRequestForApproval("req-new"))?.requestId, "fresh");
   assert.equal((await store.takeAgentRequest("fresh"))?.requestId, "fresh");
-  assert.equal(await map.get("fresh"), null);
+  assert.equal(await store.takeAgentRequest("fresh"), null, "a taken request can't be taken twice");
+  assert.equal((await map.get("fresh"))?.settled, true, "the taken request stays as a tombstone");
+  assert.equal((await store.reserveAgentRequest("fresh", record("fresh", 0))).settled, true);
+  await store.putAgentRequest("fresh", record("fresh", 0));
+  assert.equal(await store.getAgentRequest("fresh"), null, "a late write can't revive a settled request");
 });
 
 test("a handoff command approval recovered on a fresh instance still reports back to the origin channel", async () => {

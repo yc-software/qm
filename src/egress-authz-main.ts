@@ -137,7 +137,21 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
     if (portText) port = Number(portText);
     if (!Number.isInteger(port) || port < 1 || port > 65_535) return { status: 403 };
     const token = tokenFromRequest(req);
-    if (!token && deps.tokenless !== "open") return { status: 407 };
+    if (!token && deps.tokenless !== "open") {
+      try {
+        deps.audit.record({
+          source: "proxy",
+          host,
+          allowed: false,
+          verdict: "denied",
+          scopeLabel: "unknown" as ScopeId,
+          principalId: "unknown",
+        });
+      } catch (error) {
+        void error;
+      }
+      return { status: 407 };
+    }
     const claims = await claimsFor(token, deps);
     let policy: EgressPolicy | undefined = DENY_ALL;
     if (claims) policy = claims.egress;

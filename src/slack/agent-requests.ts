@@ -324,7 +324,6 @@ export function createAgentHandoffs(deps: {
       .digest("hex");
     const targetAgentLabel = personalAgentLabel(target, ask.targetUserId);
     const handoff = { handoff: { requestId, target: targetAgentLabel } };
-    if ((await core.getAgentRequest(requestId))?.dmMessageTs) return handoff;
     const opened = await client.conversations.open({ users: ask.targetUserId });
     const dmChannel = String(opened?.channel?.id ?? "");
     if (!dmChannel) return { error: `couldn't open a DM to ${target.displayName ?? ask.targetUserId}` };
@@ -336,7 +335,6 @@ export function createAgentHandoffs(deps: {
       targetUserId: ask.targetUserId,
       ...(target.displayName ? { targetDisplayName: target.displayName } : {}),
       originChannel: channel,
-      originConversationKind: "channel",
       ...(threadTs ? { originThreadTs: threadTs } : {}),
       originThreadOnly: true,
       ...(request.conversation.channelName ? { originChannelName: request.conversation.channelName } : {}),
@@ -345,8 +343,9 @@ export function createAgentHandoffs(deps: {
       targetAgentLabel,
       dmChannel,
     };
+    const reserved = await core.reserveAgentRequest(requestId, pendingCtx);
+    if (reserved.createdAt !== pendingCtx.createdAt) return handoff;
     try {
-      await core.putAgentRequest(requestId, pendingCtx);
       const prompt = agentRequestMessage({ requestId, originAgentLabel, targetAgentLabel, task: ask.task });
       const dm = await client.chat.postMessage({
         channel: dmChannel,
@@ -364,7 +363,7 @@ export function createAgentHandoffs(deps: {
     } catch (err) {
       swallow("slack: agent request dispatch", err);
       const withdrawn = "the request couldn't be sent or recorded, so it was withdrawn";
-      await settleAgentRequest(pendingCtx);
+      await core.dropAgentRequest(requestId).catch(swallowAs("slack: drop agent request", undefined));
       await tryUpdateSlackMessage(
         client,
         dmChannel,
@@ -379,11 +378,7 @@ export function createAgentHandoffs(deps: {
   }
 
   function personalAgentTurnText(ctx: SlackAgentRequestContext): string {
-    const destination = conversationPlaceLabel(
-      ctx.originConversationKind ?? "channel",
-      ctx.originChannelName,
-      ctx.originChannel,
-    );
+    const destination = conversationPlaceLabel("channel", ctx.originChannelName, ctx.originChannel);
     return [
       "[Agent-to-agent request]",
       `${ctx.originAgentLabel} asked ${ctx.targetAgentLabel} to help with a task that may require this user's personal setup.`,

@@ -1,4 +1,4 @@
-import { scopeId, type Principal, type ScopeId } from "../types.ts";
+import { parseScopeId, scopeId, type Principal, type ScopeId } from "../types.ts";
 import type { ScopedConfigStore } from "./config-store.ts";
 
 export const SHARING_POSTURES = ["isolated", "open"] as const;
@@ -42,7 +42,7 @@ interface AskAgentConversation {
 }
 
 export function askAgentConversation(c: AskAgentConversation): boolean {
-  return c.surface === "slack" && !c.external && c.scopeId.startsWith("channel:");
+  return c.surface === "slack" && !c.external && parseScopeId(c.scopeId).kind === "channel";
 }
 
 export async function askAgentAvailable(
