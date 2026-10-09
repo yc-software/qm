@@ -2,7 +2,7 @@ import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advi
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
-import { CAPABILITY_CURL_AUTH, keychainUseCommand } from "../api/contract.ts";
+import { CAPABILITY_CURL_AUTH } from "../api/contract.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
@@ -313,6 +313,7 @@ interface SaveCredentialInput {
   capturePaths?: CredentialPathSpec[];
   origin?: string;
   expectedOrigin?: string;
+  expectedFingerprint?: string | null;
   expiresAt?: number;
 }
 
@@ -393,6 +394,7 @@ interface GrantListFilter {
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
+  updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<void>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
@@ -500,7 +502,9 @@ function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: strin
   const { secretEnc: _, ...meta } = rec;
   return {
     ...meta,
-    ...(rec.kind === "env" && !isBackendCredential(rec) ? { credentialHandle: credentialHandle(rec.id) } : {}),
+    ...((rec.kind === "env" || rec.kind === "file") && !isBackendCredential(rec)
+      ? { credentialHandle: credentialHandle(rec.id) }
+      : {}),
   };
 }
 
@@ -923,6 +927,32 @@ export function createKeychain(deps: {
         updatedAt: t,
       };
     };
+    if (input.expectedFingerprint !== undefined) {
+      if (!deps.creds.update || !deps.creds.insertIfAbsent)
+        throw new Error("credential store does not support atomic capture saves");
+      if (input.expectedFingerprint === null) {
+        const fresh = buildRec();
+        if (await deps.creds.insertIfAbsent(id, fresh)) return toMeta(fresh);
+        throw new KeychainError(409, "Credential was created during login");
+      }
+      const updated = await deps.creds.update(id, (prior) => {
+        if (prior.fingerprint !== input.expectedFingerprint || prior.kind !== "file")
+          throw new KeychainError(409, "Credential changed during login");
+        const merged = new Map(decryptToFiles(prior).files.map((file) => [file.path, file]));
+        for (const file of files ?? []) merged.set(file.path, file);
+        const refreshed = [...merged.values()].sort((a, b) => a.path.localeCompare(b.path));
+        const encoded = JSON.stringify(refreshed);
+        return {
+          ...prior,
+          targets: refreshed.map((file) => file.path),
+          secretEnc: encryptSecret(encoded, deps.key),
+          fingerprint: fingerprintOf(encoded),
+          updatedAt: t,
+        };
+      });
+      if (!updated) throw new KeychainError(410, "Credential was removed during login");
+      return toMeta(updated);
+    }
     const expectedOrigin =
       input.expectedOrigin ?? (input.origin === DEVICE_FLOW_ORIGIN ? DEVICE_FLOW_ORIGIN : undefined);
     if (expectedOrigin === undefined) {
@@ -1092,6 +1122,72 @@ export function createKeychain(deps: {
 
   return {
     save: saveCredential,
+
+    async updateFiles(materialized, files) {
+      let normalized = files.map((file) => ({ ...file, path: keychainFilePath(file.path) }));
+      if (materialized.grantId && materialized.service === "aws") {
+        const roleCache = (file: CredentialFile) =>
+          /^\.aws\/cli\/cache\/[^/]+\.json$/.test(homeRelativePath(file.path));
+        normalized = [...normalized.filter((file) => !roleCache(file)), ...materialized.files.filter(roleCache)];
+      }
+      if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
+      const fingerprint = (value: CredentialFile[]) =>
+        fileCredentialFingerprint(
+          value
+            .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
+            .sort((a, b) => a.path.localeCompare(b.path)),
+        );
+      if (fingerprint(normalized) === fingerprint(materialized.files)) return;
+      if (materialized.grantId) {
+        const original = new Map(materialized.files.map((file) => [homeRelativePath(file.path), file]));
+        for (const file of normalized) {
+          const prior = original.get(file.path);
+          if (prior?.contentBase64 === file.contentBase64) continue;
+          if (materialized.service !== "aws" || !/^\.aws\/sso\/cache\/[a-zA-Z0-9_-]+\.json$/.test(file.path) || !prior)
+            throw new KeychainError(403, "A credential-use grant cannot replace credential configuration");
+          const before = JSON.parse(Buffer.from(prior.contentBase64, "base64").toString("utf8"));
+          const after = JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8"));
+          const refreshFields = new Set(["accessToken", "refreshToken", "expiresAt"]);
+          if (
+            !after ||
+            typeof after !== "object" ||
+            Array.isArray(after) ||
+            !before ||
+            typeof before !== "object" ||
+            Array.isArray(before)
+          )
+            throw new KeychainError(403, "Invalid refreshed AWS token cache");
+          for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+            if (refreshFields.has(key)) {
+              if (after[key] !== undefined && typeof after[key] !== "string")
+                throw new KeychainError(403, "Invalid refreshed AWS token field");
+            } else if (JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+              throw new KeychainError(403, "A credential-use grant cannot replace AWS registration metadata");
+          }
+        }
+        if (materialized.files.some((file) => !normalized.some((entry) => entry.path === homeRelativePath(file.path))))
+          throw new KeychainError(403, "A credential-use grant cannot remove credential files");
+      }
+
+      if (!deps.creds.update) throw new Error("credential store does not support atomic file refresh");
+      const updated = await deps.creds.update(materialized.credentialId, (current) => {
+        if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
+          throw new KeychainError(409, "Credential changed during execution");
+        const currentFiles = decryptToFiles(current).files;
+        if (fingerprint(currentFiles) === fingerprint(normalized)) return current;
+        if (fingerprint(currentFiles) !== fingerprint(materialized.files))
+          throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
+        const secret = JSON.stringify(normalized);
+        return {
+          ...current,
+          targets: normalized.map((file) => file.path),
+          secretEnc: encryptSecret(secret, deps.key),
+          fingerprint: fingerprintOf(secret),
+          updatedAt: now(),
+        };
+      });
+      if (!updated) throw new KeychainError(410, "Credential was removed during execution");
+    },
 
     async listAllMetadata() {
       return (await deps.creds.select({ omit: ["secretEnc"] }))
@@ -1533,6 +1629,29 @@ export function createKeychain(deps: {
 const tempCredentialPath = (rel: string): string =>
   /^[A-Za-z0-9._@+ /-]+$/.test(rel) ? `"$__kc_dir/${rel}"` : `"$__kc_dir"${shq(`/${rel}`)}`;
 
+export function fileCredentialEnvironment(files: CredentialFile[], home: string): Record<string, string> {
+  const env: Record<string, string> = { HOME: home };
+  const pointers: Array<[RegExp, string, boolean?]> = [
+    [/^\.aws\/credentials$/, "AWS_SHARED_CREDENTIALS_FILE"],
+    [/^\.aws\/config$/, "AWS_CONFIG_FILE"],
+    [/^\.kube\/config$/, "KUBECONFIG"],
+    [/^\.config\/gh\/hosts\.yml$/, "GH_CONFIG_DIR", true],
+    [/^(?:\.config\/(?:glab-cli|glab)|Library\/Application Support\/glab-cli)\/config\.yml$/, "GLAB_CONFIG_DIR", true],
+    [/^\.docker\/config\.json$/, "DOCKER_CONFIG", true],
+    [/^\.npmrc$/, "NPM_CONFIG_USERCONFIG"],
+    [/^\.netrc$/, "NETRC"],
+  ];
+  for (const file of files) {
+    const rel = homeRelativePath(file.path);
+    for (const [pattern, key, directory] of pointers) {
+      if (pattern.test(rel) && !(key in env)) env[key] = `${home}/${directory ? rel.replace(/\/[^/]*$/, "") : rel}`;
+    }
+    if (/^\.ssh\/[^/]*(id_|key)[^/]*$/.test(rel) && !env.GIT_SSH_COMMAND)
+      env.GIT_SSH_COMMAND = `ssh -i ${shq(`${home}/${rel}`)} -o IdentitiesOnly=yes`;
+  }
+  return env;
+}
+
 const FILE_ENV_POINTERS: Array<[RegExp, (rel: string) => string]> = [
   [/(^|\/)\.aws\/credentials$/, (rel) => `export AWS_SHARED_CREDENTIALS_FILE=${tempCredentialPath(rel)}`],
   [/(^|\/)\.aws\/config$/, (rel) => `export AWS_CONFIG_FILE=${tempCredentialPath(rel)}`],
@@ -1649,7 +1768,7 @@ const SAVE_HINT =
   "verify first (e.g. `gh api user`) and pass what the service reports as `accountLabel`. " +
   "File-style (one bundle per service — e.g. ~/.aws/config + ~/.aws/credentials together): pass " +
   '`"files":[{"path":".aws/config","contentBase64":"<base64 of the file>"}, …]` instead of `secret`/`envKey`. ' +
-  "Device-flow login bundles are captured and restored as-is, never renewed by the platform — when one expires, re-run the tool's interactive login.";
+  "Saved CLI logins are loaded only when requested through execute.credentials; updates made by the CLI are saved back after execution. If the provider can no longer refresh the session, re-run its interactive login.";
 
 function expiryNote(c: KeychainCredentialMeta, now: number, own: boolean): string {
   if (c.kind === "file" || typeof c.expiresAt !== "number") return "";
@@ -1704,14 +1823,14 @@ function connectorLine(
 export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {
   const lines: string[] = [];
   const byCred = new Map(input.scopeGrants.map((g) => [g.credential.id, g.grant]));
-  const grantNoteFor = (id: string, file = false): string => {
+  const grantNoteFor = (id: string): string => {
     const g = byCred.get(id);
     if (!g) return "no grant for this conversation";
     const note =
       g.mode === "standing"
         ? `STANDING grant for this conversation (purpose: "${g.purpose}")`
         : `one-time grant \`${g.id}\` available (purpose: "${g.purpose}")`;
-    return file ? `${note} — load with \`${keychainUseCommand({ grant: g.id })}\`` : note;
+    return note;
   };
   const ownPersonal = input.scopeId === toScopeId("personal", input.actorId);
   const openSpeaker =
@@ -1724,9 +1843,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   for (const member of input.members) {
     const own = (ownPersonal || openSpeaker) && samePerson(member.id, input.actorId);
     for (const c of input.entriesByOwner.get(member.id) ?? []) {
-      let note = own ? OWN_NOTE : grantNoteFor(c.id, c.kind === "file");
-      if (own && ownPersonal && c.kind === "file")
-        note = "their own — raw file loading needs no grant on their live turn; background turns need a grant";
+      const note = own ? OWN_NOTE : grantNoteFor(c.id);
       memberLines.push(credLine(member, c, note, now, own));
       hasOwn ||= own;
     }
@@ -1771,15 +1888,13 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   if (hasOwn && openSpeaker) {
     lines.push(
       "",
-      `Use execute with scope:"owner" for commands needing the speaker's logins or connected apps. Request env credentials and connector tokens explicitly using execute.credentials. Saved CLI logins are restored there separately. Do not load them through /v1/keychain/use on the shared computer.`,
+      `Use execute with scope:"owner" for commands needing the speaker's logins or connected apps. Request every credential, including saved CLI logins, explicitly using execute.credentials. Refreshed credential files are saved back after execution.`,
       "This is a separate, disposable computer: it cannot see the shared workspace, and is destroyed at the end of this turn. Keep credential-using commands there; return only the results needed for the task. Never copy secrets into the shared workspace or pass them to background jobs. Normal command approvals still apply.",
     );
   } else if (hasOwn) {
     lines.push(
       "",
-      "Use the execute tool handle for env-style logins. Load file-style bundles on demand with:",
-      `   \`${keychainUseCommand({ credential: "<credential id>" })}\``,
-      "That form works only on their live turn in their personal conversation. For background turns, use execute.credentials for env credentials and connector tokens; this raw file-loading form still requires a grant.",
+      "Request every credential, including saved CLI logins, explicitly using execute.credentials. Refreshed credential files are saved back after execution.",
     );
   }
 

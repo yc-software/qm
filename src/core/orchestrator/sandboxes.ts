@@ -1,5 +1,7 @@
+import { clearExecutionFiles } from "../../credentials/execute-files.ts";
+import type { CredentialCaptureSnapshot } from "../../processes/process-registry.ts";
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
-import { personalScope } from "../../types.ts";
+import { personalScope, parseScopeId } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
@@ -7,12 +9,12 @@ import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupErr
 import type { SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import {
+  completeLoginCapture,
+  clearStoredLoginFiles,
   deviceFlowCredOwner,
-  materializeDeviceFlowLogins,
   removeDeviceFlowLogins,
 } from "../../credentials/device-flow-persist.ts";
 import type { DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
-import { expandServiceAliases } from "../../credentials/resident-paths.ts";
 import {
   materializeSkillTree as laySkillTree,
   packRoot,
@@ -80,13 +82,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     openResourceAccess,
     ownerAuthAvailable,
     credentialTools,
-    credentialServices,
     credentialCutoverServices,
-    quarantinedServices,
-    cutoverModeOf,
     visibleSkillsForTurn,
     emitGapWork,
-    perf,
   } = ctx;
 
   let ownerAuthCommand: ((command: string, env?: Record<string, string>) => string) | undefined;
@@ -204,6 +202,107 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
             .catch(swallowAs("orchestrator: sandbox status append", undefined));
         }
       : undefined;
+  const loginCaptureHandles = new Map<string, { handle: SandboxHandle; ownerId: string }>();
+  const trackLoginCapture = (handle: SandboxHandle, ownerId: string) => {
+    loginCaptureHandles.set(`${handle.backend}:${handle.id}`, { handle, ownerId });
+  };
+  const captureSnapshots = new Map<string, CredentialCaptureSnapshot>();
+  const captureSnapshot = async (handle: SandboxHandle): Promise<CredentialCaptureSnapshot | undefined> => {
+    if (!deps.keychain || input.externalSlack) return;
+    const tracked = loginCaptureHandles.get(`${handle.backend}:${handle.id}`);
+    if (!tracked) return;
+    const snapshot = {
+      ownerId: tracked.ownerId,
+      fingerprints: Object.fromEntries(
+        (await deps.keychain.listByOwner(tracked.ownerId))
+          .filter((record) => record.kind === "file")
+          .map((record) => [record.service, record.fingerprint]),
+      ),
+    };
+    captureSnapshots.set(`${handle.backend}:${handle.id}`, snapshot);
+    return snapshot;
+  };
+  const prepareCredentialExecution = async (handle: SandboxHandle): Promise<void> => {
+    if (!deps.keychain) return;
+    const tracked = loginCaptureHandles.get(`${handle.backend}:${handle.id}`);
+    const targetScope = handle.scopeId ?? memoryScopeId;
+    const parsedScope = parseScopeId(targetScope);
+    await clearExecutionFiles(deps.sandbox, handle);
+    if (await hasLiveProcesses(handle, memoryScopeId)) {
+      throw new Error(
+        "A background process is still running on this computer; poll or stop it, or use a separate scratch or owner computer for this operation",
+      );
+    }
+    if (deps.processes && supportsProcessSessions(deps.sandbox)) {
+      const pending = await deps.processes.listCredentialCaptures(handle.resourceId, handle.scopeId ?? memoryScopeId);
+      for (const record of pending) {
+        if (!(await completeCapture(handle, record.credentialCapture!))) continue;
+        await deps.processes.finishCredentialCapture(record.processId);
+        await deps.processes.markStatus(record.processId, "exited");
+      }
+    }
+    await clearStoredLoginFiles({
+      sandbox: deps.sandbox,
+      handle,
+      keychain: deps.keychain,
+      ownerId: tracked?.ownerId ?? (parsedScope.kind === "personal" ? parsedScope.ref : targetScope),
+      credentialPaths: deps.deploymentLayer?.credentialPaths,
+    });
+    await captureSnapshot(handle);
+  };
+  const completeCapture = async (handle: SandboxHandle, snapshot: CredentialCaptureSnapshot): Promise<boolean> => {
+    if (!deps.keychain || (await hasLiveProcesses(handle, memoryScopeId))) return false;
+    await completeLoginCapture({
+      sandbox: deps.sandbox,
+      handle,
+      keychain: deps.keychain,
+      snapshot,
+      excludeServices: credentialCutoverServices,
+      credentialPaths: deps.deploymentLayer?.credentialPaths,
+      onAnomaly: (service, detail) =>
+        deps.errors?.record({
+          category: "keychain",
+          code: "device_flow_capture_skipped",
+          message: `${service}: ${detail}`,
+          scopeLabel: scopeId,
+          sessionId: session.id,
+        }),
+    });
+    await captureSnapshot(handle);
+    return true;
+  };
+  const captureLogins = async (selected?: SandboxHandle): Promise<void> => {
+    if (input.externalSlack || !deps.keychain) return;
+    for (const { handle } of loginCaptureHandles.values()) {
+      if (selected && (handle.id !== selected.id || handle.backend !== selected.backend)) continue;
+      const capture = async () => {
+        if (await hasLiveProcesses(handle, memoryScopeId)) return;
+        const snapshot = captureSnapshots.get(`${handle.backend}:${handle.id}`);
+        if (!snapshot) return;
+        try {
+          await completeCapture(handle, snapshot);
+        } catch (error) {
+          deps.errors?.record(
+            {
+              category: "keychain",
+              code: "device_flow_capture_failed",
+              message: errMessage(error),
+              scopeLabel: scopeId,
+              sessionId: session.id,
+            },
+            error,
+          );
+          if (selected) throw error;
+        }
+      };
+      if (selected || !deps.advisoryLock) await capture();
+      else
+        await deps.advisoryLock.withLock(
+          `credential-execution:${handle.backend}:${handle.resourceId ?? handle.id}`,
+          capture,
+        );
+    }
+  };
   const resourceHandles = new Map<string, SandboxHandle>();
   const resourcePolicy = new Map<string, string>();
   const resourcePendingHandles = new Map<string, SandboxHandle>();
@@ -216,110 +315,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       throw err;
     });
     return provisionInFlight;
-  };
-  const prepareCredentials = async (
-    handle: SandboxHandle,
-    emit: typeof emitGapWork,
-    credentialScopeId = memoryScopeId,
-  ): Promise<void> => {
-    if (!input.externalSlack && deps.keychain) {
-      const deviceFlowStart = Date.now();
-      const crossScope = credentialScopeId !== memoryScopeId;
-      const services = crossScope
-        ? [
-            ...new Set([
-              ...credentialServices,
-              ...((await deps.deviceFlowCutover?.listServices(credentialScopeId)) ?? []),
-            ]),
-          ]
-        : credentialServices;
-      const targetModes = new Map<string, DeviceFlowCutoverMode>();
-      if (crossScope) {
-        for (const service of services) {
-          const policy = await deps.deviceFlowCutover?.resolvePolicy(credentialScopeId, service);
-          targetModes.set(service, policy?.mode ?? "legacy");
-        }
-      }
-      const modeOf = (service: string): DeviceFlowCutoverMode => targetModes.get(service) ?? cutoverModeOf(service);
-      const excludedServices = [
-        ...new Set([...quarantinedServices, ...services.filter((service) => modeOf(service) === "ephemeral_only")]),
-      ];
-      const restoreOwnerId =
-        !crossScope && input.origin.kind === "automation" && input.origin.useOwnerKeychain && !isolateOwnerKeychain
-          ? actor.id
-          : deviceFlowCredOwner(credentialScopeId, actor.id);
-      const resetGenerations = new Map<string, string>();
-      for (const service of services) {
-        if (modeOf(service) !== "legacy") continue;
-        const generation = await deps.deviceFlowCutover?.residentResetGeneration(
-          credentialScopeId,
-          service,
-          handle.resourceId,
-        );
-        if (generation) resetGenerations.set(service, generation);
-      }
-      const owned = resetGenerations.size ? await deps.keychain.listByOwner(restoreOwnerId) : [];
-      const resetServices = [...resetGenerations.keys()].filter((service) =>
-        owned.some((record) => expandServiceAliases([service]).includes(record.service)),
-      );
-      const removeServices = [...new Set([...excludedServices, ...resetServices])];
-      if (removeServices.length) {
-        await removeDeviceFlowLogins({
-          sandbox: deps.sandbox,
-          handle,
-          keychain: deps.keychain,
-          ownerId: restoreOwnerId,
-          ...(crossScope ? { allOrigins: true } : {}),
-          services: removeServices,
-          canonicalRoots: credentialTools
-            .filter((tool) => removeServices.includes(tool.service))
-            .flatMap((tool) => tool.roots),
-        });
-      }
-      try {
-        const restoredServices = await materializeDeviceFlowLogins({
-          sandbox: deps.sandbox,
-          handle,
-          keychain: deps.keychain,
-          ownerId: restoreOwnerId,
-          ...(crossScope ? { allOrigins: true } : {}),
-          ...(excludedServices.length ? { excludeServices: excludedServices } : {}),
-          onAnomaly: (service, detail) =>
-            deps.errors?.record({
-              category: "keychain",
-              code: "device_flow_restore_failed",
-              message: `${service}: ${detail}`,
-              scopeLabel: scopeId,
-              sessionId: session.id,
-            }),
-        });
-        for (const service of restoredServices) {
-          deps.credentialUsage?.record({
-            slug: `keychain:${service}`,
-            host: "local",
-            status: modeOf(service) === "prefer_ephemeral" ? "legacy_retained" : "legacy_restored",
-            scopeLabel: scopeId,
-            principalId: actor.id,
-          });
-        }
-        for (const [service, generation] of resetGenerations) {
-          await deps.deviceFlowCutover?.markResidentReset(credentialScopeId, service, generation, handle.resourceId);
-        }
-      } catch (err) {
-        deps.errors?.record(
-          {
-            category: "keychain",
-            code: "device_flow_restore_failed",
-            message: errMessage(err),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          },
-          err,
-        );
-      }
-      emit("creds", deviceFlowStart, Date.now());
-      perf.credsMs += Date.now() - deviceFlowStart;
-    }
   };
   const doProvision = async (emit: typeof emitGapWork, eager: boolean): Promise<SandboxHandle> => {
     const provisionStart = Date.now();
@@ -354,7 +349,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         eager,
       }),
     });
-    await prepareCredentials(handle, emit);
     const dirCleanupStart = Date.now();
     await prepareTurnFiles(handle);
     emit("dir_cleanup", dirCleanupStart, Date.now());
@@ -378,6 +372,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     }
     box.handle = handle;
+    trackLoginCapture(handle, deviceFlowCredOwner(memoryScopeId, actor.id));
     return handle;
   };
   const skillsRoot = `${turnFilesDir}/${SKILLS_DIR}`;
@@ -496,7 +491,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const policyKey = JSON.stringify({ egress, credentialScopeId });
     const existing = resourceHandles.get(id);
     if (existing && resourcePolicy.get(id) === policyKey) {
-      if (credentialScopeId) await prepareCredentials(existing, emitGapWork, credentialScopeId);
       return existing;
     }
     const provisioned = (async () => {
@@ -516,11 +510,11 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         ...(egressToken ? { egressToken } : {}),
       });
       resourcePendingHandles.set(id, handle);
-      if (credentialScopeId) await prepareCredentials(handle, emitGapWork, credentialScopeId);
       if (!crossScope) {
-        await prepareCredentials(handle, emitGapWork);
         await prepareTurnFiles(handle);
       }
+      if (!crossScope || credentialScopeId)
+        trackLoginCapture(handle, deviceFlowCredOwner(resource.ownerScopeId, actor.id));
       resourceHandles.set(id, handle);
       resourcePolicy.set(id, policyKey);
       resourcePendingHandles.delete(id);
@@ -552,6 +546,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         },
       );
       scratchBox.provisionMs = Date.now() - provisionStart;
+      trackLoginCapture(handle, deviceFlowCredOwner(memoryScopeId, actor.id));
       scratchBox.handle = handle;
       scratchReadyAt = Date.now();
       recordScratchLifecycle("provision_ready", handle);
@@ -591,33 +586,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           );
           ownerAuthBox.pending = handle;
           ownerAuthBox.provisionMs = Date.now() - provisionStart;
-          if (deps.keychain && isolateOwnerKeychain) {
-            const restoredServices = await materializeDeviceFlowLogins({
-              sandbox: deps.sandbox,
-              handle,
-              keychain: deps.keychain,
-              ownerId: actor.id,
-              ...(openSpeakerKeychain ? { allOrigins: true } : {}),
-              ...(credentialCutoverServices.length ? { excludeServices: credentialCutoverServices } : {}),
-              onAnomaly: (service, detail) =>
-                deps.errors?.record({
-                  category: "keychain",
-                  code: "device_flow_restore_failed",
-                  message: `${service} (owner-auth box): ${detail}`,
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                }),
-            });
-            for (const service of restoredServices) {
-              deps.auditLog.record({
-                at: Date.now(),
-                principalId: actor.id,
-                action: "keychain.materialize",
-                resource: `${service} (owner-auth box)`,
-                scopeLabel: scopeId,
-              });
-            }
-          }
+          trackLoginCapture(handle, actor.id);
           ownerAuthBox.handle = handle;
           return handle;
         })().catch(async (err) => {
@@ -710,12 +679,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     );
   };
   const hasLiveProcesses = async (handle: SandboxHandle, fallbackScope: ScopeId): Promise<boolean> => {
+    if (supportsProcessSessions(deps.sandbox)) {
+      return (await deps.sandbox.listProcesses(handle)).some((process) => process.status.state !== "exited");
+    }
     if (!deps.processes) return false;
-    if (!handle.resourceId) return (await deps.processes.liveByScope(fallbackScope)).length > 0;
-    return (await deps.processes.listLive()).some(
-      (process) =>
-        process.sandboxId === handle.resourceId ||
-        (!process.sandboxId && process.scopeId === (handle.scopeId ?? fallbackScope)),
+    return (await deps.processes.listByScope(handle.scopeId ?? fallbackScope)).some(
+      (process) => process.status === "running" && (!process.sandboxId || process.sandboxId === handle.resourceId),
     );
   };
   const reclaimBox = async (): Promise<void> => {
@@ -872,6 +841,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     scratchBox,
     ownerAuthBox,
     ownerAuthCommand,
+    captureLogins,
+    prepareCredentialExecution,
+    captureSnapshot,
+    completeCapture,
     scopedCommand,
     provision,
     provisionScratch,

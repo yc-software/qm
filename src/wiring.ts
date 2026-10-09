@@ -1,3 +1,4 @@
+import { completeLoginCapture } from "./credentials/device-flow-persist.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
@@ -2536,6 +2537,44 @@ export function buildApp(
           sessions,
           leaderLease,
           heartbeatMs: config.monitorHeartbeatMs,
+          onProcessExit: keychain
+            ? async (handle, monitor) => {
+                const process = await processes.get(monitor.processId);
+                if (!process?.credentialCapture) return;
+                const credentialScope = (handle.scopeId ?? process.scopeId) as ScopeId;
+                const services = await deviceFlowCutover.listServices(credentialScope);
+                const excluded: string[] = [];
+                for (const service of services) {
+                  if ((await deviceFlowCutover.resolvePolicy(credentialScope, service))?.mode !== "legacy")
+                    excluded.push(service);
+                }
+                await advisoryLock.withLock(
+                  `credential-execution:${handle.backend}:${handle.resourceId ?? handle.id}`,
+                  async () => {
+                    const current = await processes.get(monitor.processId);
+                    if (!current?.credentialCapture) return;
+                    if ((await sandbox.listProcesses(handle)).some((process) => process.status.state !== "exited"))
+                      return;
+                    await completeLoginCapture({
+                      sandbox,
+                      handle,
+                      keychain,
+                      snapshot: current.credentialCapture,
+                      credentialPaths: deploymentLayer.credentialPaths,
+                      excludeServices: excluded,
+                      onAnomaly: (service, detail) =>
+                        errors.record({
+                          category: "keychain",
+                          code: "device_flow_capture_skipped",
+                          message: `${service}: ${detail}`,
+                          scopeLabel: monitor.ownerScopeId,
+                        }),
+                    });
+                    await processes.finishCredentialCapture(monitor.processId);
+                  },
+                );
+              }
+            : undefined,
         })
       : null;
   const skillSyncEngine = createSkillSyncEngine({

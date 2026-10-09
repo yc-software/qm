@@ -998,7 +998,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
   assert.ok(!block.includes("ghp_secret"), "the manifest is metadata-only");
 });
 
-test("manifest: in the owner's personal scope their own credentials need no grant and load by id", async () => {
+test("manifest: own credentials need no grant but require explicit execution requests", async () => {
   const k = kc();
   await k.save(GH);
   await k.save({ ownerId: "U1", service: "npm", secret: "npm_x", envKey: "NPM_TOKEN", expiresAt: Date.now() - 1 });
@@ -1016,11 +1016,10 @@ test("manifest: in the owner's personal scope their own credentials need no gran
     scopeGrants: [],
     injected: [],
   });
-  assert.match(own, /file-login.*raw file loading needs no grant on their live turn; background turns need a grant/);
+  assert.match(own, /file-login.*execute.credentials needs no grant/);
   assert.match(own, /their own — execute.credentials needs no grant/);
   assert.match(own, /including background and scheduled turns/);
-  assert.match(own, /"credential":"<credential id>"/);
-  assert.match(own, /works only on their live turn in their personal conversation/);
+  assert.match(own, /Request every credential, including saved CLI logins, explicitly using execute.credentials/);
   assert.ok(!own.includes("no grant for this conversation"));
   assert.match(
     own,
@@ -1186,8 +1185,11 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
     const grant = await grantHere(cid, "alex@conn", GROUP, "once", "check my signature emails");
     const used = await post("/v1/keychain/use", { grant: grant.id }, await capFor("carol@conn", GROUP));
-    assert.equal(used.status, 200);
-    assert.equal(await used.text(), "export VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM='ya29.alex'\n");
+    assert.equal(used.status, 410);
+    assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
+    const prepared = await built.keychain!.prepareMaterialize(grant.id, GROUP, "carol@conn");
+    assert.equal(prepared.materialized.kind, "env");
+    if (prepared.materialized.kind === "env") assert.equal(prepared.materialized.env[0]?.value, "ya29.alex");
   });
 
   it("normalizes keychain credential expiry seconds to milliseconds before storing", async () => {
@@ -1203,7 +1205,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
     const grant = await grantHere(credential.id, "U_SECONDS", "channel:C_SECONDS", "once", "seconds check");
     const used = await post("/v1/keychain/use", { grant: grant.id }, await capFor("U_SECONDS", "channel:C_SECONDS"));
-    assert.equal(used.status, 200, "seconds input must not make the credential look expired immediately");
+    assert.equal(used.status, 410);
+    await built.keychain!.prepareMaterialize(grant.id, "channel:C_SECONDS", "U_SECONDS");
   });
 
   it("rejects invalid keychain credential expiry at the route boundary", async () => {
@@ -1247,33 +1250,29 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.notEqual(res.status, 200);
   });
 
-  it("use is scope-bound, returns sourceable env text, and a once grant cannot be reused", async () => {
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        { service: "github", secret: "ghp_grant", envKey: "GH_GRANT" },
-        await capFor("OWNER"),
-      )
-    ).json()) as any;
-
-    const g = { grant: await grantHere(credential.id, "OWNER", "channel:C7", "once", "clone the repo") };
-
-    const elsewhere = await post("/v1/keychain/use", { grant: g.grant.id }, await capFor("U3", "channel:OTHER"));
-    assert.equal(elsewhere.status, 403);
-
-    const used = await post("/v1/keychain/use", { grant: g.grant.id }, await capFor("U3", "channel:C7"));
-    assert.equal(used.status, 200);
-    assert.match(used.headers.get("content-type") ?? "", /text\/plain/);
-    assert.equal(await used.text(), "export GH_GRANT='ghp_grant'\n");
-
-    const rerun = await post("/v1/keychain/use", { grant: g.grant.id }, await capFor("U3", "channel:C7"));
-    assert.equal(rerun.status, 410, "a consumed grant cannot authorize another credential load");
-
-    const usage = await built.credentialUsage.list({});
-    assert.ok(
-      usage.some(
-        (u) => u.slug === `keychain:github:${credential.id}` && u.principalId === "U3" && u.scopeLabel === "channel:C7",
-      ),
+  it("retired raw loading returns no secrets and does not consume a grant", async () => {
+    const credential = await built.keychain!.save({
+      ownerId: "OWNER",
+      service: "github",
+      secret: "ghp_grant",
+      envKey: "GH_GRANT",
+    });
+    const grant = await grantHere(credential.id, "OWNER", "channel:C7", "once", "clone the repo");
+    for (const scope of ["channel:OTHER", "channel:C7"] as const) {
+      const used = await post("/v1/keychain/use", { grant: grant.id }, await capFor("U3", scope));
+      assert.equal(used.status, scope === "channel:OTHER" ? 403 : 410);
+      if (scope !== "channel:OTHER") assert.match(await used.text(), /execute.credentials/);
+    }
+    assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
+    await assert.rejects(
+      built.keychain!.prepareMaterialize(grant.id, "channel:OTHER", "U3"),
+      (e: KeychainError) => e.status === 403,
+    );
+    const prepared = await built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3");
+    await prepared.commit();
+    await assert.rejects(
+      built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3"),
+      (e: KeychainError) => e.status === 410,
     );
   });
 
@@ -1341,120 +1340,40 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
   });
 
-  it("standing file grants are not auto-injected, but /v1/keychain/use re-fetches them into /tmp with glab env pointers", async () => {
-    const content = "hosts:\n  gitlab.com:\n    token: glpat_route\n";
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        {
-          service: "glab",
-          files: [{ path: ".config/glab-cli/config.yml", contentBase64: Buffer.from(content).toString("base64") }],
-        },
-        await capFor("OWNER"),
-      )
-    ).json()) as any;
-
-    const g = { grant: await grantHere(credential.id, "OWNER", "channel:C8", "standing", "use my glab here") };
-    assert.deepEqual(
-      await built.keychain!.materializeStanding("channel:C8"),
-      [],
-      "standing file grants do not ride provision env injection",
-    );
-
-    for (let i = 0; i < 2; i++) {
-      const used = await post("/v1/keychain/use", { grant: g.grant.id }, await capFor("U3", "channel:C8"));
-      assert.equal(used.status, 200);
-      const script = await used.text();
-      assert.match(script, /\$\{TMPDIR:-\/tmp\}\/keychain\.XXXXXX/);
-      assert.match(script, /export GLAB_CONFIG_DIR="\$__kc_dir\/.config\/glab-cli"/);
-      assert.ok(
-        !script.includes("/root/") && !script.includes("$HOME"),
-        "file grant materialization must stay off durable home",
-      );
-      assert.ok(!script.includes("glpat_route"), "raw file contents stay base64-encoded in the sourceable script");
-    }
+  it("standing file grants never return raw scripts", async () => {
+    const credential = await built.keychain!.save({
+      ownerId: "OWNER",
+      service: "glab",
+      files: [
+        { path: ".config/glab-cli/config.yml", contentBase64: Buffer.from("synthetic-token").toString("base64") },
+      ],
+    });
+    const grant = await grantHere(credential.id, "OWNER", "channel:C8", "standing", "use my glab here");
+    assert.deepEqual(await built.keychain!.materializeStanding("channel:C8"), []);
+    const used = await post("/v1/keychain/use", { grant: grant.id }, await capFor("U3", "channel:C8"));
+    assert.equal(used.status, 410);
+    const text = await used.text();
+    assert.ok(!text.includes("synthetic-token") && !text.includes("export"));
   });
 
   const liveOwn = async (actorId: string) => await capFor(actorId, scopeId("personal", actorId), { liveActor: true });
 
-  it("use by credential id: the caller's own, in their personal conversation only — no grant needed", async () => {
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        { service: "npm", secret: "npm_own", envKey: "NPM_OWN" },
-        await capFor("U_OWN"),
-      )
-    ).json()) as any;
-
-    const used = await post("/v1/keychain/use", { credential: credential.id }, await liveOwn("U_OWN"));
-    assert.equal(used.status, 200);
-    assert.equal(await used.text(), "export NPM_OWN='npm_own'\n");
-    assert.equal(
-      (await post("/v1/keychain/use", { credential: credential.id }, await liveOwn("U_OWN"))).status,
-      200,
-      "nothing is consumed",
-    );
-
-    assert.equal(
-      (
-        await post(
-          "/v1/keychain/use",
-          { credential: credential.id },
-          await capFor("U_OWN", "channel:C9", { liveActor: true }),
-        )
-      ).status,
-      403,
-      "own-use never crosses into a shared scope, even on a live turn",
-    );
-    assert.equal(
-      (await post("/v1/keychain/use", { credential: credential.id }, await capFor("U_OWN"))).status,
-      403,
-      "a non-live personal turn (unprompted/detection — no liveActor) cannot pull own credentials by id",
-    );
-    assert.equal(
-      (
-        await post(
-          "/v1/keychain/use",
-          { credential: credential.id },
-          await capFor("U_OWN", "personal:U_OWN", { triggered: true }),
-        )
-      ).status,
-      403,
-      "a trigger-fired turn runs as the owner without them speaking — refused",
-    );
-    assert.equal(
-      (await post("/v1/keychain/use", { credential: credential.id }, await liveOwn("U_ELSE"))).status,
-      404,
-      "someone else's credential id reads as unknown",
-    );
-
-    const usage = await built.credentialUsage.list({});
-    assert.ok(
-      usage.some(
-        (u) =>
-          u.slug === `keychain:npm:${credential.id}` && u.principalId === "U_OWN" && u.scopeLabel === "personal:U_OWN",
-      ),
-    );
-  });
-
-  it("use by credential id loads the caller's own file bundle into /tmp with env pointers", async () => {
-    const content = "hosts:\n  gitlab.com:\n    token: glpat_own\n";
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        {
-          service: "glab",
-          files: [{ path: ".config/glab-cli/config.yml", contentBase64: Buffer.from(content).toString("base64") }],
-        },
-        await capFor("U_OWN_FILE"),
-      )
-    ).json()) as any;
-    const used = await post("/v1/keychain/use", { credential: credential.id }, await liveOwn("U_OWN_FILE"));
-    assert.equal(used.status, 200);
-    const script = await used.text();
-    assert.match(script, /export GLAB_CONFIG_DIR="\$__kc_dir\/.config\/glab-cli"/);
-    assert.ok(!script.includes("glpat_own"), "raw file contents stay base64-encoded in the sourceable script");
-  });
+  for (const file of [false, true]) {
+    it(`own ${file ? "file" : "env"} credentials also require execute.credentials`, async () => {
+      const credential = await built.keychain!.save({
+        ownerId: "U_OWN",
+        service: file ? "aws" : "npm",
+        ...(file
+          ? { files: [{ path: ".aws/config", contentBase64: Buffer.from("synthetic").toString("base64") }] }
+          : { secret: "synthetic", envKey: "TOKEN" }),
+      });
+      for (const token of [await liveOwn("U_OWN"), await capFor("U_OWN"), await liveOwn("U_ELSE")]) {
+        const used = await post("/v1/keychain/use", { credential: credential.id }, token);
+        assert.equal(used.status, 410);
+        assert.match(await used.text(), /execute.credentials/);
+      }
+    });
+  }
 });
 
 function channelTurn(

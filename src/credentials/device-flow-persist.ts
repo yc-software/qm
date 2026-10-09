@@ -1,3 +1,4 @@
+import type { CredentialCaptureSnapshot } from "../processes/process-registry.ts";
 import {
   DEVICE_FLOW_ORIGIN,
   KeychainError,
@@ -162,6 +163,7 @@ export interface DeviceFlowPersistInput {
   handle: SandboxHandle;
   keychain: Keychain;
   ownerId: string;
+  expectedFingerprints?: Record<string, string>;
   onAnomaly?: (service: string, detail: string) => void;
   credentialPaths?: CredentialPathSpec[];
   groupAs?: { service: string; paths: readonly CredentialPathSpec[] };
@@ -243,7 +245,8 @@ function buildSweepGroups(
   const droppedServices: string[] = [];
   let registeredCount = 0;
   for (const rec of [...existing.values()].sort((a, b) => a.service.localeCompare(b.service))) {
-    if (rec.origin !== DEVICE_FLOW_ORIGIN || !serviceSelected(input, rec.service)) continue;
+    if ((!input.expectedFingerprints && rec.origin !== DEVICE_FLOW_ORIGIN) || !serviceSelected(input, rec.service))
+      continue;
     const uncovered = recordCaptureRoots(rec).filter((r) => !isCovered(r, fixed));
     const roots = uncovered.filter((r) => {
       if (SWEEP_PATH_RE.test(r.path)) return true;
@@ -405,10 +408,13 @@ export async function captureDeviceFlowLogins(input: DeviceFlowPersistInput): Pr
           service,
           files,
           origin: DEVICE_FLOW_ORIGIN,
-          expectedOrigin: DEVICE_FLOW_ORIGIN,
+          ...(input.expectedFingerprints
+            ? { expectedFingerprint: input.expectedFingerprints[service] ?? null }
+            : { expectedOrigin: DEVICE_FLOW_ORIGIN }),
         });
       } catch (e) {
         if (e instanceof KeychainError && e.status === 409) {
+          if (input.expectedFingerprints) throw e;
           resolved.add(service);
           continue;
         }
@@ -662,8 +668,8 @@ export async function removeDeviceFlowLogins(
     canonicalRoots?: readonly string[];
   },
 ): Promise<string[]> {
-  if (!input.services?.length) return [];
-  const services = new Set(expandServiceAliases(input.services));
+  if (!input.services?.length && !input.canonicalRoots?.length) return [];
+  const services = new Set(expandServiceAliases(input.services ?? []));
   const records = (await input.keychain.listByOwner(input.ownerId)).filter(
     (record) =>
       record.kind === "file" &&
@@ -687,4 +693,36 @@ export async function removeDeviceFlowLogins(
     throw new Error(`device-flow credential quarantine failed: ${removed.stderr || `exit ${removed.code}`}`);
   }
   return paths;
+}
+
+export async function clearStoredLoginFiles(
+  input: Pick<DeviceFlowPersistInput, "sandbox" | "handle" | "keychain" | "ownerId" | "credentialPaths">,
+): Promise<void> {
+  const records = (await input.keychain.listByOwner(input.ownerId)).filter((record) => record.kind === "file");
+  const roots = [...builtInCredentialPaths(), ...(input.credentialPaths ?? [])].map((root) => root.path);
+  await removeDeviceFlowLogins({
+    ...input,
+    services: records.map((record) => record.service),
+    allOrigins: true,
+    canonicalRoots: roots,
+  });
+  const cleared = await input.sandbox.run(
+    input.handle,
+    `rm -rf -- "$HOME/${DISPLACED_DIR_REL}" ${shq(EPHEMERAL_CRED_DIR)}; find /tmp/ -maxdepth 1 -type d -name 'keychain.*' -exec rm -rf -- {} +`,
+  );
+  if (cleared.code !== 0) throw new Error("Could not clear legacy credential files");
+}
+
+export async function completeLoginCapture(
+  input: Omit<DeviceFlowPersistInput, "ownerId"> & { snapshot: CredentialCaptureSnapshot },
+): Promise<void> {
+  try {
+    await captureDeviceFlowLogins({
+      ...input,
+      ownerId: input.snapshot.ownerId,
+      expectedFingerprints: input.snapshot.fingerprints,
+    });
+  } finally {
+    await clearStoredLoginFiles({ ...input, ownerId: input.snapshot.ownerId });
+  }
 }

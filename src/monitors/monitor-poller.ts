@@ -43,6 +43,7 @@ export interface MonitorPollerDeps {
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
+  onProcessExit?: (handle: SandboxHandle, monitor: Monitor) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
 }
@@ -195,6 +196,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     }
 
     const exited = read.status.state === "exited";
+    if (exited) await deps.onProcessExit?.(handle, m);
     const expired = !exited && t >= m.expiresAt;
     const raw = (m.tail ?? "") + read.chunks;
     let events = raw;

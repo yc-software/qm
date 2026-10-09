@@ -7,7 +7,6 @@ import { principalDestination, withWebTranscriptText } from "../reach/reach.ts";
 import { swallow } from "../util/errors.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { samePerson } from "../directory/person.ts";
-import { keychainUseCommand } from "../api/contract.ts";
 
 function resolutionInput(ask: KeychainAsk, grant?: KeychainGrant): string {
   if (ask.status === "approved") {
@@ -109,7 +108,7 @@ export interface DropResolution {
 function dropResolutionInput(drop: DropResolution): string {
   const waiting = !!drop.pendingSiblings?.length;
   const where = drop.granted
-    ? `now in the keychain and granted to this conversation — load it with \`${keychainUseCommand({ grant: String(drop.grantId) })}\`${waiting ? " when the task runs" : " and run the task in that same shell"}`
+    ? `now in the keychain and granted to this conversation — request its handle through execute.credentials${waiting ? " when the task runs" : " when resuming the task"}`
     : `now in your keychain and available here`;
   const next = waiting
     ? `Heads-up: other drop links from this conversation (${drop.pendingSiblings!.map((s) => `\`${s}\``).join(", ")}) haven't been filled yet — ` +

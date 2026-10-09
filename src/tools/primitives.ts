@@ -1,3 +1,9 @@
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import {
+  clearExecutionFiles,
+  prepareExecutionFiles,
+  type ExecutionFileCredential,
+} from "../credentials/execute-files.ts";
 import type { MemoryCaptureMetadata } from "../memory/records.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
@@ -178,6 +184,7 @@ export interface CommandCredential {
   resolve?: () => Promise<{
     commit?: () => Promise<void>;
     singleUse?: boolean;
+    files?: ExecutionFileCredential;
     env: Array<{ key: string; value: string; secret?: boolean }>;
   }>;
 }
@@ -444,6 +451,9 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 export interface ToolContextDeps {
   sandbox: Sandbox;
   registerLogin?: ToolContext["registerLogin"];
+  credentialExecutionLock?: AdvisoryLock;
+  prepareCredentialExecution?: (handle: SandboxHandle, requested?: boolean) => Promise<void>;
+  captureExecutionLogins?: (handle: SandboxHandle) => Promise<void>;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
   commandPolicyForCredentials?: (
@@ -632,6 +642,20 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     return cache ? once(call, cache) : call();
   }
 
+  const withCredentialAccess = <T>(handle: SandboxHandle, operation: () => Promise<T>): Promise<T> => {
+    const run = async () => {
+      if (deps.credentialExecutionLock) await clearExecutionFiles(deps.sandbox, handle);
+      await deps.prepareCredentialExecution?.(handle);
+      return operation();
+    };
+    return deps.credentialExecutionLock
+      ? deps.credentialExecutionLock.withLock(
+          `credential-execution:${handle.backend}:${handle.resourceId ?? handle.id}`,
+          run,
+        )
+      : run();
+  };
+
   return {
     ...(deps.registerLogin ? { registerLogin: deps.registerLogin } : {}),
     ...(deps.commandCredentials?.length
@@ -814,59 +838,87 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             scopeLabel: reached.scopeId,
           });
         }
-        return timed("exec", async () => {
-          execOpts?.signal?.throwIfAborted();
-          const commandEnv: Record<string, string> = {};
-          const prepared: Array<{
-            commit?: () => Promise<void>;
-            singleUse?: boolean;
-            env: Array<{ key: string; value: string; secret?: boolean }>;
-          }> = [];
-          for (const credential of new Set(requested)) {
-            const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
-            prepared.push(materialized);
-            for (const { key, value } of materialized.env) {
-              if (key in commandEnv && commandEnv[key] !== value)
-                throw new Error(`requested credentials provide conflicting environment key: ${key}`);
-              commandEnv[key] = value;
+        const executeCommand = () =>
+          timed("exec", async () => {
+            if (deps.credentialExecutionLock) await clearExecutionFiles(deps.sandbox, handle);
+            await deps.prepareCredentialExecution?.(handle, requestedCredentials.length > 0);
+            execOpts?.signal?.throwIfAborted();
+            const commandEnv: Record<string, string> = {};
+            const prepared: Array<{
+              commit?: () => Promise<void>;
+              singleUse?: boolean;
+              files?: ExecutionFileCredential;
+              env: Array<{ key: string; value: string; secret?: boolean }>;
+            }> = [];
+            for (const credential of new Set(requested)) {
+              const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
+              prepared.push(materialized);
+              for (const { key, value } of materialized.env) {
+                if (key in commandEnv && commandEnv[key] !== value)
+                  throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+                commandEnv[key] = value;
+              }
+              deps.auditLog?.record({
+                at: Date.now(),
+                principalId: deps.createdBy,
+                action: "keychain.materialize",
+                resource: `${credential.handle} (command)`,
+                scopeLabel: writableScopeId!,
+              });
             }
-            deps.auditLog?.record({
-              at: Date.now(),
-              principalId: deps.createdBy,
-              action: "keychain.materialize",
-              resource: `${credential.handle} (command)`,
-              scopeLabel: writableScopeId!,
-            });
-          }
-          execOpts?.signal?.throwIfAborted();
-          const singleUse = prepared.filter((credential) => credential.singleUse);
-          if (singleUse.length > 1) throw new Error("An execution may use at most one single-use grant");
-          for (const credential of prepared.filter((credential) => !credential.singleUse)) await credential.commit?.();
-          execOpts?.signal?.throwIfAborted();
-          for (const credential of singleUse) await credential.commit?.();
-          const sandboxCommand = ownerAuth
-            ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command)
-            : (deps.scopedCommand?.(command, { ...handle.env, ...commandEnv }) ?? command);
-          const commandHandle = Object.keys(commandEnv).length
-            ? { ...handle, env: { ...handle.env, ...commandEnv } }
-            : handle;
-          const secretEnv = executionSecretEnv(
-            commandHandle.env,
-            prepared.flatMap((credential) => credential.env),
-          );
-          const mask = createExactSecretValueMasker(Object.values(secretEnv));
-          let r: ExecResult;
-          try {
-            const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
-            r = { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
-          } catch (error) {
-            const message = errMessage(error);
-            const masked = mask(message);
-            if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
-            throw error;
-          }
-          return reached ? { ...r, reached } : r;
-        });
+            execOpts?.signal?.throwIfAborted();
+            const singleUse = prepared.filter((credential) => credential.singleUse);
+            if (singleUse.length > 1) throw new Error("An execution may use at most one single-use grant");
+            for (const credential of prepared.filter((credential) => !credential.singleUse))
+              await credential.commit?.();
+            execOpts?.signal?.throwIfAborted();
+            for (const credential of singleUse) await credential.commit?.();
+            const fileCredentials = prepared.flatMap((credential) => (credential.files ? [credential.files] : []));
+            const fileExecution = fileCredentials.length
+              ? await prepareExecutionFiles(deps.sandbox, handle, fileCredentials)
+              : undefined;
+            let r: ExecResult;
+            try {
+              for (const [key, value] of Object.entries(fileExecution?.env ?? {})) {
+                if (key in commandEnv && commandEnv[key] !== value)
+                  throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+                commandEnv[key] = value;
+              }
+              const sandboxCommand = ownerAuth
+                ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command)
+                : (deps.scopedCommand?.(command, { ...handle.env, ...commandEnv }) ?? command);
+              const commandHandle = Object.keys(commandEnv).length
+                ? { ...handle, env: { ...handle.env, ...commandEnv } }
+                : handle;
+              const secretEnv = executionSecretEnv(
+                commandHandle.env,
+                prepared.flatMap((credential) => credential.env),
+              );
+              const mask = createExactSecretValueMasker(Object.values(secretEnv));
+              try {
+                const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+                r = { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
+              } catch (error) {
+                const message = errMessage(error);
+                const masked = mask(message);
+                if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
+                throw error;
+              }
+            } finally {
+              try {
+                await fileExecution?.finish();
+              } finally {
+                await deps.captureExecutionLogins?.(handle);
+              }
+            }
+            return reached ? { ...r, reached } : r;
+          });
+        return deps.credentialExecutionLock
+          ? deps.credentialExecutionLock.withLock(
+              `credential-execution:${handle.backend}:${handle.resourceId ?? handle.id}`,
+              executeCommand,
+            )
+          : executeCommand();
       });
     },
 
@@ -914,15 +966,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
       signal?.throwIfAborted();
       const handle = await deps.provision();
-      return timed("file_op", async () => {
-        const direct = await withAbort(() => deps.sandbox.readFile(handle, path), signal);
-        if (direct !== null) return { content: direct, sourceScopeId: writableScopeId };
-        for (const mount of fallbackMounts) {
-          const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, path)), signal);
-          if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
-        }
-        return { content: null, sourceScopeId: null };
-      });
+      return withCredentialAccess(handle, () =>
+        timed("file_op", async () => {
+          const direct = await withAbort(() => deps.sandbox.readFile(handle, path), signal);
+          if (direct !== null) return { content: direct, sourceScopeId: writableScopeId };
+          for (const mount of fallbackMounts) {
+            const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, path)), signal);
+            if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
+          }
+          return { content: null, sourceScopeId: null };
+        }),
+      );
     },
 
     async createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact> {
@@ -959,69 +1013,71 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       const handle = await deps.provision();
       return once(() =>
-        timed("file_op", async () => {
-          if (data !== undefined) {
-            await deps.sandbox.writeFile(handle, path, data);
-            if (writableScopeId && persistExclude && !isUnderAnyDir(path, persistExclude)) {
-              await deps.workspace.write(writableScopeId, path, data);
-            }
-          }
-          const shared: WriteResult["shared"] = [];
-          if (wantShare) {
-            if (!writableScopeId) throw new Error("share needs a writable scope that owns the file");
-            const bytes = await deps.sandbox.readFileBytes(handle, path);
-            if (bytes === null) throw new Error(`no such file to share: ${path}`);
-            await deps.workspace.write(writableScopeId, path, bytes);
-            const priorRows = deps.files
-              ? await deps.files.resolveByOwnerPaths([{ ownerScopeId: writableScopeId, path }])
-              : [];
-            const priorArtifact = priorRows.find((r) => r.direction === "out") ?? priorRows[0];
-            const priorAuthor = priorArtifact?.createdBy;
-            const author = data === undefined ? (priorAuthor ?? deps.createdBy) : deps.createdBy;
-            if (deps.files) {
-              try {
-                const name = path.split(/[\\/]/).pop() || path;
-                await deps.files.put({
-                  id: priorArtifact?.id ?? fileArtifactId(randomUUID(), "out", 0),
-                  reuseExistingPath: true,
-                  ownerScopeId: writableScopeId,
-                  createdBy: author,
-                  name,
-                  path,
-                  mimetype: mimeFromName(name),
-                  data: bytes,
-                  direction: "out",
-                  createdInScope: writableScopeId,
-                });
-              } catch (e) {
-                swallow("tools: persist of outbound file artifact failed", e);
+        withCredentialAccess(handle, () =>
+          timed("file_op", async () => {
+            if (data !== undefined) {
+              await deps.sandbox.writeFile(handle, path, data);
+              if (writableScopeId && persistExclude && !isUnderAnyDir(path, persistExclude)) {
+                await deps.workspace.write(writableScopeId, path, data);
               }
             }
-            for (const s of share!) {
-              const granteeScopeId = s.scope === "org" ? orgScopeId : s.scope;
-              if (!granteeScopeId) throw new Error('cannot resolve "org" — no org scope is mounted in this session');
-              if (parseScopeId(granteeScopeId).kind === null) {
-                throw new Error(
-                  `invalid share target "${s.scope}" — use a scope id like personal:<id>, channel:<id>, team:<id>, or org:<id> (or "org")`,
+            const shared: WriteResult["shared"] = [];
+            if (wantShare) {
+              if (!writableScopeId) throw new Error("share needs a writable scope that owns the file");
+              const bytes = await deps.sandbox.readFileBytes(handle, path);
+              if (bytes === null) throw new Error(`no such file to share: ${path}`);
+              await deps.workspace.write(writableScopeId, path, bytes);
+              const priorRows = deps.files
+                ? await deps.files.resolveByOwnerPaths([{ ownerScopeId: writableScopeId, path }])
+                : [];
+              const priorArtifact = priorRows.find((r) => r.direction === "out") ?? priorRows[0];
+              const priorAuthor = priorArtifact?.createdBy;
+              const author = data === undefined ? (priorAuthor ?? deps.createdBy) : deps.createdBy;
+              if (deps.files) {
+                try {
+                  const name = path.split(/[\\/]/).pop() || path;
+                  await deps.files.put({
+                    id: priorArtifact?.id ?? fileArtifactId(randomUUID(), "out", 0),
+                    reuseExistingPath: true,
+                    ownerScopeId: writableScopeId,
+                    createdBy: author,
+                    name,
+                    path,
+                    mimetype: mimeFromName(name),
+                    data: bytes,
+                    direction: "out",
+                    createdInScope: writableScopeId,
+                  });
+                } catch (e) {
+                  swallow("tools: persist of outbound file artifact failed", e);
+                }
+              }
+              for (const s of share!) {
+                const granteeScopeId = s.scope === "org" ? orgScopeId : s.scope;
+                if (!granteeScopeId) throw new Error('cannot resolve "org" — no org scope is mounted in this session');
+                if (parseScopeId(granteeScopeId).kind === null) {
+                  throw new Error(
+                    `invalid share target "${s.scope}" — use a scope id like personal:<id>, channel:<id>, team:<id>, or org:<id> (or "org")`,
+                  );
+                }
+                const permission: Permission = s.permission ?? "read";
+                await deps.acl.grant(
+                  { ownerScopeId: writableScopeId, ref: path, granteeScopeId, permission, grantedBy: deps.createdBy },
+                  author,
                 );
+                deps.auditLog?.record({
+                  at: Date.now(),
+                  principalId: deps.createdBy,
+                  action: "file_share",
+                  resource: path,
+                  scopeLabel: granteeScopeId,
+                });
+                shared.push({ scope: granteeScopeId, permission });
               }
-              const permission: Permission = s.permission ?? "read";
-              await deps.acl.grant(
-                { ownerScopeId: writableScopeId, ref: path, granteeScopeId, permission, grantedBy: deps.createdBy },
-                author,
-              );
-              deps.auditLog?.record({
-                at: Date.now(),
-                principalId: deps.createdBy,
-                action: "file_share",
-                resource: path,
-                scopeLabel: granteeScopeId,
-              });
-              shared.push({ scope: granteeScopeId, permission });
             }
-          }
-          return { shared };
-        }),
+            return { shared };
+          }),
+        ),
       );
     },
 

@@ -651,7 +651,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/use",
         summary:
-          "materialize an approved grant ({grant}) — or, in the owner's personal conversation, their own credential ({credential}) — into env vars for this turn",
+          "retired: request authorized credential handles through execute.credentials; this endpoint returns no secrets",
       },
     ],
   },

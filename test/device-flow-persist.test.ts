@@ -442,7 +442,7 @@ function channel(text: string): TurnRequest {
   };
 }
 
-test("a DM turn auto-captures a device-flow login under the PERSON, and a fresh machine gets it back", async () => {
+test("a DM login is captured under the person and restored only when explicitly requested", async () => {
   const { app, keychain } = await freshApp();
   const res = await app.turn(
     dm("!run mkdir -p ~/.config/gh && printf 'oauth_token: gho_E2E' > ~/.config/gh/hosts.yml && echo done"),
@@ -457,7 +457,13 @@ test("a DM turn auto-captures a device-flow login under the PERSON, and a fresh 
   for (const name of ff.names()) rmSync(ff.homeDir(name), { recursive: true, force: true });
   const back = await app.turn(dm("!run cat ~/.config/gh/hosts.yml"));
   assert.equal(back.status, "ok");
-  assert.match(back.reply ?? "", /gho_E2E/, "auth survived machine replacement");
+  assert.doesNotMatch(back.reply ?? "", /gho_E2E/);
+  const explicit = await app.turn(
+    dm(`!execute ${JSON.stringify({ command: "cat ~/.config/gh/hosts.yml", credentials: [gh!.credentialHandle] })}`),
+  );
+  assert.match(explicit.reply ?? "", /gho_E2E/, "explicit request restores the durable credential");
+  const after = await app.turn(dm("!run test -e ~/.config/gh/hosts.yml && echo found || echo absent"));
+  assert.equal(after.reply, "absent");
 });
 
 test("a login performed on a shared channel box is keyed to the SCOPE, like its workspace", async () => {
@@ -472,23 +478,30 @@ test("a login performed on a shared channel box is keyed to the SCOPE, like its 
   assert.equal(scoped.find((c) => c.service === "glab")?.kind, "file");
 });
 
-test("a capture failure is logged as an error event and does NOT fail the turn", async () => {
+test("a capture failure is reported and removes uncaptured native credentials", async () => {
   const { app, keychain, errors } = await freshApp();
   const realSave = keychain!.save.bind(keychain!);
   keychain!.save = async () => {
     throw new Error("injected keychain outage");
   };
-  const res = await app.turn(
-    dm("!run mkdir -p ~/.config/gh && printf 'oauth_token: gho_X' > ~/.config/gh/hosts.yml && echo done"),
+  await assert.rejects(
+    app.turn(dm("!run mkdir -p ~/.config/gh && printf 'oauth_token: gho_X' > ~/.config/gh/hosts.yml && echo done")),
+    /injected keychain outage/,
   );
-  assert.equal(res.status, "ok", "capture is best-effort — the turn still succeeds");
   const logged = (await errors.list()).find((e) => e.code === "device_flow_capture_failed");
   assert.ok(logged, "the failure is durably visible to operators");
 
   keychain!.save = realSave;
   const retry = await app.turn(dm("!run echo retry"));
   assert.equal(retry.status, "ok");
-  assert.ok((await keychain!.listByOwner("U1")).some((c) => c.service === "gh"));
+  assert.equal(
+    (await keychain!.listByOwner("U1")).some((c) => c.service === "gh"),
+    false,
+  );
+  assert.equal(
+    (await app.turn(dm("!run test -e ~/.config/gh/hosts.yml && echo found || echo absent"))).reply,
+    "absent",
+  );
 });
 
 test("removing platform credential vending preserves stored quarantine on personal and shared sandboxes", async () => {
@@ -510,8 +523,8 @@ test("removing platform credential vending preserves stored quarantine on person
       files: [{ path: ".acmecli/session.json", contentBase64: Buffer.from("stored-login").toString("base64") }],
       origin: DEVICE_FLOW_ORIGIN,
     });
-    const read = "!run cat ~/.acmecli/session.json";
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
+    const read = "!run test -e ~/.acmecli/session.json && echo found || echo absent";
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "absent");
     await built.deviceFlowCutover.set(targetScope, "acmecli", "ephemeral_only", "security@example.com");
     const hidden = await built.app.turn({
       ...request,
@@ -520,7 +533,7 @@ test("removing platform credential vending preserves stored quarantine on person
     assert.equal(hidden.reply, "absent");
     assert.ok((await built.keychain!.listByOwner(ownerId)).some((record) => record.service === "acmecli"));
     await built.deviceFlowCutover.set(targetScope, "acmecli", "legacy", "security@example.com");
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "absent");
   }
 });
 
@@ -1111,8 +1124,8 @@ test("removed layer tools retain quarantine, capture exclusion and reset-to-lega
       files: [{ path: ".retired/session", contentBase64: Buffer.from("stored-login").toString("base64") }],
       origin: DEVICE_FLOW_ORIGIN,
     });
-    const read = "!run cat ~/.retired/session";
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
+    const read = "!run test -e ~/.retired/session && echo found || echo absent";
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "absent");
     await built.deviceFlowCutover.set(targetScope, "retired", "ephemeral_only", "admin");
     assert.equal(
       (await built.app.turn({ ...request, text: "!run test -e ~/.retired/session && echo found || echo absent" }))
@@ -1125,11 +1138,43 @@ test("removed layer tools retain quarantine, capture exclusion and reset-to-lega
     assert.equal(files.length, 0);
     assert.ok(stored);
     await built.deviceFlowCutover.set(targetScope, "retired", "prefer_ephemeral", "admin");
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "tampered");
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "absent");
     await built.deviceFlowCutover.clear(targetScope, "retired");
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "absent");
     await built.deviceFlowCutover.set(targetScope, "retired", "ephemeral_only", "admin");
     await built.deviceFlowCutover.set(targetScope, "retired", "legacy", "admin");
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "absent");
   }
+});
+
+test("a login on a throwaway scratch sandbox is captured before teardown", async () => {
+  const { app, keychain } = await freshApp();
+  const result = await app.turn(
+    dm("!scratch mkdir -p ~/.aws/sso/cache && printf synthetic-scratch > ~/.aws/sso/cache/session.json"),
+  );
+  assert.equal(result.status, "ok");
+  const saved = (await keychain!.materializeOwnFiles("U1")).find((record) => record.service === "aws");
+  assert.ok(saved);
+  assert.equal(Buffer.from(saved.files[0]!.contentBase64, "base64").toString(), "synthetic-scratch");
+});
+
+test("a login in an explicitly selected sandbox updates an API-saved credential", async () => {
+  const built = await freshApp();
+  const selected = await built.sandboxResources!.create("U1", scopeId("personal", "U1"), "sprites", "login target");
+  await built.keychain!.save({
+    ownerId: "U1",
+    service: "aws",
+    origin: "agent-session:previous",
+    files: [{ path: ".aws/sso/cache/session.json", contentBase64: Buffer.from("old-login").toString("base64") }],
+  });
+  const result = await built.app.turn(
+    dm(
+      `!execute ${JSON.stringify({ sandboxId: selected.id, command: "mkdir -p ~/.aws/sso/cache && printf selected-login > ~/.aws/sso/cache/session.json" })}`,
+    ),
+  );
+  assert.equal(result.status, "ok");
+  const saved = (await built.keychain!.materializeOwnFiles("U1")).find((record) => record.service === "aws");
+  assert.ok(saved);
+  assert.equal(saved.origin, "agent-session:previous");
+  assert.equal(Buffer.from(saved.files[0]!.contentBase64, "base64").toString(), "selected-login");
 });
