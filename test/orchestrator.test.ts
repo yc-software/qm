@@ -334,7 +334,7 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   const reqs = await built.sessions.listLlmRequests(recipient!.id);
   const latest = reqs.at(-1) as any;
   const footer = latest.promptEnvelope.messages.at(-1).content;
-  assert.match(footer, /Recent agent-initiated deliveries to this conversation/);
+  assert.match(footer, /Delivered here since the user's last message/);
   assert.match(footer, /\[cron\] from U-carol: /);
   assert.match(footer, /…$/m);
   assert.doesNotMatch(footer, /deploy digest ready/);

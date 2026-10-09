@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { recentPrincipalDeliveryNote } from "../src/core/orchestrator/turn-helpers.ts";
 
-async function deliveredNote(texts: string[]): Promise<string> {
+async function deliveredNote(texts: string[], since?: number): Promise<string> {
   const store = createDeliveryStore();
   for (const [i, text] of texts.entries()) {
     const d = await store.enqueue({
@@ -13,7 +13,7 @@ async function deliveredNote(texts: string[]): Promise<string> {
     });
     await store.recordRecipientThread(d.id, "dm:D-alice", 1_700_000_000_000 + i);
   }
-  return recentPrincipalDeliveryNote(store, "dm:D-alice");
+  return recentPrincipalDeliveryNote(store, "dm:D-alice", since);
 }
 
 test("a long delivery is capped at 200 chars with an ellipsis, keeping timestamp and sender", async () => {
@@ -40,4 +40,11 @@ test("the note lists at most five deliveries", async () => {
   assert.equal(items.length, 5);
   assert.match(note, /delivery number 7/);
   assert.doesNotMatch(note, /delivery number 2\b/);
+});
+
+test("only deliveries after the user's previous message are listed", async () => {
+  const note = await deliveredNote(["before reply", "after reply"], 1_700_000_000_000);
+  assert.match(note, /after reply/);
+  assert.doesNotMatch(note, /before reply/);
+  assert.equal(await deliveredNote(["already seen"], 1_700_000_000_000), "");
 });

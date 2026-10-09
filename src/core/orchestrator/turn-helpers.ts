@@ -184,9 +184,12 @@ const DELIVERY_NOTE_ITEM_MAX_CHARS = 200;
 export async function recentPrincipalDeliveryNote(
   deliveries: DeliveryStore | undefined,
   threadRef: string,
+  since = 0,
 ): Promise<string> {
   if (!deliveries) return "";
-  const recent = await deliveries.listByRecipientThread(threadRef, { limit: 5 });
+  const recent = (await deliveries.listByRecipientThread(threadRef, { limit: 5 })).filter(
+    (d) => (d.deliveredAt ?? d.createdAt) > since,
+  );
   if (!recent.length) return "";
   const lines = recent.map((d) => {
     const from = d.destination.onBehalfOf ? ` from ${d.destination.onBehalfOf}` : "";
@@ -198,11 +201,7 @@ export async function recentPrincipalDeliveryNote(
         : flattened;
     return `- ${new Date(d.deliveredAt ?? d.createdAt).toISOString()}${trigger}${from}: ${text}`;
   });
-  return [
-    "Recent agent-initiated deliveries to this conversation:",
-    ...lines,
-    "These are delivery events, not prior assistant turns. Use them as context if the user replies about them.",
-  ].join("\n");
+  return ["Delivered here since the user's last message (delivery events, not your turns):", ...lines].join("\n");
 }
 
 function principalAssertion(p: Principal): ActorAssertion {

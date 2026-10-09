@@ -424,7 +424,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
     }),
   );
   assert.match(dmPrompt.reply ?? "", /### channel:C1[\s\S]*ROOM_ONLY_MEMORY/);
-  assert.match(dmPrompt.reply ?? "", /included, authorized memories/);
+  assert.match(dmPrompt.reply ?? "", /use these authorized memories freely/);
   assert.doesNotMatch(dmPrompt.reply ?? "", /apply it only if that tag matches here/);
 
   member = false;
@@ -1141,7 +1141,7 @@ for (const surfaceTools of [false, true]) {
     await orchestrator.handleTurn({ ...input, text: "third" });
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
-    assert.match(seen[2]!.environment!, /withdrawn[\s\S]*BETA_MARKER/);
+    assert.match(seen[2]!.environment!, /personal:U1: 1 earlier fact was consolidated or removed/);
     const entries = await sessions.getEntries(first.sessionId!);
     const users = entries.filter((entry) => entry.type === "user");
     assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);

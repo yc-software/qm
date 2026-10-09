@@ -17,7 +17,7 @@ const entry = (body: string, seq = 1, anchorSeq?: number): SessionEntry => ({
 
 test("first automatic recall is complete; repeated unchanged recall is empty after reload", () => {
   const body = notebook("- ALPHA\n- BETA");
-  assert.equal(memoryRecallDelta(body, []).text, body);
+  assert.equal(memoryRecallDelta(body, []).text, "### personal:alice\n# Memory\n- ALPHA\n- BETA");
   const persisted = JSON.parse(JSON.stringify([entry(body)])) as SessionEntry[];
   assert.equal(memoryRecallDelta(body, persisted).text, "");
 });
@@ -26,7 +26,8 @@ test("changed notes emit additions and withdrawals with scope provenance, omitti
   const delta = memoryRecallDelta(notebook("- ALPHA\n- GAMMA"), [entry(notebook("- ALPHA\n- BETA"))]);
   assert.doesNotMatch(delta.text, /ALPHA/);
   assert.match(delta.text, /New or updated memory facts:[\s\S]*personal:alice[\s\S]*GAMMA/);
-  assert.match(delta.text, /withdrawn[\s\S]*BETA/);
+  assert.match(delta.text, /personal:alice: 1 earlier fact was consolidated or removed/);
+  assert.doesNotMatch(delta.text, /BETA/);
   assert.equal(delta.record.anchorSeq, 1);
 });
 
@@ -49,13 +50,16 @@ test("multiline facts remain intact and headings with unchanged content add noth
 test("compacting away the recall anchor restores a current baseline", () => {
   const body = notebook("- ALPHA\n- BETA");
   const history = [entry(body, 8, 1)];
-  assert.equal(memoryRecallDelta(body, history).text, body);
+  assert.match(memoryRecallDelta(body, history).text, /ALPHA\n- BETA/);
   assert.equal(memoryRecallDelta(body, history).record.anchorSeq, undefined);
 });
 
 test("all removed facts are withdrawn and repeated empty memory adds nothing", () => {
   const before = notebook("- OLD");
-  assert.match(memoryRecallDelta("", [entry(before)], ["personal:alice"]).text, /withdrawn[\s\S]*OLD/);
+  assert.equal(
+    memoryRecallDelta("", [entry(before)], ["personal:alice"]).text,
+    "personal:alice: 1 earlier fact was consolidated or removed; rely only on the current list.",
+  );
   assert.equal(memoryRecallDelta("", [entry(before), entry("", 3, 1)]).text, "");
 });
 
@@ -64,6 +68,16 @@ test("withdrawals never quote facts from a revoked or disabled memory scope", ()
   const result = memoryRecallDelta("", [entry(body)], []);
   assert.doesNotMatch(result.text, /PRIVATE_FACT|personal:alice/);
   assert.match(result.text, /no longer included/);
+});
+
+test("each scope and heading is rendered once and bookkeeping markers are never facts", () => {
+  const body = `### personal:alice\n### personal:alice\n## Work\n- ONE\n\n- TWO\n<!-- consolidated: 2026-10-01 -->\n<!-- captures-since-promote: 4 -->`;
+  assert.equal(memoryRecallDelta(body, []).text, "### personal:alice\n## Work\n- ONE\n- TWO");
+  const delta = memoryRecallDelta(body.replace("- TWO", "- THREE\n- FOUR"), [entry(body)]);
+  assert.equal(
+    delta.text,
+    "New or updated memory facts:\n\n### personal:alice\n## Work\n- THREE\n- FOUR\n\npersonal:alice: 1 earlier fact was consolidated or removed; rely only on the current list.",
+  );
 });
 
 test("recall checkpoint metadata never leaks into attachment-only compaction input", () => {

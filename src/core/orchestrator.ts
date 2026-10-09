@@ -112,13 +112,7 @@ import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { collectBlob, createMemoryBlobTransferStore } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
-import {
-  resolveOnboardingStatus,
-  onboardingSkillVisible,
-  isIdeasConversation,
-  PROACTIVE_OPENER_PROMPT,
-  renderPendingOnboardingPrompt,
-} from "../onboarding/onboarding.ts";
+import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { filterHistoryForAudience, principalEntitledToScope } from "../resolution/context-filter.ts";
@@ -1348,16 +1342,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (conversation.kind === "dm") memoryContext = "a direct message";
       else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
       else if (conversation.kind === "group") memoryContext = "a group conversation";
-      const memoryHeading = `\n\n## What you remember\nYou're in ${memoryContext}. Scope headings and \`(said in …)\` tags identify provenance. You may use facts from these included, authorized memories to answer this request; do not ask for them to be shared again merely because they came from another scope. Context-specific instructions and preferences still apply only to their source context unless the user says otherwise.\n\n`;
+      const memoryHeading = `\n\n## What you remember\nYou're in ${memoryContext}; use these authorized memories freely, but preferences tagged with another scope heading or \`(said in …)\` apply only there.\n\n`;
 
-      let onboardingBlock = isIdeasConversation(input)
+      const onboardingBlock = isIdeasConversation(input)
         ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."
         : "";
-      if (!onboardingBlock && useMemory && conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
-        onboardingBlock = await resolveOnboardingStatus(deps.memory, deps.sessions, memoryScopeId)
-          .then(renderPendingOnboardingPrompt)
-          .catch(swallowAs("orchestrator: onboarding status", ""));
-      }
 
       let type: SessionType = "channel";
       if (conversation.kind === "dm") type = "dm";
@@ -3255,7 +3244,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           MAX_DOCUMENT_BYTES -
           documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
         let remainingDocumentCount = 10 - documentInputs.documents.length;
-        const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef);
+        const principalDelivered = await recentPrincipalDeliveryNote(
+          deps.deliveries,
+          session.threadRef,
+          visibleHistory.findLast((e) => e.type === "user" && !isOverheardEntry(e))?.createdAt,
+        );
         const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote =
           inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentsUnscreened
