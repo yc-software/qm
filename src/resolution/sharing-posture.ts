@@ -27,12 +27,8 @@ export function renderSharingPosturePrompt(actor: Principal, sourceScopes: reado
 }
 
 export const ASK_AGENT_PROMPT =
-  "In this Slack channel you cannot use another person's private setup (their logins, keys, personal computer or files). " +
-  'When a task needs it, ask that person\'s personal agent: POST /v1/ask-agent with {person: "U123", task}, using their Slack id from the People here line. ' +
-  "Say exactly what to try and what result is safe to share back here; never ask for secrets. " +
-  "They get a DM to approve, their agent runs only if they approve, and the result posts back in this thread. " +
-  "Tell people you've asked only after the call returns ok; if it fails, say what failed. " +
-  "Another agent in the channel is a colleague: @mention it instead.";
+  "For another person's private logins, keys or files, POST /v1/ask-agent {person: their Slack id, task}; they approve by DM. " +
+  "Say you've asked only after it returns ok.";
 
 interface AskAgentConversation {
   surface?: string | undefined;

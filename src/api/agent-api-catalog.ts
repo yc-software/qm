@@ -470,7 +470,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/ask-agent",
         summary:
-          'ask a person in this Slack channel to let their personal agent do a task that needs their private setup — body {person:"U123", task}; they get a DM to approve and the result posts back in this thread. ok:true means the request was sent, not that it ran. Refused in Open conversations, where you use the requester\'s own access directly',
+          'ask a person in this Slack channel to let their personal agent do a task that needs their private setup — body {person:"U123", task}; say what to try and what is safe to share back, never ask for secrets; they get a DM to approve and the result posts back in this thread. ok:true means the request was sent, not that it ran. Refused in Open conversations, where you use the requester\'s own access directly',
       },
     ],
   },
