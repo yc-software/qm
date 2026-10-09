@@ -1773,7 +1773,7 @@ export function createChatSurface(
           >
             ${subagentChip(mail.title, mail.sessionId)}
             <span class="subagent-mail-note">${SUBAGENT_MAIL_NOTES[mail.kind] ?? mail.kind.replace(/_/g, " ")}</span>
-            ${mail.kind === "update" ? html`<div class="subagent-update-text" dir="auto">${messageText(message)}</div>` : nothing}
+            ${mail.kind === "update" ? html`<div class="subagent-update-text" dir="auto">${markdown(messageText(message))}</div>` : nothing}
           </article>
         `;
       }
@@ -2607,7 +2607,9 @@ export function createChatSurface(
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
         <span class="subagent-row-title" dir="auto">${title}</span>
-        <span class="subagent-row-meta">${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}${lastUpdateLabel(row, now)}</span>
+        <span class="subagent-row-meta"
+          >${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}${lastUpdateLabel(row, now)}</span
+        >
       </button>
       ${
         row.state === "failed"

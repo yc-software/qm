@@ -1866,7 +1866,6 @@ button.subagent-chip:hover {
 }
 .subagent-update-text {
   flex-basis: 100%;
-  white-space: pre-wrap;
   font-size: var(--font-13);
   color: var(--foreground);
   padding-left: 8px;
