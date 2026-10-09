@@ -3,8 +3,14 @@ import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue, fetchWithRetry, sleep } from "../util/async.ts";
-import { withRequestId, swallowAs, errMessage } from "../util/errors.ts";
+import { swallowAs, errMessage } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
+import {
+  createAgent37Client,
+  createAgent37FileWriter,
+  AGENT37_GONE_STATES,
+  type Agent37ExecResponse,
+} from "./agent37-client.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
@@ -38,23 +44,15 @@ const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const INLINE_LIMIT = 128 * 1024;
 const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 const READ_CHUNK = 256 * 1024;
-const WRITE_CHUNK_B64 = 64 * 1024;
 const MISSING_RC = 44;
 const EXEC_SYNC_MAX_SEC = 240;
 const EXEC_POLL_MS = 2_000;
 const EXIT_GRACE_MS = 60_000;
 const CREATE_TIMEOUT_MS = 330_000;
-const START_TIMEOUT_MS = 830_000;
-const READY_TIMEOUT_MS = 300_000;
-const READY_POLL_MS = 2_000;
-const DEFAULT_AGENT37_BASE_URL = "https://api.agent37.com";
 const DEFAULT_TEMPLATE = "agent37-codex";
 const DEFAULT_CPUS = 2;
 const DEFAULT_MEMORY_GB = 4;
 const DEFAULT_DISK_GB = 8;
-const STARTABLE_STATES = new Set(["stopped", "sleeping"]);
-const GONE_STATES = new Set(["deleting", "deleted"]);
-const DEAD_STATES = new Set(["failed", ...GONE_STATES]);
 const REFUSAL_CODES = new Set([
   "insufficient_balance",
   "instance_limit_reached",
@@ -77,29 +75,10 @@ function refusalMessage(body: string): string | null {
   return code && message && REFUSAL_CODES.has(code) ? message : null;
 }
 
-async function apiFailure(action: string, res: Response): Promise<{ detail: string; error: Error }> {
-  const body = await res.text().catch(() => "");
-  const detail = withRequestId(`http ${res.status} ${body.slice(0, 200)}`, res.headers);
-  const refused = refusalMessage(body);
-  return {
-    detail,
-    error: refused
-      ? new NonRetryableTurnError(`Agent37 refused this agent computer: ${refused}`)
-      : new Error(`agent37 ${action}: ${detail}`),
-  };
-}
-
 interface InstanceInfo {
   id: string;
   name?: string | null;
   status: string;
-}
-
-interface InstanceExecResponse {
-  exit_code: number;
-  stdout: string;
-  stderr: string;
-  truncated: boolean;
 }
 
 export interface Agent37SandboxOptions {
@@ -125,8 +104,6 @@ export interface Agent37SandboxOptions {
 
 export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37SandboxOptions = {}): Sandbox {
   if (!opts.apiKey && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=agent37 requires AGENT37_API_KEY");
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const baseUrl = (opts.baseUrl ?? DEFAULT_AGENT37_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
   const template = opts.template ?? DEFAULT_TEMPLATE;
   const resources = {
@@ -144,61 +121,18 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
-  function send(
-    method: string,
-    path: string,
-    body?: unknown,
-    timeoutMs = 60_000,
-    signal?: AbortSignal,
-  ): Promise<Response> {
-    return fetchImpl(`${baseUrl}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${opts.apiKey ?? ""}`,
-        ...(body !== undefined ? { "content-type": "application/json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: signal ?? AbortSignal.timeout(timeoutMs),
-    });
-  }
-
-  function api(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
-    const operation = (signal?: AbortSignal) => send(method, path, body, timeoutMs, signal);
-    return method === "GET" || method === "DELETE"
-      ? fetchWithRetry(operation, "idempotent", { timeoutMs })
-      : operation();
-  }
-
-  async function apiJson<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
-    const res = await api(method, path, body, timeoutMs);
-    if (!res.ok) {
-      throw (await apiFailure(`${method} ${path}`, res)).error;
-    }
-    return (await res.json()) as T;
-  }
+  const { send, api, apiJson, apiFailure, readExecResponse, ensureRunning } = createAgent37Client({
+    ...opts,
+    refusalError(body) {
+      const refused = refusalMessage(body);
+      return refused ? new NonRetryableTurnError(`Agent37 refused this agent computer: ${refused}`) : null;
+    },
+  });
+  const writeAbsBytes = createAgent37FileWriter(postExec);
 
   async function findInstance(name: string): Promise<InstanceInfo | null> {
     const { data } = await apiJson<{ data: InstanceInfo[] }>("GET", "/v1/instances");
-    return data.find((i) => i.name === name && !GONE_STATES.has(i.status)) ?? null;
-  }
-
-  async function ensureRunning(id: string): Promise<void> {
-    const deadline = Date.now() + READY_TIMEOUT_MS;
-    for (;;) {
-      const info = await apiJson<InstanceInfo>("GET", `/v1/instances/${encodeURIComponent(id)}`);
-      if (info.status === "running") return;
-      if (DEAD_STATES.has(info.status)) throw new Error(`agent37 instance ${id}: ${info.status}`);
-      if (Date.now() > deadline)
-        throw new Error(`agent37 instance ${id}: not running after ${READY_TIMEOUT_MS}ms (status=${info.status})`);
-      if (STARTABLE_STATES.has(info.status)) {
-        const res = await api("POST", `/v1/instances/${encodeURIComponent(id)}/start`, undefined, START_TIMEOUT_MS);
-        if (res.ok) continue;
-        if (res.status !== 400 && res.status !== 409) {
-          throw (await apiFailure(`start ${id}`, res)).error;
-        }
-      }
-      await sleep(READY_POLL_MS);
-    }
+    return data.find((i) => i.name === name && !AGENT37_GONE_STATES.has(i.status)) ?? null;
   }
 
   async function createInstance(name: string): Promise<InstanceInfo> {
@@ -236,7 +170,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     idByName.delete(name);
   }
 
-  async function postExec(name: string, script: string, timeoutSec: number): Promise<InstanceExecResponse> {
+  async function postExec(name: string, script: string, timeoutSec: number): Promise<Agent37ExecResponse> {
     const id = await instanceIdFor(name);
     const body = { command: script };
     const timeoutMs = timeoutSec * 1000 + 2 * EXIT_GRACE_MS;
@@ -253,15 +187,8 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       const retryId = await instanceIdFor(name);
       await ensureRunning(retryId);
       res = await send("POST", `/v1/instances/${encodeURIComponent(retryId)}/exec`, body, timeoutMs);
-      if (!res.ok) {
-        throw (await apiFailure(`exec ${name}`, res)).error;
-      }
     }
-    const parsed = (await res.json()) as InstanceExecResponse;
-    if (parsed.truncated) {
-      throw new Error(`agent37 exec ${name}: output truncated by the API: chunk the read instead`);
-    }
-    return parsed;
+    return readExecResponse(name, res);
   }
 
   async function readSpooled(name: string, absPath: string, declared: number): Promise<Buffer> {
@@ -280,7 +207,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     const envelope =
       `__o=$(wc -c < ${out}); __e=$(wc -c < ${err}); printf '%s %s %s\\n' "$__rc" "$__o" "$__e"; ` +
       `if [ "$__o" -le ${INLINE_LIMIT} ] && [ "$__e" -le ${INLINE_LIMIT} ]; then base64 < ${out}; base64 < ${err}; rm -f ${out} ${err} ${rcf}; fi`;
-    let r: InstanceExecResponse;
+    let r: Agent37ExecResponse;
     if (timeoutSec <= EXEC_SYNC_MAX_SEC) {
       r = await postExec(
         name,
@@ -345,34 +272,6 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       }
     }
     return { stdout: outBuf.toString("utf8"), stderr: errBuf.toString("utf8"), code, timedOut: code === 124 };
-  }
-
-  async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
-    const part = `${absPath}.${randomUUID().slice(0, 8)}.part`;
-    const b64 = Buffer.from(data).toString("base64");
-    const mk = await postExec(name, `mkdir -p "$(dirname ${shq(absPath)})" && : > ${shq(part)}`, 60);
-    if (mk.exit_code !== 0) throw new Error(`agent37 write ${absPath}: mkdir failed (${mk.exit_code})`);
-    try {
-      for (let i = 0; i < b64.length; i += WRITE_CHUNK_B64) {
-        const chunk = b64.slice(i, i + WRITE_CHUNK_B64);
-        const r = await postExec(name, `printf %s ${shq(chunk)} | base64 -d >> ${shq(part)}`, 120);
-        if (r.exit_code !== 0) {
-          throw new Error(`agent37 write ${absPath}: chunk ${i / WRITE_CHUNK_B64} failed (${r.exit_code})`);
-        }
-      }
-      const fin = await postExec(
-        name,
-        `sz=$(wc -c < ${shq(part)}) && mv -f ${shq(part)} ${shq(absPath)} && printf %s "$sz"`,
-        60,
-      );
-      const written = Number.parseInt(fin.stdout.trim(), 10);
-      if (fin.exit_code !== 0 || written !== data.length) {
-        throw new Error(`agent37 write ${absPath} failed (rc=${fin.exit_code}, ${written}/${data.length} bytes)`);
-      }
-    } catch (e) {
-      await postExec(name, `rm -f ${shq(part)}`, 60).catch(swallowAs("agent37-sandbox: write part cleanup", undefined));
-      throw e;
-    }
   }
 
   async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {

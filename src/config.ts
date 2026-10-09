@@ -76,7 +76,7 @@ export interface Config {
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "superserve";
   sandboxSecondaryBackend?:
     "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "superserve";
-  deployProvider: "docker" | "aws" | "fly" | "porter";
+  deployProvider: "docker" | "aws" | "fly" | "porter" | "agent37";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
@@ -208,6 +208,7 @@ export interface Config {
   modalSandbox: ModalSandboxEnv;
   porterSandbox: PorterSandboxEnv;
   porterDeploy: PorterDeployEnv;
+  agent37Deploy: Agent37DeployEnv;
   awsDeploy: AwsDeployEnv;
   deployAppsDomain?: string;
   flyDeploy: FlyDeployEnv;
@@ -654,6 +655,49 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
+  };
+}
+
+interface Agent37DeployEnv {
+  apiKey?: string;
+  baseUrl?: string;
+  template?: string;
+  runnerImage?: string;
+  namePrefix?: string;
+  cpus?: number;
+  memoryGb?: number;
+  diskGb?: number;
+  appPort?: number;
+  autoSleep?: boolean;
+}
+
+function agent37DeployEnv(env: NodeJS.ProcessEnv): Agent37DeployEnv {
+  const num = (name: string, raw: string | undefined) => numEnvStrict(name, raw);
+  return {
+    ...(env.AGENT37_DEPLOY_API_KEY?.trim() || env.AGENT37_API_KEY?.trim()
+      ? { apiKey: env.AGENT37_DEPLOY_API_KEY?.trim() || env.AGENT37_API_KEY?.trim() }
+      : {}),
+    ...(env.AGENT37_DEPLOY_API_BASE_URL?.trim() || env.AGENT37_API_BASE_URL?.trim()
+      ? { baseUrl: env.AGENT37_DEPLOY_API_BASE_URL?.trim() || env.AGENT37_API_BASE_URL?.trim() }
+      : {}),
+    ...(env.AGENT37_DEPLOY_TEMPLATE ? { template: env.AGENT37_DEPLOY_TEMPLATE } : {}),
+    ...(env.AGENT37_DEPLOY_RUNNER_IMAGE ? { runnerImage: env.AGENT37_DEPLOY_RUNNER_IMAGE } : {}),
+    ...(env.AGENT37_DEPLOY_NAME_PREFIX?.trim() || env.AGENT37_NAME_PREFIX?.trim()
+      ? { namePrefix: env.AGENT37_DEPLOY_NAME_PREFIX?.trim() || env.AGENT37_NAME_PREFIX?.trim() }
+      : {}),
+    ...(num("AGENT37_DEPLOY_CPUS", env.AGENT37_DEPLOY_CPUS) !== undefined
+      ? { cpus: num("AGENT37_DEPLOY_CPUS", env.AGENT37_DEPLOY_CPUS) }
+      : {}),
+    ...(num("AGENT37_DEPLOY_MEMORY_GB", env.AGENT37_DEPLOY_MEMORY_GB) !== undefined
+      ? { memoryGb: num("AGENT37_DEPLOY_MEMORY_GB", env.AGENT37_DEPLOY_MEMORY_GB) }
+      : {}),
+    ...(num("AGENT37_DEPLOY_DISK_GB", env.AGENT37_DEPLOY_DISK_GB) !== undefined
+      ? { diskGb: num("AGENT37_DEPLOY_DISK_GB", env.AGENT37_DEPLOY_DISK_GB) }
+      : {}),
+    ...(num("AGENT37_DEPLOY_APP_PORT", env.AGENT37_DEPLOY_APP_PORT) !== undefined
+      ? { appPort: num("AGENT37_DEPLOY_APP_PORT", env.AGENT37_DEPLOY_APP_PORT) }
+      : {}),
+    ...(env.AGENT37_DEPLOY_ALWAYS_ON === "1" || env.AGENT37_DEPLOY_ALWAYS_ON === "true" ? { autoSleep: false } : {}),
   };
 }
 
@@ -1368,10 +1412,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     deployProvider !== "aws" &&
     deployProvider !== "docker" &&
     deployProvider !== "fly" &&
-    deployProvider !== "porter"
+    deployProvider !== "porter" &&
+    deployProvider !== "agent37"
   ) {
     throw new Error(
-      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, fly, or porter)`,
+      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected agent37, aws, docker, fly, or porter)`,
     );
   }
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
@@ -1661,6 +1706,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     superserveSandbox: superserveSandboxEnv(env),
     porterSandbox: porterSandboxEnv(env),
     porterDeploy: porterDeployEnv(env),
+    agent37Deploy: agent37DeployEnv(env),
     e2bSandbox: e2bSandboxEnv(env),
     modalSandbox: modalSandboxEnv(env),
     awsDeploy: {
