@@ -202,14 +202,41 @@ export async function verifyGoalCompletion(
       `<objective>\n${escapeTags(objective)}\n</objective>\n<evidence>\n${escapeTags(evidence)}\n</evidence>`,
       signal,
     )) ?? "";
-  const json = reply.slice(reply.indexOf("{"), reply.lastIndexOf("}") + 1);
-  try {
-    const parsed = JSON.parse(json) as { complete?: unknown; reasons?: unknown };
-    const reasons = typeof parsed.reasons === "string" && parsed.reasons.trim() ? parsed.reasons.trim() : "";
-    return { complete: parsed.complete === true, reasons: reasons || "no reasons given" };
-  } catch {
-    return { complete: false, reasons: "the verifier's reply was not parseable; request completion again" };
+  const verdict = lastVerdictObject(reply);
+  if (!verdict) return { complete: false, reasons: "the verifier's reply was not parseable; request completion again" };
+  const reasons = typeof verdict.reasons === "string" && verdict.reasons.trim() ? verdict.reasons.trim() : "";
+  return { complete: verdict.complete === true, reasons: reasons || "no reasons given" };
+}
+
+function lastVerdictObject(reply: string): { complete: boolean; reasons?: unknown } | null {
+  let found: { complete: boolean; reasons?: unknown } | null = null;
+  for (let start = reply.indexOf("{"); start !== -1; start = reply.indexOf("{", start + 1)) {
+    const end = balancedEnd(reply, start);
+    if (end === -1) continue;
+    try {
+      const parsed: unknown = JSON.parse(reply.slice(start, end + 1));
+      if (parsed && typeof parsed === "object" && typeof (parsed as { complete?: unknown }).complete === "boolean")
+        found = parsed as { complete: boolean; reasons?: unknown };
+    } catch {
+      continue;
+    }
   }
+  return found;
+}
+
+function balancedEnd(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i;
+  }
+  return -1;
 }
 
 export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
