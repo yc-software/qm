@@ -114,6 +114,7 @@ export interface Session {
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;
+  workingSince?: number;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
   backgroundJobs?: number;
@@ -229,7 +230,10 @@ export interface Destination {
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
   debugFooter?: string;
-  webTranscript?: { kind: "reply" } | { kind: "turn_failure"; notBefore: number; runId?: string };
+  webTranscript?:
+    | { kind: "reply" }
+    | { kind: "turn_failure"; notBefore: number; runId?: string }
+    | { kind: "subagent_update"; sessionId: string; title: string };
 }
 
 export interface CandidateDestination extends Destination {

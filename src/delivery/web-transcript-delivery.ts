@@ -60,6 +60,7 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
       const scopeLabel = session.scopeId;
       const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
       const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
+      const update = note?.kind === "subagent_update" ? note : undefined;
       const entry = failure
         ? {
             type: "system" as const,
@@ -70,15 +71,20 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
               ...(failure.runId ? { runId: failure.runId } : {}),
             },
           }
-        : {
-            type: "assistant" as const,
-            payload: { text: d.text, deliveryKey: d.idempotencyKey, ...(via ? { via } : {}) },
-          };
+        : update
+          ? {
+              type: "system" as const,
+              payload: { ...update, text: d.text, deliveryKey: d.idempotencyKey },
+            }
+          : {
+              type: "assistant" as const,
+              payload: { text: d.text, deliveryKey: d.idempotencyKey, ...(via ? { via } : {}) },
+            };
       await appendEntryOutsideTurn(
         sessions,
         lease,
         { ...entry, scopeLabel },
-        failure
+        failure || update
           ? undefined
           : (appended) =>
               messageTag(

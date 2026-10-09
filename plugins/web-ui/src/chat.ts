@@ -1773,6 +1773,7 @@ export function createChatSurface(
           >
             ${subagentChip(mail.title, mail.sessionId)}
             <span class="subagent-mail-note">${SUBAGENT_MAIL_NOTES[mail.kind] ?? mail.kind.replace(/_/g, " ")}</span>
+            ${mail.kind === "update" ? html`<div class="subagent-update-text" dir="auto">${messageText(message)}</div>` : nothing}
           </article>
         `;
       }
@@ -2573,6 +2574,19 @@ export function createChatSurface(
     failed: "failed",
   };
 
+  function lastUpdateLabel(row: SubagentRow, now: number): string {
+    if (row.state !== "working") return "";
+    const at = Math.max(
+      0,
+      ...(chatState.agent?.state.messages ?? []).map((m) => {
+        const mail = (m as { subagentMail?: SubagentMailRef }).subagentMail;
+        const ts = (m as { timestamp?: number }).timestamp ?? 0;
+        return mail?.kind === "update" && mail.sessionId === row.session.id && ts >= row.startedAt ? ts : 0;
+      }),
+    );
+    return at ? ` · last update ${goalElapsedLabel(at, now)} ago` : " · no updates yet";
+  }
+
   function subagentRowTpl(row: SubagentRow): TemplateResult {
     const now = Date.now();
     const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
@@ -2593,7 +2607,7 @@ export function createChatSurface(
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
         <span class="subagent-row-title" dir="auto">${title}</span>
-        <span class="subagent-row-meta">${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}</span>
+        <span class="subagent-row-meta">${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}${lastUpdateLabel(row, now)}</span>
       </button>
       ${
         row.state === "failed"
@@ -2991,6 +3005,7 @@ export function createChatSurface(
   }
 
   const SUBAGENT_MAIL_NOTES: Record<string, string> = {
+    update: "sent an update",
     final_answer: "finished",
     no_reply: "finished without a reply",
     awaiting_input: "needs an approval",

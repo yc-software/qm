@@ -56,7 +56,7 @@ export function subagentRows(list: readonly CoreSession[], rootId: string): Suba
       session,
       state,
       depth,
-      startedAt: session.createdAt,
+      startedAt: (live && session.workingSince) || session.createdAt,
       endedAt: live ? null : (session.lastActivityAt ?? session.createdAt),
     };
   });

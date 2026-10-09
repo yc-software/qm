@@ -481,7 +481,10 @@ export function createSessionMethods(
         return sessions;
       return sessions.map((s) => ({
         ...s,
-        ...(workingThreadRefs.has(s.threadRef) ? { working: true } : {}),
+        ...(workingThreadRefs.has(s.threadRef) ? {
+              working: true,
+              workingSince: latestRuns.get(s.threadRef)?.startedAt ?? latestRuns.get(s.threadRef)?.createdAt,
+            } : {}),
         ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
         ...(failedChildren.has(s.id) ? { lastTurnFailed: true } : {}),
         ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),

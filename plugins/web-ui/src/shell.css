@@ -1859,9 +1859,18 @@ button.subagent-chip:hover {
 
 .subagent-mail-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 8px 0;
+}
+.subagent-update-text {
+  flex-basis: 100%;
+  white-space: pre-wrap;
+  font-size: var(--font-13);
+  color: var(--foreground);
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
 }
 .subagent-mail-note {
   font-size: var(--font-13);
