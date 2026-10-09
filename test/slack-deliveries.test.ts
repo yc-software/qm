@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
+import { installPrincipalResolver } from "../src/directory/person.ts";
 
 const mixedFiles = [
   { name: "first.png", mimetype: "image/png", sizeBytes: 2, blobId: "B1" },
@@ -91,7 +92,12 @@ async function deliver(
     clientForIdentity: () => client,
   });
 
-  await poller.pollDeliveries(client);
+  installPrincipalResolver({ identitiesOf: () => [{ provider: "slack", externalId: "T1:U_TARGET" }] });
+  try {
+    await poller.pollDeliveries(client);
+  } finally {
+    installPrincipalResolver(null);
+  }
   return { acknowledgements, uploads, posts, marks, probes, conversationsOpened };
 }
 

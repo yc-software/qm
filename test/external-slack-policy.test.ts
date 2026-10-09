@@ -130,7 +130,10 @@ test("external account directory lookups admit only company workspace DMs", asyn
       externalAccess: policy,
       directory,
       ids,
-      core: {},
+      core: {
+        personalScopeOf: async (a: { externalId: string; provider?: string }) =>
+          `personal:${a.provider}:${a.externalId}`,
+      },
       mirror: { mirrorMessageEvent: async () => {} },
       flow: {
         callCore: async (turn: Omit<TurnRequest, "surface">) => {
@@ -153,7 +156,8 @@ test("external account directory lookups admit only company workspace DMs", asyn
       client,
     );
     assert.equal(turns.length, trusted ? 1 : 0);
-    assert.deepEqual(personalScopes, trusted ? ["personal:employee@company.example"] : []);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(personalScopes, trusted ? ["personal:email:employee@company.example"] : []);
     if (trusted) {
       assert.equal(turns[0]?.slackSource?.externalPolicyNamespace, externalSlackNamespace("TPARTNER", policy));
       assert.equal(turns[0]?.externalSlack, undefined);

@@ -93,11 +93,10 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
-  const slackUser = slackUserOf(actor.id);
+  const human = input.origin?.kind === "human" && currentDestination.type === "slack" && currentDestination.target;
+  const slackUser = human ? slackUserOf(actor.id) : undefined;
   const rateLimitRecipient =
-    input.origin?.kind === "human" && currentDestination.type === "slack" && currentDestination.target && slackUser
-      ? { rateLimitRecipient: { target: currentDestination.target, user: slackUser } }
-      : {};
+    human && slackUser ? { rateLimitRecipient: { target: currentDestination.target, user: slackUser } } : {};
   let editRefConsumed = false;
   const resolveDestination = async (
     target?: {

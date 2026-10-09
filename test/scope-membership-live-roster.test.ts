@@ -11,7 +11,7 @@ const stored = async (principalId: string, scope: ScopeId) =>
 test("a verified live turn proves the speaker's membership in its own scope while the store lags", async () => {
   const check = withLiveTurnMembership(stored, { actorId: "josh@example.com", scopeId: room, verified: true });
   assert.equal(await check("josh@example.com", room), true);
-  assert.equal(await check("JOSH@example.com", room), true);
+  assert.equal(await check("JOSH@example.com", room), false, "principal ids are exact");
   assert.equal(await check("regan@example.com", room), false);
 });
 

@@ -76,7 +76,7 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const identity = await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, identitySecret);
+  const identity = await mintSignedPayload({ p: u1, exp: Date.now() + 60_000 }, identitySecret);
   const post = (path: string, body: unknown) =>
     fetch(base + path, {
       method: "POST",

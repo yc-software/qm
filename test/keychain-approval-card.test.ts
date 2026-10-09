@@ -202,6 +202,7 @@ test("Slack action records the authenticated clicker before displaying success",
       directory: {
         classifyActor: async (_client, id) => ({
           externalId: id === "UOWNER" ? "alice@example.com" : "other@example.com",
+          provider: "email",
         }),
       } as Directory,
     },
