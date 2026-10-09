@@ -51,11 +51,11 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   fifty importers is not a small change. The reviewer, not the author, has the last word on
   depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
   rather than staying in its lane. Resolve what they find before merging.
-- **Run independent Wall of shame reviews in parallel for every PR.** Dispatch a
-  separate fresh-context subagent or independent reviewer for each relevant lens in the
-  current [Wall of shame](./docs/SPEC.md#wall-of-shame), including newly added lenses.
-  `node scripts/wall-of-shame-check.ts --triage` asks a small model which lenses the diff
-  can touch; with no `ANTHROPIC_API_KEY`, every lens is relevant. Only
+- **Run independent Wall of shame reviews in parallel for every PR.** First triage:
+  give one fast, cheap model (Haiku-class) the diff and every lens in the current
+  [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
+  not, keeping any lens it is unsure about. Then dispatch a separate fresh-context
+  subagent or independent reviewer for each relevant lens. Only
   Honorable mentions may share one combined reviewer. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
@@ -72,7 +72,9 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   These reviews run alongside PR work; before merging, every lens must have accepted
   and all requested changes must be resolved. They supplement the correctness,
   security, and regression review above. The `Wall of shame review` CI check fails
-  until the description's report covers every relevant lens with an accepting verdict for the PR head.
+  until the description's report covers every lens for the PR head: relevant lenses with
+  an Accept verdict, and the rest as `Not relevant` with the triage model as reviewer and
+  its one-line reason as the assessment.
 - **Disclose config-matrix and database-schema changes in the PR description.** Name
   added, removed, or changed settings, flags, modes, and providers, including changes to
   defaults, precedence, and supported combinations. Name changed tables, columns,
