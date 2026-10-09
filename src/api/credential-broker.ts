@@ -94,12 +94,9 @@ export function gitCredentialAuthHeader(
   rec: Pick<DecryptedServiceCredential, "secret" | "injection">,
   host: string,
 ): [string, string] {
-  if (rec.injection?.scheme !== undefined || !/^(www\.)?github\.com$|\.ghe\.com$/i.test(host))
-    return brokerCredentialAuthHeader(rec);
-  return [
-    rec.injection?.header?.trim() || "Authorization",
-    `Basic ${Buffer.from(`x-access-token:${rec.secret}`).toString("base64")}`,
-  ];
+  const [header, value] = brokerCredentialAuthHeader(rec);
+  if (rec.injection?.scheme !== undefined || !/^(www\.)?github\.com$/i.test(host)) return [header, value];
+  return [header, `Basic ${Buffer.from(`x-access-token:${rec.secret}`).toString("base64")}`];
 }
 
 type CredentialGrant =

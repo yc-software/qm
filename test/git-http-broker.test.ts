@@ -112,31 +112,6 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
   });
 });
 
-test("git HTTP broker sends a GitHub token as a Basic login, since GitHub's Git endpoint rejects Bearer (#1235)", async () => {
-  let auth: string | undefined;
-  const deps: ServerDeps = {
-    control: {} as ServerDeps["control"],
-    serviceCreds: {
-      getServiceCredentialSecret: async () => ({
-        slug: "gitlab",
-        name: "GitHub git",
-        secret: "ghp_pat",
-        host: "github.com",
-        allowedMethods: ["GET", "POST"],
-        enabled: true,
-      }),
-    } as unknown as ServerDeps["serviceCreds"],
-    gitHttpFetch: async (_url, init) => {
-      auth = init.headers.Authorization;
-      return { status: 200, headers: {}, body: Readable.from([]) };
-    },
-  };
-  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/info/refs?service=git-upload-pack", "GET", deps);
-  await brokerGitHttp(c);
-  await text(c.res);
-  assert.equal(auth, `Basic ${Buffer.from("x-access-token:ghp_pat").toString("base64")}`);
-});
-
 test("git HTTP broker refuses an env-delivery record like a missing credential", async () => {
   let fetched = false;
   const deps: ServerDeps = {

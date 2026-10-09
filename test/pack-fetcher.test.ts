@@ -142,32 +142,18 @@ test("resolveRef rejects an arg-smuggling ref before invoking git", async () => 
   );
 });
 
-const githubBasic = (token: string) => `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
-
-test("resolvePackAuth: a GitHub slug with no scheme sends a Basic login, since GitHub's Git endpoint rejects Bearer (#1235)", async () => {
+test("resolvePackAuth: a GitHub slug with no scheme sends a Basic login (#1235)", async () => {
   const sources = {
     serviceCredential: async (s: string) => ({ secret: "svc:" + s, host: "github.com", enabled: true }),
     connectorToken: async () => "connector",
   };
   assert.deepEqual(
     await resolvePackAuth(sources, { url: "https://github.com/o/r", authCredentialSlug: "dep", createdBy: "u1" }),
-    { header: "Authorization", value: githubBasic("svc:dep"), secret: "svc:dep" },
-  );
-});
-
-test("resolvePackAuth: an explicit slug honors the configured injection", async () => {
-  const sources = {
-    serviceCredential: async () => ({
-      secret: "pat",
-      host: "github.com",
-      enabled: true,
-      injection: { header: "Authorization", scheme: "Bearer " },
-    }),
-    connectorToken: async () => "connector",
-  };
-  assert.deepEqual(
-    await resolvePackAuth(sources, { url: "https://github.com/o/r", authCredentialSlug: "dep", createdBy: "u1" }),
-    { header: "Authorization", value: "Bearer pat", secret: "pat" },
+    {
+      header: "Authorization",
+      value: `Basic ${Buffer.from("x-access-token:svc:dep").toString("base64")}`,
+      secret: "svc:dep",
+    },
   );
 });
 
@@ -228,7 +214,7 @@ test("resolvePackAuth: a github repo with no slug reuses the registrant's connec
   };
   assert.deepEqual(await resolvePackAuth(sources, { url: "https://github.com/o/r.git", createdBy: "alice" }), {
     header: "Authorization",
-    value: githubBasic("ghtok"),
+    value: `Basic ${Buffer.from("x-access-token:ghtok").toString("base64")}`,
     secret: "ghtok",
   });
   assert.deepEqual(calls, [["api.github.com", "alice"]], "looks up the registrant's api.github.com connector token");

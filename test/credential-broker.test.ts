@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { brokerCredentialCall, type BrokerFetch } from "../src/api/credential-broker.ts";
+import { brokerCredentialCall, gitCredentialAuthHeader, type BrokerFetch } from "../src/api/credential-broker.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src/credentials/keychain.ts";
 import { createCredentialUsageSink } from "../src/admin/credential-usage-sink.ts";
@@ -473,4 +473,12 @@ test("generic credential broker cannot bypass Composio identity binding", async 
   );
   assert.equal(result.status, 403);
   assert.equal(cap.calls.length, 0);
+});
+
+test("git auth sends GitHub tokens as Basic, since GitHub's Git endpoint rejects Bearer (#1235)", () => {
+  const basic = `Basic ${Buffer.from("x-access-token:t").toString("base64")}`;
+  assert.deepEqual(gitCredentialAuthHeader({ secret: "t" }, "github.com"), ["Authorization", basic]);
+  assert.deepEqual(gitCredentialAuthHeader({ secret: "t" }, "gitlab.com"), ["Authorization", "Bearer t"]);
+  const explicit = { secret: "dTp0", injection: { scheme: "Basic " } };
+  assert.deepEqual(gitCredentialAuthHeader(explicit, "github.com"), ["Authorization", "Basic dTp0"]);
 });
