@@ -33,6 +33,7 @@ function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SE
     JSON.stringify({
       k: "session",
       sub,
+      pid: sub,
       org: "acme",
       iat: now,
       exp: now + expInSeconds,
@@ -47,16 +48,18 @@ test("portalSession: verifies, and rejects tampering, expiry, wrong kind, wrong 
   const good = mintPortalSession("alice@example.com");
   assert.deepEqual(portalSession(`portal_session=${good}`, SESSION_SECRET), {
     sub: "alice@example.com",
+    pid: "alice@example.com",
     appOnly: false,
   });
   assert.deepEqual(portalSession(`other=1; portal_session=${good}; x=2`, SESSION_SECRET), {
     sub: "alice@example.com",
+    pid: "alice@example.com",
     appOnly: false,
   });
   assert.deepEqual(portalSession(`portal_session=${good}x`, SESSION_SECRET), null, "tampered signature");
   assert.deepEqual(
     portalSession(`portal_session=junk; portal_session=${good}`, SESSION_SECRET),
-    { sub: "alice@example.com", appOnly: false },
+    { sub: "alice@example.com", pid: "alice@example.com", appOnly: false },
     "an app's junk same-named cookie cannot shadow the real session",
   );
   assert.deepEqual(portalSession(`portal_session=${good}`, "other-secret"), null, "wrong secret");

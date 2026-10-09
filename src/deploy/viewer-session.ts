@@ -4,6 +4,7 @@ export const FRAME_SESSION_COOKIE = "portal_session_x";
 
 export interface PortalViewerSession {
   sub: string;
+  pid?: string;
   appOnly: boolean;
 }
 
@@ -48,7 +49,11 @@ function verifySessionToken(token: string, secret: string, now: number): PortalV
   if (typeof claims.sub !== "string" || !claims.sub) return null;
   if (typeof claims.exp !== "number" || now >= claims.exp * 1000) return null;
   if (claims.appOnly !== undefined && typeof claims.appOnly !== "boolean") return null;
-  return { sub: claims.sub, appOnly: claims.appOnly === true };
+  return {
+    sub: claims.sub,
+    ...(typeof claims.pid === "string" && claims.pid ? { pid: claims.pid } : {}),
+    appOnly: claims.appOnly === true,
+  };
 }
 
 function readCookies(header: string | undefined, name: string): string[] {

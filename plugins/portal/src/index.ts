@@ -1536,7 +1536,7 @@ async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<v
         ),
       );
     const data = (await r.json()) as { email: string };
-    setAuthenticatedSession(res, "email", data.email);
+    if (!(await setAuthenticatedSession(res, "email", data.email))) return identityUnavailable(req, res);
     res.writeHead(303, { location: "/", "cache-control": "no-store" });
     res.end();
   } catch {
@@ -1594,7 +1594,7 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
     }
     throw error;
   }
-  setAuthenticatedSession(res, "email", claims.email);
+  if (!(await setAuthenticatedSession(res, "email", claims.email))) return identityUnavailable(req, res);
   res.writeHead(303, { location: "/admin/", "cache-control": "no-store" });
   res.end();
 }
@@ -1639,7 +1639,8 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       );
       adminCache.delete(identity.sub);
     }
-    setAuthenticatedSession(res, "oidc", identity.sub, identity.name);
+    if (!(await setAuthenticatedSession(res, "oidc", identity.sub, identity.name)))
+      return identityUnavailable(req, res);
     res.writeHead(302, {
       location: sanitizeReturnTo(identity.returnTo, PUBLIC_URL, APPS_DOMAIN),
       "cache-control": "no-store",
@@ -1654,18 +1655,21 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   }
 }
 
-function setAuthenticatedSession(
+async function setAuthenticatedSession(
   res: ServerResponse,
   prov: NonNullable<SessionClaims["prov"]>,
   sub: string,
   name = "",
   appOnly = false,
-): void {
+): Promise<boolean> {
+  const pid = await principalFor(prov, sub);
+  if (pid === null) return false;
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
     sub,
     prov,
+    pid,
     org: ORG,
     auth: now,
     iat: now,
@@ -1679,6 +1683,7 @@ function setAuthenticatedSession(
     clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
     clearCookie("portal_impersonate", "/", SECURE_COOKIES),
   ]);
+  return true;
 }
 
 function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
@@ -1759,7 +1764,8 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
 
   const subjectProvider = OIDC.issuer === "https://slack.com" ? "slack" : "oidc";
   const prov = principal.prov === "email" ? "email" : subjectProvider;
-  setAuthenticatedSession(res, prov, principal.sub, name, principal.appOnly);
+  if (!(await setAuthenticatedSession(res, prov, principal.sub, name, principal.appOnly)))
+    return identityUnavailable(req, res);
   res.writeHead(302, {
     location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),
     "cache-control": "no-store",

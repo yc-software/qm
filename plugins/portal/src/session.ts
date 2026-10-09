@@ -30,6 +30,7 @@ export interface SessionClaims {
   k: "session";
   sub: string;
   prov?: "email" | "oidc" | "slack";
+  pid?: string;
   org: string;
   name?: string;
   auth?: number;

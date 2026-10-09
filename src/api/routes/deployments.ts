@@ -1,4 +1,3 @@
-import { personKey } from "../../directory/person.ts";
 import { EXTERNAL_APP_SHARING_OFF, externalAppSharingAllowed } from "../../feature-flags.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
@@ -860,7 +859,8 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (!session && sessionSecret && embedAncestors.length) {
     session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
   }
-  const sub = session?.sub;
+  const login = session?.sub;
+  const sub = session?.pid;
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));
   if (!isPublic && (!sessionSecret || !loginUrl)) {
     sendJson(res, 503, { error: "unavailable", message: "sign-in is not configured for deployment subdomains" });
@@ -894,7 +894,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (sub && deployment) {
     if (session?.appOnly) {
       await deps.identity?.refresh();
-      const principal = personKey(sub) || undefined;
+      const principal = sub;
       if (
         externalAllowed &&
         principal !== undefined &&
@@ -1022,7 +1022,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
     });
-    res.end(notSharedHtml(viewer));
+    res.end(notSharedHtml(login ?? viewer));
     return true;
   }
   if (reach.status === "ok" && signInAttempted && ctx.method === "GET") {

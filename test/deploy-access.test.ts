@@ -96,7 +96,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     value,
     auditLog,
     decide: (id = owner, approve = true, extra: Partial<ActorAssertion> = {}) =>
-      decideDeploymentAccess(app, identity, value, { externalId: id, ...extra }, approve),
+      decideDeploymentAccess(app, identity, value, { externalId: id, provider: "email", ...extra }, approve),
   };
 }
 
@@ -222,7 +222,7 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
       },
     },
     {
-      directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id }) } as never,
+      directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id, provider: "email" }) } as never,
       core: {
         decideDeploymentAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
           decideDeploymentAccess(f.app, f.identity, value, actor, approve),
