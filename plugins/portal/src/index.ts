@@ -943,6 +943,25 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
   return session;
 }
 
+// Cookies sealed before principals carry a bare handle and no prov/pid. Resolve
+// the handle once through the identities table and re-seal, so the user stays
+// signed in.
+function legacyProvider(sub: string): NonNullable<SessionClaims["prov"]> {
+  if (/^(T[A-Z0-9]+:)?[UW][A-Z0-9]+$/.test(sub)) return "slack";
+  if (sub.includes("@") && !sub.startsWith("oidc:")) return "email";
+  return "oidc";
+}
+
+async function upgradeLegacySession(res: ServerResponse, session: SessionClaims): Promise<SessionClaims | null> {
+  const prov = legacyProvider(session.sub);
+  const sub = prov === "email" ? session.sub.toLowerCase() : session.sub;
+  const pid = await principalFor(prov, sub);
+  if (pid === null) return null;
+  const upgraded: SessionClaims = { ...session, sub, prov, pid };
+  setSession(res, sessionCookieSet(seal(upgraded, sessionKey), upgraded.sub));
+  return upgraded;
+}
+
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
   const session = openSession(
     readCookie(req.headers.cookie, "portal_session"),
@@ -1132,7 +1151,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = renewSessionCookie(req, res) ?? currentSession(req);
   const authenticatedPrincipal = session?.sub;
-  if (session && !session.anon && !session.prov) session = null;
+  if (session && !session.anon && !session.prov) {
+    session = await upgradeLegacySession(res, session);
+    if (!session) return identityUnavailable(req, res);
+  }
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const principal = await principalFor(session.prov!, session.sub);
     if (principal === null) return identityUnavailable(req, res);
