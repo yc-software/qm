@@ -1597,3 +1597,13 @@ function notePaneSession(paneId: string, sessionId: string | null, threadRef: st
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && splitState.active && dockApi?.hasMaximizedGroup()) dockApi.exitMaximizedGroup();
 });
+
+window.addEventListener("qm:cycle-tab", (e) => {
+  const step = (e as CustomEvent<unknown>).detail;
+  if (!dockApi || !canvasHost?.isConnected || (step !== 1 && step !== -1)) return;
+  const group = dockApi.groups.find((g) => g.element.contains(document.activeElement)) ?? dockApi.activeGroup;
+  const panels = group?.panels ?? [];
+  const at = group?.activePanel ? panels.indexOf(group.activePanel) : -1;
+  if (panels.length < 2 || at < 0) return;
+  activatePanel(panels[(at + step + panels.length) % panels.length]);
+});

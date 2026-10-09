@@ -151,67 +151,19 @@ test("the compact sidebar remains a shortcut target when it is an accessible mod
   }
 });
 
-function panes(app, layout) {
-  const dock = app.window.document.createElement("div");
-  dock.className = "split-dock";
-  const activated = [];
-  const groups = layout.map(({ tabs, active = 0, focused = false }, g) => {
-    const group = app.window.document.createElement("div");
-    group.className = `dv-groupview ${focused ? "dv-active-group" : "dv-inactive-group"}`;
-    group.innerHTML = '<div class="dv-tabs-and-actions-container"><div class="dv-tabs-container"></div></div>';
-    const strip = group.querySelector(".dv-tabs-container");
-    tabs.forEach((name, t) => {
-      const tab = app.window.document.createElement("div");
-      tab.className = `dv-tab${t === active ? " dv-active-tab" : ""}`;
-      tab.textContent = name;
-      tab.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0) return;
-        activated.push(`${g}:${name}`);
-        for (const other of strip.children) other.classList.toggle("dv-active-tab", other === tab);
-      });
-      strip.append(tab);
-    });
-    dock.append(group);
-    return group;
-  });
-  app.window.document.body.append(dock);
-  return { activated, groups, dock };
-}
-
-test("cycle-tab commands move through the focused pane's tabs in strip order, wrap, and follow iframe focus", async () => {
+test("cycle-tab commands reach the page unless a modal dialog is open", async () => {
   const app = await workspace();
   try {
-    const { activated, groups } = panes(app, [
-      { tabs: ["a", "b"] },
-      { tabs: ["x", "y", "z"], active: 1, focused: true },
-    ]);
-    for (const step of [1, 1, -1, -1, -1]) app.cycle(step);
-    assert.deepEqual(activated, ["1:z", "1:x", "1:z", "1:y", "1:x"]);
-    const frame = app.window.document.createElement("iframe");
-    groups[0].append(frame);
-    frame.focus();
+    const steps = [];
+    app.window.addEventListener("qm:cycle-tab", (event) => steps.push(event.detail));
     app.cycle(1);
-    assert.deepEqual(activated.slice(5), ["0:b"]);
-  } finally {
-    app.close();
-  }
-});
-
-test("cycle-tab commands do nothing for single-tab panes, hidden canvases or open dialogs", async () => {
-  const app = await workspace();
-  try {
-    const { activated, groups, dock } = panes(app, [{ tabs: ["only"], focused: true }, { tabs: ["a", "b"] }]);
-    app.cycle(1);
-    groups[0].classList.replace("dv-active-group", "dv-inactive-group");
-    groups[1].classList.replace("dv-inactive-group", "dv-active-group");
     const dialog = app.window.document.createElement("dialog");
     dialog.open = true;
     app.window.document.body.append(dialog);
     app.cycle(1);
     dialog.remove();
-    dock.hidden = true;
-    app.cycle(1);
-    assert.deepEqual(activated, []);
+    app.cycle(-1);
+    assert.deepEqual(steps, [1, -1]);
   } finally {
     app.close();
   }

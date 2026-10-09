@@ -108,16 +108,7 @@ window.addEventListener("DOMContentLoaded", () => {
   };
   ipcRenderer.on("qm:cycle-tab", (_event, step) => {
     if (document.querySelector('dialog[open], [aria-modal="true"]:not(.sidebar)')) return;
-    const group =
-      document.activeElement?.closest(".split-dock .dv-groupview") ??
-      document.querySelector(".split-dock .dv-groupview.dv-active-group");
-    if (!group?.checkVisibility({ checkVisibilityCSS: true })) return;
-    const tabs = [...group.querySelectorAll(":scope > .dv-tabs-and-actions-container .dv-tabs-container > .dv-tab")];
-    const current = tabs.findIndex((tab) => tab.classList.contains("dv-active-tab"));
-    if (tabs.length < 2 || current < 0) return;
-    tabs[(current + step + tabs.length) % tabs.length].dispatchEvent(
-      new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, isPrimary: true }),
-    );
+    window.dispatchEvent(new CustomEvent("qm:cycle-tab", { detail: step }));
   });
   window.addEventListener(
     "keydown",
