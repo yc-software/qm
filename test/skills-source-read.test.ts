@@ -28,7 +28,7 @@ async function fixture(t: TestContext) {
   const turn = async (text: string, actor = "U1") => {
     const result = await built.app.turn({
       surface: "test",
-      actor: { externalId: actor },
+      actor: { externalId: actor, provider: "slack" as const },
       conversation: { kind: "dm", threadRef: `dm:${actor}:skill-source` },
       text,
     } as TurnRequest);

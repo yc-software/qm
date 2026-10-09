@@ -437,7 +437,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     while (!pushes.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
 
     const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
-    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
+    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com", provider: "email" }]);
   });
 
   it("retries a push the store refused as stale until the revocation actually lands", async () => {
@@ -488,7 +488,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
 
     assert.ok(pushes.length >= 2, "the refused push is retried");
     const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
-    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
+    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com", provider: "email" }]);
   });
 
   it("discards a crawl whose lease was lost mid-flight instead of pushing it", async () => {

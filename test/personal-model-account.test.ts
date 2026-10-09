@@ -47,7 +47,9 @@ test("account API binds choice to the signed-in person, preserves connections, a
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  async function request(account: unknown, principalId = "alice@default-org", signedIn = "alice@default-org") {
+  const alice = await principalOf(built, "alice@default-org");
+  const bob = await principalOf(built, "bob@default-org");
+  async function request(account: unknown, principalId = alice, signedIn = alice) {
     const path = "/v1/user-model-auth/account";
     const body = JSON.stringify({ account, principalId, nonce: crypto.randomUUID() });
     const ts = Math.floor(Date.now() / 1000);
@@ -62,13 +64,11 @@ test("account API binds choice to the signed-in person, preserves connections, a
       body,
     });
   }
-  const alice = await principalOf(built, "alice@default-org");
-  const bob = await principalOf(built, "bob@default-org");
   try {
     assert.equal((await request("personal")).status, 409);
     assert.equal((await request("invalid")).status, 400);
     await built.userModelCredentials.setApiKey(alice, "anthropic", "test-personal-key");
-    assert.equal((await request("personal", "bob@default-org", "alice@default-org")).status, 403);
+    assert.equal((await request("personal", bob, alice)).status, 403);
     const enabled = await request("personal");
     assert.equal(enabled.status, 200);
     assert.deepEqual(await enabled.json(), {
@@ -114,17 +114,17 @@ test("personal provider choice is durable and controls the submitted run indepen
   assert.equal(run?.request.harness, undefined);
   await built.config.setPersonalModelAuth(u1, false);
   assert.equal((await built.runs.get(submitted.runId!))?.request.modelAccount, "openai");
-  const steered = await built.app.signalRun(submitted.runId!, { kind: "steer", text: "more work" }, "U1");
+  const steered = await built.app.signalRun(submitted.runId!, { kind: "steer", text: "more work" }, u1);
   assert.equal(steered.accepted, false);
   assert.match(steered.reason ?? "", /account_changed/);
-  assert.equal((await built.app.signalRun(submitted.runId!, { kind: "abort" }, "U1")).accepted, true);
+  assert.equal((await built.app.signalRun(submitted.runId!, { kind: "abort" }, u1)).accepted, true);
 });
 
 test("shared chat messages queue instead of borrowing another person's account", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-steering-")) }));
   const message = (user: string) => ({
     surface: "slack",
-    actor: { externalId: user },
+    actor: { externalId: user, provider: "slack" as const },
     conversation: { kind: "channel" as const, threadRef: "account-steering", channelRef: "C1" },
     text: "hello",
     liveActor: true,

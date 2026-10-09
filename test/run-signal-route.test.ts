@@ -1,4 +1,3 @@
-import { testHandle } from "./support/principal.ts";
 import { handle } from "../src/identity/principals.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
@@ -116,7 +115,7 @@ test("core route: signals for a pending run are accepted (abort, steer)", async 
 function steererRequest(externalId: string, threadRef: string, text: string, displayName?: string): TurnRequest {
   return {
     surface: "web",
-    actor: { externalId, provider: testHandle(externalId).provider, ...(displayName ? { displayName } : {}) },
+    actor: { externalId, ...(displayName ? { displayName } : {}) },
     conversation: { kind: "dm", threadRef },
     liveActor: true,
     text,
@@ -129,7 +128,10 @@ test("core route: a steer's ts and request thread through to the signal store", 
     kind: "steer",
     text: "go left",
     ts: "1712.001",
-    request: steererRequest("internal:U1", "t-fields", "go left"),
+    request: {
+      ...steererRequest("internal:U1", "t-fields", "go left"),
+      actor: { externalId: "internal:U1", provider: "slack" },
+    },
   };
   const r = await coreSignal(run.id, body);
   assert.equal(r.status, 200);
