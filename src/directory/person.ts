@@ -16,26 +16,32 @@ export function normalizeHandle(id: string | null | undefined): string {
   return s.includes("@") ? s.toLowerCase() : s;
 }
 
-/** The principal UUID behind a handle, or the handle itself when it has never acted. */
-export function principalOf(id: string): string {
-  const key = normalizeHandle(id);
-  if (!key) return id;
-  return resolver?.principalOf(key) ?? id;
-}
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SLACK_USER = /^(?:T[A-Z0-9]+:)?[UW][A-Z0-9]+$/;
 
 /**
  * A principal and every handle linked to it. Third-party accounts (Composio users, Slack connections) were keyed
  * by whichever handle created them, so lookups try them all.
  */
 export function personHandles(id: string): string[] {
-  const principal = principalOf(id);
+  const principal = personKey(id);
   if (!principal) return [];
   return [...new Set([principal, ...(resolver?.handlesOf?.(principal) ?? [])])];
 }
 
+/** Comparison key for an id: the principal it names. Never stored; storage holds principal UUIDs from the edge. */
 export function personKey(id: string | null | undefined): string {
   const key = normalizeHandle(id);
-  return key ? principalOf(key) : "";
+  if (!key || UUID.test(key)) return key.toLowerCase();
+  return resolver?.principalOf(key) ?? key;
+}
+
+/** How Slack addresses a principal: its Slack user id, else an email Slack can look up. */
+export function slackHandleOf(id: string): string {
+  if (!UUID.test(id)) return id;
+  const handles = resolver?.handlesOf?.(id.toLowerCase()) ?? [];
+  const slack = handles.find((h) => SLACK_USER.test(h));
+  return slack?.split(":").at(-1) ?? handles.find((h) => h.includes("@")) ?? id;
 }
 
 export function samePerson(a: string | null | undefined, b: string | null | undefined): boolean {

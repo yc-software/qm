@@ -147,17 +147,15 @@ export function createMessagingMethods(
         .filter((principalId) => deps.identity.classify(principalId).type === "internal")
         .map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
     ];
-    const byKey = new Map<string, DirectoryMember>();
-    for (const member of candidates) {
-      const key = personKey(member.principalId);
-      if (key && !byKey.has(key)) byKey.set(key, member);
-    }
-    return [...byKey.values()];
+    const byPrincipal = new Map<string, DirectoryMember>();
+    for (const member of await principalRows(candidates))
+      if (!byPrincipal.has(member.principalId)) byPrincipal.set(member.principalId, member);
+    return [...byPrincipal.values()];
   };
   const mergedDirectoryMembers = async () => {
     const [stored, viaEmail] = await Promise.all([deps.directory.list(), identityMembers()]);
-    const seen = new Set(stored.map((member) => personKey(member.principalId)));
-    return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
+    const seen = new Set(stored.map((member) => member.principalId));
+    return [...stored, ...viaEmail.filter((member) => !seen.has(member.principalId))];
   };
 
   const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "loopId" | "action" | "message">) => {
@@ -168,6 +166,13 @@ export function createMessagingMethods(
       (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime, "cron"));
     if (error) throw new Error(error);
   };
+
+  /** Directory rows arrive keyed by surface handle; core stores them by principal. */
+  async function principalRows<T extends { principalId: string }>(rows: readonly T[]): Promise<T[]> {
+    const out: T[] = [];
+    for (const row of rows) out.push({ ...row, principalId: await deps.identity.principals.act(row.principalId) });
+    return out;
+  }
 
   return {
     async createCron(input) {
@@ -450,11 +455,20 @@ export function createMessagingMethods(
       return found;
     },
 
-    async upsertDirectory(members, syncedAt) {
+    async upsertDirectory(handleMembers, syncedAt) {
+      const graph = deps.identity.principals;
+      const members: DirectoryMember[] = [];
+      for (const m of handleMembers) {
+        const email = m.principalId.includes("@") ? m.principalId : null;
+        if (m.slackId && email) await graph.autoLink(m.slackId, email);
+        const principalId = await graph.act(m.principalId, {
+          displayName: m.displayName,
+          email,
+        });
+        members.push({ ...m, principalId });
+      }
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;
-      for (const m of members)
-        if (m.slackId && m.principalId.includes("@")) await deps.principals?.autoLink(m.slackId, m.principalId);
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
@@ -483,17 +497,17 @@ export function createMessagingMethods(
     async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations, partial) {
       const applied = await deps.directory.replaceChannels(
         channels,
-        channelMembers,
+        channelMembers && (await principalRows(channelMembers)),
         syncedAt,
         channelRosterIds,
-        revocations,
+        revocations && (await principalRows(revocations)),
         partial,
       );
       await h.syncLinkedProjectRosters();
       return applied;
     },
     async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
-      return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
+      return deps.directory.replaceGroups(await principalRows(groupMembers), syncedAt, groupIds, groupRosterIds);
     },
     async setDirectoryWorkspaceUrl(url) {
       await deps.directory.setWorkspaceUrl(url);

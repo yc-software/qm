@@ -1,7 +1,6 @@
 import type { AdminGrant } from "./admin-grant-store.ts";
 import { adminStatusFromGrants, type AdminStatus } from "./admin-service.ts";
 import { forEachAttributedTurn, type AttributionInput } from "./attribution.ts";
-import { principalOf } from "../directory/person.ts";
 
 export interface AdminUserRow {
   principalId: string;
@@ -27,20 +26,20 @@ export function computeUsers(input: UsersInput): AdminUserRow[] {
 
   forEachAttributedTurn(input, {
     onWindow(sessionId, w) {
-      const principalId = principalOf(w.principalId);
+      const principalId = w.principalId;
       const set = sessionsByUser.get(principalId);
       if (set) set.add(sessionId);
       else sessionsByUser.set(principalId, new Set([sessionId]));
       bumpLastSeen(principalId, w.validFrom);
     },
     onTurn(w, turn) {
-      const principalId = principalOf(w.principalId);
+      const principalId = w.principalId;
       turnsByUser.set(principalId, (turnsByUser.get(principalId) ?? 0) + turn.turns);
       bumpLastSeen(principalId, turn.lastAt);
     },
   });
 
-  const ids = new Set<string>([...sessionsByUser.keys(), ...grants.map((g) => principalOf(g.principalId))]);
+  const ids = new Set<string>([...sessionsByUser.keys(), ...grants.map((g) => g.principalId)]);
   return [...ids]
     .map((principalId) => ({
       principalId,

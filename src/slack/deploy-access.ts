@@ -59,7 +59,7 @@ export async function decideDeploymentAccess(
 ): Promise<string> {
   const { deploymentId, requesterId } = parseDeployAccess(value);
   await identity.refresh(true);
-  const actor = identity.resolve(assertion);
+  const actor = await identity.actor(assertion);
   if (!identity.isInternal(actor)) throw new Error("Only the app's owner can decide this request.");
   const home = await app.getArtifactHome("deploy", deploymentId);
   if (

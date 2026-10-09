@@ -1,3 +1,4 @@
+import { principalRequest } from "../identity/identity-service.ts";
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { availableRuntimeError, runtimeConfigBody } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
@@ -110,7 +111,8 @@ export function createTurnMethods(
         };
       await deps.refreshModels?.();
       await deps.identity.refresh();
-      const actor: Principal = deps.identity.resolve(req.actor);
+      req = await principalRequest(deps.identity, req);
+      const actor: Principal = await deps.identity.actor(req.actor);
       if (!deps.identity.isInternal(actor)) {
         return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
       }
@@ -839,6 +841,7 @@ export function createTurnMethods(
       const run = await deps.runs.get(runId);
       if (!run) return { accepted: false, reason: "not_found" };
       if (viewer && !(await viewerMayUseRun(run, viewer))) return { accepted: false, reason: "not_found" };
+      if (signal.request) signal = { ...signal, request: await principalRequest(deps.identity, signal.request) };
       if (
         signal.kind === "steer" &&
         run.request.surface === "web" &&

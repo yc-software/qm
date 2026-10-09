@@ -2112,7 +2112,6 @@ export function buildApp(
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
-    principals,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
     orchestrator,

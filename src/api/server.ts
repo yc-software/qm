@@ -32,7 +32,8 @@ import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
-import { principalOf, samePerson } from "../directory/person.ts";
+import { samePerson } from "../directory/person.ts";
+import { principalGraph } from "./routes/shared.ts";
 
 const safeDecode = (s: string): string => {
   try {
@@ -333,10 +334,9 @@ async function gate(
         actor = null;
     }
     if (actor) {
-      const p = deps.principals
-        ? await deps.principals.act(actor.p, { email: actor.p.includes("@") ? actor.p : null, verified: true })
-        : principalOf(actor.p);
-      actor = { ...actor, p, ...(actor.imp ? { imp: principalOf(actor.imp) } : {}) };
+      const graph = principalGraph(deps);
+      const signIn = (h: string) => graph.act(h, { email: h.includes("@") ? h : null, verified: true });
+      actor = { ...actor, p: await signIn(actor.p), ...(actor.imp ? { imp: await graph.act(actor.imp) } : {}) };
     }
     if (!isPublicRoute && requirePortalIdentity) {
       const webTurn =

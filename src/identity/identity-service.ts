@@ -1,15 +1,12 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { principalOf, normalizeHandle, personKey } from "../directory/person.ts";
+import { normalizeHandle } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
-
-interface IdentityProvider {
-  resolve(actor: ActorAssertion): Principal;
-  classify(externalId: string, isExternalGuest?: boolean): Principal;
-}
+import { createPrincipalGraph, isPrincipalId, type PrincipalGraph } from "./principals.ts";
 
 type DeactivationSource = "manual" | "directory-sync";
 
+/** Deactivation is a property of a principal; records are keyed by its UUID. */
 export interface DeactivationRecord {
   principalId: string;
   source: DeactivationSource;
@@ -21,17 +18,23 @@ interface DirectorySyncOutcome {
   reactivated: string[];
 }
 
-export interface IdentityService extends IdentityProvider {
+export interface IdentityService {
+  /** The principal graph handles resolve through. One per deployment. */
+  readonly principals: PrincipalGraph;
+  /** Edge entry point: the asserted handle acted, so resolve it to its principal (creating one) and classify it. */
+  actor(actor: ActorAssertion): Promise<Principal>;
+  /** Classify an id the edge already resolved. Handles resolve through the in-memory identity index. */
+  classify(id: string, isExternalGuest?: boolean): Principal;
   isInternal(p: Principal): boolean;
   audienceIsAllInternal(audience: Principal[]): boolean;
-  deactivate(externalId: string, source?: DeactivationSource): Promise<void>;
-  deactivationSource(externalId: string): DeactivationSource | undefined;
-  reactivate(externalId: string): Promise<void>;
+  deactivate(id: string, source?: DeactivationSource): Promise<void>;
+  deactivationSource(id: string): DeactivationSource | undefined;
+  reactivate(id: string): Promise<void>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
-  externalMember(principalId: string): ExternalMember | undefined;
+  externalMember(id: string): ExternalMember | undefined;
   putExternalMember(m: ExternalMember): Promise<void>;
-  removeExternalMember(principalId: string): Promise<void>;
+  removeExternalMember(email: string): Promise<void>;
   hydrate(): Promise<void>;
   refresh(force?: boolean): Promise<void>;
 }
@@ -46,14 +49,15 @@ export function actorAssertionActive(
 export function createIdentityService(
   backing?: DurableMap<DeactivationRecord>,
   opts: {
-    isOverridden?: (externalId: string) => boolean;
+    isOverridden?: (handle: string) => boolean;
     directorySyncProtected?: readonly string[];
     externalMembers?: DurableMap<ExternalMember>;
-    principals?: { refresh(force?: boolean): Promise<void> };
+    principals?: PrincipalGraph;
   } = {},
 ): IdentityService {
   const store = backing ?? createMemoryMap<DeactivationRecord>();
   const externalStore = opts.externalMembers ?? createMemoryMap<ExternalMember>();
+  const graph = opts.principals ?? createPrincipalGraph();
   const deactivated = new Map<string, DeactivationRecord>();
   const externals = new Map<string, ExternalMember>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
@@ -62,54 +66,72 @@ export function createIdentityService(
   let refreshP: Promise<void> | null = null;
   let hydrateP: Promise<void> | null = null;
 
-  const keptByDirectorySync = (key: string): boolean =>
-    directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
-  const storeKeys = (externalId: string): string[] => [normalizeHandle(externalId)].filter(Boolean);
+  /** The principal an id names: a UUID is itself, a handle goes through its identity. */
+  const principalKey = (id: string): string | undefined =>
+    isPrincipalId(id.trim()) ? id.trim().toLowerCase() : graph.principalOf(id);
+  const principalHandles = (principalId: string): string[] => [principalId, ...graph.handlesOf(principalId)];
+  const resolve = async (id: string): Promise<string> => principalKey(id) ?? graph.act(id);
+  const emailKey = (email: string): string => normalizeHandle(email);
+  const externalFor = (id: string): ExternalMember | undefined => {
+    const principal = principalKey(id);
+    if (!principal) return externals.get(emailKey(id));
+    for (const handle of principalHandles(principal)) {
+      const m = externals.get(emailKey(handle));
+      if (m) return m;
+    }
+    return undefined;
+  };
+  const overridden = (id: string): boolean => {
+    if (!opts.isOverridden) return false;
+    const principal = principalKey(id);
+    return (principal ? principalHandles(principal) : [id]).some((h) => opts.isOverridden!(h));
+  };
+  const keptByDirectorySync = (id: string): boolean => {
+    const principal = principalKey(id);
+    return (
+      (!!principal && directorySyncProtected.some((h) => principalKey(h) === principal)) ||
+      externalFor(id) !== undefined
+    );
+  };
 
   async function load(overwrite: boolean): Promise<void> {
-    await opts.principals?.refresh(true);
+    await graph.refresh(true);
     const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
     if (overwrite) {
       deactivated.clear();
       externals.clear();
     }
-    for (const r of deactivations) {
-      const key = personKey(r.principalId);
-      if (deactivated.get(key)?.source !== "manual" && (r.source === "manual" || overwrite || !deactivated.has(key)))
-        deactivated.set(key, r);
-    }
-    for (const m of members) {
-      const key = personKey(m.email);
-      if (overwrite || !externals.has(key)) externals.set(key, m);
-    }
+    for (const r of deactivations) if (overwrite || !deactivated.has(r.principalId)) deactivated.set(r.principalId, r);
+    for (const m of members) if (overwrite || !externals.has(emailKey(m.email))) externals.set(emailKey(m.email), m);
   }
 
-  function classify(externalId: string, isExternalGuest?: boolean): Principal {
-    const id = principalOf(externalId);
-    if (opts.isOverridden?.(externalId)) return { id, type: "internal" };
-    const key = personKey(externalId);
-    const record = deactivated.get(key);
-    const external = externals.get(key);
+  function classify(id: string, isExternalGuest?: boolean): Principal {
+    const principal = principalKey(id);
+    const pid = principal ?? id;
+    if (overridden(id)) return { id: pid, type: "internal" };
+    const record = principal ? deactivated.get(principal) : undefined;
+    const external = externalFor(id);
     const inactive =
       record?.source === "manual" ||
-      (record?.source === "directory-sync" && !keptByDirectorySync(key)) ||
+      (record?.source === "directory-sync" && !keptByDirectorySync(id)) ||
       (external !== undefined && !externalMemberActive(external));
-    const type: Principal["type"] = inactive || isExternalGuest ? "guest" : "internal";
-    return { id, type };
+    return { id: pid, type: inactive || isExternalGuest ? "guest" : "internal" };
   }
 
-  async function deactivate(externalId: string, source: DeactivationSource = "manual"): Promise<void> {
-    const key = personKey(externalId);
-    const existing = deactivated.get(key);
+  async function deactivate(id: string, source: DeactivationSource = "manual"): Promise<void> {
+    const principalId = await resolve(id);
+    const existing = deactivated.get(principalId);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
-    const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
-    deactivated.set(key, record);
-    await store.put(normalizeHandle(externalId), record);
+    const record: DeactivationRecord = { principalId, source, at: Date.now() };
+    deactivated.set(principalId, record);
+    await store.put(principalId, record);
   }
 
-  async function reactivate(externalId: string): Promise<void> {
-    deactivated.delete(personKey(externalId));
-    for (const key of storeKeys(externalId)) await store.delete(key);
+  async function reactivate(id: string): Promise<void> {
+    const principalId = principalKey(id);
+    if (!principalId) return;
+    deactivated.delete(principalId);
+    await store.delete(principalId);
   }
 
   async function refresh(force = false): Promise<void> {
@@ -127,21 +149,39 @@ export function createIdentityService(
   }
 
   return {
+    principals: graph,
+    async actor(actor: ActorAssertion): Promise<Principal> {
+      const principalId = actor.isExternalGuest
+        ? actor.externalId
+        : await graph.act(actor.externalId, {
+            kind: actor.isBot ? "agent" : "person",
+            ...(actor.displayName ? { displayName: actor.displayName } : {}),
+          });
+      const p = classify(principalId, actor.isExternalGuest);
+      return {
+        ...p,
+        ...(actor.teamIds ? { teamIds: actor.teamIds } : {}),
+        ...(actor.displayName ? { displayName: actor.displayName } : {}),
+      };
+    },
     classify,
     deactivate,
-    deactivationSource(externalId: string): DeactivationSource | undefined {
-      return deactivated.get(personKey(externalId))?.source;
+    deactivationSource(id: string): DeactivationSource | undefined {
+      const principal = principalKey(id);
+      return principal ? deactivated.get(principal)?.source : undefined;
     },
     reactivate,
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {
       const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
       for (const id of removedIds) {
-        if (keptByDirectorySync(personKey(id)) || deactivated.has(personKey(id))) continue;
+        const principal = principalKey(id);
+        if (keptByDirectorySync(id) || (principal && deactivated.has(principal))) continue;
         await deactivate(id, "directory-sync");
         outcome.deactivated.push(id);
       }
       for (const id of presentIds) {
-        if (deactivated.get(personKey(id))?.source !== "directory-sync") continue;
+        const principal = principalKey(id);
+        if (!principal || deactivated.get(principal)?.source !== "directory-sync") continue;
         await reactivate(id);
         outcome.reactivated.push(id);
       }
@@ -151,35 +191,64 @@ export function createIdentityService(
       await refresh();
       return [...externals.values()];
     },
-    externalMember(principalId: string): ExternalMember | undefined {
-      return externals.get(personKey(principalId));
+    externalMember(id: string): ExternalMember | undefined {
+      return externalFor(id);
     },
     async putExternalMember(m: ExternalMember): Promise<void> {
-      externals.set(personKey(m.email), m);
-      await externalStore.put(normalizeHandle(m.email), m);
+      externals.set(emailKey(m.email), m);
+      await externalStore.put(emailKey(m.email), m);
     },
-    async removeExternalMember(principalId: string): Promise<void> {
-      externals.delete(personKey(principalId));
-      for (const key of storeKeys(principalId)) await externalStore.delete(key);
+    async removeExternalMember(email: string): Promise<void> {
+      externals.delete(emailKey(email));
+      await externalStore.delete(emailKey(email));
     },
     hydrate(): Promise<void> {
       if (!hydrateP) hydrateP = load(false);
       return hydrateP;
     },
     refresh,
-    resolve(actor: ActorAssertion): Principal {
-      const p = classify(actor.externalId, actor.isExternalGuest);
-      return {
-        ...p,
-        ...(actor.teamIds ? { teamIds: actor.teamIds } : {}),
-        ...(actor.displayName ? { displayName: actor.displayName } : {}),
-      };
-    },
     isInternal(p: Principal): boolean {
       return p.type === "internal";
     },
     audienceIsAllInternal(audience: Principal[]): boolean {
       return audience.length > 0 && audience.every((p) => p.type === "internal");
+    },
+  };
+}
+
+type AssertedRequest = {
+  actor: ActorAssertion;
+  conversation: { audience?: ActorAssertion[]; publishMembers?: ActorAssertion[] };
+};
+
+/** A surface request with every asserted handle replaced by its principal UUID. Runs once, where the request enters core. */
+export async function principalRequest<R extends AssertedRequest>(
+  identity: Pick<IdentityService, "principals">,
+  req: R,
+): Promise<R> {
+  const one = async (a: ActorAssertion): Promise<ActorAssertion> =>
+    a.isExternalGuest
+      ? a
+      : {
+          ...a,
+          externalId: await identity.principals.act(a.externalId, {
+            kind: a.isBot ? "agent" : "person",
+            ...(a.displayName ? { displayName: a.displayName } : {}),
+          }),
+        };
+  const many = async (list: ActorAssertion[] | undefined) => (list ? Promise.all(list.map(one)) : undefined);
+  const [actor, audience, publishMembers] = await Promise.all([
+    one(req.actor),
+    many(req.conversation.audience),
+    many(req.conversation.publishMembers),
+  ]);
+  return {
+    ...req,
+    actor,
+    conversation: {
+      ...req.conversation,
+      ...(audience ? { audience } : {}),
+      ...(publishMembers ? { publishMembers } : {}),
     },
   };
 }

@@ -1,8 +1,7 @@
 import { isPrincipalType, PRINCIPAL_TYPES, type PrincipalType } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
-import { principalOf } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, orgScope, principalGraph } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -32,9 +31,10 @@ async function principalForHandle(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const handle = ctx.params.id!;
   if (!handle) return sendJson(res, 404, { error: "not_found" });
-  const principalId = deps.principals
-    ? await deps.principals.act(handle, { email: handle.includes("@") ? handle : null, verified: true })
-    : principalOf(handle);
+  const principalId = await principalGraph(deps).act(handle, {
+    email: handle.includes("@") ? handle : null,
+    verified: true,
+  });
   await deps.identity?.refresh(true);
   return sendJson(res, 200, { principalId });
 }

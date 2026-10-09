@@ -3,6 +3,11 @@ import type { Pool, PoolClient } from "pg";
 import { handleOf, isPrincipalId, PRINCIPAL_SCHEMA } from "./principals.ts";
 import { PRINCIPAL_REFS } from "./principal-refs.ts";
 
+/** Deactivation is a principal property: its durable map is rekeyed by principal UUID like every other id. */
+const DEACTIVATIONS = "deactivated_principals";
+/** External members are email identities: their map stays keyed by the lowercased address. */
+const EMAIL_KEYED = "external_members";
+
 /**
  * One-time conversion from handle-keyed rows to principal UUIDs.
  *
@@ -134,6 +139,11 @@ export async function runIdentityMigration(opts: {
           if (p.includes("@")) slackEmail.set(s, fold(p));
         }
       }
+    }
+
+    if (has(DEACTIVATIONS, "id")) {
+      const { rows } = await client.query<{ id: string }>(`SELECT id FROM ${DEACTIVATIONS}`);
+      for (const { id } of rows) see(id);
     }
 
     const groups = new Map<string, string[]>();
@@ -270,6 +280,7 @@ export async function runIdentityMigration(opts: {
         !cols.has("id") ||
         !cols.has("json") ||
         table === "principal_links" ||
+        table === EMAIL_KEYED ||
         table.startsWith("identity_premigration_")
       )
         continue;

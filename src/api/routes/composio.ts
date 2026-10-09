@@ -1,7 +1,7 @@
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
-import { personHandles, principalOf, samePerson } from "../../directory/person.ts";
+import { personHandles, samePerson } from "../../directory/person.ts";
 import { IdentityLinkError } from "../../identity/principals.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
@@ -208,7 +208,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
-  const userId = composioUserId(orgId(), principalOf(access.principal));
+  const userId = composioUserId(orgId(), access.principal);
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
@@ -440,7 +440,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
   const sessionUri = (ctx.body as { sessionUri?: unknown } | null)?.sessionUri;
   if (typeof sessionUri !== "string" || !sessionUri || sessionUri.length > 8192)
     return sendJson(ctx.res, 400, { error: "invalid_session" });
-  const userId = composioUserId(orgId(), principalOf(access.principal));
+  const userId = composioUserId(orgId(), access.principal);
   try {
     const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
       session_uri: sessionUri,
