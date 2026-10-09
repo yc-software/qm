@@ -1,3 +1,4 @@
+import { answerPrincipalLookup } from "./principal-stub.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
@@ -18,6 +19,7 @@ let nonce = "";
 const email = "guest@partner.test";
 const seen: Array<{ path: string; headers: Record<string, unknown> }> = [];
 const upstream = createServer((req, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   void (async () => {
     const path = new URL(req.url!, origin).pathname;
     res.setHeader("content-type", "application/json");
