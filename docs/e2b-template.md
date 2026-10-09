@@ -1,5 +1,31 @@
 # E2B sandbox template
 
+## Public template
+
+E2B publishes a ready agent-computer template, `qm-sandbox`. It has the same tools as
+the sandbox base image (`fly/Dockerfile`): Claude Code, Codex, GitHub CLI, AWS CLI v2, the
+Python venv at `/opt/agent-venv` and `x-api`. Each sandbox gets 8 vCPU and 8 GiB where the
+plan allows.
+
+```jsonc
+"sandbox": { "backend": "e2b" },
+"env": { "core": { "E2B_TEMPLATE_ID": "qm-sandbox:v1.0.0" } }
+```
+
+Set `E2B_API_KEY` with `qm secrets set`. Pin a version tag, so a new release does not
+change the image of new scopes.
+
+On E2B plans capped at one hour, also set `E2B_MAX_LIFETIME_SEC=3600` in `env.core`.
+Core otherwise asks for a 61 minute sandbox timeout, and those plans reject every create
+with `400: Timeout cannot be greater than 1 hours`. The setting also caps a command at 59
+minutes.
+
+To run core on E2B as well, `e2b sandbox create qm` starts it from the `qm-core` template
+with a setup page for the E2B key, org, admin and model keys. See
+[E2B's docs](https://e2b.dev/docs) for the CLI.
+
+## Build your own
+
 E2B stopped accepting V1 template builds (`e2b template build` against a bare
 Dockerfile with an access token) on 2026-08-01. `deploy/e2b/e2b.Dockerfile` is still
 the single source for the sandbox image, but it is now fed to the Template SDK, which
