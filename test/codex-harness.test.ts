@@ -204,6 +204,25 @@ process.stdin.resume();
   return path;
 }
 
+function startupCancellationCodexBinary(dir: string): string {
+  const path = join(dir, "startup-cancellation-codex");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
+process.on("SIGTERM", () => {
+  fs.writeFileSync(${JSON.stringify(join(dir, "closed.tmp"))}, "closed");
+  fs.renameSync(${JSON.stringify(join(dir, "closed.tmp"))}, ${JSON.stringify(join(dir, "closed"))});
+  process.exit(0);
+});
+process.stdin.resume();
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
 function pendingThreadStartCodexBinary(dir: string): string {
   const path = join(dir, "pending-thread-start-codex");
   writeFileSync(
@@ -1111,6 +1130,57 @@ test("Codex preserves OAuth auth before discarding a failed startup", async (t) 
   );
   const persisted = JSON.parse(readFileSync(authFile, "utf8")) as Record<string, unknown>;
   assert.equal((persisted.tokens as Record<string, unknown>).access_token, "startup-access-before");
+});
+
+test("cancelling an OAuth startup after spawn closes the provider", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-cancel-startup-child-test-"));
+  const authFile = join(dir, "auth.json");
+  writeFileSync(
+    authFile,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "cancel-child-access",
+        refresh_token: "cancel-child-refresh",
+        account_id: "cancel-child-account",
+        id_token: oauthIdToken("cancel-child-account"),
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const harness = createCodexHarness({
+    binaryPath: startupCancellationCodexBinary(dir),
+    env: { CODEX_AUTH_FILE: authFile },
+    appServerStartTimeoutMs: 1_000,
+    turnWallClockMs: 3_000,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const cancel = new AbortController();
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const turn = harness.turns.runTurn({
+    session: { id: "cancel-startup-child" } as Session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    cancel: cancel.signal,
+    emit: async (entry) =>
+      ({ ...entry, sessionId: "cancel-startup-child", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+  for (let attempt = 0; attempt < 50 && !existsSync(join(dir, "starts")); attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(existsSync(join(dir, "starts")), true);
+  cancel.abort();
+  assert.deepEqual(await turn, { reply: "", stopped: true });
+  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
 });
 
 test("Codex classifies a thread/start deadline as a non-retryable timeout", async (t) => {
