@@ -2448,7 +2448,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.",
           );
         }
-        if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
+        if (
+          input.origin.kind === "automation" &&
+          input.origin.destination &&
+          !input.surfaceTools &&
+          !input.subagentCompletion
+        ) {
           systemPrompt +=
             "\n\nThis turn was fired by a scheduled trigger with a platform-managed destination. " +
             "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.";
@@ -3319,7 +3324,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
         }
-        const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
+        const isPollFire =
+          automatedTurn && (input.subagentCompletion || (!!input.surface && isPollSurface(input.surface)));
         const sessionUsedTools = visibleHistory.some(
           (e) =>
             e.type === "tool_call" &&

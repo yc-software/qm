@@ -2058,6 +2058,35 @@ test("a poll fire that calls finish_silently ends the turn with an empty reply a
   assert.equal(res.reply, undefined, "nothing is delivered — the model never gets a step to narrate its silence");
 });
 
+for (const completion of [true, false]) {
+  test(`a web subagent turn allows silence only for completion wakes: ${completion}`, async () => {
+    const built = freshApp({ workers: 1 });
+    const actor = { id: "U1", type: "internal" as const };
+    await selectComputer(built, actor.id, scopeId("personal", actor.id));
+    const { run } = await built.runs.enqueue({
+      sessionId: "web:completion",
+      request: {
+        surface: "web",
+        actor,
+        conversation: { kind: "dm", threadRef: "web:completion", audience: [actor] },
+        origin: { kind: "automation" },
+        sessionSenderId: "child",
+        ...(completion ? { subagentCompletion: true as const } : {}),
+        text: "!finish-silent",
+      },
+    });
+    built.runtime.start();
+    try {
+      const finished = await built.runs.waitFor(run.id, 10_000);
+      assert.equal(finished.result?.status, completion ? "silent" : "ok");
+      if (completion) assert.equal(finished.result?.reply, undefined);
+      else assert.match(finished.result?.reply ?? "", /ending silently/);
+    } finally {
+      await built.runtime.stop();
+    }
+  });
+}
+
 test("finish_silently is a no-op off a poll fire — the agent's reply still delivers", async () => {
   const { app } = freshApp();
   const interactive = await app.turn(dm("!finish-silent"));

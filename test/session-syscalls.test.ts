@@ -1149,6 +1149,56 @@ test("delegated live authority follows immutable provenance without changing aut
   assert.equal(await delegatedAuthorizationOrigin(r.run.request, r), undefined);
 });
 
+test("a cron completion wakes its parent without enabling unconsented surface delivery", async () => {
+  const r = await delegatedHumanRig({
+    surface: "cron",
+    origin: { kind: "automation", destination: { type: "slack", target: "C1" } },
+  });
+  for (const run of [r.parent, r.run]) {
+    const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+    await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  }
+  await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(r.run.id))!);
+  const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
+  assert.equal(wake.request.surface, "cron");
+  assert.equal(wake.request.surfaceTools, false);
+  const claimed = await r.runs.claimById(wake.id, "worker", 60_000);
+  await r.runs.complete(wake.id, claimed!.leaseToken!, { status: "ok", reply: "late result" });
+  assert.equal(runResultDelivery((await r.runs.get(wake.id))!), null);
+});
+
+test("nested completion wakes retain their delegation and return to the original parent", async () => {
+  const r = await delegatedHumanRig({ surface: "web" });
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.child,
+    scopeId: scope,
+    request: { ...r.run.request, runId: r.run.id },
+  });
+  const opened = await api.open({ task: "nested step" });
+  assert.ok(opened.ok);
+  const grandchild = await freshSession(r.sessions, opened.sessionId);
+  const nested = (await r.runs.inFlightForThread(grandchild.threadRef))[0]!;
+  assert.equal(nested.request.subagentCompletion, undefined);
+  for (const run of [r.parent, r.run, nested]) {
+    const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+    await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "step done" });
+  }
+  await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(nested.id))!);
+  const wake = (await r.runs.getByDedupKey(`subagent-return:${nested.id}`))!;
+  assert.equal(wake.request.surfaceTools, false);
+  assert.equal(wake.request.delegatingRunId, r.run.request.delegatingRunId);
+  assert.equal(wake.request.sessionSenderId, r.run.request.sessionSenderId);
+  assert.equal((await delegatedAuthorizationOrigin(wake.request, r))?.kind, "human");
+  const claimed = await r.runs.claimById(wake.id, "worker", 60_000);
+  await r.runs.complete(wake.id, claimed!.leaseToken!, { status: "ok", reply: "nested result" });
+  await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(wake.id))!);
+  const parentWake = (await r.runs.getByDedupKey(`subagent-return:${wake.id}`))!;
+  assert.equal(parentWake.sessionId, r.room.threadRef);
+  assert.equal(parentWake.request.delegatingRunId, r.parent.id);
+  assert.equal(parentWake.request.addressed, true);
+  assert.equal((await delegatedAuthorizationOrigin(parentWake.request, r))?.kind, "human");
+});
+
 test("unrelated automated follow-ups cannot borrow earlier human authority", async () => {
   const r = await delegatedHumanRig();
   const claimed = await r.runs.claimById(r.run.id, "w1", 60000);

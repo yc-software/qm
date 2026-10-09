@@ -91,6 +91,7 @@ export interface OrchestratorInput extends Omit<
   surface?: string;
   privateSessionMessage?: true;
   delegatingRunId?: string;
+  subagentCompletion?: true;
   sessionMessageDepth?: number;
   actor: Principal;
   conversation: Conversation;

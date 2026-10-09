@@ -64,7 +64,6 @@ export async function delegatedAuthorizationOrigin(
       child.parentSessionId === sender.id &&
       source.sessionId === sender.threadRef;
     const continued =
-      requiresDelegation(current, true) &&
       isSubagentThreadRef(sender.threadRef) &&
       sender.parentSessionId === child.id &&
       source.sessionId === child.threadRef;
@@ -1215,8 +1214,16 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     dedupKey,
     request: {
       ...prepared,
-      surfaceTools: prepared.surface !== "web" && !isSubagentThreadRef(parent.threadRef),
+      subagentCompletion: true,
+      surfaceTools:
+        !isSubagentThreadRef(parent.threadRef) && (prepared.surfaceTools === true || prepared.surface === "slack"),
       ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
+      ...(isSubagentThreadRef(parent.threadRef)
+        ? {
+            delegatingRunId: (originalParent ? initiatingRun : latestParent)?.request.delegatingRunId,
+            sessionSenderId: (originalParent ? initiatingRun : latestParent)?.request.sessionSenderId,
+          }
+        : {}),
       origin: { ...prepared.origin, kind: "automation", screenData: wake },
       text: wake,
       displayText: "Delegated task completed",
