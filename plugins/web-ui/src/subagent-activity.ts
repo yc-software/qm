@@ -1,4 +1,5 @@
-import type { CoreSession, SessionEntry } from "./core-bridge.ts";
+import type { CoreSession, SessionEntry, SubagentMailRef } from "./core-bridge.ts";
+import { goalElapsedLabel } from "./goal-strip.ts";
 
 type SubagentState = "working" | "waiting" | "done" | "failed";
 
@@ -56,7 +57,7 @@ export function subagentRows(list: readonly CoreSession[], rootId: string): Suba
       session,
       state,
       depth,
-      startedAt: session.createdAt,
+      startedAt: (live && session.workingSince) || session.createdAt,
       endedAt: live ? null : (session.lastActivityAt ?? session.createdAt),
     };
   });
@@ -80,6 +81,22 @@ export function subagentSummary(rows: readonly SubagentRow[]): string {
   if (waiting) parts.push(`${waiting} need${waiting === 1 ? "s" : ""} you`);
   if (failed) parts.push(`${failed} failed`);
   return parts.join(", ");
+}
+
+export function lastUpdates(messages: readonly unknown[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const message of messages) {
+    const { subagentMail, timestamp = 0 } = message as { subagentMail?: SubagentMailRef; timestamp?: number };
+    if (subagentMail?.kind === "update")
+      out.set(subagentMail.sessionId, Math.max(out.get(subagentMail.sessionId) ?? 0, timestamp));
+  }
+  return out;
+}
+
+export function lastUpdateLabel(row: SubagentRow, updates: ReadonlyMap<string, number>, now: number): string {
+  if (row.state !== "working") return "";
+  const at = updates.get(row.session.id) ?? 0;
+  return at >= row.startedAt ? ` · last update ${goalElapsedLabel(at, now)} ago` : " · no updates yet";
 }
 
 export interface PeekLine {

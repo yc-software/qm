@@ -139,6 +139,7 @@ export interface CoreSession {
   color?: string | null;
   lastActivityAt?: number;
   working?: boolean;
+  workingSince?: number;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
   backgroundJobs?: number;
@@ -2149,6 +2150,18 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
           else original.edited = true;
         }
         out.push({ ...revision, timestamp: e.createdAt } as unknown as AgentMessage);
+        continue;
+      }
+      const update = e.payload as { kind?: string; sessionId?: string; title?: string; text?: string } | null;
+      if (update?.kind === "subagent_update" && update.sessionId && update.text) {
+        spillHeldPosts();
+        flushWork("", e.createdAt);
+        out.push({
+          role: "user",
+          content: update.text,
+          timestamp: e.createdAt,
+          subagentMail: { sessionId: update.sessionId, title: update.title ?? "Subagent", kind: "update" },
+        } as unknown as AgentMessage);
         continue;
       }
       const failure = e.payload as { kind?: string; message?: string } | null;

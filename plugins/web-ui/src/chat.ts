@@ -190,6 +190,8 @@ import { liveTurnThreadRef } from "./working-dot";
 import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, latestGoal } from "./goal-strip";
 import {
   ackKey,
+  lastUpdateLabel,
+  lastUpdates,
   peekLines,
   subagentRows,
   subagentSummary,
@@ -1773,6 +1775,7 @@ export function createChatSurface(
           >
             ${subagentChip(mail.title, mail.sessionId)}
             <span class="subagent-mail-note">${SUBAGENT_MAIL_NOTES[mail.kind] ?? mail.kind.replace(/_/g, " ")}</span>
+            ${mail.kind === "update" ? html`<div class="subagent-update-text" dir="auto">${markdown(messageText(message))}</div>` : nothing}
           </article>
         `;
       }
@@ -2573,7 +2576,7 @@ export function createChatSurface(
     failed: "failed",
   };
 
-  function subagentRowTpl(row: SubagentRow): TemplateResult {
+  function subagentRowTpl(row: SubagentRow, updates: ReadonlyMap<string, number>): TemplateResult {
     const now = Date.now();
     const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
     const peeking = subagentUi.peekId === row.session.id;
@@ -2593,7 +2596,9 @@ export function createChatSurface(
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
         <span class="subagent-row-title" dir="auto">${title}</span>
-        <span class="subagent-row-meta">${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}</span>
+        <span class="subagent-row-meta"
+          >${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}${lastUpdateLabel(row, updates, now)}</span
+        >
       </button>
       ${
         row.state === "failed"
@@ -2639,6 +2644,7 @@ export function createChatSurface(
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
     syncWorkTicker();
     if (!rows.length) return nothing;
+    const updates = lastUpdates(chatState.agent?.state.messages ?? []);
     const single = rows.length === 1;
     const expanded = single || subagentUi.expanded || rows.some((row) => row.state === "waiting");
     const failed = rows.some((row) => row.state === "failed");
@@ -2661,7 +2667,7 @@ export function createChatSurface(
                 <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
               </button>`
         }
-        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(subagentRowTpl)}</div>` : nothing}
+        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map((row) => subagentRowTpl(row, updates))}</div>` : nothing}
       </section>
     `;
   }
@@ -2991,6 +2997,7 @@ export function createChatSurface(
   }
 
   const SUBAGENT_MAIL_NOTES: Record<string, string> = {
+    update: "sent an update",
     final_answer: "finished",
     no_reply: "finished without a reply",
     awaiting_input: "needs an approval",

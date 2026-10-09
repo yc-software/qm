@@ -470,6 +470,10 @@ export function createSessionMethods(
             ...(goal.floor ? { floor: { ...goal.floor } } : {}),
           });
       }
+      const workingSince = (threadRef: string) => {
+        const run = latestRuns.get(threadRef);
+        return run?.startedAt ?? run?.createdAt;
+      };
       if (
         workingThreadRefs.size === 0 &&
         waiting.size === 0 &&
@@ -481,7 +485,7 @@ export function createSessionMethods(
         return sessions;
       return sessions.map((s) => ({
         ...s,
-        ...(workingThreadRefs.has(s.threadRef) ? { working: true } : {}),
+        ...(workingThreadRefs.has(s.threadRef) ? { working: true, workingSince: workingSince(s.threadRef) } : {}),
         ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
         ...(failedChildren.has(s.id) ? { lastTurnFailed: true } : {}),
         ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),

@@ -223,6 +223,7 @@ export interface SessionSyscallsFactory {
 
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
+  deliveries?: Pick<DeliveryStore, "enqueue">;
   enabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
@@ -824,10 +825,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               if (!input.followup) {
                 const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
+                const id = input.requestId
+                  ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
+                  : randomUUID();
                 await deps.mailbox.send({
-                  id: input.requestId
-                    ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
-                    : randomUUID(),
+                  id,
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
@@ -836,6 +838,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
+                if (deps.deliveries && binding.session.parentSessionId === target.id && target.surface === "web")
+                  await deps.deliveries.enqueue({
+                    destination: {
+                      type: "web",
+                      target: target.threadRef,
+                      webTranscript: { kind: "subagent_update", sessionId: binding.session.id, title: callerTitle },
+                    },
+                    text,
+                    idempotencyKey: `subagent-update:${id}`,
+                  });
                 return { ok: true, sessionId: target.id, title, delivered: "queued_message" };
               }
               if (input.followup && binding.request.privateSessionMessage)
