@@ -30,9 +30,11 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
+const speaker = (built: ReturnType<typeof buildAppRaw>, req: TurnRequest): Promise<string> =>
+  req.actor.provider ? principalOf(built, req.actor.externalId) : Promise.resolve(req.actor.externalId);
 async function requestScope(built: ReturnType<typeof buildAppRaw>, req: TurnRequest): Promise<string | null> {
   const c = req.conversation;
-  if (c.kind === "dm") return personalScope(built, req.actor.externalId);
+  if (c.kind === "dm") return `personal:${await speaker(built, req)}`;
   if ((c.kind === "channel" || c.kind === "group") && c.channelRef) return `${c.kind}:${c.channelRef}`;
   return null;
 }
@@ -60,7 +62,7 @@ function buildApp(...args: Parameters<typeof buildAppRaw>): ReturnType<typeof bu
   const turn = built.app.turn.bind(built.app);
   built.app.turn = async (req, ...rest) => {
     const scope = await requestScope(built, req);
-    if (scope) await ensure(await principalOf(built, req.actor.externalId), scope);
+    if (scope) await ensure(await speaker(built, req), scope);
     return turn(req, ...rest);
   };
   return built;
@@ -1307,12 +1309,12 @@ test("the egress claim keeps the control-plane host reachable under an allowlist
 });
 
 test("identity grounding: the roster lists this conversation's participants by their canonical directory name", async () => {
-  const { app, directory } = freshApp();
-  await directory.replace([
-    { principalId: "U1", displayName: "Alice Example", type: "internal" },
-    { principalId: "U2", displayName: "Renee Mars", type: "internal" },
-    { principalId: "U3", displayName: "taylor", type: "internal" },
-    { principalId: "U9", displayName: "Outsider Olive", type: "internal" },
+  const { app } = freshApp();
+  await app.upsertDirectory([
+    { principalId: "U1", provider: "slack" as const, displayName: "Alice Example", type: "internal" },
+    { principalId: "U2", provider: "slack" as const, displayName: "Renee Mars", type: "internal" },
+    { principalId: "U3", provider: "slack" as const, displayName: "taylor", type: "internal" },
+    { principalId: "U9", provider: "slack" as const, displayName: "Outsider Olive", type: "internal" },
   ]);
   const prompt = await app.turn({
     surface: "slack",
@@ -1338,13 +1340,14 @@ test("identity grounding: the roster lists this conversation's participants by t
 });
 
 test("identity grounding: the roster is bounded (caps at ROSTER_CAP and reports the overflow)", async () => {
-  const { app, directory } = freshApp();
+  const { app } = freshApp();
   const many = Array.from({ length: 30 }, (_, i) => ({
     principalId: `U${i}`,
+    provider: "slack" as const,
     displayName: `Person ${i}`,
     type: "internal" as const,
   }));
-  await directory.replace(many);
+  await app.upsertDirectory(many);
   const prompt = await app.turn({
     surface: "slack",
     actor: { externalId: "U0", provider: "slack" as const },
@@ -1352,7 +1355,7 @@ test("identity grounding: the roster is bounded (caps at ROSTER_CAP and reports 
       kind: "channel",
       threadRef: "ch:roster-big:t1",
       channelRef: "C-roster-big",
-      audience: many.map((m) => ({ externalId: m.principalId })),
+      audience: many.map((m) => ({ externalId: m.principalId, provider: "slack" as const })),
     },
     text: "!sysprompt",
   });
@@ -1379,15 +1382,15 @@ test("identity grounding: a participant who hasn't synced into the directory sti
     text: "!sysprompt",
   });
   const sp = prompt.reply ?? "";
-  assert.ok(sp.includes(`Alice Example (${alice})`));
-  assert.ok(sp.includes(`Newcomer Nat (${await principalOf(built, "U7")})`));
+  assert.ok(sp.includes("Alice Example (U1)"));
+  assert.ok(sp.includes("Newcomer Nat (U7)"));
 });
 
 test("identity grounding: a cased-vs-lowercase duplicate participant resolves to the single real directory member", async () => {
-  const { app, directory } = freshApp();
-  await directory.replace([
-    { principalId: "U1", displayName: "Jordan Lee", type: "internal" },
-    { principalId: "alice@acme.com", displayName: "Alice Wonderland", type: "internal" },
+  const { app } = freshApp();
+  await app.upsertDirectory([
+    { principalId: "U1", provider: "slack" as const, displayName: "Jordan Lee", type: "internal" },
+    { principalId: "alice@acme.com", provider: "email" as const, displayName: "Alice Wonderland", type: "internal" },
   ]);
   const prompt = await app.turn({
     surface: "slack",
@@ -1686,7 +1689,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     }
     assert.deepEqual(
       claims!.keychainMembers?.map((p) => p.id),
-      [await principalOf(built, "admin-alice")],
+      ["admin-alice"],
     );
   }
 });
@@ -1963,7 +1966,7 @@ test("a file shared with the session is LISTED in the cached system prompt — w
     ref: "budget.csv",
     granteeScopeId: scopeId("personal", p_u1),
     permission: "read",
-    grantedBy: "U2",
+    grantedBy: p_u2,
   });
   const res = await app.turn(dm("!sysprompt"));
   assert.equal(res.status, "ok");
