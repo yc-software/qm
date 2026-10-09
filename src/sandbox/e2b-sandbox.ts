@@ -4,6 +4,7 @@ import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
+import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -75,6 +76,7 @@ export interface StoredE2bSandbox {
 }
 
 export interface E2bSandboxOptions extends BlobStagingOptions {
+  advisoryLock?: AdvisoryLock;
   client: E2bClient;
   namePrefix?: string;
   defaultTimeoutSec?: number;
@@ -106,7 +108,10 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const store = opts.store ?? createMemoryMap<StoredE2bSandbox>();
   const snapshots = opts.snapshots ?? createMemorySnapshotStore();
-  const provisionQueue = createKeyedQueue<string>();
+  const localQueue = createKeyedQueue<string>();
+  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
+    localQueue(scope, () => advisoryLock.withLock(`e2b-provision:${scope}`, action));
 
   const sessionByName = new Map<string, E2bSession>();
   const scopeByName = new Map<string, string>();

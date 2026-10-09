@@ -130,7 +130,7 @@ test("provision uses the scope's default resource: backend, backing scope, lock,
   assert.equal(h.resourceId, "r1");
   assert.equal(h.scopeId, "personal:a");
   assert.equal(sprites.provisioned[0]!.layers[0]!.scopeId, "sandbox:r1", "rw layer remapped to the backing scope");
-  assert.deepEqual(resources.locks, [{ id: "r1", exclusive: true }]);
+  assert.deepEqual(resources.locks, [{ id: "r1", exclusive: false }]);
   assert.deepEqual(aws.calls, []);
 });
 

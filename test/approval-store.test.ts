@@ -92,3 +92,22 @@ test("system approvals stay pending without enqueuing or reviving an impossible 
   assert.deepEqual(await deliveries.pending("principal"), []);
   assert.equal((await deliveries.get(stale.id))?.expiredAt, expiredAt, "a sweep must not revive the stale DM");
 });
+
+test("approvals requested from a Slack DM thread are delivered into that thread", async () => {
+  for (const threadRef of ["dm:D1:1700.1", "agent:main:subagent:child"]) {
+    const deliveries = createDeliveryStore();
+    const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), deliveries);
+    const approval = record(threadRef);
+    approval.request!.deliveryTarget = "D1:1700.1";
+    await approvals.put("A1", approval);
+    const [delivery] = await deliveries.pending("principal");
+    assert.equal(delivery?.destination.threadTs, "1700.1");
+  }
+  const deliveries = createDeliveryStore();
+  const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), deliveries);
+  const channel = record("channel:C1:1700.2");
+  channel.request!.conversation = { kind: "channel", threadRef: "channel:C1:1700.2" } as never;
+  channel.request!.deliveryTarget = "C1:1700.2";
+  await approvals.put("A2", channel);
+  assert.equal((await deliveries.pending("principal"))[0]?.destination.threadTs, undefined);
+});

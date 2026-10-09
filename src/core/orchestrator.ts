@@ -160,13 +160,12 @@ import {
 } from "../harness/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
-import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
+import { absoluteAppLinks, jsonbSafeStringify } from "../util/text.ts";
 import {
   isModelBudget,
   isNonRetryable,
   NonRetryableTurnError,
   ProviderTurnError,
-  TitleRejected,
   turnFailureMessage,
   type TurnFailurePayload,
 } from "./turn-error.ts";
@@ -181,6 +180,7 @@ import { isHarnessId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts"
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { CodexTurnAuth } from "../harness/harness.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
+import { createSessionTitles } from "./session-title.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
   approvalGrantId,
@@ -196,7 +196,6 @@ import {
   renderTitleTranscript,
   replayableRequest,
   stripAckPrefix,
-  stripTurnBoilerplate,
   turnPostKeys,
   visibleTitleEntryText,
 } from "./orchestrator/turn-helpers.ts";
@@ -334,42 +333,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   const classifySecurityData = createSecurityClassifier(deps);
 
-  function fallbackSessionTitle(text: string): string | undefined {
-    const clean = stripTurnBoilerplate(text).replace(/\s+/g, " ").trim();
-    if (!clean) return undefined;
-    return clean.length > 60 ? `${headSlice(clean, 59).trimEnd()}…` : clean;
-  }
-
-  async function generateAndStoreTitle(
-    sessionId: string,
-    scopeId: ScopeId,
-    transcript: string,
-    principalId?: string,
-    fallbackText?: string,
-  ): Promise<string | undefined> {
-    if (!transcript.trim()) return undefined;
-    let title: string | undefined;
-    try {
-      title = await deps.harness.models.generateTitle?.(transcript);
-    } catch (e) {
-      deps.errors?.record(
-        {
-          category: "session_title",
-          code: e instanceof TitleRejected ? `rejected_${e.rule}` : "generation_failed",
-          message: errMessage(e),
-          scopeLabel: scopeId,
-          sessionId,
-        },
-        e,
-      );
-    }
-    title ??= fallbackText ? fallbackSessionTitle(fallbackText) : undefined;
-    if (title) {
-      if (principalId) await deps.sessions.updateParticipantView(sessionId, principalId, { title });
-      else await deps.sessions.updateTitle(sessionId, title);
-    }
-    return title;
-  }
+  const titles = createSessionTitles({
+    sessions: deps.sessions,
+    harness: deps.harness,
+    ...(deps.sessionStateBus ? { sessionStateBus: deps.sessionStateBus } : {}),
+    ...(deps.errors ? { errors: deps.errors } : {}),
+  });
 
   function recordSessionBusy(busy: {
     site: "turn" | "quarantined_input" | "flagged_input";
@@ -541,7 +510,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (entries.length === 0) return null;
       const transcript = renderTitleTranscript(entries);
       const fallbackEntry = entries.find((entry) => entry.type === "user" && !isOverheardEntry(entry));
-      const title = await generateAndStoreTitle(
+      const title = await titles.generateAndStore(
         session.id,
         session.scopeId,
         transcript,
@@ -1372,6 +1341,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
 
+      const delegatedTask =
+        automatedTurn && !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      const syntheticInput = (input.proactiveOpener && !input.text.trim()) || (automatedTurn && !delegatedTask);
+      const titleText = input.displayText?.trim() || input.text;
+      let fallbackTitleWrite: Promise<void> | undefined;
+      const assignSessionTitle = () => {
+        if (!session.title && !syntheticInput && !input.approval)
+          fallbackTitleWrite = titles.titleFromFirstMessage(session, scopeId, titleText);
+      };
+
       const isRetry = (input.attempt ?? 1) > 1;
       const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
         if (!input.runId || !deps.runs) return null;
@@ -2076,6 +2055,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       leaseMs += Date.now() - leaseStart - acquired.waitedMs;
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
+      if (!ambientTurn) assignSessionTitle();
       const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
       const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
       const catchUpMessageRevisions = async (): Promise<void> => {
@@ -2558,6 +2538,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : { status: "silent", sessionId: session.id };
           }
         }
+        if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
           if ((input.surface === "slack" || input.surface === "monitor") && input.runLeaseToken) {
@@ -3287,12 +3268,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let firstChunkAt: number | undefined;
         let lastChunkAt: number | undefined;
         const emittedEntries: SessionEntry[] = [];
-        const syntheticPrompt =
-          (input.proactiveOpener && !input.text.trim()) ||
-          automatedTurn ||
-          partial ||
-          approvalReplay ||
-          !!releasedToolOutput;
+        const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
         failureUserPayload =
           !syntheticPrompt && input.text.trim()
             ? {
@@ -3302,15 +3278,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
               }
             : undefined;
-        const titleText = input.displayText?.trim() || input.text;
-        const fallbackTitle = !session.title && !syntheticPrompt ? fallbackSessionTitle(titleText) : undefined;
-        const fallbackTitleWrite = fallbackTitle ? deps.sessions.updateTitle(session.id, fallbackTitle) : undefined;
-        if (fallbackTitleWrite && deps.harness.models.generateTitle) {
-          void fallbackTitleWrite
-            .then(() => generateAndStoreTitle(session.id, scopeId, `User:\n${stripTurnBoilerplate(titleText)}`))
-            .finally(() => deps.errors?.flush())
-            .catch(swallowAs("orchestrator: session title", undefined));
-        }
         const requestedTurnWallClockMs =
           typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0 ? input.turnWallClockMs : undefined;
         const configuredTurnWallClockSec = await deps.config?.getTurnWallClockSecDurable(resolution.orgScopeId);
@@ -3584,6 +3551,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
           return deps.harness.turns.runTurn({
             session,
+            ...(turnTimezone ? { timezone: turnTimezone } : {}),
             prepareSteer: async (text, request) => {
               const refreshedInbox =
                 input.surface === "web" &&
@@ -4313,7 +4281,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const tail = async (): Promise<void> => {
           try {
             if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
-              await generateAndStoreTitle(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
+              await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
             }
           } finally {
             await reclaimBox();

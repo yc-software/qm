@@ -1,0 +1,30 @@
+name: Wall of shame review
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wall-of-shame-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  wall-of-shame:
+    name: Wall of shame review
+    timeout-minutes: 3
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .node-version
+      - name: Check the PR description's review report
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/wall-of-shame-check.ts

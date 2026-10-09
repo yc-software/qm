@@ -115,6 +115,17 @@ test("blank sandbox identities coexist and default changes never copy files or r
   assert.equal(a.resourceId, first.id);
 });
 
+test("provisioning a running computer does not wait behind a long-running command on it", async () => {
+  const { resources, router, layers } = fixture();
+  const handle = await router.provision(layers);
+  const command = Promise.withResolvers<void>();
+  const running = resources.use(handle.resourceId!, () => command.promise);
+
+  assert.equal((await router.provision(layers)).id, handle.id);
+  command.resolve();
+  await running;
+});
+
 test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
   const { backend, options } = fixture();
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };

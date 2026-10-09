@@ -21,6 +21,7 @@ import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../re
 import type { DirectoryStore } from "../../directory/directory-store.ts";
 import type { EnvironmentStore } from "../../environments/environment-store.ts";
 import type { SessionStore } from "../../sessions/session-store.ts";
+import type { SessionStateBus } from "../../runs/session-state-bus.ts";
 import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
@@ -123,6 +124,7 @@ export interface OrchestratorDeps {
   resolveBaseModelId?: () => string | undefined;
   sessionTapeMode?: "shadow" | "serve";
   sessions: SessionStore;
+  sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
   workspace: WorkspaceStore;
   files: FileArtifactStore;
