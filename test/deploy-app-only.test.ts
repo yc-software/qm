@@ -44,7 +44,9 @@ test("app-only gateway checks exact current personal read grants without inherit
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const acl = createAclStore();
+  const identity = createIdentityService();
   const deploy = createDeployService({
+    principals: identity.principals,
     externalSharingAllowed: async () => true,
     deployStore: createDeployStore({ git: { repoRoot: join(dir, "repos") } }),
     provider: {
@@ -56,7 +58,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     acl,
     deployDir: join(dir, "deploy"),
   });
-  const identity = createIdentityService();
+  const guestScope = scopeId("personal", await identity.principals.act(guest, { email: guest }));
   const app = createApp({
     deploy,
     acl,
@@ -140,7 +142,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     await acl.grant({
       ownerScopeId,
       ref: encodeRef(deployRef(shared.id)),
-      granteeScopeId: scopeId("personal", guest),
+      granteeScopeId: guestScope,
       permission: "write",
       grantedBy: "owner@example.test",
     });

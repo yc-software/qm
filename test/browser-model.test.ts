@@ -1,3 +1,4 @@
+import { personalScope } from "./support/principal.ts";
 import "./support/auto-fake-sprites.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { test } from "node:test";
@@ -160,7 +161,7 @@ test("gateway deployment provisions a browser token without exposing the company
   const claims = await verifyCapabilityToken(env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.aud, BROWSER_MODEL_AUD);
   assert.equal(claims?.browserModel, model);
-  assert.equal(claims?.scopeId, "personal:U1");
+  assert.equal(claims?.scopeId, await personalScope(built, "U1"));
 });
 
 test("gateway browsing never selects a direct provider when callback signing or URL is missing", async () => {

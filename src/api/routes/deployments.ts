@@ -17,7 +17,7 @@ import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope, principalGraph } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
@@ -145,7 +145,10 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
   )
     return;
   const deployment = (await app.listDeployments()).find((d) => d.id === parts.id);
-  const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
+  const actor = await authorizeAdmin(
+    { req, res, deps, app, capability: null },
+    deployment?.ownerScopeId ?? orgScope(deps),
+  );
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   audit(deps, {
@@ -890,11 +893,13 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (sub && deployment) {
     if (session?.appOnly) {
       await deps.identity?.refresh();
+      const principal = principalGraph(ctx).principalOf(sub);
       if (
         externalAllowed &&
         deps.identity?.deactivationSource(sub) !== "manual" &&
         (await app.deploymentGrantees(deployment.id)).some(
-          (grant) => grant.scope === scopeId("personal", sub.trim().toLowerCase()) && grant.permission === "read",
+          (grant) =>
+            principal !== undefined && grant.scope === scopeId("personal", principal) && grant.permission === "read",
         )
       )
         authenticatedPermission = "read";
@@ -1677,7 +1682,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
     const deployment = await app.getDeployment(params.id!);
     return sendJson(res, 200, {
       ok: true,
-      target: { scope: target.scope, label: target.label },
+      target: { scope: invite?.scope ?? target.scope, label: target.label },
       access,
       reach,
       ...(invite ? { invitation: invite.invitation } : {}),

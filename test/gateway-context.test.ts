@@ -9,6 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 test("renders gateway + location + identifier lines", () => {
   const out = renderGatewayContext("slack", {
@@ -93,11 +94,12 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
 });
 
 test("web prompt tells cron creators to use a real notification destination", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
   const res = await app.turn({
     surface: "web",
     actor: { externalId: "U3" },
-    conversation: { kind: "dm", threadRef: "web:U3:t1" },
+    conversation: { kind: "dm", threadRef: `web:${await principalOf(built, "U3")}:t1` },
     text: "!sysprompt",
   });
   assert.equal(res.status, "ok");

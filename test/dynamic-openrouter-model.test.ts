@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const oxAlphaCatalog: typeof fetch = async () =>
   Response.json({
@@ -39,7 +40,7 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
   const turn = await built.app.turn({
     surface: "web",
     actor: { externalId: "alice" },
-    conversation: { kind: "dm", threadRef: "web:alice:dynamic-openrouter-model" },
+    conversation: { kind: "dm", threadRef: `web:${await principalOf(built, "alice")}:dynamic-openrouter-model` },
     text: "hello",
     model: "stealth/ox-alpha",
     async: true,

@@ -9,6 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-working-"));
@@ -31,7 +32,8 @@ function enqueueRequest(): OrchestratorInput {
 }
 
 test("listSessions flags a session with an in-flight turn as working", async () => {
-  const { app, runs } = freshApp();
+  const built = freshApp();
+  const { app, runs } = built;
 
   await app.turn(dm("Just a question", "web:U1:idle"));
 
@@ -42,7 +44,7 @@ test("listSessions flags a session with an in-flight turn as working", async () 
   assert.notEqual(busyId, busyThread, "session UUID and threadRef are distinct (the trap)");
   await runs.enqueue({ sessionId: busyThread, request: enqueueRequest() });
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions(await principalOf(built, "U1"));
   const busyRow = list.find((s) => s.threadRef === busyThread);
   const idleRow = list.find((s) => s.threadRef === "web:U1:idle");
 
@@ -52,25 +54,30 @@ test("listSessions flags a session with an in-flight turn as working", async () 
 });
 
 test("the working flag clears once the in-flight run settles", async () => {
-  const { app, runs } = freshApp();
+  const built = freshApp();
+  const { app, runs } = built;
   const thread = "web:U1:settle";
   await app.turn(dm("start", thread));
   await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
 
-  assert.equal((await app.listSessions("U1")).find((r) => r.threadRef === thread)?.working, true);
+  assert.equal(
+    (await app.listSessions(await principalOf(built, "U1"))).find((r) => r.threadRef === thread)?.working,
+    true,
+  );
 
   const claimed = await runs.claim("w1", 5_000);
   assert.equal(claimed?.sessionId, thread, "the run is keyed by threadRef");
   await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "ok", reply: "done" });
 
   assert.ok(
-    !(await app.listSessions("U1")).find((r) => r.threadRef === thread)?.working,
+    !(await app.listSessions(await principalOf(built, "U1"))).find((r) => r.threadRef === thread)?.working,
     "the flag clears once the run is terminal",
   );
 });
 
 test("listSessions flags a subagent whose latest turn failed, and only while it stays failed", async () => {
-  const { app, runs, sessions } = freshApp();
+  const built = freshApp();
+  const { app, runs, sessions } = built;
   const parent = await app.turn(dm("parent", "web:U1:parent"));
   const child = await app.turn(dm("child", "web:U1:child"));
   const loose = await app.turn(dm("loose", "web:U1:loose"));
@@ -82,24 +89,28 @@ test("listSessions flags a subagent whose latest turn failed, and only while it 
     await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "failed", reason: "boom" });
   }
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions(await principalOf(built, "U1"));
   assert.equal(list.find((s) => s.id === child.sessionId)?.lastTurnFailed, true);
   assert.ok(!list.find((s) => s.id === loose.sessionId)?.lastTurnFailed, "only subagents carry the flag");
 
   await runs.enqueue({ sessionId: "web:U1:child", request: enqueueRequest() });
   const retry = await runs.claim("w1", 5_000);
   await runs.complete(retry!.id, retry!.leaseToken ?? "", { status: "ok", reply: "fine" });
-  assert.ok(!(await app.listSessions("U1")).find((s) => s.id === child.sessionId)?.lastTurnFailed);
+  assert.ok(
+    !(await app.listSessions(await principalOf(built, "U1"))).find((s) => s.id === child.sessionId)?.lastTurnFailed,
+  );
 });
 
 test("sidebar batches visible goals and preserves the lookback boundary and inactive overrides", async () => {
-  const { app, sessions, runs } = freshApp();
+  const built = freshApp();
+  const { app, sessions, runs } = built;
   const visible: string[] = [];
   const refs: string[] = [];
   for (const [index, owner] of ["U1", "U1", "hidden"].entries()) {
     const ref = `web:${owner}:batch:${index}`;
-    const session = await sessions.getOrCreateByThread(ref, "dm", `personal:${owner}`);
-    await sessions.addParticipant(session.id, owner);
+    const principal = await principalOf(built, owner);
+    const session = await sessions.getOrCreateByThread(ref, "dm", `personal:${principal}`);
+    await sessions.addParticipant(session.id, principal);
     const { lease } = await sessions.acquireLease(session.id);
     assert.ok(lease);
     const goal = {
@@ -148,7 +159,7 @@ test("sidebar batches visible goals and preserves the lookback boundary and inac
     assert.deepEqual(new Set(ids), new Set(refs));
     return latest(ids, opts);
   };
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions(await principalOf(built, "U1"));
   assert.deepEqual({ reads, runReads }, { reads: 1, runReads: 1 });
   assert.equal(list.length, 2);
   assert.equal(list.find((row) => row.id === visible[0])?.goal?.objective, "goal 0");

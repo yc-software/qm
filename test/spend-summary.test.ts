@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installPrincipalResolver } from "../src/directory/person.ts";
 import { cacheHitRatio } from "../src/admin/metrics-sink.ts";
 import type { SpendRow } from "../src/sessions/session-store.ts";
 import { spendCsv, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
@@ -362,13 +361,11 @@ for (const bucket of ["day", "week"] as const) {
 }
 
 for (const bucket of ["day", "week"] as const) {
-  test(`summarizeSpend: ${bucket} person series merges aliases and conserves shared spend`, (t) => {
-    installPrincipalResolver({ principalOf: (id: string) => (id === "slack-alice" ? "alice" : undefined) });
-    t.after(() => installPrincipalResolver(null));
+  test(`summarizeSpend: ${bucket} person series groups a principal's personal spend and conserves shared spend`, () => {
     const rows = [
       row({ day: MON, scopeId: "personal:alice", origin: "conversation", costUsd: 1 }),
-      row({ day: MON, scopeId: "personal:slack-alice", origin: "cron", costUsd: 2 }),
-      row({ day: TUE, scopeId: "personal:slack-alice", origin: "monitor", costUsd: 4 }),
+      row({ day: MON, scopeId: "personal:alice", origin: "cron", costUsd: 2 }),
+      row({ day: TUE, scopeId: "personal:alice", origin: "monitor", costUsd: 4 }),
       row({ day: MON, scopeId: "channel:C1", origin: "conversation", costUsd: 8 }),
       row({ day: TUE, scopeId: "team:T1", origin: "cron", costUsd: 16 }),
       row({ day: MON + 7, scopeId: "personal:bob", origin: "conversation", costUsd: 32 }),

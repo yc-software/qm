@@ -11,6 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -90,8 +91,9 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     const r = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
+    const u1 = await principalOf(s.built, "U1");
     assert.ok(
-      d.users.some((u: { principalId: string }) => u.principalId === "U1"),
+      d.users.some((u: { principalId: string }) => u.principalId === u1),
       "the DM participant appears",
     );
     assert.ok(
@@ -134,8 +136,9 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     const r = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
-    assert.equal(d.principalId, "U1");
-    assert.equal(d.scopeId, "personal:U1");
+    const u1 = await principalOf(s.built, "U1");
+    assert.equal(d.principalId, u1);
+    assert.equal(d.scopeId, `personal:${u1}`);
     assert.equal(d.stats.sessions, 1);
     for (const key of ["conversations", "files", "crons", "deployments"]) assert.equal(key in d, false);
 
@@ -284,7 +287,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     });
     assert.equal(onboarded.status, 200);
     assert.deepEqual(((await onboarded.json()) as any).members, [
-      { principalId: "new@example.com", displayName: "new@example.com" },
+      { principalId: await principalOf(built, "new@example.com"), displayName: "new@example.com" },
     ]);
 
     const empty = await fetch(`${base}/v1/admin/directory`, {

@@ -2,10 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 let providerConfigured = false;
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   if (req.url?.startsWith("/v1/surface-config")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(

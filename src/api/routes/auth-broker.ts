@@ -5,7 +5,7 @@ import { AdminError } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
 import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
-import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
+import { isObj, authorizeAdmin, orgScope, audit, activePrincipal, principalGraph } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 const NAMESPACE = "authbroker:";
@@ -67,7 +67,8 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
-  const grants = (await deps.acl?.list()) ?? [];
+  const principal = principalGraph(ctx).principalOf(email);
+  const grants = principal ? ((await deps.acl?.list()) ?? []) : [];
   const deployments = await app.listDeployments();
   const granted = deployments.filter(
     (d) =>
@@ -76,7 +77,7 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
         (g) =>
           g.ownerScopeId === d.ownerScopeId &&
           g.ref === encodeRef(deployRef(d.id)) &&
-          g.granteeScopeId === `personal:${email}` &&
+          g.granteeScopeId === `personal:${principal}` &&
           g.permission === "read",
       ),
   );
@@ -100,7 +101,8 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "invalid_email" });
   const email = b.email.trim().toLowerCase();
   if (ctx.pathname.endsWith("/revoke")) {
-    if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, orgScope()))) return;
+    const own = !!ctx.actor && principalGraph(ctx).principalOf(email) === ctx.actor.p;
+    if (!own && !(await authorizeAdmin(ctx, orgScope()))) return;
     await deps.brokerSessions.revoke(email);
     audit(deps, {
       principalId: ctx.actor?.p ?? "admin",

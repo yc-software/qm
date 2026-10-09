@@ -13,6 +13,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-keychain-")) }));
@@ -43,9 +44,11 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
       text: "hello",
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
+    const u1 = await principalOf(s.built, "U1");
+    const u2 = await principalOf(s.built, "U2");
 
     const cred = await s.keychain.save({
-      ownerId: "U1",
+      ownerId: u1,
       service: "github",
       secret: "ghp_secret",
       envKey: "GITHUB_TOKEN",
@@ -53,14 +56,14 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
     });
     const grant = await s.keychain.createGrant({
       credentialId: cred.id,
-      ownerId: "U1",
+      ownerId: u1,
       audienceScopeId: scopeId("channel", "C1"),
       mode: "standing",
       purpose: "use github for deploys",
     });
     const { ask } = await s.keychain.createAsk({
       credentialId: cred.id,
-      requesterId: "U2",
+      requesterId: u2,
       requesterScopeId: scopeId("channel", "C2"),
       purpose: "need github for CI",
     });
@@ -71,11 +74,11 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
     assert.equal(d.enabled, true);
     assert.ok(
       d.people.some(
-        (p: { principalId: string; credentialCount: number }) => p.principalId === "U1" && p.credentialCount === 1,
+        (p: { principalId: string; credentialCount: number }) => p.principalId === u1 && p.credentialCount === 1,
       ),
     );
     assert.ok(
-      d.people.some((p: { principalId: string }) => p.principalId === "U2"),
+      d.people.some((p: { principalId: string }) => p.principalId === u2),
       "ask requester appears even without sessions",
     );
     assert.deepEqual(

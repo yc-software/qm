@@ -36,6 +36,19 @@ export function personKey(id: string | null | undefined): string {
   return resolver?.principalOf(key) ?? key;
 }
 
+/** How people know a principal: an email, else a Slack user id, else the UUID itself. */
+function readableHandle(id: string): string {
+  if (!UUID.test(id)) return id;
+  const handles = resolver?.handlesOf?.(id.toLowerCase()) ?? [];
+  return handles.find((h) => h.includes("@")) ?? handles.find((h) => SLACK_USER.test(h)) ?? id;
+}
+
+/** A principal as prompts name it: `Display Name (handle)`, or just the handle. */
+export function personLabel(person: { id: string; displayName?: string }): string {
+  const handle = readableHandle(person.id);
+  return person.displayName ? `${person.displayName} (${handle})` : handle;
+}
+
 /** How Slack addresses a principal: its Slack user id, else an email Slack can look up. */
 export function slackHandleOf(id: string): string {
   if (!UUID.test(id)) return id;

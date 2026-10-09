@@ -334,7 +334,7 @@ async function gate(
         actor = null;
     }
     if (actor) {
-      const graph = principalGraph(deps);
+      const graph = principalGraph(wiring);
       const signIn = (h: string) => graph.act(h, { email: h.includes("@") ? h : null, verified: true });
       actor = { ...actor, p: await signIn(actor.p), ...(actor.imp ? { imp: await graph.act(actor.imp) } : {}) };
     }
@@ -360,7 +360,9 @@ async function gate(
         if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
         else if (field) asserted = assertedActor(field, url, body, req);
         const actorId = actor.p;
-        const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
+        const graph = principalGraph(wiring);
+        const matchesActor = (value: unknown): boolean =>
+          typeof value === "string" && (graph.principalOf(value) ?? value) === actorId;
         if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;

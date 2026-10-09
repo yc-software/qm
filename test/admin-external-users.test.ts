@@ -540,20 +540,22 @@ test("expiry classifies an external as guest, and the signed broker check answer
 test("the directory resolves participants without loading their session windows", async (t) => {
   const s = start();
   t.after(s.close);
+  const aliceId = await s.built.principals.act("alice");
+  const inactiveId = await s.built.principals.act("inactive");
   for (const thread of ["first", "second"]) {
-    const session = await s.built.sessions.getOrCreateByThread(thread, "dm", "personal:alice");
-    await s.built.sessions.addParticipant(session.id, "alice");
-    await s.built.sessions.addParticipant(session.id, "inactive");
+    const session = await s.built.sessions.getOrCreateByThread(thread, "dm", `personal:${aliceId}`);
+    await s.built.sessions.addParticipant(session.id, aliceId);
+    await s.built.sessions.addParticipant(session.id, inactiveId);
   }
-  await s.built.identity.deactivate("inactive");
+  await s.built.identity.deactivate(inactiveId);
   t.mock.method(s.built.sessions, "listParticipants", () => {
     throw new Error("Directory lookup must not load participant windows");
   });
-  const alice = { principalId: "alice", displayName: "alice", type: "internal" };
+  const alice = { principalId: aliceId, displayName: "alice", type: "internal" };
   assert.deepEqual(await s.built.app.directoryMembers(), [alice]);
-  assert.deepEqual(await s.built.app.directoryMember("alice"), alice);
-  assert.deepEqual(await s.built.app.resolveRecipient("alice"), { kind: "one", member: alice });
-  assert.equal(await s.built.app.directoryMember("inactive"), null);
+  assert.deepEqual(await s.built.app.directoryMember(aliceId), alice);
+  assert.deepEqual(await s.built.app.resolveRecipient(aliceId), { kind: "one", member: alice });
+  assert.equal(await s.built.app.directoryMember(inactiveId), null);
 });
 
 test("the directory resolves an active external member and not an expired one", async () => {
@@ -571,23 +573,23 @@ test("the directory resolves an active external member and not an expired one", 
     await s.built.identity.putExternalMember(record("live@partner.example", now + DAY_MS));
     await s.built.identity.putExternalMember(record("gone@partner.example", now - 1));
 
+    const live = await s.built.principals.act("live@partner.example");
+    const gone = await s.built.principals.act("gone@partner.example");
     assert.deepEqual(await s.built.app.directoryMember("Live@Partner.example"), {
-      principalId: "live@partner.example",
+      principalId: live,
       displayName: "live@partner.example",
       type: "internal",
     });
     assert.equal(await s.built.app.directoryMember("gone@partner.example"), null);
     assert.equal((await s.built.app.resolveRecipient("live@partner.example")).kind, "one");
     assert.equal((await s.built.app.resolveRecipient("gone@partner.example")).kind, "none");
-    assert.ok((await s.built.app.directoryMembers()).some((m) => m.principalId === "live@partner.example"));
-    assert.ok(!(await s.built.app.directoryMembers()).some((m) => m.principalId === "gone@partner.example"));
+    assert.ok((await s.built.app.directoryMembers()).some((m) => m.principalId === live));
+    assert.ok(!(await s.built.app.directoryMembers()).some((m) => m.principalId === gone));
 
     const hit = await fetch(`${s.base}/v1/admin/directory?q=${encodeURIComponent("live@partner.example")}`, {
       headers: { "x-admin-actor": ALICE },
     });
-    assert.deepEqual(((await hit.json()) as any).members, [
-      { principalId: "live@partner.example", displayName: "live@partner.example" },
-    ]);
+    assert.deepEqual(((await hit.json()) as any).members, [{ principalId: live, displayName: "live@partner.example" }]);
   } finally {
     await s.close();
   }

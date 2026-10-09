@@ -7,12 +7,14 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 for (const checkResult of ["passed", "failed", "missing"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
     const built = buildApp(testConfig());
-    const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
-    await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+    const u1 = await principalOf(built, "U1");
+    const computer = await built.sandboxResources.create(u1, `personal:${u1}`, "sprites", "default");
+    await built.sandboxResources.setDefault(u1, `personal:${u1}`, computer.id);
     const org = scopeId("org", "default-org");
     await built.serviceCreds.setServiceCredential(org, {
       slug: "error-source",
@@ -88,9 +90,9 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
       },
     });
     const { loop } = await loops.create({
-      owner: "U1",
-      createdBy: "U1",
-      ownerScopeId: scopeId("personal", "U1"),
+      owner: u1,
+      createdBy: u1,
+      ownerScopeId: scopeId("personal", u1),
       name: "Error RCA",
       playbook: "Read errors and prepare an RCA and proposed fix.",
       successCondition: "RCA and proposed fix are prepared and the check passes.",

@@ -31,6 +31,8 @@ import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 
+const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
+
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
   const viewersOwn = (id: string): boolean => viewerKeys.has(personKey(id));
@@ -145,7 +147,11 @@ export function createMessagingMethods(
         .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
       ...participants
         .filter((principalId) => deps.identity.classify(principalId).type === "internal")
-        .map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
+        .map((principalId) => ({
+          principalId,
+          displayName: deps.identity.principals.displayName(principalId) ?? principalId,
+          type: "internal" as const,
+        })),
     ];
     const byPrincipal = new Map<string, DirectoryMember>();
     for (const member of await principalRows(candidates))
@@ -465,7 +471,8 @@ export function createMessagingMethods(
           displayName: m.displayName,
           email,
         });
-        members.push({ ...m, principalId });
+        const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
+        members.push({ ...m, principalId, ...(slackId ? { slackId } : {}) });
       }
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;

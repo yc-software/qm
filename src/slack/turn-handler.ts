@@ -285,7 +285,10 @@ export function createTurnHandler(deps: {
       if (deps.externalAccess) threadRef = `slack-account:${ids.ownTeamId}:${threadRef}`;
       replyThreadTs = inc.threadTs;
       if (!actor.isBot && !actor.isExternalGuest)
-        deps.ensureHeader?.(client, inc.channel, `personal:${actor.externalId}`, "dm");
+        void core
+          .personalScopeOf(actor.externalId)
+          .then((scope) => deps.ensureHeader?.(client, inc.channel, scope, "dm"))
+          .catch(swallowAs("slack: dm header scope", undefined));
     } else {
       channelRef = inc.channel;
       channelObservedAt = Date.now();

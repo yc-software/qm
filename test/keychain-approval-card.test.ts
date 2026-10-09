@@ -28,14 +28,16 @@ async function fixture() {
     key: deriveConnectorKey("native-approval-test"),
     now: () => now,
   });
-  const credential = await keychain.save({ ownerId: "alice@example.com", service: "aws", secret: "fixture-secret" });
+  const identity = createIdentityService();
+  const alice = await identity.principals.act("alice@example.com");
+  const credential = await keychain.save({ ownerId: alice, service: "aws", secret: "fixture-secret" });
   const sessions = createMemorySessionStore();
-  const session = await sessions.getOrCreateByThread("web:alice:fixture", "dm", "personal:alice@example.com");
-  await sessions.addParticipant(session.id, "alice@example.com");
+  const session = await sessions.getOrCreateByThread(`web:${alice}:fixture`, "dm", `personal:${alice}`);
+  await sessions.addParticipant(session.id, alice);
   const { ask } = await keychain.createAsk({
     credentialId: credential.id,
-    requesterId: "alice@example.com",
-    requesterScopeId: "personal:alice@example.com",
+    requesterId: alice,
+    requesterScopeId: `personal:${alice}`,
     requesterThreadRef: session.threadRef,
     requesterSeq: 120,
     requestedMode: "standing",
@@ -46,7 +48,6 @@ async function fixture() {
     belongsToScope: async () => member,
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
-  const identity = createIdentityService();
   const enqueued: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
   const approvals = createKeychainApprovals({
     deliveries: {
@@ -64,6 +65,8 @@ async function fixture() {
     },
   });
   return {
+    alice,
+    identity,
     keychain,
     grants,
     asks,
@@ -132,7 +135,7 @@ test("wrong owner, revoked membership, and expired requests never grant access",
 
 test("the card links the conversation inline and omits command-policy fields", async () => {
   const f = await fixture();
-  const view = (await f.approvals.get(f.ask.id, "alice@example.com"))!;
+  const view = (await f.approvals.get(f.ask.id, f.alice))!;
   const origin = await keychainApprovalOrigin(view, {}, "https://qm.example/web-ui");
   assert.equal(origin, `https://qm.example/web-ui/s/${f.session.id}?seq=120`);
   const card = keychainApprovalMessage(view, origin);
@@ -278,12 +281,12 @@ test("an expired notification cannot hide an approval recovered after a failed w
 test("approval labels use the owner's session title without exposing inaccessible titles", async () => {
   const f = await fixture();
   await f.sessions.updateTitle(f.session.id, "Nightly report");
-  await f.sessions.updateParticipantView(f.session.id, "alice@example.com", { title: "My nightly report" });
-  const view = (await f.approvals.get(f.ask.id, "alice@example.com"))!;
+  await f.sessions.updateParticipantView(f.session.id, f.alice, { title: "My nightly report" });
+  const view = (await f.approvals.get(f.ask.id, f.alice))!;
   assert.equal(view.conversation, "My nightly report");
   assert.match(JSON.stringify(keychainApprovalMessage(view, "https://qm.example/s/test")), /\|in My nightly report>/);
   f.sessions.getForParticipant = async () => null;
-  const hidden = (await f.approvals.get(f.ask.id, "alice@example.com"))!;
+  const hidden = (await f.approvals.get(f.ask.id, f.alice))!;
   assert.equal(hidden.conversation, "the Reports conversation");
   assert.equal(hidden.sessionId, undefined);
 });
@@ -312,13 +315,13 @@ test("the card goes where the request came from, never to someone else's DM", ()
 
 test("a sub-agent request shows in both sessions, and deciding anywhere syncs the posted card", async () => {
   const f = await fixture();
-  const child = await f.sessions.getOrCreateByThread("agent:main:subagent:c1", "dm", "personal:alice@example.com");
-  await f.sessions.addParticipant(child.id, "alice@example.com");
+  const child = await f.sessions.getOrCreateByThread("agent:main:subagent:c1", "dm", `personal:${f.alice}`);
+  await f.sessions.addParticipant(child.id, f.alice);
   await f.sessions.setParentSession(child.id, f.session.id);
   const { ask } = await f.keychain.createAsk({
     credentialId: f.ask.credentialId,
-    requesterId: "alice@example.com",
-    requesterScopeId: "personal:alice@example.com",
+    requesterId: f.alice,
+    requesterScopeId: `personal:${f.alice}`,
     requesterThreadRef: child.threadRef,
     requesterDestination: { type: "slack", target: "D1:9.9" },
     purpose: "Read the report",

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 import type { ScopeId } from "../src/types.ts";
 
 test("session parentage requires current membership and rejects cycles and scope changes", async () => {
@@ -118,23 +119,25 @@ test("a late child steer remains pending when admission fails, then replays once
 
 test("late human child messages retain their sender and revalidate access", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-human-replay-")) }));
+  const p1 = await principalOf(built, "U1");
+  const p2 = await principalOf(built, "U2");
   await built.app.upsertDirectory([
-    { principalId: "U1", displayName: "User One", type: "internal" },
-    { principalId: "U2", displayName: "User Two", type: "internal" },
+    { principalId: p1, displayName: "User One", type: "internal" },
+    { principalId: p2, displayName: "User Two", type: "internal" },
   ]);
   const channels = [{ channelId: "C1", name: "shared", isPrivate: true }];
   await built.app.upsertChannels(
     channels,
-    ["U1", "U2"].map((principalId) => ({ channelId: "C1", principalId })),
+    [p1, p2].map((principalId) => ({ channelId: "C1", principalId })),
   );
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:human-replay", "channel", "channel:C1");
-  for (const id of ["U1", "U2"]) await built.sessions.addParticipant(child.id, id);
-  const actor = { id: "U1", type: "internal" as const };
+  for (const id of [p1, p2]) await built.sessions.addParticipant(child.id, id);
+  const actor = { id: p1, type: "internal" as const };
   const conversation = {
     kind: "channel" as const,
     channelRef: "C1",
     threadRef: child.threadRef,
-    audience: [actor, { id: "U2", type: "internal" as const }],
+    audience: [actor, { id: p2, type: "internal" as const }],
   };
   await built.sessions.setSpawnMeta(child.id, { surface: "web", actor, conversation });
   const { run } = await built.runs.enqueue({
@@ -158,10 +161,10 @@ test("late human child messages retain their sender and revalidate access", asyn
   };
   await send("from second user");
   const replay = await built.runs.activeForThread(child.threadRef);
-  assert.equal(replay?.request.actor.id, "U2");
+  assert.equal(replay?.request.actor.id, p2);
   assert.equal(replay?.request.text, "from second user");
   await built.runs.withdraw(replay!.id);
-  await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: "U1" }], Date.now() + 1, ["C1"]);
+  await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: p1 }], Date.now() + 1, ["C1"]);
   await send("after revocation");
   assert.equal(await built.runs.activeForThread(child.threadRef), null);
   assert.deepEqual(await built.signals.pending(run.id), []);

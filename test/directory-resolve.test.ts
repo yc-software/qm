@@ -12,6 +12,7 @@ import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "directory-resolve-secret".repeat(3);
 
@@ -49,10 +50,12 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       [{ channelId: "CPUBLIC", name: "public", isPrivate: false }],
       [{ channelId: "CPUBLIC", principalId: "carol@acme.com" }],
     );
+    const carol = await principalOf(built, "carol@acme.com");
+    const alice = await principalOf(built, "alice@acme.com");
     for (const [channel, principal, member] of [
-      ["CPUBLIC", "carol@acme.com", true],
-      ["CPUBLIC", "alice@acme.com", false],
-      ["CUNKNOWN", "carol@acme.com", false],
+      ["CPUBLIC", carol, true],
+      ["CPUBLIC", alice, false],
+      ["CUNKNOWN", carol, false],
     ] as const) {
       const path = `/v1/directory/channels/${channel}/members/${encodeURIComponent(principal)}`;
       assert.equal((await fetch(`${base}${path}`)).status, 401);
@@ -68,7 +71,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     assert.equal(res.status, 200);
     const { matches } = (await res.json()) as { matches: Array<{ principalId: string; slackId?: string }> };
     assert.equal(matches.length, 1);
-    assert.equal(matches[0]!.principalId, "carol@acme.com");
+    assert.equal(matches[0]!.principalId, await principalOf(built, "carol@acme.com"));
     assert.equal(matches[0]!.slackId, "U0CAROL");
   });
 
@@ -147,7 +150,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     };
     assert.equal((await post(body)).status, 200);
     assert.equal(await built.directory.channelPrivacy("C_OTHER"), false);
-    assert.equal(await built.directory.channelMember("C_LIVE", "U1"), true);
+    assert.equal(await built.directory.channelMember("C_LIVE", await principalOf(built, "U1")), true);
     assert.equal((await post({ ...body, channelsSyncedAt: 20 })).status, 409);
     for (const invalid of [
       { ...body, channelsSyncedAt: undefined },
@@ -163,10 +166,9 @@ describe("a deployment without the Slack surface (the directory store is never p
   let base: string;
   let built: BuiltApp;
 
-  const cap = await mintCapabilityToken(
-    { actorId: "dana@acme.com", scopeId: "personal:dana@acme.com", exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
-  );
+  let cap: string;
+  let dana: string;
+  let rex: string;
 
   before(async () => {
     built = buildApp(
@@ -179,8 +181,14 @@ describe("a deployment without the Slack surface (the directory store is never p
     server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const session = await built.sessions.getOrCreateByThread("web:1", "dm", "personal:rex@acme.com");
-    await built.sessions.addParticipant(session.id, "rex@acme.com");
+    dana = await principalOf(built, "dana@acme.com");
+    rex = await principalOf(built, "rex@acme.com");
+    cap = await mintCapabilityToken(
+      { actorId: dana, scopeId: `personal:${dana}`, exp: Date.now() + CAPABILITY_TTL_MS },
+      SECRET,
+    );
+    const session = await built.sessions.getOrCreateByThread("web:1", "dm", `personal:${rex}`);
+    await built.sessions.addParticipant(session.id, rex);
   });
 
   after(async () => {
@@ -198,7 +206,7 @@ describe("a deployment without the Slack surface (the directory store is never p
     const matches = await matchesOf("rex@acme.com");
     assert.deepEqual(
       matches.map((m) => m.principalId),
-      ["rex@acme.com"],
+      [rex],
     );
     assert.equal(matches[0]!.type, "internal", "the web UI only offers internal principals as project members");
   });
@@ -206,11 +214,11 @@ describe("a deployment without the Slack surface (the directory store is never p
   it("matches on a prefix, the way the stored directory does — the search box types a name, not an address", async () => {
     assert.deepEqual(
       (await matchesOf("dan")).map((m) => m.principalId),
-      ["dana@acme.com"],
+      [dana],
     );
     assert.deepEqual(
       (await matchesOf("rex")).map((m) => m.principalId),
-      ["rex@acme.com"],
+      [rex],
     );
   });
 

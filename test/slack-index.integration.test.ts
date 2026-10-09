@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { SlackAgentRequestContext } from "../src/api/slack-core-client.ts";
-import type { TurnResult } from "../src/types.ts";
+import type { ScopeId, TurnResult } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -262,6 +262,9 @@ class FakeCore implements SlackCoreClient {
   readonly publishedEmojiCatalogs: Array<Record<string, string>> = [];
   async publishEmojiCatalog(emoji: Record<string, string>): Promise<void> {
     this.publishedEmojiCatalogs.push(emoji);
+  }
+  async personalScopeOf(handle: string): Promise<ScopeId> {
+    return `personal:principal-of-${handle}`;
   }
   async surfaceHeaderFacts(): Promise<{ agentLabel?: string; modelName: string }> {
     return { agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" };
@@ -873,7 +876,8 @@ test("a human's DM sets the conversation header to the serving model + web surfa
     assert.deepEqual(f.client.topics, [
       {
         channel: "D1",
-        topic: "Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
+        topic:
+          "Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3Aprincipal-of-U1|More settings>",
       },
     ]);
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });

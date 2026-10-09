@@ -1,3 +1,4 @@
+import { principalOf } from "./support/principal.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -404,9 +405,10 @@ test("Trap 1 e2e: the reach tool_result is labeled the session scope and survive
   const entries = await built.sessions.getEntries(res.sessionId!);
   const toolResults = entries.filter((e) => e.type === "tool_result");
   assert.ok(toolResults.length >= 1, "a reach tool_result was recorded");
-  for (const e of toolResults) assert.equal(e.scopeLabel, scopeId("personal", "U1"));
-  const audience: Principal[] = [{ id: "U1", type: "internal" }];
-  const kept = filterHistoryForAudience(entries, audience, scopeId("personal", "U1"), scopeId("org", "default-org"));
+  const u1 = await principalOf(built, "U1");
+  for (const e of toolResults) assert.equal(e.scopeLabel, scopeId("personal", u1));
+  const audience: Principal[] = [{ id: u1, type: "internal" }];
+  const kept = filterHistoryForAudience(entries, audience, scopeId("personal", u1), scopeId("org", "default-org"));
   assert.ok(
     kept.some((e) => e.type === "tool_result"),
     "the reach result is not dropped from the DM's own next turn",

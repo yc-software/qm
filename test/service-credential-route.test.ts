@@ -21,6 +21,7 @@ import {
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
 import type { GitHttpFetch } from "../src/api/git-http-broker.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
@@ -1085,7 +1086,7 @@ test("orchestrator vends a capability for only the requested org credential", as
   const botClaims = await verifyCapabilityToken(executionEnv()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(botClaims?.botActor, true);
   assert.equal(botClaims?.liveActor, true);
-  assert.deepEqual(botClaims?.members, [{ id: "B-LEGACY", type: "internal" }]);
+  assert.deepEqual(botClaims?.members, [{ id: await principalOf(built, "B-LEGACY"), type: "internal" }]);
 });
 
 test("orchestrator does NOT stamp a credential granted only to someone else", async () => {

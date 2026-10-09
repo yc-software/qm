@@ -1003,7 +1003,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           ...(invite ? { invitation: invite.invitation } : {}),
           type: req.type,
           id: home.id,
-          target: { scope: toScope, label: target.label },
+          target: { scope: invite?.scope ?? toScope, label: target.label },
           permission,
         };
       } catch (e) {

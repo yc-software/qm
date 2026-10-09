@@ -4,11 +4,13 @@ import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { principalOf } from "./support/principal.ts";
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
   await built.deploymentLayerReady;
-  for (const actor of ["U1", "U2"]) {
+  const u1 = await principalOf(built, "U1");
+  for (const actor of [u1, await principalOf(built, "U2")]) {
     const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
     await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
   }
@@ -36,7 +38,7 @@ async function fixture(t: TestContext) {
   const publish = async (scopeId: string, body: string, packId?: string, name = "source-helper") => {
     const skill = await built.skills.create({
       scopeId,
-      createdBy: "U1",
+      createdBy: u1,
       ...(packId ? { pack: { packId, commit: "c", upstreamName: name } } : {}),
       manifest: {
         name,
@@ -50,12 +52,12 @@ async function fixture(t: TestContext) {
     await built.skills.publish(skill.id);
     return skill;
   };
-  return { ...built, turn, publish, provisions: () => provisions };
+  return { ...built, u1, personalU1: `personal:${u1}`, turn, publish, provisions: () => provisions };
 }
 
 test("published skill sources and assets read without a sandbox, respecting scope and archive", async (t) => {
   const b = await fixture(t);
-  const skill = await b.publish("personal:U1", "PUBLISHED_BODY");
+  const skill = await b.publish(b.personalU1, "PUBLISHED_BODY");
   assert.match(await b.turn("!sysprompt"), /\*\*source-helper\*\*/);
   assert.match(
     await b.turn("!skill source-helper"),
@@ -72,8 +74,8 @@ test("published skill sources and assets read without a sandbox, respecting scop
 test("a body-only skill loads without any sandbox work", async (t) => {
   const b = await fixture(t);
   const skill = await b.skills.create({
-    scopeId: "personal:U1",
-    createdBy: "U1",
+    scopeId: b.personalU1,
+    createdBy: b.u1,
     manifest: { name: "notes-only", description: "text only", body: "JUST_TEXT", requiredCapabilities: [] },
   });
   await b.skills.review(skill.id, "reviewer", []);
@@ -85,7 +87,7 @@ test("a body-only skill loads without any sandbox work", async (t) => {
 
 test("published skill loads reject invalid and control paths without provisioning", async (t) => {
   const b = await fixture(t);
-  await b.publish("personal:U1", "PUBLISHED_BODY");
+  await b.publish(b.personalU1, "PUBLISHED_BODY");
   for (const [name, path] of [
     ["missing", "SKILL.md"],
     ["source-helper", "../SKILL.md"],
@@ -103,7 +105,7 @@ test("published skill loads reject invalid and control paths without provisionin
 test("published source follows scope shadowing and preserves sandbox-authored working copies", async (t) => {
   const b = await fixture(t);
   await b.publish("org:default-org", "ORG_BODY");
-  const personal = await b.publish("personal:U1", "PERSONAL_BODY");
+  const personal = await b.publish(b.personalU1, "PERSONAL_BODY");
   assert.match(await b.turn("!skill source-helper"), /\nPERSONAL_BODY$/);
   await b.turn("!write skills/source-helper/SKILL.md LOCAL_EDIT");
   assert.match(await b.turn("!skill source-helper"), /\nPERSONAL_BODY$/);
@@ -210,7 +212,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
 test("pack assets run from the turn directory and vanish with it", async (t) => {
   const { computeBundleHash } = await import("../src/skills/skill-bundle-store.ts");
   const b = await fixture(t);
-  const skill = await b.publish("personal:U1", "PACK_BODY", "source-pack");
+  const skill = await b.publish(b.personalU1, "PACK_BODY", "source-pack");
   const files = [{ path: "example.sh", content: "printf PACK_ASSET" }];
   await b.skillBundles.put({ packId: "source-pack", commit: "c", files, hash: computeBundleHash(files) });
   assert.match(await b.turn("!skill source-helper"), /skills\/\.packs\/source-pack/);

@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import type { Session } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-view-patch-")) }));
@@ -55,15 +56,16 @@ async function patch(
 
 test("POST /v1/sessions/:id pins and colors the viewer's row; null clears; casing normalizes", async () => {
   const srv = start();
+  const u1 = await principalOf(srv.built, "U1");
   try {
     const id = await newSession(srv.base, "web:U1:pin-color");
 
-    const pinned = await patch(srv.base, id, { principalId: "U1", pinned: true, color: "#AaBbCc" });
+    const pinned = await patch(srv.base, id, { principalId: u1, pinned: true, color: "#AaBbCc" });
     assert.equal(pinned.status, 200);
     assert.equal(pinned.session?.pinned, true);
     assert.equal(pinned.session?.color, "#aabbcc", "color is normalized to lowercase");
 
-    const cleared = await patch(srv.base, id, { principalId: "U1", pinned: false, color: null });
+    const cleared = await patch(srv.base, id, { principalId: u1, pinned: false, color: null });
     assert.equal(cleared.status, 200);
     assert.ok(!cleared.session?.pinned);
     assert.equal(cleared.session?.color ?? null, null, "null clears the color");
@@ -74,17 +76,18 @@ test("POST /v1/sessions/:id pins and colors the viewer's row; null clears; casin
 
 test("POST /v1/sessions/:id rejects malformed colors and non-boolean pins", async () => {
   const srv = start();
+  const u1 = await principalOf(srv.built, "U1");
   try {
     const id = await newSession(srv.base, "web:U1:pin-color-bad");
 
     for (const color of ["red", "#fff", "#12345", "#gggggg", "url(x)", "#aabbcc;background:red", 42]) {
-      const r = await patch(srv.base, id, { principalId: "U1", color });
+      const r = await patch(srv.base, id, { principalId: u1, color });
       assert.equal(r.status, 400, `rejects ${JSON.stringify(color)}`);
     }
-    const badPin = await patch(srv.base, id, { principalId: "U1", pinned: "yes" });
+    const badPin = await patch(srv.base, id, { principalId: u1, pinned: "yes" });
     assert.equal(badPin.status, 400);
 
-    const empty = await patch(srv.base, id, { principalId: "U1" });
+    const empty = await patch(srv.base, id, { principalId: u1 });
     assert.equal(empty.status, 400, "an empty patch is a bad request");
 
     const stranger = await patch(srv.base, id, { principalId: "intruder", pinned: true });
@@ -96,14 +99,15 @@ test("POST /v1/sessions/:id rejects malformed colors and non-boolean pins", asyn
 
 test("surface session route sets and clears status, rejecting malformed input", async () => {
   const srv = start();
+  const u1 = await principalOf(srv.built, "U1");
   try {
     const id = await newSession(srv.base, "web:U1:status");
     const status = { emoji: "🚀", text: "Live in production" };
-    const set = await patch(srv.base, id, { principalId: "U1", status });
+    const set = await patch(srv.base, id, { principalId: u1, status });
     assert.equal(set.status, 200);
     assert.deepEqual(set.session?.status, status);
-    assert.equal((await patch(srv.base, id, { principalId: "U1", status: {} })).status, 400);
-    const cleared = await patch(srv.base, id, { principalId: "U1", status: null });
+    assert.equal((await patch(srv.base, id, { principalId: u1, status: {} })).status, 400);
+    const cleared = await patch(srv.base, id, { principalId: u1, status: null });
     assert.equal(cleared.status, 200);
     assert.equal(cleared.session?.status ?? null, null);
   } finally {

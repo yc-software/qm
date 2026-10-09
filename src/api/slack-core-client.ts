@@ -111,6 +111,8 @@ export interface SlackCoreClient {
   ackEmojiOverride(): Promise<string[] | null>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
+  /** The personal scope of the principal a Slack handle acts as, created on first sight. */
+  personalScopeOf(handle: string): Promise<ScopeId>;
   channelHeaderPinEnabled(scope: ScopeId): Promise<boolean>;
   onScopeModelChanged(listener: (scope: ScopeId) => void): void;
   onChannelHeaderPinChanged(listener: (scope: ScopeId) => void): void;
@@ -286,6 +288,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async publishEmojiCatalog(emoji) {
       deps.config.setSlackEmojiCatalog(orgScope, emoji);
+    },
+
+    async personalScopeOf(handle) {
+      return scopeId("personal", await deps.identity.principals.act(handle));
     },
 
     async surfaceHeaderFacts(scope) {

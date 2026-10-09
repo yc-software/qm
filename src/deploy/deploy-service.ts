@@ -1,3 +1,4 @@
+import { createPrincipalGraph } from "../identity/principals.ts";
 import { EXTERNAL_APP_SHARING_OFF } from "../feature-flags.ts";
 import { notifyDeploymentShared } from "./share-notice.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -130,6 +131,8 @@ export interface DeployServiceDeps {
   canReadScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
   canWriteScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
   canManageEmail?: (email: string) => Promise<boolean>;
+  /** Where email recipients resolve to principals; a private in-memory graph when omitted. */
+  principals?: { act(handle: string, opts?: { email?: string | null }): Promise<string> };
   externalSharingAllowed?: (ownerScopeId: ScopeId) => Promise<boolean>;
   managesArtifactHome?: (homeScopeId: ScopeId, createdBy: string, principalId: string) => Promise<boolean>;
   deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>;
@@ -167,6 +170,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
   const advisoryLock = deps.advisoryLock ?? createNoopAdvisoryLock();
   const deployQueue = createKeyedQueue();
+  const principals = deps.principals ?? createPrincipalGraph();
   const externalSharingAllowed = (ownerScopeId: ScopeId): Promise<boolean> =>
     deps.externalSharingAllowed?.(ownerScopeId) ?? Promise.resolve(false);
   async function assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null) {
@@ -733,8 +737,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
         throw new Error(`only the owner can change who can reach "${d.name ?? d.id}"`);
       }
-      grantee = await deploymentShareScope(grantee, permission, deps.canManageEmail);
       await assertShareAllowed(d.ownerScopeId, grantee, permission);
+      grantee = await deploymentShareScope(grantee, permission, principals, deps.canManageEmail);
       const ref = deploymentRef(d.id);
       await deps.acl.revoke(d.ownerScopeId, ref, grantee, actor.createdBy);
       if (permission === null) {

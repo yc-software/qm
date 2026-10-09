@@ -31,7 +31,7 @@ async function principalForHandle(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const handle = ctx.params.id!;
   if (!handle) return sendJson(res, 404, { error: "not_found" });
-  const principalId = await principalGraph(deps).act(handle, {
+  const principalId = await principalGraph(ctx).act(handle, {
     email: handle.includes("@") ? handle : null,
     verified: true,
   });

@@ -3,7 +3,7 @@ import type { Principal } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { samePerson } from "../../directory/person.ts";
-import { createPrincipalGraph, type PrincipalGraph } from "../../identity/principals.ts";
+import type { PrincipalGraph } from "../../identity/principals.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
@@ -24,24 +24,18 @@ function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor"
   return ctx.deps.admin?.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
 }
 
-const standalonePrincipals = new WeakMap<ServerDeps, PrincipalGraph>();
-
-/** The deployment's principal graph. A server built without one (tests, single-process dev) gets its own in memory. */
-export function principalGraph(deps: ServerDeps): PrincipalGraph {
-  const wired = deps.principals ?? deps.identity?.principals;
-  if (wired) return wired;
-  let graph = standalonePrincipals.get(deps);
-  if (!graph) standalonePrincipals.set(deps, (graph = createPrincipalGraph()));
-  return graph;
+/** The deployment's principal graph, where surface handles resolve to principals. */
+export function principalGraph(ctx: Pick<ApiCtx, "deps" | "app">): PrincipalGraph {
+  return ctx.deps.principals ?? ctx.app.principals;
 }
 
-export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
+export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "app" | "capability" | "actor">): Principal | null {
   const actor = rawAdminActor(ctx);
-  return actor ? { ...actor, id: principalGraph(ctx.deps).principalOf(actor.id) ?? actor.id } : null;
+  return actor ? { ...actor, id: principalGraph(ctx).principalOf(actor.id) ?? actor.id } : null;
 }
 
 export async function authorizeAdmin(
-  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor">,
+  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "app" | "capability" | "actor">,
   _scope: string,
 ): Promise<Principal | null> {
   const { res, deps } = ctx;
@@ -67,7 +61,7 @@ export async function activePrincipal(deps: ServerDeps, principalId: string): Pr
 }
 
 export async function requireScopedAdmin(
-  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "url">,
+  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "app" | "capability" | "actor" | "url">,
 ): Promise<{ actor: Principal; scope: string } | null> {
   const scope = ctx.url.searchParams.get("scope") ?? "";
   if (!scope) {

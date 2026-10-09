@@ -46,7 +46,6 @@ mock.module("../src/harness/mock-harness.ts", {
 const { buildApp } = await import("../src/wiring.ts");
 const { createServer } = await import("../src/api/server.ts");
 const SECRET = "synthetic-continuity-http-signing-key";
-const members = ["alice", "bob"].map((id) => ({ id, type: "internal" as const }));
 
 async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
@@ -60,15 +59,21 @@ async function fixture(t: TestContext) {
       type: "internal" as const,
     })),
   );
-  const roster = (ids: string[]) =>
+  const P = {
+    alice: await b.principals.act("alice"),
+    bob: await b.principals.act("bob"),
+    stranger: await b.principals.act("stranger"),
+  };
+  const members = [P.alice, P.bob].map((id) => ({ id, type: "internal" as const }));
+  const roster = (handles: Array<keyof typeof P>) =>
     b.directory.replaceChannels(
       [{ channelId: "public-room", name: "public-room", isPrivate: false }],
-      ids.map((principalId) => ({ channelId: "public-room", principalId })),
+      handles.map((h) => ({ channelId: "public-room", principalId: P[h] })),
     );
   await roster(["alice", "bob"]);
   await b.config.setSharingPosture("org:default-org", "open");
-  const sharedSandbox = await b.sandboxResources.create("alice", "channel:public-room", "sprites", "shared-proof");
-  await b.sandboxResources.setDefault("alice", "channel:public-room", sharedSandbox.id);
+  const sharedSandbox = await b.sandboxResources.create(P.alice, "channel:public-room", "sprites", "shared-proof");
+  await b.sandboxResources.setDefault(P.alice, "channel:public-room", sharedSandbox.id);
   const server = createServer(b.app, {
     signingSecret: SECRET,
     scheduler: b.scheduler,
@@ -83,10 +88,10 @@ async function fixture(t: TestContext) {
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
-  const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>
+  const cap = (handle: keyof typeof P, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>
     mintCapabilityToken(
       {
-        actorId,
+        actorId: P[handle],
         scopeId,
         members,
         liveActor: true,
@@ -120,7 +125,7 @@ async function fixture(t: TestContext) {
     text: string,
     actor = "alice",
     room = true,
-    audience: { externalId: string; isExternalGuest?: boolean }[] = members.map((m) => ({ externalId: m.id })),
+    audience: { externalId: string; isExternalGuest?: boolean }[] = [{ externalId: "alice" }, { externalId: "bob" }],
   ) => {
     const body = JSON.stringify({
       surface: "test",
@@ -146,12 +151,12 @@ async function fixture(t: TestContext) {
     const result = (await response.json()) as { status: string; reply?: string; reason?: string };
     return { ...result, http: response.status };
   };
-  return { ...b, cap, request, turn, roster, awaitFire };
+  return { ...b, P, cap, request, turn, roster, awaitFire };
 }
 
 test("HTTP Open continuity: personal sandbox follows owner into shared channel and back, never another member", async (t) => {
   const b = await fixture(t);
-  const resource = await b.sandboxResources.create("alice", "personal:alice", "sprites", "personal-proof");
+  const resource = await b.sandboxResources.create(b.P.alice, `personal:${b.P.alice}`, "sprites", "personal-proof");
   const command = (cmd: string) => `!proof ${JSON.stringify({ id: resource.id, command: cmd })}`;
   const first = await b.turn(command("printf continuity-sentinel > proof.txt; cat proof.txt"), "alice", false);
   assert.equal(first.http, 200, JSON.stringify(first));
@@ -159,10 +164,10 @@ test("HTTP Open continuity: personal sandbox follows owner into shared channel a
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
   assert.match((await b.turn(command("cat proof.txt"), "bob")).reply ?? "", /DENIED/);
   assert.match((await b.turn(command("cat proof.txt"), "stranger")).reply ?? "", /DENIED/);
-  await b.config.setSharingPosture("personal:alice", "isolated");
+  await b.config.setSharingPosture(`personal:${b.P.alice}`, "isolated");
   assert.match((await b.turn(command("cat proof.txt"))).reply ?? "", /DENIED/);
   assert.equal((await b.turn(command("cat proof.txt"), "alice", false)).reply, "continuity-sentinel");
-  await b.config.clearSharingPosture("personal:alice");
+  await b.config.clearSharingPosture(`personal:${b.P.alice}`);
   await b.roster(["bob"]);
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
   const guests = [{ externalId: "alice" }, { externalId: "guest", isExternalGuest: true }];
@@ -186,7 +191,7 @@ test("HTTP Open continuity: public channel permits explicit shared cron", async 
 
 test("HTTP Open continuity: member edit keeps owner, notifies privately, fires with owner resources, and remains manageable in DM", async (t) => {
   const b = await fixture(t);
-  const resource = await b.sandboxResources.create("alice", "personal:alice", "sprites", "cron-proof");
+  const resource = await b.sandboxResources.create(b.P.alice, `personal:${b.P.alice}`, "sprites", "cron-proof");
   const action = `!proof ${JSON.stringify({ id: resource.id, command: "printf cron-owner-resource" })}`;
   const owner = await b.cap("alice");
   const member = await b.cap("bob");
@@ -200,11 +205,11 @@ test("HTTP Open continuity: member edit keeps owner, notifies privately, fires w
   const id = created.body.cron.id as string;
   const edit = await b.request("PATCH", `/v1/crons/${id}`, member, { title: "Member edited proof" });
   assert.equal(edit.status, 200, JSON.stringify(edit.body));
-  assert.equal((await b.crons.get(id))?.owner, "alice");
+  assert.equal((await b.crons.get(id))?.owner, b.P.alice);
   assert.equal((await b.crons.get(id))?.runAs, "scopeShared");
   const notices = await b.deliveries.pending("principal");
   assert.equal(notices.length, 1);
-  assert.equal(notices[0]!.destination.target, "alice");
+  assert.equal(notices[0]!.destination.target, b.P.alice);
   assert.match(notices[0]!.text, /bob.*renamed/);
   assert.equal(
     (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("stranger"), { title: "hijacked" })).status,
@@ -220,8 +225,11 @@ test("HTTP Open continuity: member edit keeps owner, notifies privately, fires w
     JSON.stringify(log),
   );
   assert.equal(
-    (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", "personal:alice"), { title: "Back in personal" }))
-      .status,
+    (
+      await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", `personal:${b.P.alice}`), {
+        title: "Back in personal",
+      })
+    ).status,
     200,
   );
   assert.equal((await b.deliveries.pending("principal")).length, 1, "owner edits do not notify themselves");
@@ -233,7 +241,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   const b = await fixture(t);
   assert.ok(b.keychain);
   const credential = await b.keychain.save({
-    ownerId: "alice",
+    ownerId: b.P.alice,
     service: "continuity-synthetic",
     envKey: "CONTINUITY_PROOF_TOKEN",
     secret: "synthetic-owner-sentinel",
@@ -265,16 +273,17 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
 });
 
 for (const isPrivate of [false, true]) {
-  for (const veto of ["org:default-org", "personal:alice", "channel:public-room"]) {
-    test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`, async (t) => {
+  for (const vetoTarget of ["org:default-org", "personal", "channel:public-room"]) {
+    test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${vetoTarget})`, async (t) => {
       const b = await fixture(t);
+      const veto = vetoTarget === "personal" ? `personal:${b.P.alice}` : vetoTarget;
       assert.ok(b.keychain);
       await b.directory.replaceChannels(
         [{ channelId: "public-room", name: "public-room", isPrivate }],
-        ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
+        [b.P.alice, b.P.bob].map((principalId) => ({ channelId: "public-room", principalId })),
       );
       const credential = await b.keychain.save({
-        ownerId: "alice",
+        ownerId: b.P.alice,
         service: "continuity-veto",
         envKey: "CONTINUITY_VETO_TOKEN",
         secret: "synthetic-veto-sentinel",
@@ -316,21 +325,21 @@ test("HTTP legacy explicit private shared cron remains owner-authorized under is
   assert.ok(b.keychain);
   await b.directory.replaceChannels(
     [{ channelId: "public-room", name: "private-room", isPrivate: true }],
-    ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
+    [b.P.alice, b.P.bob].map((principalId) => ({ channelId: "public-room", principalId })),
   );
   await b.config.setSharingPosture("org:default-org", "isolated");
   const credential = await b.keychain.save({
-    ownerId: "alice",
+    ownerId: b.P.alice,
     service: "continuity-legacy",
     envKey: "CONTINUITY_LEGACY_TOKEN",
     secret: "synthetic-legacy-sentinel",
   });
   const cron = await b.crons.create({
-    owner: "alice",
-    createdBy: "alice",
+    owner: b.P.alice,
+    createdBy: b.P.alice,
     ownerScopeId: "channel:public-room",
     runAs: "scopeShared",
-    members,
+    members: [b.P.alice, b.P.bob].map((id) => ({ id, type: "internal" as const })),
     schedule: { everyMs: 3600000 },
     action: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential.id)], command: 'test "$CONTINUITY_LEGACY_TOKEN" = "synthetic-legacy-sentinel" && printf legacy-credential-present' })}`,
     destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },

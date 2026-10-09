@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -79,61 +80,65 @@ test("/me carries the Slack workspace URL once the directory has one", async () 
 });
 
 test("a channel member can continue a teammate's shared web thread; outsiders and personal claims can't", async () => {
+  const ALICE_ID = await principalOf(built, "alice");
+  const BOB_ID = await principalOf(built, "bob");
+  const MALLORY_ID = await principalOf(built, "mallory");
   await built.app.upsertChannels(
     [{ channelId: "C2", name: "sekrit", isPrivate: true }],
     [
-      { channelId: "C2", principalId: "alice" },
-      { channelId: "C2", principalId: "bob" },
+      { channelId: "C2", principalId: ALICE_ID },
+      { channelId: "C2", principalId: BOB_ID },
     ],
   );
 
   const aliceTurn = await fetch(
     `${webBase}/api/turn`,
-    asUser("alice", {
+    asUser(ALICE_ID, {
       method: "POST",
       body: JSON.stringify({
         text: "kick off",
-        threadRef: "web:alice:s1",
+        threadRef: `web:${ALICE_ID}:s1`,
         scopeId: "channel:C2",
         channelName: "sekrit",
       }),
     }),
   );
   assert.ok(aliceTurn.status < 300, `alice's turn should be accepted (got ${aliceTurn.status})`);
-  const session = await waitForSession("alice", "web:alice:s1");
+  const session = await waitForSession(ALICE_ID, `web:${ALICE_ID}:s1`);
   assert.equal(session.scopeId, "channel:C2");
 
   const bobTurn = await fetch(
     `${webBase}/api/turn`,
-    asUser("bob", {
+    asUser(BOB_ID, {
       method: "POST",
-      body: JSON.stringify({ text: "me too", threadRef: "web:alice:s1", scopeId: "channel:C2" }),
+      body: JSON.stringify({ text: "me too", threadRef: `web:${ALICE_ID}:s1`, scopeId: "channel:C2" }),
     }),
   );
   assert.ok(bobTurn.status < 300, `bob's continuation should be accepted (got ${bobTurn.status})`);
-  await waitForSession("bob", "web:alice:s1");
+  await waitForSession(BOB_ID, `web:${ALICE_ID}:s1`);
 
   assert.equal(
-    (await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent("web:alice:s1")}`, asUser("bob"))).status,
+    (await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(`web:${ALICE_ID}:s1`)}`, asUser(BOB_ID)))
+      .status,
     200,
   );
   assert.equal(
-    (await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent("dm:D1")}`, asUser("bob"))).status,
+    (await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent("dm:D1")}`, asUser(BOB_ID))).status,
     404,
   );
 
   const personalClaim = await fetch(
     `${webBase}/api/turn`,
-    asUser("bob", { method: "POST", body: JSON.stringify({ text: "sneak", threadRef: "web:alice:s1" }) }),
+    asUser(BOB_ID, { method: "POST", body: JSON.stringify({ text: "sneak", threadRef: `web:${ALICE_ID}:s1` }) }),
   );
   assert.equal(personalClaim.status, 403);
   assert.equal(((await personalClaim.json()) as { error: string }).error, "forbidden_thread");
 
   const outsider = await fetch(
     `${webBase}/api/turn`,
-    asUser("mallory", {
+    asUser(MALLORY_ID, {
       method: "POST",
-      body: JSON.stringify({ text: "sneak", threadRef: "web:alice:s1", scopeId: "channel:C2" }),
+      body: JSON.stringify({ text: "sneak", threadRef: `web:${ALICE_ID}:s1`, scopeId: "channel:C2" }),
     }),
   );
   assert.equal(outsider.status, 403);

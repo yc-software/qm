@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
+import { principalOf } from "./support/principal.ts";
 import { testConfig } from "./support/test-config.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
@@ -229,9 +230,10 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
           }),
     });
   const path = `/v1/admin/model-registry/${MODEL_ID}`;
+  const alicePrincipal = await principalOf(built, "admin-alice@default-org");
   const runtime = {
-    principalId: "admin-alice@default-org",
-    scopeId: "personal:admin-alice@default-org",
+    principalId: alicePrincipal,
+    scopeId: `personal:${alicePrincipal}`,
     harnessId: "pi",
     modelId: MODEL_ID,
   };
@@ -274,7 +276,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     await built.config.setRuntimeSelectionLatest("org:default-org", { harnessId: "pi", modelId: MODEL_ID });
     assert.equal((await api(path, "DELETE")).status, 200);
     const afterDelete = await api(
-      "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
+      `/v1/runtime-config?principalId=${alicePrincipal}&scopeId=personal:${alicePrincipal}`,
     );
     const unavailable = (await afterDelete.json()) as {
       effective: { modelId: string };
@@ -303,7 +305,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     for (const model of [undefined, "gpt-5.6-sol"]) {
       const recoveredTurn = await built.app.turn({
         surface: "web",
-        actor: { externalId: runtime.principalId },
+        actor: { externalId: "admin-alice@default-org" },
         conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
         text: "Continue with the replacement I selected",
         ...(model ? { model } : {}),

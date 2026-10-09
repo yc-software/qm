@@ -9,10 +9,12 @@ import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
-  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
-  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  const owner = await principalOf(built, "U1");
+  const computer = await built.sandboxResources.create(owner, `personal:${owner}`, "sprites", "default");
+  await built.sandboxResources.setDefault(owner, `personal:${owner}`, computer.id);
   return built;
 }
 
@@ -25,16 +27,18 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 
-async function publishPersonalSkill(skills: ReturnType<typeof buildApp>["skills"]) {
+async function publishPersonalSkill(built: ReturnType<typeof buildApp>) {
+  const { skills } = built;
+  const owner = await principalOf(built, "U1");
   const sk = await skills.create({
-    scopeId: scopeId("personal", "U1"),
+    scopeId: scopeId("personal", owner),
     manifest: {
       name: "make-digest",
       description: "assemble a morning digest",
       requiredCapabilities: [],
       body: "# make-digest\nStep 1: gather. Step 2: summarize.",
     },
-    createdBy: "U1",
+    createdBy: owner,
   });
   await skills.review(sk.id, "reviewer-1", []);
   await skills.publish(sk.id);
@@ -42,8 +46,9 @@ async function publishPersonalSkill(skills: ReturnType<typeof buildApp>["skills"
 }
 
 test("a published personal skill is advertised and loads in the owner's DM", async () => {
-  const { app, skills } = freshApp();
-  await publishPersonalSkill(skills);
+  const built = freshApp();
+  const { app } = built;
+  await publishPersonalSkill(built);
 
   const sys = await app.turn({
     surface: "test",
@@ -64,8 +69,9 @@ test("a published personal skill is advertised and loads in the owner's DM", asy
 });
 
 test("a channel session does NOT see a personal skill (scope boundary)", async () => {
-  const { app, skills } = freshApp();
-  await publishPersonalSkill(skills);
+  const built = freshApp();
+  const { app } = built;
+  await publishPersonalSkill(built);
   const sys = await app.turn({
     surface: "test",
     actor,
@@ -76,8 +82,9 @@ test("a channel session does NOT see a personal skill (scope boundary)", async (
 });
 
 test("ordinary sandbox work never touches the skills tree", async () => {
-  const { app, skills, sandbox } = await withDefaultComputer(freshApp());
-  await publishPersonalSkill(skills);
+  const built = await withDefaultComputer(freshApp());
+  const { app, sandbox } = built;
+  await publishPersonalSkill(built);
   const touched: string[] = [];
   const read = sandbox.readFile.bind(sandbox);
   sandbox.readFile = async (handle, path) => {
@@ -103,9 +110,11 @@ test("ordinary sandbox work never touches the skills tree", async () => {
   assert.deepEqual(touched, []);
 });
 
-async function publishFileSkill(skills: ReturnType<typeof buildApp>["skills"], name: string) {
+async function publishFileSkill(built: ReturnType<typeof buildApp>, name: string) {
+  const { skills } = built;
+  const owner = await principalOf(built, "U1");
   const sk = await skills.create({
-    scopeId: scopeId("personal", "U1"),
+    scopeId: scopeId("personal", owner),
     manifest: {
       name,
       description: `${name} ships a script`,
@@ -113,7 +122,7 @@ async function publishFileSkill(skills: ReturnType<typeof buildApp>["skills"], n
       body: "run the script",
       files: [{ path: "scripts/run.sh", content: `printf ${name}` }],
     },
-    createdBy: "U1",
+    createdBy: owner,
   });
   await skills.review(sk.id, "reviewer-1", []);
   await skills.publish(sk.id);
@@ -121,8 +130,9 @@ async function publishFileSkill(skills: ReturnType<typeof buildApp>["skills"], n
 }
 
 test("skill files live only for the turn that loaded them", async () => {
-  const { app, skills } = await withDefaultComputer(freshApp());
-  const first = await publishFileSkill(skills, "helper");
+  const built = await withDefaultComputer(freshApp());
+  const { app } = built;
+  const first = await publishFileSkill(built, "helper");
   const request = {
     surface: "test",
     actor,
@@ -132,6 +142,6 @@ test("skill files live only for the turn that loaded them", async () => {
   assert.equal(ran.reply, "printf helper");
   const next = await app.turn({ ...request, text: "!run find . -name run.sh | wc -l | tr -d ' '" } as TurnRequest);
   assert.equal(next.reply, "0");
-  await skills.archive(first.id);
+  await built.skills.archive(first.id);
   assert.match((await app.turn({ ...request, text: "!skill helper" } as TurnRequest)).reply ?? "", /no skill file/);
 });

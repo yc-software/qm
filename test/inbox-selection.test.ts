@@ -14,7 +14,6 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
-import { installPrincipalResolver } from "../src/directory/person.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
@@ -604,7 +603,7 @@ test("email classification is projected only by the flagged inbox endpoint", asy
   }
 });
 
-test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and aliases", async (t) => {
+test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and linked identities", async () => {
   const store = createLoopStore();
   const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
   const { loop: personal } = await store.create({
@@ -628,7 +627,10 @@ test("inbox viewers are exactly the active candidates who can administer the loo
         loops: { store },
         identity: {
           refresh: async () => {},
-          classify: (id: string) => ({ id, type: id === "carol" ? "deactivated" : "internal" }),
+          classify: (id: string) => ({
+            id: id === "bob-slack" ? "bob" : id,
+            type: id === "carol" ? "deactivated" : "internal",
+          }),
         },
       },
       app: {
@@ -649,8 +651,6 @@ test("inbox viewers are exactly the active candidates who can administer the loo
     return { status, data };
   };
   const candidates = ["alice", "bob-slack", "carol", "mallory"];
-  installPrincipalResolver({ principalOf: (key: string) => (key === "bob-slack" ? "bob" : undefined) });
-  t.after(() => installPrincipalResolver(null));
   assert.deepEqual((await ask({ loopId: personal.id, candidates })).data.viewers, ["alice"]);
   assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob-slack"]);
   members.delete("alice");

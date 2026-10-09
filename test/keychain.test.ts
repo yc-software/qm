@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { principalOf } from "./support/principal.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -1498,8 +1499,9 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     resolved.push(args[1]);
     return materializeOwnById(...args);
   };
+  const owner = await principalOf(built, "U_OWNER");
   const cred = await built.keychain!.save({
-    ownerId: "U_OWNER",
+    ownerId: owner,
     service: "github",
     secret: "ghp_e2e",
     envKey: "GITHUB_TOKEN",
@@ -1510,7 +1512,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   const sys = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
   assert.equal(sys.status, "ok");
   assert.match(sys.reply ?? "", /## Teammate keychains/);
-  assert.match(sys.reply ?? "", /Alice \(U_OWNER\): github/);
+  assert.match(sys.reply ?? "", new RegExp(`Alice \\(${owner}\\): github`));
   assert.match(sys.reply ?? "", /no grant for this conversation/);
   assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
   await selectDefaultSandbox(built, "U_ASKER", "channel:C1");
@@ -1521,7 +1523,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
 
   await built.keychain!.createGrant({
     credentialId: cred.id,
-    ownerId: "U_OWNER",
+    ownerId: owner,
     audienceScopeId: "channel:C1",
     mode: "standing",
     purpose: "use my gh here for repo work",

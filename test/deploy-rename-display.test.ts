@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
+import { createPrincipalGraph } from "../src/identity/principals.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -29,8 +30,8 @@ function svc() {
   return { deploy, deployStore };
 }
 
-const make = (deploy: ReturnType<typeof svc>["deploy"], name: string) =>
-  deploy.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [], name });
+const make = (deploy: ReturnType<typeof svc>["deploy"], name: string, owner = "U1") =>
+  deploy.deploy({ ownerScopeId: scopeId("personal", owner), createdBy: owner, entrypoint: "x", files: [], name });
 
 test("renameDeployment moves the URL slug by id, keeping the immutable id", async () => {
   const s = svc();
@@ -64,7 +65,9 @@ test("setDeploymentDisplayName sets the label, then clears it (independent of th
 
 test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   const s = svc();
-  const app = createApp({ deploy: s.deploy } as unknown as Parameters<typeof createApp>[0]);
+  const principals = createPrincipalGraph();
+  const u1 = await principals.act("U1");
+  const app = createApp({ deploy: s.deploy, identity: { principals } } as unknown as Parameters<typeof createApp>[0]);
   const identitySecret = "deployment-route-identity-secret";
   const server = createInsecureTestServer(app, {
     portalIdentitySecret: identitySecret,
@@ -80,7 +83,7 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
       body: JSON.stringify(body),
     });
   try {
-    const d = await make(s.deploy, "my-app");
+    const d = await make(s.deploy, "my-app", u1);
     const dn = await post(`/v1/deployments/${d.id}/display-name`, { displayName: "Pretty" });
     assert.equal(dn.status, 200);
     const dnBody = (await dn.json()) as { deployment: { name?: string; displayName?: string } };

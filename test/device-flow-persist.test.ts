@@ -21,6 +21,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { personalScope, principalOf } from "./support/principal.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -443,13 +444,15 @@ function channel(text: string): TurnRequest {
 }
 
 test("a DM turn auto-captures a device-flow login under the PERSON, and a fresh machine gets it back", async () => {
-  const { app, keychain } = await freshApp();
+  const built = await freshApp();
+  const { app, keychain } = built;
+  const u1 = await principalOf(built, "U1");
   const res = await app.turn(
     dm("!run mkdir -p ~/.config/gh && printf 'oauth_token: gho_E2E' > ~/.config/gh/hosts.yml && echo done"),
   );
   assert.equal(res.status, "ok");
 
-  const records = await keychain!.listByOwner("U1");
+  const records = await keychain!.listByOwner(u1);
   const gh = records.find((c) => c.service === "gh");
   assert.ok(gh, "post-turn capture persisted the login under the actor");
   assert.equal(gh!.kind, "file");
@@ -461,19 +464,23 @@ test("a DM turn auto-captures a device-flow login under the PERSON, and a fresh 
 });
 
 test("a login performed on a shared channel box is keyed to the SCOPE, like its workspace", async () => {
-  const { app, keychain } = await freshApp();
+  const built = await freshApp();
+  const { app, keychain } = built;
+  const u1 = await principalOf(built, "U1");
   const res = await app.turn(
     channel("!run mkdir -p ~/.config/glab && printf 'token: glpat_CH' > ~/.config/glab/config.yml && echo done"),
   );
   assert.equal(res.status, "ok", res.reason);
 
-  assert.equal((await keychain!.listByOwner("U1")).length, 0, "no personal record from a channel turn");
+  assert.equal((await keychain!.listByOwner(u1)).length, 0, "no personal record from a channel turn");
   const scoped = await keychain!.listByOwner(scopeId("channel", "C1"));
   assert.equal(scoped.find((c) => c.service === "glab")?.kind, "file");
 });
 
 test("a capture failure is logged as an error event and does NOT fail the turn", async () => {
-  const { app, keychain, errors } = await freshApp();
+  const built = await freshApp();
+  const { app, keychain, errors } = built;
+  const u1 = await principalOf(built, "U1");
   const realSave = keychain!.save.bind(keychain!);
   keychain!.save = async () => {
     throw new Error("injected keychain outage");
@@ -488,7 +495,7 @@ test("a capture failure is logged as an error event and does NOT fail the turn",
   keychain!.save = realSave;
   const retry = await app.turn(dm("!run echo retry"));
   assert.equal(retry.status, "ok");
-  assert.ok((await keychain!.listByOwner("U1")).some((c) => c.service === "gh"));
+  assert.ok((await keychain!.listByOwner(u1)).some((c) => c.service === "gh"));
 });
 
 test("removing platform credential vending preserves stored quarantine on personal and shared sandboxes", async () => {
@@ -501,8 +508,8 @@ test("removing platform credential vending preserves stored quarantine on person
       }),
     );
     const request = shared ? channel("!run echo ready") : dm("!run echo ready");
-    const ownerId = shared ? scopeId("channel", "C1") : "U1";
-    const targetScope = shared ? scopeId("channel", "C1") : scopeId("personal", "U1");
+    const ownerId = shared ? scopeId("channel", "C1") : await principalOf(built, "U1");
+    const targetScope = shared ? scopeId("channel", "C1") : await personalScope(built, "U1");
     await selectDefaultSandbox(built, "U1", targetScope);
     await built.keychain!.save({
       ownerId,
@@ -1102,8 +1109,8 @@ test("removed layer tools retain quarantine, capture exclusion and reset-to-lega
     );
     assert.equal(built.credentialTools.length, 0);
     const request = shared ? channel("!run echo ready") : dm("!run echo ready");
-    const ownerId = shared ? scopeId("channel", "C1") : "U1";
-    const targetScope = shared ? scopeId("channel", "C1") : scopeId("personal", "U1");
+    const ownerId = shared ? scopeId("channel", "C1") : await principalOf(built, "U1");
+    const targetScope = shared ? scopeId("channel", "C1") : await personalScope(built, "U1");
     await selectDefaultSandbox(built, "U1", targetScope);
     await built.keychain!.save({
       ownerId,

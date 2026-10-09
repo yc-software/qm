@@ -12,6 +12,7 @@ import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "personal-account-test-signing-secret";
 
@@ -61,10 +62,12 @@ test("account API binds choice to the signed-in person, preserves connections, a
       body,
     });
   }
+  const alice = await principalOf(built, "alice@default-org");
+  const bob = await principalOf(built, "bob@default-org");
   try {
     assert.equal((await request("personal")).status, 409);
     assert.equal((await request("invalid")).status, 400);
-    await built.userModelCredentials.setApiKey("alice@default-org", "anthropic", "test-personal-key");
+    await built.userModelCredentials.setApiKey(alice, "anthropic", "test-personal-key");
     assert.equal((await request("personal", "bob@default-org", "alice@default-org")).status, 403);
     const enabled = await request("personal");
     assert.equal(enabled.status, 200);
@@ -74,12 +77,12 @@ test("account API binds choice to the signed-in person, preserves connections, a
       account: "personal",
       connections: [{ provider: "anthropic", kind: "apikey" }],
     });
-    assert.equal(await built.config.getIndividualModelAuthDurable("bob@default-org"), false);
+    assert.equal(await built.config.getIndividualModelAuthDurable(bob), false);
     assert.equal((await request("company")).status, 200);
-    assert.equal((await built.userModelCredentials.connections("alice@default-org")).length, 1);
+    assert.equal((await built.userModelCredentials.connections(alice)).length, 1);
     assert.equal((await request("personal")).status, 200);
-    await built.userModelCredentials.delete("alice@default-org", "anthropic");
-    assert.equal(await built.config.getIndividualModelAuthDurable("alice@default-org"), true);
+    await built.userModelCredentials.delete(alice, "anthropic");
+    assert.equal(await built.config.getIndividualModelAuthDurable(alice), true);
     assert.equal((await request("company")).status, 200);
     built.config.setIndividualModelAuth(true);
     await built.config.flushScope("org:default-org");
@@ -91,9 +94,10 @@ test("account API binds choice to the signed-in person, preserves connections, a
 
 test("personal provider choice is durable and controls the submitted run independently of the company model", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-routing-")) }));
-  await built.userModelCredentials.setApiKey("U1", "anthropic", "test-anthropic-key");
-  await built.userModelCredentials.setApiKey("U1", "openai", "test-openai-key");
-  await built.config.setPersonalModelAuth("U1", true, "openai");
+  const u1 = await principalOf(built, "U1");
+  await built.userModelCredentials.setApiKey(u1, "anthropic", "test-anthropic-key");
+  await built.userModelCredentials.setApiKey(u1, "openai", "test-openai-key");
+  await built.config.setPersonalModelAuth(u1, true, "openai");
   const submitted = await built.app.turn({
     surface: "slack",
     actor: { externalId: "U1" },
@@ -108,7 +112,7 @@ test("personal provider choice is durable and controls the submitted run indepen
   assert.equal(run?.request.modelAccount, "openai");
   assert.equal(run?.request.model, undefined);
   assert.equal(run?.request.harness, undefined);
-  await built.config.setPersonalModelAuth("U1", false);
+  await built.config.setPersonalModelAuth(u1, false);
   assert.equal((await built.runs.get(submitted.runId!))?.request.modelAccount, "openai");
   const steered = await built.app.signalRun(submitted.runId!, { kind: "steer", text: "more work" }, "U1");
   assert.equal(steered.accepted, false);
@@ -126,7 +130,7 @@ test("shared chat messages queue instead of borrowing another person's account",
     liveActor: true,
     async: true,
   });
-  await built.config.setPersonalModelAuth("U1", true, "anthropic");
+  await built.config.setPersonalModelAuth(await principalOf(built, "U1"), true, "anthropic");
   const first = await built.app.turn(message("U1"));
   const other = await built.app.turn(message("U2"));
   assert.notEqual(first.runId, other.runId);

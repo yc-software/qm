@@ -278,7 +278,7 @@ test("connections require credential access and fail visibly on upstream errors"
 test("Slack connection links verified workspace identity to the web owner and persists status", async () => {
   const f = fixture();
   const { createDirectoryStore } = await import("../src/directory/directory-store.ts");
-  const { installPrincipalResolver, principalOf } = await import("../src/directory/person.ts");
+  const { installPrincipalResolver } = await import("../src/directory/person.ts");
   const { createPrincipalGraph } = await import("../src/identity/principals.ts");
   f.deps.principals = createPrincipalGraph();
   const alice = await f.deps.principals.act("alice");
@@ -309,7 +309,7 @@ test("Slack connection links verified workspace identity to the web owner and pe
     f.replies.push(account, { data: { ok: true, user_id: "U123", team_id: "T123", user: "alice", team: "Acme" } });
     const linked = await f.invoke("/v1/composio/slack/complete", { ticket: started.data.ticket }, alice);
     assert.equal(linked.status, 200);
-    assert.equal(principalOf("U123"), alice);
+    assert.equal(f.deps.principals.principalOf("U123"), alice);
     assert.equal((await f.deps.principals.principals()).length, 1);
     assert.equal((await f.deps.slackAccounts.get(alice))?.accountId, "ca_test");
     f.replies.push(account);
@@ -705,33 +705,25 @@ test("unlinking an account owner during tool lookup prevents provider execution"
   }
 });
 
-test("consent and browser verification use the canonical identity when signed in through an alias", async () => {
-  const { installPrincipalResolver } = await import("../src/directory/person.ts");
+test("consent and browser verification hash the principal the edge resolved", async () => {
   const f = fixture();
   await f.shared();
-  const links = aliasResolver();
-  installPrincipalResolver(links);
-  const aliasId = "oidc:alice";
-  const userId = composioUserId(orgId(), "alice");
+  const principal = "5b0c1a52-3d0e-4c39-9f0e-2f0d6c1d7a11";
+  const userId = composioUserId(orgId(), principal);
   const callbackUrl = "https://qm.example/s/chat?composioReturn=linked";
-  try {
-    links.link(aliasId, "alice");
-    f.replies.push(
-      { session_id: "trs_linked" },
-      { redirect_url: "https://connect.composio.dev/link/lk_linked", connected_account_id: "ca_linked" },
-    );
-    assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, aliasId)).status, 200);
-    assert.equal(JSON.parse(String(f.calls[0]!.init?.body)).user_id, userId);
-    assert.equal((await f.deps.composioReturns!.get(`${userId}:ca_linked`))?.url, callbackUrl);
-    f.replies.push({ connected_account_id: "ca_linked", toolkit_slug: "gmail" });
-    const result = await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" }, aliasId);
-    assert.equal(result.status, 200);
-    assert.deepEqual(result.data, { returnTo: callbackUrl });
-    assert.deepEqual(JSON.parse(String(f.calls.at(-1)!.init?.body)), { session_uri: "opaque", user_id: userId });
-    assert.equal((await f.deps.composioReturns!.entries()).length, 0);
-  } finally {
-    installPrincipalResolver(null);
-  }
+  f.replies.push(
+    { session_id: "trs_linked" },
+    { redirect_url: "https://connect.composio.dev/link/lk_linked", connected_account_id: "ca_linked" },
+  );
+  assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, principal)).status, 200);
+  assert.equal(JSON.parse(String(f.calls[0]!.init?.body)).user_id, userId);
+  assert.equal((await f.deps.composioReturns!.get(`${userId}:ca_linked`))?.url, callbackUrl);
+  f.replies.push({ connected_account_id: "ca_linked", toolkit_slug: "gmail" });
+  const result = await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" }, principal);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data, { returnTo: callbackUrl });
+  assert.deepEqual(JSON.parse(String(f.calls.at(-1)!.init?.body)), { session_uri: "opaque", user_id: userId });
+  assert.equal((await f.deps.composioReturns!.entries()).length, 0);
 });
 
 test("linked identities retain provider accounts and Slack status until unlinked", async () => {
@@ -792,7 +784,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
       { session_id: "trs_test" },
       { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
     );
-    assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" }, "oidc:alice")).status, 200);
+    assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" }, "alice")).status, 200);
     assert.equal(JSON.parse(String(f.calls[3]!.init?.body)).user_id, canonical);
     links.unlink("oidc:alice");
     f.replies.push({ items: [account], next_cursor: null });

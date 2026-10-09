@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -82,7 +83,7 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
     assert.equal(record.requestId, requestId);
     assert.equal(record.command, command);
     assert.ok(record.reason);
-    assert.equal(record.request?.actor.externalId, "U1");
+    assert.equal(record.request?.actor.externalId, await principalOf(srv.built, "U1"));
     assert.equal(record.request?.conversation.threadRef, "dm:U1:t-approval-recovery");
     assert.equal(record.request?.text, `!run ${command}`);
     assert.equal(record.request?.approval, undefined);
@@ -131,7 +132,7 @@ test("GET /v1/sessions/:id/approvals lists the commands the session is still pau
     assert.ok(requestId);
 
     const listed = await fetch(
-      `${srv.base}/v1/sessions/${encodeURIComponent(firstBody.sessionId)}/approvals?viewer=U2`,
+      `${srv.base}/v1/sessions/${encodeURIComponent(firstBody.sessionId)}/approvals?viewer=${await principalOf(srv.built, "U2")}`,
     );
     assert.equal(listed.status, 200);
     const body = (await listed.json()) as { approvals: { requestId: string; command: string; reason: string }[] };

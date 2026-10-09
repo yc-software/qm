@@ -1715,6 +1715,7 @@ export function buildApp(
     sessions,
   );
   const deployService = createDeployService({
+    principals,
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
     publicWebUrl: config.publicWebUrl,

@@ -11,6 +11,7 @@ import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprit
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { principalOf, personalScope } from "./support/principal.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -69,7 +70,7 @@ test("a scope allow rule cannot override the ephemeral_only direct-execution den
       },
     },
   );
-  const personal = scopeId("personal", actor.externalId);
+  const personal = await personalScope(built, actor.externalId);
   built.config.setCommandPolicy(personal, {
     mode: "denylist",
     rules: [{ pattern: "\\benv\\b", decision: "allow" }],
@@ -112,6 +113,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   const alice = { externalId: "ALICE" };
   const room = scopeId("channel", "C-owner-auth");
   await selectDefaultSandbox(built, "BOB", room);
+  const BOB = await principalOf(built, "BOB");
   const conversation = {
     kind: "channel" as const,
     threadRef: "ch:C-owner-auth:cron",
@@ -119,15 +121,15 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     isPrivate: true,
     audience: [bob, alice],
   };
-  const npm = await built.keychain!.save({ ownerId: "BOB", service: "npm", secret: "npm_BOB", envKey: "NPM_TOKEN" });
+  const npm = await built.keychain!.save({ ownerId: BOB, service: "npm", secret: "npm_BOB", envKey: "NPM_TOKEN" });
   const aws = await built.keychain!.save({
-    ownerId: "BOB",
+    ownerId: BOB,
     service: "aws",
     secret: "AKIA_BOB_GENERAL",
     envKey: "AWS_ACCESS_KEY_ID",
   });
   await built.keychain!.save({
-    ownerId: "BOB",
+    ownerId: BOB,
     service: "acmecorp",
     files: [{ path: ".config/acmecorp/auth.json", contentBase64: Buffer.from("file_BOB").toString("base64") }],
     origin: DEVICE_FLOW_ORIGIN,
@@ -582,7 +584,7 @@ test("selected broker execute honors deployment approval rules before vending cr
       },
     },
   );
-  const personal = scopeId("personal", actor.externalId);
+  const personal = await personalScope(built, actor.externalId);
   const conversation = { kind: "dm" as const, threadRef: "dm:credexec-approval", audience: [actor] };
   await built.deviceFlowCutover.set(personal, "acmecli", "ephemeral_only", "security@example.com");
 

@@ -1,3 +1,4 @@
+import { createPrincipalGraph } from "../src/identity/principals.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
@@ -402,6 +403,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   const auditEvents: Array<{ principalId: string; action: string; resource: string; scopeLabel: string }> = [];
   let bypassAcl: boolean | undefined;
   const app = {
+    principals: createPrincipalGraph(),
     listDeployments: async () => [{ id: "d1", ownerScopeId: "personal:U1" }],
     reachDeployment: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
       bypassAcl = opts?.bypassAcl;

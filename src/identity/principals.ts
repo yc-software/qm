@@ -184,8 +184,10 @@ export interface PrincipalGraph {
   refresh(force?: boolean): Promise<void>;
   /** The principal a handle is linked to, from the in-memory index. A principal UUID resolves to itself. */
   principalOf(handle: string): string | undefined;
-  /** Every handle linked to a principal, as the raw ids older rows were keyed by. */
+  /** Every handle linked to a principal. */
   handlesOf(principalId: string): string[];
+  /** The principal's display name, from the in-memory index. */
+  displayName(principalId: string): string | undefined;
   /** Edge entry point: the handle acted, so it must have a principal. Auto-links by email first. */
   act(handle: string, opts?: ActOptions): Promise<string>;
   /** Point an identity at a principal. The self-serve connect flow and the admin link API both call this. */
@@ -299,6 +301,9 @@ export function createPrincipalGraph(
     principalOf,
     handlesOf(principalId) {
       return [...identities.values()].filter((r) => r.principalId === principalId).map((r) => r.externalId);
+    },
+    displayName(principalId) {
+      return principals.get(principalId)?.displayName;
     },
     act(handle, o = {}) {
       return serial(async () => {

@@ -10,6 +10,7 @@ import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf, personalScope } from "./support/principal.ts";
 import { scopeId } from "../src/types.ts";
 import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
@@ -338,17 +339,18 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       mode: "denylist",
       rules: [{ pattern: "printf", decision: "require_approval" }],
     });
+    const u2Thread = `web:${await principalOf(built, "U2")}:private`;
     const pending = await built.app.turn({
       surface: "web",
       actor: { externalId: "U2" },
-      conversation: { kind: "dm", threadRef: "web:U2:private" },
+      conversation: { kind: "dm", threadRef: u2Thread },
       text: "!run printf private",
     });
     assert.equal(pending.status, "pending_approval");
     const requestId = pending.pendingApprovals![0]!.requestId;
     assert.equal((await fetch(`${base}/v1/approvals/${requestId}`, { headers: aliceHeaders })).status, 404);
     const pendingBody = (await (
-      await fetch(`${base}/v1/approvals/pending?threadRef=${encodeURIComponent("web:U2:private")}`, {
+      await fetch(`${base}/v1/approvals/pending?threadRef=${encodeURIComponent(u2Thread)}`, {
         headers: aliceHeaders,
       })
     ).json()) as { pending: unknown };
@@ -389,8 +391,8 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal(typeof body.token, "string", "token must be the minted string, not a serialized Promise");
     assert.ok((body.token as string).length > 0);
     const claims = await verifyCapabilityToken(body.token as string, CAP);
-    assert.equal(claims?.actorId, "U1");
-    assert.equal(claims?.scopeId, "personal:U1");
+    assert.equal(claims?.actorId, await principalOf(built, "U1"));
+    assert.equal(claims?.scopeId, await personalScope(built, "U1"));
   });
 });
 

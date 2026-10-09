@@ -5,11 +5,13 @@ import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { format } from "node:util";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 let whoamiMode: "ok" | "down" | "fail-once" | "malformed" = "ok";
 let whoamiRequests = 0;
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (answerPrincipalLookup(req, res)) return;
   if (req.url === "/api/whoami") {
     whoamiRequests++;
     if (whoamiMode === "down" || (whoamiMode === "fail-once" && whoamiRequests === 1)) {

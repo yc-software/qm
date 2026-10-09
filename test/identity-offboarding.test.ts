@@ -11,6 +11,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "offboarding-secret".repeat(3);
 
@@ -57,15 +58,16 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
 
     await built.app.upsertDirectory([member("U-stay")]);
     assert.equal(built.identity.classify("U-leave").type, "guest");
+    const leave = await principalOf(built, "U-leave");
     assert.equal(built.identity.classify("U-stay").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.deactivate" && e.principalId === "U-leave"),
+      (await built.auditLog.events()).some((e) => e.action === "principal.deactivate" && e.principalId === leave),
     );
 
     await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
     assert.equal(built.identity.classify("U-leave").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-leave"),
+      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === leave),
     );
   });
 
@@ -74,16 +76,15 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     await built.app.upsertDirectory([member("U-stay")]);
 
     assert.equal(built.identity.classify("allowed@example.com").type, "internal");
+    const allowed = await principalOf(built, "allowed@example.com");
     const resolved = await built.app.resolveRecipient("allowed@example.com");
     assert.equal(resolved.kind, "one");
     if (resolved.kind === "one") {
-      assert.equal(resolved.member.principalId, "allowed@example.com");
+      assert.equal(resolved.member.principalId, allowed);
       assert.equal(resolved.member.displayName, "allowed@example.com");
     }
     assert.ok(
-      !(await built.auditLog.events()).some(
-        (e) => e.action === "principal.deactivate" && e.principalId === "allowed@example.com",
-      ),
+      !(await built.auditLog.events()).some((e) => e.action === "principal.deactivate" && e.principalId === allowed),
     );
   });
 

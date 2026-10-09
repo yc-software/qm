@@ -8,6 +8,7 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "session-pins-secret-value!".repeat(2);
 
@@ -22,8 +23,9 @@ describe("conversation pins self-API", async () => {
   let sessionId: string;
   const THREAD = "web:U1:pins";
 
-  const capFor = (actorId: string, threadRef?: string) =>
-    mintCapabilityToken(
+  const capFor = async (handle: string, threadRef?: string) => {
+    const actorId = await principalOf(built, handle);
+    return mintCapabilityToken(
       {
         actorId,
         scopeId: scopeId("personal", actorId),
@@ -34,6 +36,7 @@ describe("conversation pins self-API", async () => {
       },
       SECRET,
     );
+  };
 
   const call = async (method: string, path: string, body?: unknown, token?: string) =>
     fetch(`${base}${path}`, {
@@ -74,7 +77,7 @@ describe("conversation pins self-API", async () => {
     assert.equal(res.status, 200);
     const { pin } = (await res.json()) as { pin: { id: string; text: string; addedBy: string } };
     assert.equal(pin.text, "launch date: Sept 4");
-    assert.equal(pin.addedBy, "U1");
+    assert.equal(pin.addedBy, await principalOf(built, "U1"));
     const list = await call("GET", "/v1/pins", undefined, token);
     assert.equal(list.status, 200);
     const { pins } = (await list.json()) as { pins: Array<{ id: string }> };
@@ -104,12 +107,12 @@ describe("conversation pins self-API", async () => {
     const child = await built.sessions.getOrCreateByThread(
       "agent:main:subagent:pins-child",
       "dm",
-      scopeId("personal", "U1"),
+      scopeId("personal", await principalOf(built, "U1")),
     );
     const nested = await built.sessions.getOrCreateByThread(
       "agent:main:subagent:pins-nested",
       "dm",
-      scopeId("personal", "U1"),
+      scopeId("personal", await principalOf(built, "U1")),
     );
     await built.sessions.setParentSession(child.id, sessionId);
     await built.sessions.setParentSession(nested.id, child.id);
@@ -130,7 +133,7 @@ describe("conversation pins self-API", async () => {
   });
 
   it("surfaces pins on the transcript for the web UI", async () => {
-    const found = await built.app.getSessionForViewer(sessionId, "U1");
+    const found = await built.app.getSessionForViewer(sessionId, await principalOf(built, "U1"));
     assert.ok(found, "viewer can read the session");
     assert.ok((found!.pins?.length ?? 0) >= 2, "transcript response carries the pins");
     const entryPin = found!.pins!.find((p) => p.entrySeq !== undefined);
@@ -138,13 +141,13 @@ describe("conversation pins self-API", async () => {
   });
 
   it("hides entry-pin previews from viewers outside the participant window", async () => {
-    await built.sessions.addParticipant(sessionId, "U3");
-    const found = await built.app.getSessionForViewer(sessionId, "U3");
+    await built.sessions.addParticipant(sessionId, await principalOf(built, "U3"));
+    const found = await built.app.getSessionForViewer(sessionId, await principalOf(built, "U3"));
     assert.ok(found, "the late joiner can read the session");
     const entryPin = found!.pins!.find((p) => p.entrySeq !== undefined);
     assert.ok(entryPin, "the pin itself is listed");
     assert.equal(entryPin!.preview, undefined, "no preview for an entry outside the viewer's window");
-    const mine = await built.app.getSessionForViewer(sessionId, "U1");
+    const mine = await built.app.getSessionForViewer(sessionId, await principalOf(built, "U1"));
     const minePin = mine!.pins!.find((p) => p.entrySeq !== undefined);
     assert.ok(minePin?.preview, "the original participant still sees the preview");
   });

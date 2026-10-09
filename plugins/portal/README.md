@@ -303,7 +303,7 @@ login routing retain their existing behavior. Switching keeps the destination
 from the signed email login transaction.
 The link is available without a remembered browser preference.
 
-The proxy also signs the original authenticated subject as `authenticatedAs`. Core verifies that it still belongs to the canonical person, rejecting stale claims after unlinking. Trusted-entry failures offer retry of that provider without an alternate email sign-in link; invitation authentication remains unchanged.
+The proxy also signs the original authenticated subject as `authenticatedAs`. Core verifies that it still resolves to the same principal, rejecting stale claims after unlinking. Trusted-entry failures offer retry of that provider without an alternate email sign-in link; invitation authentication remains unchanged.
 
 The portal always issues `portal_session_x`, a `SameSite=None` twin of the
 session cookie that lets opted-in apps be framed by named origins. The cores

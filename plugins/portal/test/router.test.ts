@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 let whoamiProbes = 0;
 let lastConsentClicker: string | null = null;
@@ -61,6 +62,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
     res.writeHead(500, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ error: "boom" }));
   }
+  if (answerPrincipalLookup(req, res)) return;
   if (req.url === "/api/whoami") {
     whoamiProbes++;
     const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
@@ -197,7 +199,7 @@ test("valid session: upstream receives ONLY the synthesized cookie, prefix strip
   assert.equal(body.headers["x-admin-actor"], undefined);
 });
 
-test("a session whose subject core links to another principal is proxied as that canonical principal", async () => {
+test("a session is proxied as the principal core resolves its subject to", async () => {
   const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-alias") } });
   assert.equal(r.status, 200);
   const body = (await r.json()) as { cookie: string };

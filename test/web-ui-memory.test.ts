@@ -12,6 +12,7 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { readMemory } from "../src/memory/memory-service.ts";
+import { principalOf } from "./support/principal.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -46,35 +47,37 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
 }
 
 test("a signed-in user reads, edits, and re-reads their own memory; identity is the cookie", async () => {
-  const empty = await fetch(`${webBase}/api/memory`, asUser("alice"));
+  const ALICE_ID = await principalOf(built, "alice");
+  const BOB_ID = await principalOf(built, "bob");
+  const empty = await fetch(`${webBase}/api/memory`, asUser(ALICE_ID));
   assert.equal(empty.status, 200);
   assert.equal(((await empty.json()) as { content: string }).content, "");
 
   const put = await fetch(
     `${webBase}/api/memory`,
-    asUser("alice", { method: "PUT", body: JSON.stringify({ content: "# Memory\n\n- Calls me Al\n" }) }),
+    asUser(ALICE_ID, { method: "PUT", body: JSON.stringify({ content: "# Memory\n\n- Calls me Al\n" }) }),
   );
   assert.equal(put.status, 200);
 
-  const back = await fetch(`${webBase}/api/memory`, asUser("alice"));
+  const back = await fetch(`${webBase}/api/memory`, asUser(ALICE_ID));
   assert.equal(((await back.json()) as { content: string }).content, "# Memory\n\n- Calls me Al\n");
 
-  assert.equal(await readMemory(built.workspace, "personal:alice"), "# Memory\n\n- Calls me Al\n");
+  assert.equal(await readMemory(built.workspace, `personal:${ALICE_ID}`), "# Memory\n\n- Calls me Al\n");
 
-  const bob = await fetch(`${webBase}/api/memory`, asUser("bob"));
+  const bob = await fetch(`${webBase}/api/memory`, asUser(BOB_ID));
   assert.equal(((await bob.json()) as { content: string }).content, "", "another user's memory is separate");
 
   await fetch(
     `${webBase}/api/memory`,
-    asUser("bob", { method: "PUT", body: JSON.stringify({ principalId: "alice", content: "bob was here" }) }),
+    asUser(BOB_ID, { method: "PUT", body: JSON.stringify({ principalId: ALICE_ID, content: "bob was here" }) }),
   );
   assert.equal(
-    await readMemory(built.workspace, "personal:alice"),
+    await readMemory(built.workspace, `personal:${ALICE_ID}`),
     "# Memory\n\n- Calls me Al\n",
     "a spoofed body principalId cannot overwrite alice's memory",
   );
   assert.equal(
-    await readMemory(built.workspace, "personal:bob"),
+    await readMemory(built.workspace, `personal:${BOB_ID}`),
     "bob was here\n",
     "bob's write lands in bob's own scope",
   );
@@ -95,28 +98,29 @@ test("memory routes require a signed-in principal", async () => {
 });
 
 test("a non-string content is REJECTED, not coerced to a wipe; an empty string still clears", async () => {
+  const CAROL_ID = await principalOf(built, "carol");
   await fetch(
     `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: "# Memory\n\n- keep me\n" }) }),
+    asUser(CAROL_ID, { method: "PUT", body: JSON.stringify({ content: "# Memory\n\n- keep me\n" }) }),
   );
   const bad = await fetch(
     `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: 42 }) }),
+    asUser(CAROL_ID, { method: "PUT", body: JSON.stringify({ content: 42 }) }),
   );
   assert.equal(bad.status, 400, "non-string content is rejected");
   assert.equal(
-    await readMemory(built.workspace, "personal:carol"),
+    await readMemory(built.workspace, `personal:${CAROL_ID}`),
     "# Memory\n\n- keep me\n",
     "the malformed request did not wipe memory",
   );
 
   const clear = await fetch(
     `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: "" }) }),
+    asUser(CAROL_ID, { method: "PUT", body: JSON.stringify({ content: "" }) }),
   );
   assert.equal(clear.status, 200);
   assert.equal(
-    ((await (await fetch(`${webBase}/api/memory`, asUser("carol"))).json()) as { content: string }).content,
+    ((await (await fetch(`${webBase}/api/memory`, asUser(CAROL_ID))).json()) as { content: string }).content,
     "",
     "empty string clears the notebook",
   );

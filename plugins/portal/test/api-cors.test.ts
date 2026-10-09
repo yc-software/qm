@@ -4,10 +4,12 @@ import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { isChatApiRoute, parseAllowedOrigins } from "../src/cors.ts";
+import { answerPrincipalLookup } from "./principal-stub.ts";
 
 const upstream = createServer((req: IncomingMessage, res) => {
   req.resume();
   req.on("end", () => {
+    if (answerPrincipalLookup(req, res)) return;
     if (req.url === "/api/whoami") {
       res.writeHead(200, { "content-type": "application/json" });
       return void res.end(JSON.stringify({ isAdmin: (req.headers.cookie ?? "").includes("admin=U-admin") }));

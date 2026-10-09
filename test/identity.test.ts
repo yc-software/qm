@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryPrincipalStore, createPrincipalGraph } from "../src/identity/principals.ts";
+
+/** Instances of one deployment share the principal tables, as they share Postgres in production. */
+function sharedPrincipals() {
+  const store = createMemoryPrincipalStore();
+  return () => ({ principals: createPrincipalGraph(store) });
+}
 
 const id = createIdentityService();
 
@@ -18,8 +25,8 @@ test("classifies a flagged Slack Connect user as guest", () => {
   assert.equal(id.isInternal(p), false);
 });
 
-test("resolves bot assertions as internal automation callers", () => {
-  const p = id.resolve({ externalId: "B1", isBot: true });
+test("resolves bot assertions as internal automation callers", async () => {
+  const p = await id.actor({ externalId: "B1", isBot: true });
   assert.equal(p.type, "internal");
   assert.equal(id.isInternal(p), true);
 });
@@ -65,19 +72,21 @@ test("case fold does not merge distinct emails or touch non-email ids", async ()
 
 test("durable rehydration folds a cased stored deactivation", async () => {
   const backing = createMemoryMap<DeactivationRecord>();
-  const first = createIdentityService(backing);
+  const deployment = sharedPrincipals();
+  const first = createIdentityService(backing, deployment());
   await first.deactivate("Carol@Corp.com");
-  const second = createIdentityService(backing);
+  const second = createIdentityService(backing, deployment());
   await second.hydrate();
   assert.equal(second.classify("carol@corp.com").type, "guest");
 });
 
 test("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
   const backing = createMemoryMap<DeactivationRecord>();
-  const first = createIdentityService(backing);
+  const deployment = sharedPrincipals();
+  const first = createIdentityService(backing, deployment());
   await first.deactivate("U-leaver");
 
-  const second = createIdentityService(backing);
+  const second = createIdentityService(backing, deployment());
   assert.equal(second.classify("U-leaver").type, "internal");
   await second.hydrate();
   assert.equal(second.classify("U-leaver").type, "guest");
@@ -85,8 +94,9 @@ test("deactivation is durable: a fresh service over the same backing rehydrates 
 
 test("a running instance refreshes deactivations written by another instance", async () => {
   const backing = createMemoryMap<DeactivationRecord>();
-  const writer = createIdentityService(backing);
-  const reader = createIdentityService(backing);
+  const deployment = sharedPrincipals();
+  const writer = createIdentityService(backing, deployment());
+  const reader = createIdentityService(backing, deployment());
   await reader.hydrate();
   await writer.deactivate("U-leaver");
   assert.equal(reader.classify("U-leaver").type, "internal");

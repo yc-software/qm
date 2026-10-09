@@ -1,3 +1,4 @@
+import type { PrincipalGraph } from "../identity/principals.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
@@ -276,6 +277,8 @@ export interface SessionSearchHit {
 
 export interface App {
   swarms?: SwarmService;
+  /** The deployment's principal graph: where surface handles resolve to principals. */
+  readonly principals: PrincipalGraph;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
@@ -596,6 +599,8 @@ export interface App {
     email: string,
     actorId: string,
   ): Promise<{
+    /** The principal scope the grant landed on. */
+    scope: ScopeId;
     grantees: DeploymentGrantee[];
     invitation: DeploymentInvitation;
   }>;

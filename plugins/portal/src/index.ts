@@ -309,29 +309,32 @@ async function isAdmin(sub: string): Promise<boolean> {
   return (await adminProbe(sub)).isAdmin;
 }
 
-const CANONICAL_TTL_MS = 60_000;
-const CANONICAL_TIMEOUT_MS = 4_000;
-const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
+const PRINCIPAL_TTL_MS = 60_000;
+const PRINCIPAL_TIMEOUT_MS = 4_000;
+const principalCache = new LRUCache<string, string>({ max: 10_000, ttl: PRINCIPAL_TTL_MS });
 
-async function canonicalPrincipal(sub: string): Promise<string | null> {
-  const hit = canonicalCache.get(sub);
+async function principalFor(sub: string): Promise<string | null> {
+  const hit = principalCache.get(sub);
   if (hit !== undefined) return hit;
   const path = withSourceAuthNonce(`/v1/identities/${encodeURIComponent(sub)}/principal`, CORE_SIGNING_SECRET);
   try {
     const r = await fetch(`${CORE}${path}`, {
       headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
+      signal: AbortSignal.timeout(PRINCIPAL_TIMEOUT_MS),
     });
     if (!r.ok) {
-      console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
+      console.warn(`[portal] principal lookup returned HTTP ${r.status}`);
       return null;
     }
     const body = (await r.json()) as { principalId?: unknown };
-    const canonical = typeof body.principalId === "string" && body.principalId ? body.principalId : sub;
-    canonicalCache.set(sub, canonical);
-    return canonical;
+    if (typeof body.principalId !== "string" || !body.principalId) {
+      console.warn("[portal] principal lookup returned no principal");
+      return null;
+    }
+    principalCache.set(sub, body.principalId);
+    return body.principalId;
   } catch (error) {
-    console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+    console.warn(`[portal] principal lookup failed: ${errMessage(error)}`);
     return null;
   }
 }
@@ -1129,9 +1132,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   let session = renewSessionCookie(req, res) ?? currentSession(req);
   const authenticatedPrincipal = session?.sub;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
-    const canonical = await canonicalPrincipal(session.sub);
-    if (canonical === null) return identityUnavailable(req, res);
-    session = { ...session, sub: canonical };
+    const principal = await principalFor(session.sub);
+    if (principal === null) return identityUnavailable(req, res);
+    session = { ...session, sub: principal };
   }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
@@ -1140,7 +1143,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await canonicalPrincipal(target)) === session.sub)
+    if (target === session.sub || (await principalFor(target)) === session.sub)
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {

@@ -9,6 +9,7 @@ import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprit
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { personalScope } from "./support/principal.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -79,7 +80,8 @@ test("selected broker credential uses isolated execute with policy before vendin
     },
   );
 
-  const personal = scopeId("personal", actor.externalId);
+  const personal = await personalScope(built, actor.externalId);
+  await selectDefaultSandbox(built, actor.externalId, personal);
   const conversation = { kind: "dm" as const, threadRef: "dm:env-broker", audience: [actor] };
   await built.deviceFlowCutover.set(personal, "acmecli", "ephemeral_only", "security@example.com");
   const run = (params: object) =>
