@@ -61,12 +61,3 @@ export function executionSecretEnv(
   for (const field of injected) if (field.secret !== false) secrets[field.key] = field.value;
   return secrets;
 }
-
-export function backgroundOutputMasker(
-  env: Record<string, string> | undefined,
-  sealed: string | undefined,
-  open: ((sealed: string) => string[]) | undefined,
-): (text: string) => string {
-  if (sealed && !open) throw new Error("Background job output cannot be masked without the keychain");
-  return createExactSecretValueMasker([...Object.values(executionSecretEnv(env)), ...(sealed ? open!(sealed) : [])]);
-}

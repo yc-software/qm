@@ -23,7 +23,6 @@ export interface ProcessRecord {
   status: ProcessStatus;
   sessionRef?: string;
   runId?: string;
-  secretValuesEnc?: string;
   credentialsPending?: boolean;
 }
 
@@ -38,7 +37,6 @@ interface NewProcessRecord {
   sessionRef?: string;
   runId?: string;
   credentialFiles?: ProcessCredentialFiles;
-  secretValuesEnc?: string;
 }
 
 export interface ProcessRegistry {
@@ -69,7 +67,6 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
     status: "running",
     ...(rec.sessionRef ? { sessionRef: rec.sessionRef } : {}),
     ...(rec.runId ? { runId: rec.runId } : {}),
-    ...(rec.secretValuesEnc ? { secretValuesEnc: rec.secretValuesEnc } : {}),
   };
 }
 
@@ -138,7 +135,6 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
     status: r.status as ProcessStatus,
     ...(r.session_ref ? { sessionRef: r.session_ref as string } : {}),
     ...(r.run_id ? { runId: r.run_id as string } : {}),
-    ...(r.secret_values_enc ? { secretValuesEnc: r.secret_values_enc as string } : {}),
     ...(r.credential_files != null ? { credentialsPending: true } : {}),
   };
 }
@@ -167,10 +163,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
   pg.registerMigration(purposeMigration);
   const credentialFilesMigration = {
     id: "processes/registry/0004",
-    statements: [
-      "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB",
-      "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS secret_values_enc TEXT",
-    ],
+    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"],
   };
   pg.registerMigration(credentialFilesMigration);
   let ready: Promise<void> | undefined;
@@ -190,8 +183,8 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async register(rec) {
       const row = newRecord(rec, Date.now());
       await q(
-        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose, credential_files, secret_values_enc)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose, credential_files)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           row.processId,
           row.scopeId,
@@ -205,7 +198,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.sandboxId ?? null,
           row.purpose ?? null,
           rec.credentialFiles ? JSON.stringify(rec.credentialFiles) : null,
-          row.secretValuesEnc ?? null,
         ],
       );
       return row;

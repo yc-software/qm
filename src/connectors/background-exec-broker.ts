@@ -5,15 +5,13 @@ import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess, processIsGone } from "../sandbox/process-poll.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
-import { backgroundOutputMasker } from "../security/secret-masking.ts";
+import { createExactSecretValueMasker } from "../security/secret-masking.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
   registry: ProcessRegistry;
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
-  sealSecrets?: (values: readonly string[]) => string;
-  openSecrets?: (sealed: string) => string[];
   scopeId: string;
   sessionRef?: string;
   ttlMs?: number;
@@ -96,10 +94,6 @@ function stateFromRow(status: ProcessStatus): ProcessState {
   return { state: "exited", code: status === "reaped" ? 143 : 0 };
 }
 
-function missingKeychain(): never {
-  throw new Error("Background job credentials cannot be stored without the keychain");
-}
-
 export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): BackgroundExecBroker {
   const POLL_MS = deps.pollMs ?? 5_000;
   const defaultTtlMs = deps.ttlMs ?? DEFAULT_TTL_MS;
@@ -166,7 +160,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         if (read.status.state === "exited") await exited(handle, processId);
         return {
           processId,
-          output: backgroundOutputMasker(handle.env, undefined, undefined)(read.chunks),
+          output: read.chunks,
           cursor: read.cursor,
           status: read.status,
           reattached: true,
@@ -175,10 +169,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
 
       let launched = false;
       try {
-        const secretValuesEnc = credentials?.secrets.length
-          ? (deps.sealSecrets ?? missingKeychain)(credentials.secrets)
-          : undefined;
-        const mask = backgroundOutputMasker(handle.env, secretValuesEnc, deps.openSecrets);
+        const mask = createExactSecretValueMasker(credentials?.secrets ?? []);
         const register = async (id: string): Promise<void> => {
           launched = true;
           await deps.registry.register({
@@ -191,7 +182,6 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             ttlMs: ttl,
             ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
             ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
-            ...(secretValuesEnc ? { secretValuesEnc } : {}),
           });
         };
         const startOptions = { env: { PYTHONUNBUFFERED: "1", ...credentials?.env } };
@@ -228,9 +218,8 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         maxBytes: opts?.maxBytes ?? DEFAULT_MAX_BYTES,
         waitMs: opts?.waitMs ?? 0,
       });
-      const mask = backgroundOutputMasker(handle.env, rec.secretValuesEnc, deps.openSecrets);
       if (read.status.state === "exited") await exited(handle, processId);
-      return { processId, chunks: mask(read.chunks), cursor: read.cursor, status: read.status };
+      return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 
     async write(handle, processId, data): Promise<BackgroundWriteResult> {

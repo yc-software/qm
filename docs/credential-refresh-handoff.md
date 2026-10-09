@@ -30,8 +30,8 @@ reaper, reconcile on provision) re-checks the baseline against the keychain, wri
 refreshes back, clears the column and removes the directory. If a write fails for a reason
 other than a keychain rejection, the column and directory stay so a later observer or the
 next provision retries. A start that fails after the process launched leaves cleanup to
-these paths. Env credential values are sealed with the keychain key on the same row, so
-background output is masked like `execute` output on every later read.
+these paths. The start call masks the job's env credential values in its initial output;
+later polls are unmasked, as on main, because no secret values are stored.
 
 Directories older than two hours are swept when the next credentialed execution starts,
 which is longer than any execution or background job may live, so concurrent operations never

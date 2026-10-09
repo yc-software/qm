@@ -2621,12 +2621,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     handle,
                     processId,
                   ),
-                ...(deps.keychain
-                  ? {
-                      sealSecrets: (values: readonly string[]) => deps.keychain!.sealValues(values),
-                      openSecrets: (sealed: string) => deps.keychain!.openValues(sealed),
-                    }
-                  : {}),
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),

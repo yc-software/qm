@@ -332,8 +332,6 @@ function background(
       scopeId: scope,
       pollMs: 10,
       onExit: (h, processId) => finish(h, processId),
-      sealSecrets: (values) => f.keychain.sealValues(values),
-      openSecrets: (sealed) => f.keychain.openValues(sealed),
     });
   const ctx = (b = broker()) => f.context({ sandbox, backgroundBroker: b });
   const waitForExit = async (processId: string) => {
@@ -366,18 +364,15 @@ test("background credentials stay staged until the job exits, then refreshes are
   assert.equal(await bg.registry.credentialFiles(started.processId), null);
 });
 
-test("background output masks credential values, including on a later turn's poll", async (t) => {
+test("background start output masks the command's credential values", async (t) => {
   const f = await fixture(t);
   const bg = background(f);
-  const started = await bg.ctx().backgroundStart('echo "early $API_TOKEN"; sleep 0.3; echo "late $API_TOKEN"', {
+  const started = await bg.ctx().backgroundStart('echo "early $API_TOKEN"; sleep 0.3', {
     purpose: "Print a token",
     credentials: ["token"],
   });
   assert.match(started.output, /early <redacted:credential>/);
-  await bg.waitForExit(started.processId);
-  const later = await bg.ctx(bg.broker()).backgroundPoll(started.processId);
-  assert.match(later.chunks, /late <redacted:credential>/);
-  assert.ok(!`${started.output}${later.chunks}`.includes(SECRET_TOKEN));
+  assert.ok(!started.output.includes(SECRET_TOKEN));
   assert.ok(!JSON.stringify(await bg.registry.get(started.processId)).includes(SECRET_TOKEN));
 });
 

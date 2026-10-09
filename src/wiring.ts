@@ -2536,7 +2536,6 @@ export function buildApp(
           sessions,
           leaderLease,
           onProcessExit: finishCredentials,
-          ...(keychain ? { openSecrets: (sealed: string) => keychain.openValues(sealed) } : {}),
           heartbeatMs: config.monitorHeartbeatMs,
         })
       : null;

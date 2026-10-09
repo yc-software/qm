@@ -148,12 +148,10 @@ for (const [name, make] of [
         command: "x",
         ttlMs: 60_000,
         credentialFiles,
-        secretValuesEnc: "sealed",
       });
       const reopened = name === "postgres" ? make() : reg;
       assert.deepEqual(await reopened.credentialFiles(processId), credentialFiles);
       assert.equal((await reopened.get(processId))?.credentialsPending, true);
-      assert.equal((await reopened.get(processId))?.secretValuesEnc, "sealed");
       await reopened.setCredentialFiles(processId, null);
       assert.equal(await reg.credentialFiles(processId), null);
       assert.equal((await reg.get(processId))?.credentialsPending, undefined);
