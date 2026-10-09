@@ -29,6 +29,7 @@ interface FakeRecord {
   rejectNextCommand: boolean;
   failNextCheckpoint: boolean;
   failNextCheckpointDelete: boolean;
+  failNextRollback: boolean;
 }
 
 export interface FakeManagedAgents {
@@ -46,8 +47,10 @@ export interface FakeManagedAgents {
   guestDisconnects(): string[];
   checkpointCalls(): Array<{ sessionId: string; checkpointId: string; label?: string }>;
   deletedCheckpoints(): string[];
+  rollbackCalls(): Array<{ sessionId: string; checkpointId: string }>;
   failNextCheckpoint(name: string): void;
   failNextCheckpointDelete(name: string): void;
+  failNextRollback(name: string): void;
   cleanup(): void;
 }
 
@@ -60,7 +63,9 @@ export function installFakeManagedAgents(): FakeManagedAgents {
   const guestDisconnects: string[] = [];
   const checkpointCalls: Array<{ sessionId: string; checkpointId: string; label?: string }> = [];
   const deletedCheckpoints: string[] = [];
+  const rollbackCalls: Array<{ sessionId: string; checkpointId: string }> = [];
   let nextId = 1;
+  let nextSandbox = 1;
   let nextCheckpoint = 1;
   let clock = 0;
 
@@ -160,6 +165,9 @@ export function installFakeManagedAgents(): FakeManagedAgents {
       }
       deletedCheckpoints.push(checkpointId);
     },
+    async close(): Promise<void> {
+      guestDisconnects.push(r.sessionId);
+    },
     async pause(): Promise<void> {
       if (gone(r.state)) throw new ManagedAgentsSandboxGoneError(r.sessionId, `status ${r.state}`);
       guestDisconnects.push(r.sessionId);
@@ -198,6 +206,7 @@ export function installFakeManagedAgents(): FakeManagedAgents {
         rejectNextCommand: false,
         failNextCheckpoint: false,
         failNextCheckpointDelete: false,
+        failNextRollback: false,
       };
       mkdirSync(r.home, { recursive: true });
       records.set(id, r);
@@ -216,6 +225,18 @@ export function installFakeManagedAgents(): FakeManagedAgents {
       return [...records.values()]
         .filter((r) => !gone(r.state) && r.name === name)
         .map((r) => ({ sessionId: r.sessionId, sandboxId: r.sandboxId, name: r.name, state: r.state }));
+    },
+    async rollback(sessionId, checkpointId): Promise<ManagedAgentsSessionInfo> {
+      const r = records.get(sessionId);
+      if (!r || gone(r.state)) throw new ManagedAgentsSandboxGoneError(sessionId, "session was not found");
+      if (r.failNextRollback) {
+        r.failNextRollback = false;
+        throw new Error("do-managed-agents rollback: http 409 checkpoint is not ready");
+      }
+      rollbackCalls.push({ sessionId, checkpointId });
+      r.sandboxId = `sbx-restored-${nextSandbox++}`;
+      r.state = "ready";
+      return info(r);
     },
     async kill(sessionId): Promise<void> {
       const r = records.get(sessionId);
@@ -254,6 +275,10 @@ export function installFakeManagedAgents(): FakeManagedAgents {
     },
     failNextCheckpointDelete: (name) => {
       need(name).failNextCheckpointDelete = true;
+    },
+    rollbackCalls: () => [...rollbackCalls],
+    failNextRollback: (name) => {
+      need(name).failNextRollback = true;
     },
     execScripts: () => [...execScripts],
     pauseCalls: () => [...pauseCalls],

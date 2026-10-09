@@ -235,6 +235,19 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
       });
       return;
     }
+    if (req.method === "POST" && action === "checkpoints" && parts[6] === "rollback" && parts.length === 7) {
+      const row = rows.get(id);
+      const checkpointId = decodeURIComponent(parts[5] ?? "");
+      const list = checkpoints.get(id) ?? [];
+      if (!row || row.status === "SESSION_STATUS_DESTROYED" || !list.some((c) => c.checkpoint_id === checkpointId)) {
+        json(res, 404, { error: { code: "not_found", message: "no such checkpoint" } });
+        return;
+      }
+      row.sandbox_id = `sbx-restored-${randomUUID().slice(0, 8)}`;
+      row.status = "SESSION_STATUS_READY";
+      json(res, 200, { session: row });
+      return;
+    }
     if (req.method === "DELETE" && action === "checkpoints" && parts.length === 6) {
       const checkpointId = decodeURIComponent(parts[5] ?? "");
       const list = checkpoints.get(id) ?? [];

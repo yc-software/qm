@@ -478,6 +478,38 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
       await snapshotHome(scopeId, session);
     },
 
+    async restartComputer(scopeId: string): Promise<void> {
+      const name = sandboxScopeName(prefix, scopeId);
+      scopeByName.set(name, scopeId);
+      return provisionQueue(scopeId, async () => {
+        const stored = await store.get(scopeId);
+        if (!stored?.sessionId) throw new Error("do-managed-agents restart: no sandbox provisioned yet");
+        const checkpointId = stored.checkpointId;
+        if (!checkpointId) throw new Error("do-managed-agents restart: no checkpoint to restore");
+        const cached = sessionByName.get(name);
+        sessionByName.delete(name);
+        if (cached) await cached.close();
+        let restored: ManagedAgentsSessionInfo;
+        try {
+          restored = await client.rollback(stored.sessionId, checkpointId);
+        } catch (e) {
+          reportError("agent_computer", "checkpoint_rollback_failed", errMessage(e), scopeId);
+          throw e;
+        }
+        await store.merge(scopeId, {
+          sandboxId: restored.sandboxId,
+          preservationState: "running",
+          preservationError: undefined,
+        });
+        reportError(
+          "agent_computer",
+          "checkpoint_restored",
+          `session ${stored.sessionId}: restored checkpoint ${checkpointId} onto sandbox ${restored.sandboxId}`,
+          scopeId,
+        );
+      });
+    },
+
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = sandboxScopeName(prefix, scopeId);
       const stored = await store.get(scopeId);

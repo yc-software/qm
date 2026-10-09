@@ -87,6 +87,71 @@ test("teardown captures a provider checkpoint before pausing", async () => {
   assert.equal(fake.pauseCalls().length, 1);
 });
 
+test("restart rolls a paused session back to its checkpoint without resuming the old microVM", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const restored: string[] = [];
+  sandbox = make({
+    store,
+    onError: (e: { code: string }) => {
+      if (e.code === "checkpoint_restored") restored.push(e.code);
+    },
+  });
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  const before = await store.get(scope);
+  assert.ok(before?.checkpointId);
+  assert.equal(before.preservationState, "paused");
+  const resumes = fake.resumeCalls().length;
+  const disconnects = fake.guestDisconnects().length;
+  await sandbox.restartComputer!(scope);
+  const after = await store.get(scope);
+  assert.equal(after?.sessionId, before.sessionId);
+  assert.notEqual(after?.sandboxId, before.sandboxId);
+  assert.equal(after?.preservationState, "running");
+  assert.equal(after?.checkpointId, before.checkpointId);
+  assert.deepEqual(fake.rollbackCalls(), [{ sessionId: before.sessionId, checkpointId: before.checkpointId }]);
+  assert.equal(fake.resumeCalls().length, resumes);
+  assert.equal(fake.guestDisconnects().length, disconnects);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  assert.deepEqual(restored, ["checkpoint_restored"]);
+  const again = await sandbox.provision(layers);
+  assert.equal(again.coldStart, false);
+  assert.equal(fake.current(scopeName())?.sandboxId, after?.sandboxId);
+});
+
+test("restart drops a warm guest's port-forward before rolling back", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  sandbox = make({ store });
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h, { keepWarm: true });
+  const disconnects = fake.guestDisconnects().length;
+  await sandbox.restartComputer!(scope);
+  assert.equal(fake.guestDisconnects().length, disconnects + 1);
+  assert.equal(fake.rollbackCalls().length, 1);
+  assert.equal((await store.get(scope))?.preservationState, "running");
+});
+
+test("restart without a checkpoint does not call rollback", async () => {
+  await sandbox.provision(layers);
+  await assert.rejects(() => sandbox.restartComputer!(scope), /no checkpoint to restore/);
+  assert.equal(fake.rollbackCalls().length, 0);
+});
+
+test("a failed rollback keeps the stored sandbox and the same session", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  sandbox = make({ store });
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  const before = await store.get(scope);
+  fake.failNextRollback(scopeName());
+  await assert.rejects(() => sandbox.restartComputer!(scope), /rollback/);
+  assert.equal((await store.get(scope))?.sandboxId, before?.sandboxId);
+  assert.equal(fake.rollbackCalls().length, 0);
+  const again = await sandbox.provision(layers);
+  assert.equal(again.coldStart, false);
+  assert.equal(fake.createdCount(scopeName()), 1);
+});
+
 test("a checkpoint failure is recorded and the session still pauses", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });

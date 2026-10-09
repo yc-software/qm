@@ -47,6 +47,7 @@ export interface ManagedAgentsSession {
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
   createCheckpoint(label?: string): Promise<ManagedAgentsCheckpoint>;
   deleteCheckpoint(checkpointId: string): Promise<void>;
+  close(): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
   kill(): Promise<void>;
@@ -88,6 +89,7 @@ export interface ManagedAgentsClient {
   create(opts: ManagedAgentsCreateOpts): Promise<ManagedAgentsSession>;
   connect(sessionId: string): Promise<ManagedAgentsSession>;
   list(name: string): Promise<ManagedAgentsSessionSummary[]>;
+  rollback(sessionId: string, checkpointId: string): Promise<ManagedAgentsSessionInfo>;
   kill(sessionId: string): Promise<void>;
 }
 
@@ -111,6 +113,7 @@ const CREATE_TIMEOUT_MS = 120_000;
 const CHECKPOINT_TIMEOUT_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const READY_TIMEOUT_MS = 300_000;
+const ROLLBACK_TIMEOUT_MS = READY_TIMEOUT_MS;
 const READY_POLL_MS = 2_000;
 const READY_FAST_POLL_MS = 250;
 const READY_FAST_WINDOW_MS = 10_000;
@@ -430,6 +433,24 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
     }
   }
 
+  async function rollbackToCheckpoint(sessionId: string, checkpointId: string): Promise<ManagedAgentsSessionInfo> {
+    const body = await callJson<{ session?: WireSession }>(
+      "POST",
+      `/v2/agents/sessions/${sessionId}/checkpoints/${encodeURIComponent(checkpointId)}/rollback`,
+      sessionId,
+      undefined,
+      undefined,
+      ROLLBACK_TIMEOUT_MS,
+    );
+    if (!body.session) throw new Error(`do-managed-agents rollback ${sessionId}: response carried no session`);
+    const restored = toInfo(body.session);
+    if (!restored.sandboxId)
+      throw new Error(`do-managed-agents rollback ${sessionId}: response carried no sandbox id`);
+    if (GONE_STATES.has(restored.state))
+      throw new ManagedAgentsSandboxGoneError(sessionId, restored.errorMessage ?? `status ${restored.state}`);
+    return restored;
+  }
+
   function buildSession(info: ManagedAgentsSessionInfo): ManagedAgentsSession {
     const sessionId = info.sessionId;
     let guest: Promise<{ tunnel: ManagedAgentsTunnel; agent: SandboxAgent }> | null = null;
@@ -663,6 +684,10 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
         );
       },
 
+      async close(): Promise<void> {
+        await disconnect();
+      },
+
       async pause(): Promise<void> {
         await disconnect();
         await callJson<void>("POST", `/v2/agents/sessions/${sessionId}/pause`, sessionId);
@@ -708,6 +733,10 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
 
     async connect(sessionId): Promise<ManagedAgentsSession> {
       return buildSession(await awaitUsable(sessionId));
+    },
+
+    async rollback(sessionId, checkpointId): Promise<ManagedAgentsSessionInfo> {
+      return rollbackToCheckpoint(sessionId, checkpointId);
     },
 
     async list(name): Promise<ManagedAgentsSessionSummary[]> {

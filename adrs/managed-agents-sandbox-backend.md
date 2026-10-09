@@ -65,13 +65,18 @@ sequenceDiagram
   else destroy the scope
     B->>E: DELETE /v2/agents/sessions/{id}
   end
+
+  Note over O,B: restart a wedged computer
+  O->>B: restart
+  B->>E: POST /v2/agents/sessions/{id}/checkpoints/{checkpoint_id}/rollback
+  E-->>B: same session_id, new sandbox_id
 ```
 
 What the PR adds
 
 - `SANDBOX_BACKEND=do-managed-agents`, with `DO_AGENTS_API_TOKEN` required — a DO IAM token, which is also where the team identity comes from, and the only credential the backend needs. Optional knobs: `DO_AGENTS_API_BASE_URL`, `DO_AGENTS_TEMPLATE`, `DO_AGENTS_NAME_PREFIX`, `DO_AGENTS_SIZE_SLUG`, `DO_AGENTS_IDLE_TIMEOUT_SEC`, `DO_AGENTS_EGRESS_PROXY_URL`, `DO_AGENTS_SNAPSHOT_INTERVAL_SEC`, `DO_AGENTS_SNAPSHOT_S3_BUCKET`, and the shared `SANDBOX_TIMEOUT_SEC`.
 - `src/sandbox/managed-agents-tunnel.ts`, the port-forward client: one WebSocket per TCP connection, bytes piped both ways with one chunk in flight per direction so a slow consumer cannot make core buffer the stream. The local listener is unreferenced, so an abandoned tunnel can never hold core's event loop open.
-- `src/sandbox/managed-agents-client.ts`, holding both transports behind one interface the way `e2b-client.ts` wraps the E2B SDK: REST for `/v2/agents/sessions{,/{id},/{id}/pause,/{id}/resume,/{id}/checkpoints}`, and `SandboxAgentService` stubs for `Exec`, `Upload` and `Download` over the tunnel. Our 404s, terminal statuses and gRPC `UNAVAILABLE` translate to the same two error classes the E2B client uses — one for a sandbox that was already gone before a command started, which the backend reconnects and retries, and one for a sandbox lost mid-command, which is reported rather than retried because the command may have partially run. The session body is an agents.yaml manifest in its flat form, which is the shape we are standardising on.
+- `src/sandbox/managed-agents-client.ts`, holding both transports behind one interface the way `e2b-client.ts` wraps the E2B SDK: REST for `/v2/agents/sessions{,/{id},/{id}/pause,/{id}/resume,/{id}/checkpoints,/{id}/checkpoints/{checkpoint_id}/rollback}`, and `SandboxAgentService` stubs for `Exec`, `Upload` and `Download` over the tunnel. Our 404s, terminal statuses and gRPC `UNAVAILABLE` translate to the same two error classes the E2B client uses — one for a sandbox that was already gone before a command started, which the backend reconnects and retries, and one for a sandbox lost mid-command, which is reported rather than retried because the command may have partially run. The session body is an agents.yaml manifest in its flat form, which is the shape we are standardising on.
 - `src/sandbox/managed-agents-sandbox-agent.proto`, a vendored copy of our guest proto with the internal annotations stripped, loaded at runtime through `@grpc/proto-loader`. No build step and no generated code in the tree.
 - `src/sandbox/managed-agents-sandbox.ts`. Provision creates or resumes the session and waits for it to become usable. Run is `Exec` over the tunnel. Files are `Upload` and `Download` rather than base64 through exec, since we have real transfer RPCs. Process sessions, read-only layers, layer tool install, home snapshots and blob staging come from the shared exec helpers unchanged.
 - Scope recovery without local state. Session names are team-unique among non-terminal sessions and `ListSessions` takes a `?name=` filter, so the backend can re-adopt a running sandbox after losing its durable record, the way the E2B backend re-adopts by sandbox metadata. `sandboxScopeName` already produces names that fit our 64-character, not-UUID-shaped rule.
