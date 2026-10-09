@@ -2,6 +2,13 @@ name: Build signed QM images
 
 on:
   workflow_call:
+    inputs:
+      images:
+        type: string
+        required: false
+      architecture:
+        type: string
+        required: false
   workflow_dispatch:
 
 permissions:
@@ -12,26 +19,15 @@ permissions:
 jobs:
   image:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    env:
+      ARCHITECTURE: ${{ inputs.architecture || 'amd64' }}
+      SUFFIX: ${{ inputs.architecture && inputs.architecture != 'amd64' && format('-{0}', inputs.architecture) || '' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: core
-            dockerfile: deploy/core/Dockerfile
-          - name: web-ui
-            dockerfile: deploy/web-ui/Dockerfile
-          - name: admin
-            dockerfile: deploy/admin/Dockerfile
-          - name: portal
-            dockerfile: deploy/portal/Dockerfile
-          - name: auth
-            dockerfile: deploy/auth/Dockerfile
-          - name: egress-proxy
-            dockerfile: deploy/egress-proxy/Dockerfile
-          - name: sandbox-base
-            dockerfile: fly/Dockerfile
-            build-args: INSTALL_BROWSER_ENGINE=1
+        name: ${{ fromJSON(inputs.images || '["core","web-ui","admin","portal","auth","egress-proxy","sandbox-base"]') }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad
@@ -45,16 +41,16 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64
+          file: ${{ matrix.name == 'sandbox-base' && 'fly/Dockerfile' || format('deploy/{0}/Dockerfile', matrix.name) }}
+          platforms: linux/${{ env.ARCHITECTURE }}
           provenance: false
           push: true
           build-args: |
-            ${{ matrix.build-args }}
+            ${{ matrix.name == 'sandbox-base' && 'INSTALL_BROWSER_ENGINE=1' || '' }}
             GIT_SHA=${{ github.sha }}
-          tags: ghcr.io/yc-software/qm/${{ matrix.name }}:${{ github.sha }}
-          cache-from: type=gha,scope=qm-${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=qm-${{ matrix.name }}
+          tags: ghcr.io/yc-software/qm/${{ matrix.name }}:${{ github.sha }}${{ env.SUFFIX }}
+          cache-from: type=gha,scope=qm-${{ matrix.name }}${{ env.SUFFIX }}
+          cache-to: type=gha,mode=max,scope=qm-${{ matrix.name }}${{ env.SUFFIX }}
       - name: Sign exact image
         run: |
           image='ghcr.io/yc-software/qm/${{ matrix.name }}@${{ steps.build.outputs.digest }}'
@@ -65,7 +61,8 @@ jobs:
           printf '%s\n' "$image" > qm-${{ matrix.name }}.image
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: qm-${{ matrix.name }}-${{ github.sha }}
+          name: qm-${{ matrix.name }}${{ env.SUFFIX }}-${{ github.sha }}
           path: qm-${{ matrix.name }}.image
           if-no-files-found: error
           retention-days: 30
+          overwrite: true

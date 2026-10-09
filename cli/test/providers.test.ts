@@ -30,6 +30,7 @@ test("the hosting provider registry owns target discovery and lifecycle capabili
     "inactive",
     "restart",
     "build-concurrency",
+    "prebuilt",
   ]);
 });
 
