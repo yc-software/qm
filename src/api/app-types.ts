@@ -277,7 +277,6 @@ export interface SessionSearchHit {
 
 export interface App {
   swarms?: SwarmService;
-  /** The deployment's principal graph: where surface handles resolve to principals. */
   readonly principals: PrincipalGraph;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
@@ -500,7 +499,7 @@ export interface App {
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
-  upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
+  upsertDirectory(members: (DirectoryMember & { email?: string })[], syncedAt?: number): Promise<boolean>;
   upsertChannels(
     channels: DirectoryChannel[],
     channelMembers?: ChannelMembership[],
@@ -599,7 +598,6 @@ export interface App {
     email: string,
     actorId: string,
   ): Promise<{
-    /** The principal scope the grant landed on. */
     scope: ScopeId;
     grantees: DeploymentGrantee[];
     invitation: DeploymentInvitation;

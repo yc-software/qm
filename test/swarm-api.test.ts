@@ -80,7 +80,6 @@ test("authenticated swarm API binds agent operations to the token and human oper
   const app = {
     swarms: fixture.service,
     authorizesCapabilityScope: async () => true,
-    // The swarm fixture's participant "alice" already stands for its principal, so the edge resolves it to itself.
     principals: { act: async (handle: string) => handle, principalOf: (handle: string) => handle },
     getSessionForViewer: async (id: string, actorId: string) => {
       const session = await fixture.sessions.getForParticipant(id, actorId);

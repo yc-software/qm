@@ -240,7 +240,7 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
         headers: { "x-admin-actor": "admin-alice@default-org" },
       })
     ).json();
-    assert.equal(d.principalId, "admin-alice");
+    assert.equal(d.principalId, s.built.principals.principalOf("admin-alice"));
     assert.equal(d.admin.isAdmin, true);
     assert.equal(d.stats.sessions, 0);
     assert.equal("conversations" in d, false);

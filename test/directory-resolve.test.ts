@@ -75,21 +75,6 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     assert.equal(matches[0]!.slackId, "U0CAROL");
   });
 
-  it("recovers the mention id from the principal id in slack-id identity mode (no slackId field)", async () => {
-    await built.app.upsertDirectory([{ principalId: "U0SLACKID", displayName: "Morgan", type: "internal" }]);
-    const res = await get("/v1/directory/resolve?q=Morgan");
-    assert.equal(res.status, 200);
-    const { matches } = (await res.json()) as { matches: Array<{ principalId: string; slackId?: string }> };
-    assert.equal(matches.length, 1);
-    assert.equal(matches[0]!.slackId, "U0SLACKID");
-    await built.app.upsertDirectory([
-      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
-    ]);
-  });
-
   it("does not fabricate a mention id from a principal id that isn't Slack-id-shaped", async () => {
     await built.app.upsertDirectory([{ principalId: "USER123", displayName: "Pat", type: "internal" }]);
     const res = await get("/v1/directory/resolve?q=Pat");

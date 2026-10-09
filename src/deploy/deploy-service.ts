@@ -131,7 +131,6 @@ export interface DeployServiceDeps {
   canReadScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
   canWriteScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
   canManageEmail?: (email: string) => Promise<boolean>;
-  /** Where email recipients resolve to principals; a private in-memory graph when omitted. */
   principals?: { act(handle: string, opts?: { email?: string | null }): Promise<string> };
   externalSharingAllowed?: (ownerScopeId: ScopeId) => Promise<boolean>;
   managesArtifactHome?: (homeScopeId: ScopeId, createdBy: string, principalId: string) => Promise<boolean>;

@@ -1,7 +1,6 @@
 import { validEmail } from "../identity/external-members.ts";
 import { parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 
-/** An email recipient is an email identity: the grant lands on its principal, created on first share. */
 export async function deploymentShareScope(
   grantee: ScopeId,
   permission: Permission | null,

@@ -102,7 +102,11 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
 
     const updates = (await s.built.auditLog.events()).filter((e) => e.action === "memory.update");
     assert.equal(updates.length, 1);
-    assert.equal(updates[0]!.principalId, "admin-alice", "the admin action is attributed to the acting admin");
+    assert.equal(
+      updates[0]!.principalId,
+      s.built.principals.principalOf("admin-alice"),
+      "the admin action is attributed to the acting admin",
+    );
   } finally {
     await s.close();
   }
@@ -641,7 +645,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
       assert.match(((await response.json()) as { content: string }).content, /private test sentinel/);
       const reads = (await s.built.auditLog.events()).filter((e) => e.action === "memory.read");
       assert.equal(reads.length, 1);
-      assert.equal(reads[0]!.principalId, "admin-alice");
+      assert.equal(reads[0]!.principalId, s.built.principals.principalOf("admin-alice"));
       assert.equal(reads[0]!.scopeLabel, target);
       for (const route of [`/v1/admin/sessions?scope=${target}`, "/v1/admin/keychain", `/v1/admin/scopes/${target}`]) {
         assert.equal((await fetch(`${s.base}${route}`, { headers })).status, 200, route);
@@ -656,7 +660,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
       assert.equal(await s.built.config.getSoul(target), "Open admin configuration sentinel");
       const writes = (await s.built.auditLog.events()).filter((e) => e.action === "soul.update");
       assert.equal(writes.length, 1);
-      assert.equal(writes[0]!.principalId, "admin-alice");
+      assert.equal(writes[0]!.principalId, s.built.principals.principalOf("admin-alice"));
       assert.equal(writes[0]!.scopeLabel, target);
       for (const veto of [ORG, personal, room]) {
         await s.built.config.setSharingPosture(veto, "isolated");

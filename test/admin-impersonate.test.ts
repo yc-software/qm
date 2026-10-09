@@ -48,7 +48,10 @@ test("an org admin can start impersonating a user; audited", async () => {
     assert.equal(body.target, "U-target");
     assert.ok(
       (await s.built.auditLog.events()).some(
-        (e) => e.action === "impersonate.start" && e.resource === "U-target" && e.principalId === "admin-alice",
+        (e) =>
+          e.action === "impersonate.start" &&
+          e.resource === "U-target" &&
+          e.principalId === s.built.principals.principalOf("admin-alice"),
       ),
       "the start is recorded in the durable audit log",
     );

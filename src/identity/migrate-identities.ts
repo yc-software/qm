@@ -3,9 +3,7 @@ import type { Pool, PoolClient } from "pg";
 import { handleOf, isPrincipalId, PRINCIPAL_SCHEMA } from "./principals.ts";
 import { PRINCIPAL_REFS } from "./principal-refs.ts";
 
-/** Deactivation is a principal property: its durable map is rekeyed by principal UUID like every other id. */
 const DEACTIVATIONS = "deactivated_principals";
-/** External members are email identities: their map stays keyed by the lowercased address. */
 const EMAIL_KEYED = "external_members";
 
 /**

@@ -67,6 +67,7 @@ import type { ServerDeps } from "./api/deps.ts";
 import {
   actorAssertionActive,
   createIdentityService,
+  emailInternal,
   type DeactivationRecord,
   type IdentityService,
 } from "./identity/identity-service.ts";
@@ -659,7 +660,7 @@ export function buildApp(
   );
   installPrincipalResolver(principals);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
-    isOverridden: (id) => configStore.getInternalMemberOverrides().includes(id.trim().toLowerCase()),
+    isOverridden: (handle) => configStore.getInternalMemberOverrides().includes(handle.toLowerCase()),
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principals,
@@ -908,6 +909,7 @@ export function buildApp(
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey) throw new Error("SANDBOX_BACKEND=e2b requires E2B_API_KEY");
     return createE2bSandbox(workspace, {
+      advisoryLock,
       client: createSdkE2bClient({
         apiKey: e2b.apiKey,
         ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
@@ -1733,7 +1735,7 @@ export function buildApp(
     canManageEmail: async (email) => {
       await identity.refresh();
       return (
-        identity.isInternal(identity.classify(email)) &&
+        emailInternal(identity, email) &&
         ((await directory.get(email))?.type === "internal" ||
           config.emailAuthPrincipals?.includes(email) ||
           Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
@@ -1909,6 +1911,7 @@ export function buildApp(
     },
   });
   const orchestratorDeps: OrchestratorDeps = {
+    sessionStateBus,
     externalSlackPolicies: config.externalSlackPolicies,
     sessionSyscalls,
     refreshModels,

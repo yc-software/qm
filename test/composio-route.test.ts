@@ -1,4 +1,5 @@
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
+import { handleOf, isPrincipalId } from "../src/identity/principals.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
@@ -100,8 +101,8 @@ function fixture() {
 function aliasResolver() {
   const links = new Map<string, string>();
   return {
-    principalOf: (handle: string) => links.get(handle),
-    handlesOf: (principal: string) => [...links].filter(([, p]) => p === principal).map(([h]) => h),
+    principalOf: (handle: string) => links.get(handle) ?? (isPrincipalId(handle) ? handle : undefined),
+    identitiesOf: (principal: string) => [...links].filter(([, p]) => p === principal).map(([h]) => handleOf(h)),
     link: (handle: string, principal: string) => void links.set(handle, principal),
     unlink: (handle: string) => void links.delete(handle),
   };

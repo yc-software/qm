@@ -2660,7 +2660,8 @@ test("a pending approval stops blocking its thread once the requester is deactiv
   );
   assert.equal(blocked.status, "pending_approval");
 
-  await identity.deactivate("U1");
+  const requester = await identity.principals.act("U1");
+  await identity.deactivate(requester);
   const after = await app.turn(
     channel("hello again?", {
       actor: bystander,
@@ -2669,7 +2670,7 @@ test("a pending approval stops blocking its thread once the requester is deactiv
   );
   assert.equal(after.status, "ok", "a departed requester's approval no longer wedges the conversation");
 
-  await identity.reactivate("U1");
+  await identity.reactivate(requester);
   const reactivated = await app.turn(
     channel("still with me?", {
       actor: bystander,

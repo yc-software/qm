@@ -9,8 +9,8 @@ const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" &&
 async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
-  const id = ctx.params.id!;
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!ctx.params.id) return sendJson(res, 404, { error: "not_found" });
+  const id = await principalGraph(ctx).act(ctx.params.id);
   await deps.identity.deactivate(id);
   audit(deps, { principalId: id, action: "principal.deactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: false });
@@ -19,8 +19,8 @@ async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
 async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
-  const id = ctx.params.id!;
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!ctx.params.id) return sendJson(res, 404, { error: "not_found" });
+  const id = await principalGraph(ctx).act(ctx.params.id);
   await deps.identity.reactivate(id);
   audit(deps, { principalId: id, action: "principal.reactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
@@ -31,10 +31,7 @@ async function principalForHandle(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const handle = ctx.params.id!;
   if (!handle) return sendJson(res, 404, { error: "not_found" });
-  const principalId = await principalGraph(ctx).act(handle, {
-    email: handle.includes("@") ? handle : null,
-    verified: true,
-  });
+  const principalId = await principalGraph(ctx).act(handle, { verified: true });
   await deps.identity?.refresh(true);
   return sendJson(res, 200, { principalId });
 }
@@ -88,7 +85,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   if (Array.isArray(b.members)) {
     const members = b.members
       .filter(
-        (m): m is { principalId: string; displayName: string; type: PrincipalType; slackId?: string } =>
+        (m): m is { principalId: string; displayName: string; type: PrincipalType; slackId?: string; email?: string } =>
           isObj(m) && typeof m.principalId === "string" && typeof m.displayName === "string" && isPrincipalType(m.type),
       )
       .map((m) => ({
@@ -96,6 +93,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         displayName: m.displayName,
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
+        ...(typeof m.email === "string" && m.email ? { email: m.email } : {}),
       }));
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;
@@ -160,7 +158,6 @@ async function directoryMeta(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, await app.directoryMeta());
 }
 
-const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
 async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const q = (url.searchParams.get("q") ?? "").trim();
@@ -169,11 +166,7 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   let found: DirectoryMember[] = [];
   if (r.kind === "one") found = [r.member];
   else if (r.kind === "ambiguous") found = r.candidates;
-  const matches = found.map((m) => {
-    const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
-    return slackId ? { ...m, slackId } : m;
-  });
-  return sendJson(res, 200, { matches });
+  return sendJson(res, 200, { matches: found });
 }
 
 async function channelMembership(ctx: ApiCtx): Promise<void> {

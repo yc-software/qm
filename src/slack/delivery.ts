@@ -1,4 +1,4 @@
-import { slackHandleOf } from "../directory/person.ts";
+import { identityOf } from "../directory/person.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -256,11 +256,13 @@ export function encodeDeliveryTarget(channel: string, threadTs?: string): string
 }
 
 async function slackUserIdFor(client: any, principalId: string): Promise<string> {
-  const handle = slackHandleOf(principalId);
-  if (!handle.includes("@")) return handle;
-  const res = (await client.users.lookupByEmail({ email: handle })) as { user?: { id?: string } };
+  const slackId = identityOf(principalId, "slack")?.split(":").at(-1);
+  if (slackId) return slackId;
+  const email = identityOf(principalId, "email");
+  if (!email) throw new Error(`no Slack or email identity for ${principalId}`);
+  const res = (await client.users.lookupByEmail({ email })) as { user?: { id?: string } };
   const id = res?.user?.id;
-  if (!id) throw new Error(`no Slack member found for ${handle}`);
+  if (!id) throw new Error(`no Slack member found for ${email}`);
   return id;
 }
 

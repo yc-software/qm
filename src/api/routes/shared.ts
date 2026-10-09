@@ -24,14 +24,15 @@ function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor"
   return ctx.deps.admin?.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
 }
 
-/** The deployment's principal graph, where surface handles resolve to principals. */
 export function principalGraph(ctx: Pick<ApiCtx, "deps" | "app">): PrincipalGraph {
   return ctx.deps.principals ?? ctx.app.principals;
 }
 
-export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "app" | "capability" | "actor">): Principal | null {
+export async function adminActorFrom(
+  ctx: Pick<ApiCtx, "req" | "deps" | "app" | "capability" | "actor">,
+): Promise<Principal | null> {
   const actor = rawAdminActor(ctx);
-  return actor ? { ...actor, id: principalGraph(ctx).principalOf(actor.id) ?? actor.id } : null;
+  return actor ? { ...actor, id: await principalGraph(ctx).act(actor.id) } : null;
 }
 
 export async function authorizeAdmin(
@@ -44,7 +45,7 @@ export async function authorizeAdmin(
     return null;
   }
   const grants = await deps.admin.listGrants();
-  const actor = adminActorFrom(ctx);
+  const actor = await adminActorFrom(ctx);
   if (actor && !(await activePrincipal(deps, actor.id))) {
     sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
     return null;

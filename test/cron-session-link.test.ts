@@ -14,7 +14,6 @@ import { testConfig } from "./support/test-config.ts";
 import { principalOf } from "./support/principal.ts";
 
 const THREAD = "web:U1:watching";
-/** U1's principal, resolved per app in setup(); capability claims carry principals, not handles. */
 let U1 = "";
 
 function claims(extra: Partial<CapabilityClaims> = {}): CapabilityClaims {

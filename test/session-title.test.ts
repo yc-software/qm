@@ -12,6 +12,7 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { principalOf } from "./support/principal.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-title-"));
@@ -30,6 +31,33 @@ test("names a conversation from its first completed turn (auto-title)", async ()
   assert.equal(r.status, "ok");
   const got = await app.getSession(r.sessionId!);
   assert.equal(got?.session.title, "Chat: How do I roll back");
+});
+
+test("the title and its sidebar refresh land before the turn's computer is ready", async () => {
+  const built = freshApp();
+  await selectDefaultSandbox(built, "U1", "personal:U1");
+  const computerReady = Promise.withResolvers<void>();
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = async (layers, opts) => {
+    await computerReady.promise;
+    return provision(layers, opts);
+  };
+  const refreshed = new Promise<string | undefined>((resolve) => {
+    const off = built.sessionStateBus.subscribe((event) => {
+      if (event.state !== "metadata") return;
+      off();
+      resolve(event.sessionId);
+    });
+  });
+  const turn = built.app.turn({
+    ...dm("Summarize this screenshot of the dashboard", "web:U1:title-before-computer"),
+    attachments: [{ name: "shot.png", mimetype: "image/png", sizeBytes: 3, blobId: "blob-shot" }],
+  });
+
+  const sessionId = await refreshed;
+  assert.match((await built.app.getSession(sessionId!))?.session.title ?? "", /Summarize this screenshot/);
+  computerReady.resolve();
+  assert.equal((await turn).status, "ok");
 });
 
 test("concurrent completed turns keep durable titles when title generation is unavailable", async () => {

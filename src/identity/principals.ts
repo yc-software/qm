@@ -50,7 +50,7 @@ const key = (provider: string, externalId: string): string => `${provider}\u0000
 /** Storage for the two identity tables. Postgres in production, memory in tests and single-process dev. */
 export interface PrincipalStore {
   load(): Promise<{ principals: PrincipalRow[]; identities: IdentityRow[] }>;
-  insertPrincipal(row: PrincipalRow): Promise<void>;
+  createForIdentity(principal: PrincipalRow, identity: IdentityRow): Promise<string>;
   putIdentity(row: IdentityRow): Promise<void>;
   deleteIdentity(provider: string, externalId: string): Promise<void>;
   combine(keep: string, drop: string): Promise<void>;
@@ -63,8 +63,12 @@ export function createMemoryPrincipalStore(): PrincipalStore {
     async load() {
       return { principals: [...principals.values()], identities: [...identities.values()] };
     },
-    async insertPrincipal(row) {
-      principals.set(row.principalId, row);
+    async createForIdentity(principal, row) {
+      const existing = identities.get(key(row.provider, row.externalId))?.principalId;
+      if (existing) return existing;
+      principals.set(principal.principalId, principal);
+      identities.set(key(row.provider, row.externalId), row);
+      return principal.principalId;
     },
     async putIdentity(row) {
       identities.set(key(row.provider, row.externalId), row);
@@ -130,11 +134,46 @@ export function createPostgresPrincipalStore(connectionString: string): Principa
         })),
       };
     },
-    async insertPrincipal(row) {
-      await q(
-        "INSERT INTO principals(principal_id, kind, display_name, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-        [row.principalId, row.kind, row.displayName, ts(row.createdAt)],
-      );
+    async createForIdentity(principal, row) {
+      const client: PoolClient = await (await pool()).connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          "INSERT INTO principals(principal_id, kind, display_name, created_at) VALUES ($1, $2, $3, $4)",
+          [principal.principalId, principal.kind, principal.displayName, ts(principal.createdAt)],
+        );
+        const claimed = await client.query(
+          `INSERT INTO identities(provider, external_id, principal_id, email, verified_at, linked_by, evidence, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (provider, external_id) DO NOTHING RETURNING principal_id`,
+          [
+            row.provider,
+            row.externalId,
+            row.principalId,
+            row.email,
+            ts(row.verifiedAt),
+            row.linkedBy,
+            row.evidence,
+            ts(row.updatedAt),
+          ],
+        );
+        if (claimed.rowCount) {
+          await client.query("COMMIT");
+          return principal.principalId;
+        }
+        await client.query("ROLLBACK");
+        const winner = await client.query(
+          "SELECT principal_id FROM identities WHERE provider = $1 AND external_id = $2",
+          [row.provider, row.externalId],
+        );
+        const id = winner.rows[0]?.principal_id;
+        if (id == null) throw new Error(`identity ${row.provider}:${row.externalId} is unlinked; link it instead`);
+        return String(id);
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
     },
     async putIdentity(row) {
       await q(
@@ -182,24 +221,16 @@ interface ActOptions {
 
 export interface PrincipalGraph {
   refresh(force?: boolean): Promise<void>;
-  /** The principal a handle is linked to, from the in-memory index. A principal UUID resolves to itself. */
   principalOf(handle: string): string | undefined;
-  /** Every handle linked to a principal. */
-  handlesOf(principalId: string): string[];
-  /** The principal's display name, from the in-memory index. */
+  identitiesOf(principalId: string): IdentityRow[];
   displayName(principalId: string): string | undefined;
-  /** Edge entry point: the handle acted, so it must have a principal. Auto-links by email first. */
   act(handle: string, opts?: ActOptions): Promise<string>;
-  /** Point an identity at a principal. The self-serve connect flow and the admin link API both call this. */
   attach(handle: string, principalId: string, linkedBy: string, evidence?: string): Promise<IdentityRow>;
   unlink(handle: string): Promise<IdentityRow | null>;
-  /** Replace the email identities `linkedBy` wrote for a principal. Admin and platform only. */
   setEmails(principalId: string, emails: readonly string[], linkedBy: string): Promise<void>;
-  /** Rule 2: attach an identity carrying `email` to the single principal that owns that email. */
   autoLink(handle: string, email: string): Promise<string | undefined>;
   identities(principalId?: string): Promise<IdentityRow[]>;
   principals(): Promise<PrincipalRow[]>;
-  /** Fold `drop` into `keep`: every reference re-pointed, `drop` deleted. */
   combine(keep: string, drop: string): Promise<void>;
 }
 
@@ -211,6 +242,7 @@ export function createPrincipalGraph(
 ): PrincipalGraph {
   const principals = new Map<string, PrincipalRow>();
   const identities = new Map<string, IdentityRow>();
+  const byPrincipal = new Map<string, Map<string, IdentityRow>>();
   let refreshedAt = 0;
   let refreshP: Promise<void> | null = null;
   let tail: Promise<unknown> = Promise.resolve();
@@ -220,6 +252,22 @@ export function createPrincipalGraph(
     return run;
   };
 
+  function forget(k: string): void {
+    const prior = identities.get(k);
+    if (prior?.principalId) byPrincipal.get(prior.principalId)?.delete(k);
+    identities.delete(k);
+  }
+
+  function remember(row: IdentityRow): void {
+    const k = key(row.provider, row.externalId);
+    forget(k);
+    identities.set(k, row);
+    if (!row.principalId) return;
+    const rows = byPrincipal.get(row.principalId) ?? new Map<string, IdentityRow>();
+    rows.set(k, row);
+    byPrincipal.set(row.principalId, rows);
+  }
+
   async function refresh(force = false): Promise<void> {
     if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return;
     if (refreshP) return refreshP;
@@ -228,8 +276,9 @@ export function createPrincipalGraph(
       .then((data) => {
         principals.clear();
         identities.clear();
+        byPrincipal.clear();
         for (const p of data.principals) principals.set(p.principalId, p);
-        for (const i of data.identities) identities.set(key(i.provider, i.externalId), i);
+        for (const i of data.identities) remember(i);
         refreshedAt = Date.now();
       })
       .finally(() => {
@@ -251,7 +300,7 @@ export function createPrincipalGraph(
 
   async function write(row: IdentityRow): Promise<IdentityRow> {
     await store.putIdentity(row);
-    identities.set(key(row.provider, row.externalId), row);
+    remember(row);
     return row;
   }
 
@@ -271,14 +320,8 @@ export function createPrincipalGraph(
     );
   }
 
-  function emailOwner(email: string): string | undefined {
-    const address = email.trim().toLowerCase();
-    if (!address.includes("@")) return undefined;
-    const owners = new Set<string>();
-    for (const row of identities.values())
-      if (row.provider === "email" && row.externalId === address && row.principalId) owners.add(row.principalId);
-    return owners.size === 1 ? [...owners][0] : undefined;
-  }
+  const emailOwner = (email: string): string | undefined =>
+    identities.get(key("email", email.trim().toLowerCase()))?.principalId ?? undefined;
 
   async function autoLinkLocked(handle: string, email: string): Promise<string | undefined> {
     const current = identity(handle);
@@ -296,16 +339,25 @@ export function createPrincipalGraph(
     return owner;
   }
 
+  async function principalFor(id: string): Promise<string> {
+    const target = principalOf(id);
+    if (!target || !principals.has(target)) await refresh(true);
+    if (!target || !principals.has(target)) throw new IdentityLinkError(404, `no principal ${id}`);
+    return target;
+  }
+
   return {
     refresh,
     principalOf,
-    handlesOf(principalId) {
-      return [...identities.values()].filter((r) => r.principalId === principalId).map((r) => r.externalId);
+    identitiesOf(principalId) {
+      return [...(byPrincipal.get(principalId)?.values() ?? [])];
     },
     displayName(principalId) {
       return principals.get(principalId)?.displayName;
     },
-    act(handle, o = {}) {
+    async act(handle, o = {}) {
+      const cached = principalOf(handle);
+      if (cached) return cached;
       return serial(async () => {
         await refresh();
         const known = principalOf(handle);
@@ -320,25 +372,28 @@ export function createPrincipalGraph(
           displayName: o.displayName?.trim() || email || h.externalId,
           createdAt: Date.now(),
         };
-        await store.insertPrincipal(principal);
-        principals.set(principal.principalId, principal);
-        await write({
+        const row: IdentityRow = {
           ...blank(handle, email),
           principalId: principal.principalId,
           linkedBy: "self",
           verifiedAt: o.verified ? Date.now() : null,
           updatedAt: Date.now(),
-        });
-        return principal.principalId;
+        };
+        const owner = await store.createForIdentity(principal, row);
+        if (owner !== principal.principalId) {
+          await refresh(true);
+          return owner;
+        }
+        principals.set(principal.principalId, principal);
+        remember(row);
+        return owner;
       });
     },
     attach(handle, principalId, linkedBy, evidence) {
       return serial(async () => {
-        await refresh(true);
-        const target = principalOf(principalId) ?? principalId;
-        if (!principals.has(target)) throw new IdentityLinkError(404, `no principal ${principalId}`);
-        const prior = identity(handle);
-        const previous = prior?.principalId;
+        await refresh();
+        const target = await principalFor(principalId);
+        const previous = identity(handle)?.principalId;
         const row = await write({
           ...blank(handle, null),
           principalId: target,
@@ -355,7 +410,7 @@ export function createPrincipalGraph(
     },
     unlink(handle) {
       return serial(async () => {
-        await refresh(true);
+        await refresh();
         const row = identity(handle);
         if (!row?.principalId) return null;
         return write({ ...row, principalId: null, linkedBy: null, evidence: null, updatedAt: Date.now() });
@@ -363,28 +418,21 @@ export function createPrincipalGraph(
     },
     setEmails(principalId, emails, linkedBy) {
       return serial(async () => {
-        await refresh(true);
-        if (!principals.has(principalId)) throw new IdentityLinkError(404, `no principal ${principalId}`);
+        await refresh();
+        await principalFor(principalId);
         const wanted = new Set(emails.map((e) => e.trim().toLowerCase()).filter((e) => e.includes("@")));
-        for (const row of Array.from(identities.values()))
-          if (
-            row.provider === "email" &&
-            row.principalId === principalId &&
-            row.linkedBy === linkedBy &&
-            !wanted.has(row.externalId)
-          ) {
+        for (const row of [...(byPrincipal.get(principalId)?.values() ?? [])])
+          if (row.provider === "email" && row.linkedBy === linkedBy && !wanted.has(row.externalId)) {
             await store.deleteIdentity(row.provider, row.externalId);
-            identities.delete(key(row.provider, row.externalId));
+            forget(key(row.provider, row.externalId));
           }
         for (const address of wanted) {
-          const prior = identities.get(key("email", address));
-          if (prior?.principalId && prior.principalId !== principalId) continue;
-          if (prior?.principalId === principalId) continue;
+          if (identities.get(key("email", address))?.principalId) continue;
           await write({ ...blank(address, address), principalId, linkedBy, updatedAt: Date.now() });
         }
         for (const row of Array.from(identities.values()))
           if (row.provider !== "email" && !row.principalId && row.email && wanted.has(row.email))
-            await autoLinkLocked(`${row.externalId}`, row.email);
+            await autoLinkLocked(row.externalId, row.email);
       });
     },
     autoLink(handle, email) {
@@ -394,18 +442,18 @@ export function createPrincipalGraph(
       });
     },
     async identities(principalId) {
-      await refresh(true);
+      await refresh();
       return [...identities.values()].filter((r) => principalId === undefined || r.principalId === principalId);
     },
     async principals() {
-      await refresh(true);
+      await refresh();
       return [...principals.values()];
     },
     combine(keep, drop) {
       return serial(async () => {
         if (keep === drop) throw new IdentityLinkError(400, "a principal cannot be combined with itself");
-        await refresh(true);
-        if (!principals.has(keep) || !principals.has(drop)) throw new IdentityLinkError(404, "unknown principal");
+        await principalFor(keep);
+        await principalFor(drop);
         await store.combine(keep, drop);
         await refresh(true);
       });

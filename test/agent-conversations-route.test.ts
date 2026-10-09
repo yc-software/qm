@@ -24,7 +24,6 @@ describe("agent conversations self-API", async () => {
   let theirsId: string;
 
   const P = { U1: "", U2: "", U3: "", U4: "" };
-  /** Core mints capabilities for principals; fixture handles resolve the way the edge resolves them. */
   const capFor = async (handle: string, scope?: string, live = true) => {
     const actorId = await built.principals.act(handle);
     return mintCapabilityToken(

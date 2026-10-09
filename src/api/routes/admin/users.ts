@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
-import { personKey, samePerson } from "../../../directory/person.ts";
+import { personKey, personLabel, samePerson } from "../../../directory/person.ts";
 import type { AdminRole } from "../../../admin/admin-grant-store.ts";
 import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { computeUsers } from "../../../admin/users.ts";
@@ -130,7 +130,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if ((!teammate && expiry.value === undefined) || (expiry.value !== undefined && expiry.value <= now))
     return bad("expiresAt is required and must be in the future");
   await deps.identity.refresh(true);
-  if (teammate && deps.identity.deactivationSource(email) === "manual")
+  const principal = deps.identity.principals.principalOf(email);
+  if (teammate && principal && deps.identity.deactivationSource(principal) === "manual")
     return sendJson(res, 409, {
       error: "conflict",
       message: "This account is manually deactivated. Reactivate it before inviting them.",
@@ -208,7 +209,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
           ...renderInviteEmail({
             to: email,
             brandName: branding.selfLabel ?? "qm",
-            invitedBy: actor.id,
+            invitedBy: personLabel({ id: actor.id, displayName: deps.identity.principals.displayName(actor.id) }),
             signInUrl,
             expiresAt: member.expiresAt,
             magicLink: teammate,
@@ -419,7 +420,8 @@ export async function startImpersonation(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
   if (!target) return sendJson(res, 400, { error: "bad_request", message: "target principal required" });
-  if (target === actor.id) return sendJson(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
+  if (samePerson(target, actor.id))
+    return sendJson(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
   const member = await app.directoryMember(target);
   audit(deps, { principalId: actor.id, action: "impersonate.start", resource: target, scopeLabel: org });
   return sendJson(res, 200, { ok: true, target, displayName: member?.displayName ?? target });

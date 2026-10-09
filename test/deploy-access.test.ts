@@ -164,7 +164,7 @@ test("requester, stranger, guest and deactivated owner cannot approve or decline
     for (const id of [requester, "carol@example.com"]) await assert.rejects(f.decide(id, approve), /owner/);
     await assert.rejects(f.decide(owner, approve, { isExternalGuest: true }), /owner/);
   }
-  await f.identity.deactivate(owner);
+  await f.identity.deactivate(await f.identity.principals.act(owner));
   await assert.rejects(f.decide(), /owner/);
   await assert.rejects(f.decide(owner, false), /owner/);
   assert.deepEqual(await f.grants(), []);

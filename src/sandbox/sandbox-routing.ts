@@ -121,7 +121,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       const routedLayers = layers.map((layer) =>
         layer.mode === "rw" ? { ...layer, scopeId: resource.backingScopeId } : layer,
       );
-      const handle = await resources.use(resource.id, () => provision(routedLayers), true);
+      const handle = await resources.use(resource.id, () => provision(routedLayers));
       return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
     },
 

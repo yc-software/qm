@@ -32,7 +32,6 @@ import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
-import { samePerson } from "../directory/person.ts";
 import { principalGraph } from "./routes/shared.ts";
 
 const safeDecode = (s: string): string => {
@@ -323,20 +322,24 @@ async function gate(
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
+    if (actor) {
+      const graph = principalGraph(wiring);
+      const [p, imp, authenticatedAs] = await Promise.all(
+        [actor.p, actor.imp, actor.authenticatedAs].map((h) =>
+          h ? graph.act(h, { verified: h === actor!.p }) : undefined,
+        ),
+      );
+      actor = { ...actor, p: p!, ...(imp ? { imp } : {}), ...(authenticatedAs ? { authenticatedAs } : {}) };
+    }
     if (actor && deps.identity) {
       await deps.identity.refresh(Boolean(actor.authenticatedAs));
       if (
         deps.identity.classify(actor.p).type !== "internal" ||
         (actor.authenticatedAs &&
           (deps.identity.classify(actor.authenticatedAs).type !== "internal" ||
-            !samePerson(actor.authenticatedAs, actor.imp ?? actor.p)))
+            actor.authenticatedAs !== (actor.imp ?? actor.p)))
       )
         actor = null;
-    }
-    if (actor) {
-      const graph = principalGraph(wiring);
-      const signIn = (h: string) => graph.act(h, { email: h.includes("@") ? h : null, verified: true });
-      actor = { ...actor, p: await signIn(actor.p), ...(actor.imp ? { imp: await graph.act(actor.imp) } : {}) };
     }
     if (!isPublicRoute && requirePortalIdentity) {
       const webTurn =
@@ -362,7 +365,7 @@ async function gate(
         const actorId = actor.p;
         const graph = principalGraph(wiring);
         const matchesActor = (value: unknown): boolean =>
-          typeof value === "string" && (graph.principalOf(value) ?? value) === actorId;
+          typeof value === "string" && graph.principalOf(value) === actorId;
         if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;

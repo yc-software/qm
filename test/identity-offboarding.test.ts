@@ -54,18 +54,18 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
 
   it("a roster swap that drops a member deactivates them; reappearing reactivates", async () => {
     await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
-    assert.equal(built.identity.classify("U-leave").type, "internal");
+    const leave = await principalOf(built, "U-leave");
+    assert.equal(built.identity.classify(leave).type, "internal");
 
     await built.app.upsertDirectory([member("U-stay")]);
-    assert.equal(built.identity.classify("U-leave").type, "guest");
-    const leave = await principalOf(built, "U-leave");
-    assert.equal(built.identity.classify("U-stay").type, "internal");
+    assert.equal(built.identity.classify(leave).type, "guest");
+    assert.equal(built.identity.classify(await principalOf(built, "U-stay")).type, "internal");
     assert.ok(
       (await built.auditLog.events()).some((e) => e.action === "principal.deactivate" && e.principalId === leave),
     );
 
     await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
-    assert.equal(built.identity.classify("U-leave").type, "internal");
+    assert.equal(built.identity.classify(leave).type, "internal");
     assert.ok(
       (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === leave),
     );
@@ -75,8 +75,8 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     await built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]);
     await built.app.upsertDirectory([member("U-stay")]);
 
-    assert.equal(built.identity.classify("allowed@example.com").type, "internal");
     const allowed = await principalOf(built, "allowed@example.com");
+    assert.equal(built.identity.classify(allowed).type, "internal");
     const resolved = await built.app.resolveRecipient("allowed@example.com");
     assert.equal(resolved.kind, "one");
     if (resolved.kind === "one") {
@@ -91,24 +91,26 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   it("the deactivate/reactivate routes flip classification and are audited", async () => {
     const off = await signedPost("/v1/principals/U-manual/deactivate");
     assert.equal(off.status, 200);
-    assert.deepEqual(await off.json(), { ok: true, principalId: "U-manual", active: false });
-    assert.equal(built.identity.classify("U-manual").type, "guest");
+    const manual = await principalOf(built, "U-manual");
+    assert.deepEqual(await off.json(), { ok: true, principalId: manual, active: false });
+    assert.equal(built.identity.classify(manual).type, "guest");
 
     await built.app.upsertDirectory([member("U-manual")]);
-    assert.equal(built.identity.classify("U-manual").type, "guest");
+    assert.equal(built.identity.classify(manual).type, "guest");
 
     const on = await signedPost("/v1/principals/U-manual/reactivate");
     assert.equal(on.status, 200);
-    assert.deepEqual(await on.json(), { ok: true, principalId: "U-manual", active: true });
-    assert.equal(built.identity.classify("U-manual").type, "internal");
+    assert.deepEqual(await on.json(), { ok: true, principalId: manual, active: true });
+    assert.equal(built.identity.classify(manual).type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-manual"),
+      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === manual),
     );
   });
 
   it("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
+    const stay = await principalOf(built, "U-stay");
     const cap = await mintCapabilityToken(
-      { actorId: "U-stay", scopeId: scopeId("personal", "U-stay"), exp: Date.now() + CAPABILITY_TTL_MS },
+      { actorId: stay, scopeId: scopeId("personal", stay), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
     const res = await fetch(`${base}/v1/principals/U-stay/deactivate`, {

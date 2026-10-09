@@ -603,7 +603,7 @@ test("email classification is projected only by the flagged inbox endpoint", asy
   }
 });
 
-test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and linked identities", async () => {
+test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes", async () => {
   const store = createLoopStore();
   const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
   const { loop: personal } = await store.create({
@@ -627,10 +627,7 @@ test("inbox viewers are exactly the active candidates who can administer the loo
         loops: { store },
         identity: {
           refresh: async () => {},
-          classify: (id: string) => ({
-            id: id === "bob-slack" ? "bob" : id,
-            type: id === "carol" ? "deactivated" : "internal",
-          }),
+          classify: (id: string) => ({ id, type: id === "carol" ? "deactivated" : "internal" }),
         },
       },
       app: {
@@ -650,11 +647,11 @@ test("inbox viewers are exactly the active candidates who can administer the loo
     } as unknown as ApiCtx);
     return { status, data };
   };
-  const candidates = ["alice", "bob-slack", "carol", "mallory"];
+  const candidates = ["alice", "bob", "carol", "mallory"];
   assert.deepEqual((await ask({ loopId: personal.id, candidates })).data.viewers, ["alice"]);
-  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob-slack"]);
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob"]);
   members.delete("alice");
-  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["bob-slack"]);
+  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["bob"]);
   assert.equal((await ask({ loopId: "missing", candidates })).status, 404);
   assert.equal((await ask({ loopId: group.id, candidates }, { actorId: "mallory" })).status, 403);
 });

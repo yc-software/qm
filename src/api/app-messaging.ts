@@ -31,8 +31,6 @@ import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 
-const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
-
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
   const viewersOwn = (id: string): boolean => viewerKeys.has(personKey(id));
@@ -173,7 +171,6 @@ export function createMessagingMethods(
     if (error) throw new Error(error);
   };
 
-  /** Directory rows arrive keyed by surface handle; core stores them by principal. */
   async function principalRows<T extends { principalId: string }>(rows: readonly T[]): Promise<T[]> {
     const out: T[] = [];
     for (const row of rows) out.push({ ...row, principalId: await deps.identity.principals.act(row.principalId) });
@@ -465,14 +462,13 @@ export function createMessagingMethods(
       const graph = deps.identity.principals;
       const members: DirectoryMember[] = [];
       for (const m of handleMembers) {
-        const email = m.principalId.includes("@") ? m.principalId : null;
-        if (m.slackId && email) await graph.autoLink(m.slackId, email);
+        const { email, ...member } = m;
         const principalId = await graph.act(m.principalId, {
           displayName: m.displayName,
-          email,
+          email: email ?? null,
         });
-        const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
-        members.push({ ...m, principalId, ...(slackId ? { slackId } : {}) });
+        if (m.slackId && email) await graph.autoLink(m.slackId, email);
+        members.push({ ...member, principalId });
       }
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;

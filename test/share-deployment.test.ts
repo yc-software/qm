@@ -708,8 +708,9 @@ test("exact email read grants admit app-only login and guest reach without membe
     name: "invite-test",
   });
   const email = "invitee@example.com";
-  await identity.deactivate(email, "directory-sync");
-  assert.equal(identity.classify(email).type, "guest");
+  const invitee = await identity.principals.act(email);
+  await identity.deactivate(invitee, "directory-sync");
+  assert.equal(identity.classify(invitee).type, "guest");
   const allowed = async (email: string, featureFlags = externalSharingOn) => {
     let status: number | undefined;
     let body: unknown;
@@ -740,7 +741,6 @@ test("exact email read grants admit app-only login and guest reach without membe
     "existing outside grants stop admitting sign-in while external sharing is off",
   );
   assert.deepEqual(await allowed("other@example.com"), { allowed: false });
-  const invitee = (await emailScope(email)).slice("personal:".length);
   const other = (await emailScope("other@example.com")).slice("personal:".length);
   assert.equal(await app.effectiveDeploymentPermission(d, invitee), "read");
   assert.equal(await app.effectiveDeploymentPermission(d, other), null);
@@ -748,14 +748,14 @@ test("exact email read grants admit app-only login and guest reach without membe
   assert.equal((await app.reachDeployment(d.id, invitee)).status, "ok");
   assert.equal(await app.directoryMember(email), null);
   assert.equal(identity.externalMember(email), undefined);
-  assert.equal(identity.classify(email).type, "guest");
+  assert.equal(identity.classify(invitee).type, "guest");
   await app.archiveDeployment(d.id);
   assert.deepEqual(await allowed(email), { allowed: false });
   await app.restoreDeployment(d.id, "U1");
-  await identity.deactivate(email);
+  await identity.deactivate(invitee);
   assert.deepEqual(await allowed(email), { allowed: false });
   assert.equal(await app.effectiveDeploymentPermission(d, invitee), null);
-  await identity.reactivate(email);
+  await identity.reactivate(invitee);
   await app.shareDeployment(d.id, `personal:${email}`, null, { createdBy: "U1" });
   assert.deepEqual(await allowed(email), { allowed: false });
   assert.equal(await app.effectiveDeploymentPermission(d, invitee), null);

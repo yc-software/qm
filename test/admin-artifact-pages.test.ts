@@ -382,7 +382,11 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
     assert.deepEqual(await s.built.app.getCron(cron.id), { ...cron, runtime: null });
     const audit = (await s.built.auditLog.events()).filter((event) => event.action === "cron.runtime.update");
     assert.equal(audit.length, 2);
-    assert.ok(audit.every((event) => event.principalId === "admin-alice" && event.resource === cron.id));
+    assert.ok(
+      audit.every(
+        (event) => event.principalId === s.built.principals.principalOf("admin-alice") && event.resource === cron.id,
+      ),
+    );
   } finally {
     await s.close();
   }

@@ -1,23 +1,21 @@
 import { swallowAs } from "../util/errors.ts";
+import { createPrincipalGraph, type IdentityProvider } from "../identity/principals.ts";
 
 export interface PrincipalResolver {
   principalOf(handle: string): string | undefined;
-  handlesOf?(principalId: string): readonly string[];
+  identitiesOf(principalId: string): readonly { provider: IdentityProvider; externalId: string }[];
 }
 
-let resolver: PrincipalResolver | null = null;
+let resolver: PrincipalResolver = createPrincipalGraph();
 
 export function installPrincipalResolver(next: PrincipalResolver | null): void {
-  resolver = next;
+  resolver = next ?? createPrincipalGraph();
 }
 
 export function normalizeHandle(id: string | null | undefined): string {
   const s = (id ?? "").trim();
   return s.includes("@") ? s.toLowerCase() : s;
 }
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SLACK_USER = /^(?:T[A-Z0-9]+:)?[UW][A-Z0-9]+$/;
 
 /**
  * A principal and every handle linked to it. Third-party accounts (Composio users, Slack connections) were keyed
@@ -26,35 +24,24 @@ const SLACK_USER = /^(?:T[A-Z0-9]+:)?[UW][A-Z0-9]+$/;
 export function personHandles(id: string): string[] {
   const principal = personKey(id);
   if (!principal) return [];
-  return [...new Set([principal, ...(resolver?.handlesOf?.(principal) ?? [])])];
+  return [...new Set([principal, ...resolver.identitiesOf(principal).map((i) => i.externalId)])];
 }
 
-/** Comparison key for an id: the principal it names. Never stored; storage holds principal UUIDs from the edge. */
 export function personKey(id: string | null | undefined): string {
   const key = normalizeHandle(id);
-  if (!key || UUID.test(key)) return key.toLowerCase();
-  return resolver?.principalOf(key) ?? key;
+  return key ? (resolver.principalOf(key) ?? key) : "";
 }
 
-/** How people know a principal: an email, else a Slack user id, else the UUID itself. */
-function readableHandle(id: string): string {
-  if (!UUID.test(id)) return id;
-  const handles = resolver?.handlesOf?.(id.toLowerCase()) ?? [];
-  return handles.find((h) => h.includes("@")) ?? handles.find((h) => SLACK_USER.test(h)) ?? id;
-}
+export const identityOf = (id: string, provider: IdentityProvider): string | undefined =>
+  resolver.identitiesOf(personKey(id)).find((i) => i.provider === provider)?.externalId;
 
-/** A principal as prompts name it: `Display Name (handle)`, or just the handle. */
 export function personLabel(person: { id: string; displayName?: string }): string {
-  const handle = readableHandle(person.id);
+  const handle = identityOf(person.id, "email") ?? identityOf(person.id, "slack") ?? person.id;
   return person.displayName ? `${person.displayName} (${handle})` : handle;
 }
 
-/** How Slack addresses a principal: its Slack user id, else an email Slack can look up. */
 export function slackHandleOf(id: string): string {
-  if (!UUID.test(id)) return id;
-  const handles = resolver?.handlesOf?.(id.toLowerCase()) ?? [];
-  const slack = handles.find((h) => SLACK_USER.test(h));
-  return slack?.split(":").at(-1) ?? handles.find((h) => h.includes("@")) ?? id;
+  return identityOf(id, "slack")?.split(":").at(-1) ?? identityOf(id, "email") ?? id;
 }
 
 export function samePerson(a: string | null | undefined, b: string | null | undefined): boolean {

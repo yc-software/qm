@@ -896,10 +896,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       const principal = principalGraph(ctx).principalOf(sub);
       if (
         externalAllowed &&
-        deps.identity?.deactivationSource(sub) !== "manual" &&
+        principal !== undefined &&
+        deps.identity?.deactivationSource(principal) !== "manual" &&
         (await app.deploymentGrantees(deployment.id)).some(
-          (grant) =>
-            principal !== undefined && grant.scope === scopeId("personal", principal) && grant.permission === "read",
+          (grant) => grant.scope === scopeId("personal", principal) && grant.permission === "read",
         )
       )
         authenticatedPermission = "read";

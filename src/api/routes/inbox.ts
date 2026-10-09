@@ -214,7 +214,7 @@ async function viewers(ctx: ApiCtx): Promise<void> {
     candidates.map(
       async (id) =>
         (!identity || identity.classify(id).type === "internal") &&
-        canAdministerLoop(ctx, loop, { actorId: identity?.classify(id).id ?? id, liveHuman: false }),
+        canAdministerLoop(ctx, loop, { actorId: id, liveHuman: false }),
     ),
   );
   sendJson(ctx.res, 200, { viewers: candidates.filter((_, i) => allowed[i]) });

@@ -155,9 +155,9 @@ test("app-only gateway checks exact current personal read grants without inherit
     assert.notEqual(JSON.parse(granted.body)["x-portal-identity"], "forged");
     assert.equal((await get("shared", "/__claw__/version")).status, 200, "request goes to app, never management shell");
     assert.equal((await get("org-app")).status, 403, "grant is for one deployment only");
-    await identity.deactivate(guest, "manual");
+    await identity.deactivate(await identity.principals.act(guest), "manual");
     assert.equal((await get("shared")).status, 403, "manual deactivation overrides the current direct grant");
-    await identity.reactivate(guest);
+    await identity.reactivate(await identity.principals.act(guest));
     await app.shareDeployment(shared.id, scopeId("personal", guest), null, { createdBy: "owner@example.test" });
     assert.equal((await get("shared")).status, 403, "same session is refused immediately after revoke");
     await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });

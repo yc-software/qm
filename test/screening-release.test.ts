@@ -12,7 +12,6 @@ import { personalScope, principalOf } from "./support/principal.ts";
 let executions = 0;
 let observedRelease = "";
 let failRelease = false;
-/** The shared file's owning scope; tests set it to the reader's principal-keyed personal scope. */
 let sharedSourceScope = "personal:U1";
 mock.module("../src/harness/mock-harness.ts", {
   namedExports: {

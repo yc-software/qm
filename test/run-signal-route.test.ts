@@ -64,7 +64,6 @@ const PRINCIPAL_HANDLES = [
 const principals = new Map(
   await Promise.all(PRINCIPAL_HANDLES.map(async (h) => [h, await built.principals.act(h)] as const)),
 );
-/** The principal a fixture handle resolves to, as the portal and the core edge would deliver it. */
 function P(handle: (typeof PRINCIPAL_HANDLES)[number]): string {
   return principals.get(handle)!;
 }
