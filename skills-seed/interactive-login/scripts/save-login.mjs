@@ -38,14 +38,18 @@ const walk = (path) => {
       });
     }
     if (files.length > MAX_FILES || bytes > MAX_BYTES) {
-      console.error(`${dir} is too large to save as a login (limit ${MAX_FILES} files, ${MAX_BYTES} bytes)`);
+      rmSync(dir, { recursive: true, force: true });
+      console.error(
+        `${dir} was too large to save as a login (limit ${MAX_FILES} files, ${MAX_BYTES} bytes) and was removed`,
+      );
       process.exit(1);
     }
   }
 };
 walk(dir);
 if (!files.length) {
-  console.error(`${dir} contains no files; the login did not complete`);
+  rmSync(dir, { recursive: true, force: true });
+  console.error(`${dir} contained no files, so the login did not complete; it was removed`);
   process.exit(1);
 }
 

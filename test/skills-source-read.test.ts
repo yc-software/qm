@@ -57,7 +57,7 @@ test("published skill sources and assets read without a sandbox, respecting scop
   const b = await fixture(t);
   const skill = await b.publish("personal:U1", "PUBLISHED_BODY");
   assert.match(await b.turn("!sysprompt"), /\*\*source-helper\*\*/);
-  assert.match(await b.turn("!skill source-helper"), /^\.agent-skills\/source-helper\nPUBLISHED_BODY$/);
+  assert.match(await b.turn("!skill source-helper"), /^\/.+\/\.agent-skills\/\w+\/source-helper\nPUBLISHED_BODY$/);
   assert.match(await b.turn("!skill source-helper references/example.txt"), /\nPUBLISHED_ASSET$/);
   assert.equal(await b.turn("!skill-run source-helper cat {dir}/references/example.txt"), "PUBLISHED_ASSET");
   assert.match(await b.turn("!skill source-helper", "U2"), /no skill file/);
@@ -180,12 +180,12 @@ test("a body read avoids sandbox work and a file request materializes that skill
   visible[0] = resolution;
   const loaded = await turn.useSkill("source-helper", "references/example.txt");
   assert.equal(loaded.content, "v2");
-  assert.equal(loaded.dir, ".agent-skills/source-helper");
+  assert.equal(loaded.dir, "/workspace/.agent-skills/s/source-helper");
   assert.equal(provisions, 1);
-  assert.equal(files.get(".agent-skills/source-helper/references/example.txt"), "v2");
-  files.set(".agent-skills/source-helper/references/example.txt", "local edit");
+  assert.equal(files.get(".agent-skills/s/source-helper/references/example.txt"), "v2");
+  files.set(".agent-skills/s/source-helper/references/example.txt", "local edit");
   await turn.useSkill("source-helper", "SKILL.md");
-  assert.equal(files.get(".agent-skills/source-helper/references/example.txt"), "local edit");
+  assert.equal(files.get(".agent-skills/s/source-helper/references/example.txt"), "local edit");
   resolution.skill!.pack = { packId: "pack", commit: "c", upstreamName: "source-helper" };
   resolution.screenedBundles = [
     { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
@@ -194,9 +194,9 @@ test("a body read avoids sandbox work and a file request materializes that skill
   await turn.provisionResource("resource-1");
   assert.deepEqual(files, beforeResource);
   const onResource = await turn.useSkill("source-helper", "SKILL.md", "resource-1");
-  assert.equal(onResource.packDir, ".agent-skills/.packs/pack");
+  assert.equal(onResource.packDir, "/workspace/.agent-skills/s/.packs/pack");
   assert.deepEqual(sandboxIds, [undefined, "resource-1"]);
-  assert.equal(files.get(".agent-skills/.packs/pack/lib.txt"), "PACK_RESOURCE");
+  assert.equal(files.get(".agent-skills/s/.packs/pack/lib.txt"), "PACK_RESOURCE");
   assert.equal(
     [...files.keys()].some((path) => path.includes("/unrelated/")),
     false,
@@ -209,7 +209,7 @@ test("pack assets run from the skills root and stay across turns", async (t) => 
   const skill = await b.publish("personal:U1", "PACK_BODY", "source-pack");
   const files = [{ path: "example.sh", content: "printf PACK_ASSET" }];
   await b.skillBundles.put({ packId: "source-pack", commit: "c", files, hash: computeBundleHash(files) });
-  assert.match(await b.turn("!skill source-helper"), /skills\/\.packs\/source-pack/);
+  assert.match(await b.turn("!skill source-helper"), /\.agent-skills\/\w+\/\.packs\/source-pack/);
   assert.equal(b.provisions(), 1);
   assert.equal(await b.turn("!skill-run source-helper sh {dir}/../.packs/source-pack/example.sh"), "PACK_ASSET");
   assert.equal(await b.turn("!run find . -name example.sh | wc -l | tr -d ' '"), "1");

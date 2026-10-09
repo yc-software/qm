@@ -246,7 +246,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.handle = handle;
     return handle;
   };
-  const skillsRoot = SKILLS_ROOT;
+  const skillsRoot = `${SKILLS_ROOT}/${turnSessionDir.split("/").at(-1)}`;
   const laidTrees = new Set<string>();
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
     const treeKey = `${sandboxId ?? "default"}:${skillDir(skillsRoot, r)}`;
@@ -290,22 +290,24 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         return false;
       }
     })?.content;
-    let content: string | undefined;
-    if (file === "SKILL.md") content = renderSkillBody(resolution, shipsFiles ? skillsRoot : undefined);
-    else if (asset !== undefined) content = rehomeSkillPaths(resolution, asset, skillsRoot);
-    if (content === undefined) return missing;
+    if (file !== "SKILL.md" && asset === undefined) return missing;
     if (deps.skills)
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
-    if (!shipsFiles) return { content, sourceScopeId: resolution.skill.scopeId };
+    const render = (root?: string) =>
+      file === "SKILL.md"
+        ? renderSkillBody(resolution, root)
+        : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot);
+    if (!shipsFiles) return { content: render(), sourceScopeId: resolution.skill.scopeId };
     const access = sandboxId ? await accessResource(sandboxId) : undefined;
-    if (access?.crossScope) return { content, sourceScopeId: resolution.skill.scopeId };
+    if (access?.crossScope) return { content: render(skillsRoot), sourceScopeId: resolution.skill.scopeId };
     const handle = access ? await provisionResource(access) : await provision();
     await materializeSkillTree(handle, resolution, sandboxId);
-    const pack = packRoot(skillsRoot, resolution);
+    const root = `${handle.rootDir}/${skillsRoot}`;
+    const pack = packRoot(root, resolution);
     return {
-      content,
+      content: render(root),
       sourceScopeId: resolution.skill.scopeId,
-      dir: skillDir(skillsRoot, resolution),
+      dir: skillDir(root, resolution),
       ...(pack ? { packDir: pack } : {}),
     };
   };
@@ -511,7 +513,27 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     }
   };
+  const pruneSkills = async (handle: SandboxHandle): Promise<void> => {
+    const visible = (await visibleSkillsForTurn()).flatMap((r) => (r.skill ? [r.skill] : []));
+    const keep = new Set([
+      ...visible.map((skill) => skill.manifest.name),
+      ...visible.flatMap((skill) => (skill.pack ? [`.packs/${skill.pack.packId}`] : [])),
+    ]);
+    const stale = new Set<string>();
+    for (const path of await deps.sandbox.listDir(handle, SKILLS_ROOT)) {
+      const [root, conversation, name, sub] = path.split("/");
+      const key = name === ".packs" ? `${name}/${sub}` : name;
+      if (root === SKILLS_ROOT && conversation && key && !keep.has(key))
+        stale.add(`${SKILLS_ROOT}/${conversation}/${key}`);
+    }
+    await Promise.all(
+      [...stale].map((dir) =>
+        deps.sandbox.removeDir(handle, dir).catch(swallowAs("orchestrator: stale skill cleanup", undefined)),
+      ),
+    );
+  };
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
+    await pruneSkills(handle);
     const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
     const paths = deps.sandbox.removeDirAndList
       ? await deps.sandbox.removeDirAndList(handle, turnSessionDir, TURN_FILES_DIR)

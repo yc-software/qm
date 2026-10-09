@@ -79,8 +79,10 @@ named by `path`, without creating or waking a sandbox. Unavailable skills and in
 paths return no file.
 
 When a skill ships supporting files or pack bundles, the same call writes them to
-`.agent-skills/<name>/` on the computer (packs under `.agent-skills/.packs/<id>/`) and
-reports that path; the body's own `skills/<name>/` references are rewritten to it. The
-copy stays across turns, and each read overwrites it with the published version, so
-nothing reconciles, locks, or sweeps and plain commands never wait on skill
-synchronization. Publish changes through the skill API to update the source.
+`.agent-skills/<conversation>/<name>/` on the computer (packs under
+`.agent-skills/<conversation>/.packs/<id>/`) and reports that absolute path; the body's own
+`skills/<name>/` references are rewritten to it. The copy stays across turns and each read
+overwrites it with the published version. When a turn first prepares the computer, it
+removes every copy of a skill that turn's speaker cannot see, so archived, revoked, blocked,
+or another person's skills do not linger on a shared computer. Publish changes through the
+skill API to update the source.
