@@ -234,6 +234,21 @@ test("list resolves a session by name and skips destroyed rows", async () => {
   assert.deepEqual(await client.list("qm-list"), []);
 });
 
+test("create checkpoint posts to the session checkpoint route and returns the ready id", async () => {
+  const s = await session("qm-checkpoint");
+  const captured = await s.createCheckpoint("qm teardown");
+  assert.match(captured.checkpointId, /^cp_/);
+  assert.equal(captured.status, "READY");
+  assert.ok(captured.createdAtMs);
+  const stored = service.checkpoints(s.sessionId);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0]?.checkpoint_id, captured.checkpointId);
+  assert.equal(stored[0]?.label, "qm teardown");
+  assert.equal(stored[0]?.status, "READY");
+  await s.deleteCheckpoint(captured.checkpointId);
+  assert.equal(service.checkpoints(s.sessionId).length, 0);
+});
+
 test("connect resumes a paused session before handing it back", async () => {
   const s = await session("qm-paused");
   await s.pause();

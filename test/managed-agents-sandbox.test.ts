@@ -68,6 +68,60 @@ test("the session is named after the scope so an operator can find it", async ()
   assert.doesNotMatch(scopeName(), /^[0-9a-f]{8}-[0-9a-f]{4}-/, "Managed Agents rejects UUID-shaped session names");
 });
 
+test("teardown captures a provider checkpoint before pausing", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  sandbox = make({ store });
+  const h = await sandbox.provision(layers);
+  await sandbox.run(h, "echo hi > kept.txt");
+  await sandbox.teardown(h);
+  const calls = fake.checkpointCalls();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.label, "qm teardown");
+  assert.equal(calls[0]?.sessionId, fake.current(scopeName())?.sessionId);
+  const stored = await store.get(scope);
+  assert.equal(stored?.checkpointId, calls[0]?.checkpointId);
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.recovery?.checkpointId, stored?.checkpointId);
+  assert.equal(status.lifecycleState, "paused");
+  assert.equal(fake.pauseCalls().length, 1);
+});
+
+test("a checkpoint failure is recorded and the session still pauses", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  sandbox = make({ store });
+  const h = await sandbox.provision(layers);
+  fake.failNextCheckpoint(scopeName());
+  await sandbox.teardown(h);
+  assert.equal(fake.checkpointCalls().length, 0);
+  assert.equal(fake.pauseCalls().length, 1);
+  assert.equal(fake.current(scopeName())?.state, "paused");
+  const status = await sandbox.computerStatus!(scope);
+  assert.match(status.recovery?.error ?? "", /create checkpoint/);
+});
+
+test("checkpoint capture is throttled across a pause and resume", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  const again = await sandbox.provision(layers);
+  await sandbox.teardown(again);
+  assert.equal(fake.checkpointCalls().length, 1);
+});
+
+test("a newer checkpoint replaces the previous one", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  sandbox = make({ store, snapshotIntervalMs: -1 });
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  const first = (await store.get(scope))?.checkpointId;
+  const again = await sandbox.provision(layers);
+  await sandbox.teardown(again);
+  const second = (await store.get(scope))?.checkpointId;
+  assert.ok(first);
+  assert.ok(second);
+  assert.notEqual(first, second);
+  assert.deepEqual(fake.deletedCheckpoints(), [first]);
+});
+
 test("teardown pauses the session and the next provision resumes it", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.run(h, "echo hi > kept.txt");

@@ -33,12 +33,20 @@ export interface ManagedAgentsSessionInfo extends ManagedAgentsSessionSummary {
   template?: string;
 }
 
+export interface ManagedAgentsCheckpoint {
+  checkpointId: string;
+  status: string;
+  createdAtMs?: number;
+}
+
 export interface ManagedAgentsSession {
   readonly sessionId: string;
   readonly sandboxId: string;
   runCommand(command: string, opts?: ManagedAgentsRunOpts): Promise<ManagedAgentsCommandResult>;
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
+  createCheckpoint(label?: string): Promise<ManagedAgentsCheckpoint>;
+  deleteCheckpoint(checkpointId: string): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
   kill(): Promise<void>;
@@ -100,6 +108,7 @@ const DEFAULT_TEMPLATE = "";
 const DEFAULT_AGENT = "none";
 const DEFAULT_MAX_COMMAND_MS = 3600_000;
 const CREATE_TIMEOUT_MS = 120_000;
+const CHECKPOINT_TIMEOUT_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const READY_TIMEOUT_MS = 300_000;
 const READY_POLL_MS = 2_000;
@@ -173,6 +182,13 @@ interface WireSession {
   status?: string;
   template?: string;
   size_slug?: string;
+  error_message?: string;
+  created_at?: string;
+}
+
+interface WireCheckpoint {
+  checkpoint_id?: string;
+  status?: string;
   error_message?: string;
   created_at?: string;
 }
@@ -611,6 +627,40 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
           stream.write({ end: {} });
           stream.end();
         });
+      },
+
+      async createCheckpoint(label?: string): Promise<ManagedAgentsCheckpoint> {
+        const body = await callJson<{ checkpoint?: WireCheckpoint }>(
+          "POST",
+          `/v2/agents/sessions/${sessionId}/checkpoints`,
+          sessionId,
+          JSON.stringify(label ? { label } : {}),
+          "application/json",
+          CHECKPOINT_TIMEOUT_MS,
+        );
+        const captured = body.checkpoint;
+        if (!captured?.checkpoint_id)
+          throw new Error(`do-managed-agents create checkpoint ${sessionId}: response carried no checkpoint id`);
+        if (captured.status !== "READY") {
+          const detail = captured.error_message ? `: ${captured.error_message}` : "";
+          throw new Error(
+            `do-managed-agents create checkpoint ${sessionId}: status ${captured.status ?? "missing"}${detail}`,
+          );
+        }
+        const createdAtMs = captured.created_at ? Date.parse(captured.created_at) : Number.NaN;
+        return {
+          checkpointId: captured.checkpoint_id,
+          status: captured.status,
+          ...(Number.isFinite(createdAtMs) ? { createdAtMs } : {}),
+        };
+      },
+
+      async deleteCheckpoint(checkpointId: string): Promise<void> {
+        await callJson<void>(
+          "DELETE",
+          `/v2/agents/sessions/${sessionId}/checkpoints/${encodeURIComponent(checkpointId)}`,
+          sessionId,
+        );
       },
 
       async pause(): Promise<void> {

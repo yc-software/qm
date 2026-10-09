@@ -60,6 +60,7 @@ const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 
 const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 5 * 60_000;
+const CHECKPOINT_LABEL = "qm teardown";
 
 export const QM_TEMPLATE_TOOLS = ["jq", "rg", "unzip", "wget"];
 
@@ -71,6 +72,9 @@ export interface StoredManagedAgentsSandbox {
   createdAtMs: number;
   lastSnapshotMs?: number;
   homeDirty?: boolean;
+  checkpointId?: string;
+  checkpointAtMs?: number;
+  checkpointError?: string;
 }
 
 export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
@@ -122,6 +126,22 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
   async function snapshotHome(scope: string, session: ManagedAgentsSession): Promise<void> {
     await homeSnapshots.snapshotHome(scope, session);
     await store.merge(scope, { lastSnapshotMs: Date.now(), homeDirty: false });
+  }
+
+  async function captureCheckpoint(scope: string, session: ManagedAgentsSession): Promise<void> {
+    const previous = (await store.get(scope))?.checkpointId;
+    const captured = await session.createCheckpoint(CHECKPOINT_LABEL);
+    await store.merge(scope, {
+      checkpointId: captured.checkpointId,
+      checkpointAtMs: captured.createdAtMs ?? Date.now(),
+      checkpointError: undefined,
+    });
+    if (!previous || previous === captured.checkpointId) return;
+    try {
+      await session.deleteCheckpoint(previous);
+    } catch (e) {
+      reportError("sandbox_snapshot", "checkpoint_delete_failed", errMessage(e), scope);
+    }
   }
 
   const hydrateHome = (scope: string, session: ManagedAgentsSession): Promise<boolean> =>
@@ -440,11 +460,14 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
 
       if (!stored) return { machine: "no sandbox provisioned yet", provisioned: false, guestResponsive: false };
       const machine = `do-managed-agents sandbox ${stored.sandboxId || stored.sessionId}`;
+      const checkpointAtMs = stored.checkpointAtMs ?? stored.lastSnapshotMs;
+      const recoveryError = stored.preservationError ?? stored.checkpointError;
       const recovery = {
         strategy: "workspace_snapshot" as const,
         state: stored.preservationState,
-        ...(stored.preservationError ? { error: stored.preservationError } : {}),
-        ...(stored.lastSnapshotMs ? { checkpointAtMs: stored.lastSnapshotMs } : {}),
+        ...(recoveryError ? { error: recoveryError } : {}),
+        ...(stored.checkpointId ? { checkpointId: stored.checkpointId } : {}),
+        ...(checkpointAtMs ? { checkpointAtMs } : {}),
       };
       try {
         const info: ManagedAgentsSessionInfo = await client.info(stored.sessionId);
@@ -513,6 +536,12 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
     const stored = await store.get(scope);
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
     if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
+      try {
+        await captureCheckpoint(scope, session);
+      } catch (e) {
+        await store.merge(scope, { checkpointError: errMessage(e) });
+        reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), scope);
+      }
       try {
         await snapshotHome(scope, session);
       } catch (e) {
