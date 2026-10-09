@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { handleOf, isPrincipalId, PRINCIPAL_SCHEMA } from "./principals.ts";
-import { PRINCIPAL_REFS } from "./principal-refs.ts";
+import { interleaveNotebooks, PRINCIPAL_REFS } from "./principal-refs.ts";
 
 const DEACTIVATIONS = "deactivated_principals";
 const EMAIL_KEYED = "external_members";
@@ -216,25 +216,7 @@ export async function runIdentityMigration(opts: {
         report.notebooksMerged++;
         if (!opts.apply) continue;
         await backup("memory_revisions");
-        let offset = 0;
-        const heads: string[] = [];
-        for (const source of sources) {
-          const moved = await client.query<{ seq: string; body: string }>(
-            "UPDATE memory_revisions SET scope_id = $1, seq = seq + $2 WHERE scope_id = $3 RETURNING seq, body",
-            [`migrating:${target}`, offset, source],
-          );
-          const last = moved.rows.reduce((a, r) => (Number(r.seq) > Number(a.seq) ? r : a), moved.rows[0]!);
-          offset = Number(last.seq);
-          heads.push(last.body);
-        }
-        await client.query("UPDATE memory_revisions SET scope_id = $1 WHERE scope_id = $2", [
-          target,
-          `migrating:${target}`,
-        ]);
-        await client.query(
-          "INSERT INTO memory_revisions(scope_id, seq, op, body, author, at) VALUES ($1, $2, 'combine', $3, NULL, $4)",
-          [target, offset + 1, heads.filter(Boolean).join("\n"), Date.now()],
-        );
+        await interleaveNotebooks(client, target, sources);
       }
     }
 

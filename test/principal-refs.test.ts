@@ -62,3 +62,35 @@ test("the scan sees the core tables it guards", () => {
   for (const c of ["participants.principal_id", "memory_revisions.author", "admin_grants.principal_id"])
     assert.ok(cols.has(c), c);
 });
+
+test("combining notebooks interleaves both histories in time order with no trailing join revision", async () => {
+  const { interleaveRevisions } = await import("../src/identity/principal-refs.ts");
+  const rec = (id: string, text: string) => ({ id, text, sensitivity: "ordinary", sources: [], sourceUnknown: false });
+  const rev = (scope_id: string, seq: number, at: number, texts: string[]) => ({
+    scope_id,
+    seq,
+    op: "capture",
+    body: "",
+    author: null,
+    at,
+    records: { version: 1, records: texts.map((t) => rec(`${scope_id}:${t}`, t)) },
+  });
+  const merged = interleaveRevisions(
+    ["personal:a", "personal:b"],
+    [
+      rev("personal:b", 1, 20, ["- b1"]),
+      rev("personal:a", 1, 10, ["- a1"]),
+      rev("personal:a", 2, 30, ["- a1", "- shared"]),
+      rev("personal:b", 2, 40, ["- b1", "- shared", "- b2"]),
+    ],
+  );
+  assert.deepEqual(
+    merged.map((r) => r.at),
+    [10, 20, 30, 40],
+  );
+  assert.deepEqual(
+    merged.map((r) => r.records.records.map((x) => x.text)),
+    [["- a1"], ["- a1", "- b1"], ["- a1", "- shared", "- b1"], ["- a1", "- shared", "- b1", "- b2"]],
+  );
+  assert.ok(merged.every((r) => r.op === "capture"));
+});

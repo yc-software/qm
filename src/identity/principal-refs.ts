@@ -1,4 +1,6 @@
 import type { PoolClient } from "pg";
+import { normalize } from "../memory/notebook.ts";
+import { parseMemoryRecords, renderMemoryRecords, type MemoryRecords } from "../memory/records.ts";
 
 /**
  * How a column refers to a principal:
@@ -129,41 +131,80 @@ async function repointEquals(client: PoolClient, table: string, column: string, 
   await client.query(`UPDATE ${quote(table)} SET ${quote(column)} = $2 WHERE ${quote(column)}::text = $1`, [from, to]);
 }
 
-async function combineMemory(client: PoolClient, keep: string, drop: string): Promise<void> {
-  const [k, d] = [`personal:${keep}`, `personal:${drop}`];
-  const { rows } = await client.query<{ max: string | null }>(
-    "SELECT max(seq)::text AS max FROM memory_revisions WHERE scope_id = $1",
-    [k],
+/**
+ * Merge several notebooks into `target` as if they had always been one: every source revision is replayed in `at`
+ * order and becomes one revision whose records are the de-duplicated union of each source's head at that moment.
+ * The sources' rows are replaced by the merged history, numbered from 1 under `target`.
+ */
+export async function interleaveNotebooks(
+  client: PoolClient,
+  target: string,
+  sources: readonly string[],
+): Promise<number> {
+  const { rows } = await client.query<{
+    scope_id: string;
+    seq: string;
+    op: string;
+    body: string;
+    author: string | null;
+    at: string;
+    records: unknown;
+  }>("SELECT scope_id, seq::text, op, body, author, at::text, records FROM memory_revisions WHERE scope_id = ANY($1)", [
+    sources,
+  ]);
+  const merged = interleaveRevisions(
+    sources,
+    rows.map((r) => ({ ...r, seq: Number(r.seq), at: Number(r.at) })),
   );
-  const base = Number(rows[0]?.max ?? 0);
-  if (!base) return;
-  const heads = await client.query<{ scope_id: string; body: string }>(
-    `SELECT DISTINCT ON (scope_id) scope_id, body FROM memory_revisions WHERE scope_id = ANY($1) ORDER BY scope_id, seq DESC`,
-    [[k, d]],
-  );
-  const dropHead = heads.rows.find((r) => r.scope_id === d);
-  if (!dropHead) return;
-  const keepHead = heads.rows.find((r) => r.scope_id === k);
-  const moved = await client.query(
-    "UPDATE memory_revisions SET scope_id = $1, seq = seq + $2 WHERE scope_id = $3 RETURNING seq",
-    [k, base, d],
-  );
-  const last = Math.max(...moved.rows.map((r: { seq: string | number }) => Number(r.seq)));
-  await client.query(
-    "INSERT INTO memory_revisions(scope_id, seq, op, body, author, at) VALUES ($1, $2, 'combine', $3, NULL, $4)",
-    [k, last + 1, [keepHead?.body ?? "", dropHead.body].filter(Boolean).join("\n"), Date.now()],
-  );
+  await client.query("DELETE FROM memory_revisions WHERE scope_id = ANY($1)", [sources]);
+  for (const [i, r] of merged.entries())
+    await client.query(
+      "INSERT INTO memory_revisions(scope_id, seq, op, body, author, at, records) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      [target, i + 1, r.op, renderMemoryRecords(r.records), r.author, r.at, JSON.stringify(r.records)],
+    );
+  return merged.length;
+}
+
+interface SourceRevision {
+  scope_id: string;
+  seq: number;
+  op: string;
+  body: string;
+  author: string | null;
+  at: number;
+  records: unknown;
+}
+
+/** Pure core of {@link interleaveNotebooks}, exported for tests. */
+export function interleaveRevisions(sources: readonly string[], rows: readonly SourceRevision[]) {
+  const order = (r: SourceRevision): number => sources.indexOf(r.scope_id);
+  const sorted = [...rows].sort((a, b) => a.at - b.at || order(a) - order(b) || a.seq - b.seq);
+  const heads = new Map<string, MemoryRecords>();
+  return sorted.map((r) => {
+    heads.set(r.scope_id, parseMemoryRecords(r.scope_id, r.body, r.records ?? undefined));
+    const seen = new Set<string>();
+    const records: MemoryRecords["records"] = [];
+    for (const scope of sources)
+      for (const record of heads.get(scope)?.records ?? []) {
+        const k = normalize(record.text);
+        if (seen.has(k) || seen.has(`id:${record.id}`)) continue;
+        seen.add(k).add(`id:${record.id}`);
+        records.push(record);
+      }
+    return { op: r.op, author: r.author, at: r.at, records: { version: 1 as const, records } };
+  });
 }
 
 /**
  * Fold principal `drop` into `keep` inside the caller's transaction: every registered column and every durable-map
- * row is re-pointed, singleton clashes keep `keep`'s row, `drop`'s memory history is appended after `keep`'s,
+ * row is re-pointed, singleton clashes keep `keep`'s row, the two notebooks are interleaved into one history,
  * `drop`'s identities move to `keep`, and `drop` is deleted.
  */
 export async function combineReferences(client: PoolClient, keep: string, drop: string): Promise<void> {
   const columns = await tableColumns(client);
   const has = (t: string, c: string): boolean => columns.get(t)?.has(c) ?? false;
-  if (has("memory_revisions", "scope_id")) await combineMemory(client, keep, drop);
+  if (has("memory_revisions", "scope_id"))
+    await interleaveNotebooks(client, `personal:${keep}`, [`personal:${keep}`, `personal:${drop}`]);
   const pattern = TOKEN_PATTERN(drop);
   for (const r of PRINCIPAL_REFS) {
     if (!has(r.table, r.column)) continue;
