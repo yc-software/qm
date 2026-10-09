@@ -707,7 +707,7 @@ test("completion cannot expand the finished run's audience and retries after its
   await recover();
   assert.equal(attempts, 2);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
-  assert.deepEqual(await r.runs.pendingReturns(), []);
+  assert.ok(await r.runs.getByDedupKey(`subagent-return:${run!.id}`));
 });
 
 test("private session replies stay read-only, queue behind running work, and do not return to a parent", async () => {
@@ -1089,19 +1089,66 @@ test("coordinator delegation requires an explicit actor rollout", () => {
   );
 });
 
-test("disabled coordinators retain passive completion mail without a wake", async () => {
+async function webChildRig() {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "inspect logs" });
+  const webConversation: Conversation = { kind: "dm", threadRef: "web:alex:1", audience: [actor] };
+  const room = await r.sessions.getOrCreateByThread(webConversation.threadRef, "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(room.id, actor.id);
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: room,
+    scopeId: scope,
+    request: { surface: "web", conversation: webConversation, actor },
+  });
+  const opened = await api.open({ task: "inspect logs" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(queued.id, "w1", 60000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  await deliverSubagentMail(
-    { ...r, maxAttempts: 3, delegationEnabled: async () => false },
-    (await r.runs.get(queued.id))!,
-  );
+  const deliver = async () =>
+    deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => false }, (await r.runs.get(queued.id))!);
+  return { ...r, room, api, deliver, wakeKey: `subagent-return:${queued.id}` };
+}
+
+test("a finished child wakes an idle web parent once without the responsive rollout", async () => {
+  const r = await webChildRig();
+  assert.equal(await r.deliver(), false);
+  assert.equal(await r.deliver(), false);
+  const wakes = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0]!.dedupKey, r.wakeKey);
+  assert.equal(wakes[0]!.request.surfaceTools, undefined);
+  assert.equal(wakes[0]!.request.actor.id, actor.id);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+});
+
+test("a busy parent collects completion mail at its next tool boundary without an extra wake", async () => {
+  const r = await webChildRig();
+  const busy = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    dedupKey: "busy-parent",
+    request: {
+      actor,
+      conversation: { kind: "dm", threadRef: r.room.threadRef, audience: [actor] },
+      origin: { kind: "human" },
+      text: "hi",
+    },
+  });
+  assert.equal(await r.deliver(), false);
+  assert.equal(await r.runs.getByDedupKey(r.wakeKey), null);
+  const mail = await r.api.receive!(0);
+  await r.api.acknowledge!(mail.map((message) => message.id));
+  const claimed = await r.runs.claimById(busy.run.id, "w1", 60000);
+  await r.runs.complete(busy.run.id, claimed!.leaseToken!, { status: "ok", reply: "hello" });
+  assert.equal(await r.deliver(), true);
+  assert.equal(await r.runs.getByDedupKey(r.wakeKey), null);
+});
+
+test("no wake once the parent already consumed the completion", async () => {
+  const r = await webChildRig();
+  assert.equal(await r.deliver(), false);
+  await r.api.acknowledge!((await r.mailbox.pending(r.room.id)).map((message) => message.id));
+  assert.equal(await r.deliver(), true);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
@@ -1642,6 +1689,8 @@ for (const surface of ["slack", "web"] as const) {
       const mail = await r.mailbox.pending(parent.id);
       assert.equal(mail.length, 1);
       assert.match(mail[0]!.text, /INTERNAL_CHILD_REPORT/);
+      await r.mailbox.acknowledge(parent.id, [mail[0]!.id]);
+      await deliverSubagentMail(deps, completed);
       const files = await deliveries.pending(surface);
       assert.equal(files.length, 1);
       assert.equal(files[0]!.text, "");

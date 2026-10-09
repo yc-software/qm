@@ -1199,12 +1199,10 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
-  if (
-    requiresDelegation(
-      { ...prepared, surfaceTools: meta.surfaceTools },
-      (await deps.delegationEnabled?.(prepared.actor.id)) === true,
-    )
-  ) {
+  if (!isSubagentThreadRef(parent.threadRef)) {
+    const surfaceTools =
+      meta.surfaceTools === true ||
+      requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
     const dedupKey = `subagent-return:${run.id}`;
     const existing = await deps.runs.getByDedupKey(dedupKey);
     const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
@@ -1221,7 +1219,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       dedupKey,
       request: {
         ...prepared,
-        surfaceTools: true,
+        ...(surfaceTools ? { surfaceTools } : {}),
         ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
         origin: { ...prepared.origin, kind: "automation", screenData: wake },
         text: wake,
