@@ -1399,6 +1399,57 @@ test("identity grounding: a cased-vs-lowercase duplicate participant resolves to
   assert.equal((sp.match(/Alice/g) ?? []).length, 1, "the duplicate is listed exactly once");
 });
 
+test("a web turn in a shared channel attests liveness only when the directory roster is complete and internal", async () => {
+  const { app, sandbox } = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "web-live-")),
+      signingSecret: "test-secret",
+      apiBaseUrl: "https://core.example.com",
+    }),
+  );
+  let captured: ProvisionOptions | undefined;
+  const realProvision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    captured = opts;
+    return realProvision(layers, opts);
+  };
+  await app.upsertDirectory([
+    { principalId: "alice", displayName: "Alice", type: "internal" },
+    { principalId: "bob", displayName: "Bob", type: "internal" },
+    { principalId: "guest", displayName: "Guest", type: "guest" },
+  ]);
+  await app.upsertChannels(
+    [
+      { channelId: "C1", name: "team", isPrivate: true },
+      { channelId: "C2", name: "shared", isPrivate: true },
+      { channelId: "C3", name: "public", isPrivate: false },
+    ],
+    [
+      { channelId: "C1", principalId: "alice" },
+      { channelId: "C1", principalId: "bob" },
+      { channelId: "C2", principalId: "alice" },
+      { channelId: "C2", principalId: "guest" },
+      { channelId: "C3", principalId: "bob" },
+    ],
+  );
+  const claimsFor = async (channelRef: string) => {
+    const res = await app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "channel", threadRef: `web:alice:${channelRef}`, channelRef },
+      text: "!run echo hi",
+      liveActor: true,
+    });
+    assert.equal(res.status, "ok");
+    return verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  };
+  const internal = await claimsFor("C1");
+  assert.equal(internal?.liveActor, true);
+  assert.deepEqual(internal?.members?.map((m) => m.id).sort(), ["alice", "bob"]);
+  assert.notEqual((await claimsFor("C2"))?.liveActor, true);
+  assert.notEqual((await claimsFor("C3"))?.liveActor, true);
+});
+
 test("an org admin's turn carries org-notebook write (token claim + prompt hint); a regular user's does not", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
