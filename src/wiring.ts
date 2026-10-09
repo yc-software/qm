@@ -905,6 +905,7 @@ export function buildApp(
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey) throw new Error("SANDBOX_BACKEND=e2b requires E2B_API_KEY");
     return createE2bSandbox(workspace, {
+      advisoryLock,
       client: createSdkE2bClient({
         apiKey: e2b.apiKey,
         ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
