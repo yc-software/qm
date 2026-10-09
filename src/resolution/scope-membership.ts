@@ -30,7 +30,13 @@ export interface ScopeMembershipDeps {
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
   };
+  teams?: { isMember(principalId: string, teamId: string): Promise<boolean> };
   sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+}
+
+async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {
+  if (deps.identity?.classify(principalId).teamIds?.includes(teamId)) return true;
+  return activePrincipal(deps, principalId) && (await deps.teams?.isMember(principalId, teamId)) === true;
 }
 
 function activePrincipal(deps: ScopeMembershipDeps, principalId: string): boolean {
@@ -192,9 +198,7 @@ export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
     const { kind, ref } = parseScopeId(targetScope);
     if (kind === "org") return deps.identity?.classify(principalId).type === "internal";
     if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "team") {
-      return deps.identity?.classify(principalId).teamIds?.includes(ref) === true;
-    }
+    if (kind === "team") return teamMember(deps, principalId, ref);
     if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId, targetScope);
     if (kind === "channel") {
       if (await memberOfSharedScope(deps, kind, ref, principalId, targetScope)) return true;
@@ -214,7 +218,7 @@ export function createCanWriteScope(deps: ScopeMembershipDeps): CanWriteScope {
     const { kind, ref } = parseScopeId(targetScope);
     if (kind === "org") return true;
     if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "team") return deps.identity?.classify(principalId).teamIds?.includes(ref) === true;
+    if (kind === "team") return teamMember(deps, principalId, ref);
     if (kind === "channel" || kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
     return false;
   };

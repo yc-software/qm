@@ -1,3 +1,4 @@
+import type { TeamChange } from "../../teams/teams.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
@@ -370,6 +371,28 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         principalId: actor.id,
         action: "feature-flag.update",
         resource: `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
+        scopeLabel: scope,
+      });
+      return { ok: true };
+    },
+  },
+  {
+    id: "teams",
+    kind: "custom",
+    target: "org",
+    readKey: "teams",
+    label:
+      "Teams. Each team is a team:<id> scope shared by its members. Send { id, name?, isolatedInOpen?, addMembers?, addAdmins?, drop?, addRooms?, dropRooms? } or { id, remove: true }. Rooms are channel or group scopes where the team stays available; isolatedInOpen keeps it isolated when the org posture is Open.",
+    get: (deps) => deps.teams?.list(),
+    apply: async (ctx, actor, scope) => {
+      if (!ctx.deps.teams) return { error: "not available on this deployment", status: 404 };
+      const change = parseTeamChange(ctx.body);
+      if ("error" in change) return change;
+      await ctx.deps.teams.apply(change, actor.id);
+      audit(ctx.deps, {
+        principalId: actor.id,
+        action: change.remove ? "team.remove" : "team.update",
+        resource: `team:${change.id}`,
         scopeLabel: scope,
       });
       return { ok: true };
@@ -1269,4 +1292,35 @@ export function adminResourceManifest(): AdminResourceManifestEntry[] {
     ...(r.label ? { label: r.label } : {}),
     ...(r.enumValues ? { enumValues: r.enumValues } : {}),
   }));
+}
+
+const TEAM_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const TEAM_LISTS = ["addMembers", "addAdmins", "drop", "addRooms", "dropRooms"] as const;
+
+function parseTeamChange(body: unknown): TeamChange | { error: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (typeof b.id !== "string" || !TEAM_ID.test(b.id))
+    return { error: "teams requires id: lowercase letters, digits, -" };
+  if (b.remove === true) return { id: b.id, remove: true };
+  const lists: Partial<Record<(typeof TEAM_LISTS)[number], string[]>> = {};
+  for (const key of TEAM_LISTS) {
+    const v = b[key] ?? [];
+    if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.trim()))
+      return { error: `${key} must be an array of non-empty strings` };
+    lists[key] = [...new Set(v as string[])];
+  }
+  const isRoom = (r: string) => {
+    const { kind, ref } = parseScopeId(r as ScopeId);
+    return (kind === "channel" || kind === "group") && !!ref;
+  };
+  if (![...lists.addRooms!, ...lists.dropRooms!].every(isRoom))
+    return { error: "rooms must be channel:<id> or group:<id> scopes" };
+  return {
+    id: b.id,
+    ...(typeof b.name === "string" && b.name.trim() ? { name: b.name.trim() } : {}),
+    ...(typeof b.isolatedInOpen === "boolean" ? { isolatedInOpen: b.isolatedInOpen } : {}),
+    ...lists,
+    addRooms: lists.addRooms as ScopeId[],
+    dropRooms: lists.dropRooms as ScopeId[],
+  };
 }
