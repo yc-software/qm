@@ -29,7 +29,7 @@ import { createFeatureFlagStore, type FeatureName } from "../src/feature-flags.t
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
-import { scopeId, type Principal } from "../src/types.ts";
+import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 
@@ -38,7 +38,8 @@ type Turn = {
   ref: Parameters<typeof createAgentTools>[0];
   options: AgentToolsOptions;
   tools: string[];
-  results: string[];
+  results: Array<{ isError?: unknown }>;
+  started: Session[];
 };
 
 const actor: Principal = { id: "U1", type: "internal" };
@@ -68,7 +69,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const { runs } = createMemoryRunStore();
   const featureFlags = createFeatureFlagStore(createMemoryMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
-  const sidebar: Awaited<ReturnType<typeof sessions.get>>[] = [];
+  const sidebar: Session[] = [];
   const sessionSyscalls = createSessionSyscalls({
     sessions,
     runs,
@@ -76,7 +77,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     signals: createMemoryRunSignalStore(),
     maxAttempts: 1,
     conversations: {
-      list: async () => sidebar.filter((session) => session !== null),
+      list: async () => sidebar,
       start: async (_actorId, input) => {
         const session = await sessions.getOrCreateByThread(`web:U1:started-${sidebar.length}`, "dm", input.scopeId);
         await sessions.addParticipant(session.id, actor.id);
@@ -101,16 +102,20 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     },
     {
       async runTurn(turn) {
+        const results: Turn["results"] = [];
         const ref = {
           current: turn.tools,
           scopeLabel: turn.scopeLabel,
-          emit: turn.emit,
+          emit: async (entry: Parameters<typeof turn.emit>[0]) => {
+            if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
+            return turn.emit(entry);
+          },
           screenToolResult: turn.screenToolResult,
           pendingApprovals: [],
         };
         const options = harnessToolOptions({}, turn);
         const tools = createAgentTools(ref, options);
-        const record: Turn = { ref, options, tools: tools.map((t) => t.name).sort(), results: [] };
+        const record: Turn = { ref, options, tools: tools.map((t) => t.name).sort(), results, started: sidebar };
         turns.set(turn.session.threadRef, record);
         for (
           let call = next(record, !!turn.session.parentSessionId);
@@ -120,9 +125,8 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
           const execute = tools.find((t) => t.name === call.tool)!.execute as unknown as (
             id: string,
             input: unknown,
-          ) => Promise<{ content: { text?: string }[] }>;
-          const out = await execute(`call-${record.results.length}`, call.args);
-          record.results.push(out.content.map((c) => c.text ?? "").join(""));
+          ) => Promise<unknown>;
+          await execute(`call-${results.length}`, call.args);
         }
         return { reply: "done", modelCalls: 1 };
       },
@@ -173,8 +177,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   return { parentTurn };
 }
 
-const failed = (result: string) => result.includes("[error]");
-const startedId = (result: string) => /sessionId ([0-9a-f-]{36})/.exec(result)?.[1] ?? "";
+const failed = (result: Turn["results"][number]) => result.isError === true;
 
 function script(turn: Turn, subagent: boolean): Call | undefined {
   const calls: Call[] = [
@@ -184,7 +187,7 @@ function script(turn: Turn, subagent: boolean): Call | undefined {
           { tool: "sessions", args: { action: "new", text: "draft the memo", title: "Memo" } },
           {
             tool: "sessions",
-            args: { action: "send_message", target: startedId(turn.results[1] ?? ""), text: "add a summary" },
+            args: { action: "send_message", target: turn.started.at(-1)?.id, text: "add a summary" },
           },
         ]
       : []),
@@ -197,7 +200,7 @@ test("the sessions tool lists, starts and messages sessions through the real too
   const w = await world(["persistent_subagents"], script);
   const { parent } = await w.parentTurn("web", "web:U1:sessions");
   assert.equal(parent.results.length, 4);
-  assert.deepEqual(parent.results.map(failed), [false, false, false, false], parent.results.join("\n"));
+  assert.deepEqual(parent.results.map(failed), [false, false, false, false], JSON.stringify(parent.results));
 });
 
 for (const [surface, flags] of [
@@ -220,7 +223,7 @@ for (const [surface, flags] of [
     assert.deepEqual(
       child.results.map(failed),
       parent.results.slice(0, child.results.length).map(failed),
-      child.results.join("\n"),
+      JSON.stringify(child.results),
     );
   });
 }
