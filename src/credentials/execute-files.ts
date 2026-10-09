@@ -2,6 +2,7 @@ import type { Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import { parseTar } from "../sandbox/tar.ts";
 import { shq } from "../util/shell.ts";
+import { errMessage, withCleanup } from "../util/errors.ts";
 import { pathUnder } from "../util/paths.ts";
 import { homeRelativePath } from "./paths.ts";
 import { builtInCredentialPaths, type CredentialPathSpec } from "./resident-paths.ts";
@@ -9,6 +10,8 @@ import {
   credentialFilesFingerprint,
   fileCredentialEnvironment,
   KeychainError,
+  MAX_CREDENTIAL_BYTES,
+  MAX_CREDENTIAL_FILES,
   restoredFileMode,
   type CredentialFile,
   type FileCredentialSource,
@@ -77,6 +80,12 @@ export async function finishProcessCredentials(
   );
 }
 
+async function runOrThrow(sandbox: Sandbox, handle: SandboxHandle, command: string, failure: string) {
+  const result = await sandbox.run(handle, command);
+  if (result.code !== 0) throw new Error(`${failure} (exit ${result.code}): ${result.stderr.trim()}`);
+  return result;
+}
+
 const belongsTo = (path: string, roots: readonly CredentialPathSpec[]) =>
   roots.some((root) => (root.kind === "directory" ? pathUnder(path, root.path) : path === root.path));
 
@@ -107,33 +116,39 @@ export async function prepareExecutionFiles(
   if (files.some((file) => roots.filter((group) => belongsTo(file.path, group)).length !== 1))
     throw new Error("Requested credentials contain overlapping credential directories");
   const prefix = "/tmp/qm-credentials.";
-  const created = await sandbox.run(
+  const created = await runOrThrow(
+    sandbox,
     handle,
     `find /tmp/ -maxdepth 1 -name ${shq(`${prefix.slice(5)}*`)} -mmin +120 -exec rm -rf -- {} + 2>/dev/null; umask 077; d=$(mktemp -d ${shq(`${prefix}XXXXXXXXXX`)}) && printf '%s\\n' "\${d##*.}"`,
+    "Could not create command credential directory",
   );
   const suffix = created.stdout.trim();
+  if (!/^[a-zA-Z0-9]+$/.test(suffix))
+    throw new Error(`Unexpected credential directory suffix: ${JSON.stringify(suffix)}`);
   const directory = `${prefix}${suffix}`;
-  if (created.code !== 0 || !/^[a-zA-Z0-9]+$/.test(suffix))
-    throw new Error("Could not create command credential directory");
   const home = `${directory}/home`;
   const rooted = { ...handle, rootDir: home };
   try {
-    const setup = await sandbox.run(
+    await runOrThrow(
+      sandbox,
       handle,
       `umask 077; mkdir -p ${files.map((file) => shq(`${home}/${file.path.split("/").slice(0, -1).join("/")}`)).join(" ")}`,
+      "Could not prepare command credential files",
     );
-    if (setup.code !== 0) throw new Error("Could not prepare command credential files");
     for (const file of files) {
       await sandbox.writeFileBytes(rooted, file.path, Buffer.from(file.contentBase64, "base64"));
-      const mode = await sandbox.run(
+      await runOrThrow(
+        sandbox,
         handle,
         `chmod ${restoredFileMode(file.mode).toString(8)} ${shq(`${home}/${file.path}`)}`,
+        "Could not protect command credential file",
       );
-      if (mode.code !== 0) throw new Error("Could not protect command credential file");
     }
   } catch (error) {
-    await removeDirectory(sandbox, handle, directory);
-    throw error;
+    return withCleanup(
+      () => Promise.reject(error),
+      () => removeDirectory(sandbox, handle, directory),
+    );
   }
   const plan = {
     directory,
@@ -156,8 +171,7 @@ export async function prepareExecutionFiles(
 }
 
 async function removeDirectory(sandbox: Sandbox, handle: SandboxHandle, directory: string): Promise<void> {
-  const result = await sandbox.run(handle, `rm -rf -- ${shq(directory)}`);
-  if (result.code !== 0) throw new Error("Could not remove command credential directory");
+  await runOrThrow(sandbox, handle, `rm -rf -- ${shq(directory)}`, "Could not remove command credential directory");
 }
 
 async function finishExecutionFiles(
@@ -174,18 +188,20 @@ async function finishExecutionFiles(
     retry = [];
     return new Error(message);
   };
-  try {
+  const work = async () => {
     const captured = await sandbox.run(
       handle,
       `cd ${shq(home)} && [ ! -L ${shq(home)} ] && find . -type f -print0 > ${shq(`${directory}/paths`)} && ` +
         `COPYFILE_DISABLE=1 tar --null -T ${shq(`${directory}/paths`)} -cf ${shq(`${directory}/files.tar`)} && ` +
-        `[ "$(wc -c < ${shq(`${directory}/files.tar`)})" -le 8388608 ]`,
+        `[ "$(wc -c < ${shq(`${directory}/files.tar`)})" -le ${MAX_CREDENTIAL_BYTES + MAX_CREDENTIAL_FILES * 1024} ]`,
     );
-    if (captured.code !== 0) throw permanent("Could not capture refreshed credential files");
+    if (captured.code !== 0)
+      throw permanent(
+        `Could not capture refreshed credential files (exit ${captured.code}): ${captured.stderr.trim()}`,
+      );
     const archive = await sandbox.readFileBytes({ ...handle, rootDir: directory }, "files.tar");
-    if (!archive || archive.length > 8 * 1024 * 1024) throw permanent("Credential capture exceeds size limit");
+    if (!archive) throw permanent("Captured credential archive is missing");
     const entries = await parseTar(archive);
-    if (entries.length > 500) throw permanent("Credential capture exceeds file limit");
     const refreshed = entries.map((entry) => ({
       path: homeRelativePath(entry.path),
       contentBase64: entry.data.toString("base64"),
@@ -210,12 +226,11 @@ async function finishExecutionFiles(
     if (failures.length)
       throw new AggregateError(
         failures.map(({ reason }) => reason),
-        retry.length
-          ? "Could not persist refreshed credentials; will retry"
-          : "Could not persist refreshed credentials",
+        `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}`,
       );
-  } finally {
+  };
+  await withCleanup(work, async () => {
     await settle?.(retry);
     if (!retry.length) await removeDirectory(sandbox, handle, directory);
-  }
+  });
 }

@@ -39,7 +39,13 @@ export function createReaperKillHook(
       }
       await opts
         ?.onExit?.(handle, rec.processId)
-        .catch((e) => console.error("[process-reaper] credential writeback failed:", errMessage(e)));
+        .catch((e) =>
+          console.error(
+            "[process-reaper] credential writeback failed:",
+            errMessage(e),
+            ...(e instanceof AggregateError ? e.errors.map(errMessage) : []),
+          ),
+        );
     } finally {
       await sandbox.teardown(handle, { keepWarm: true });
     }

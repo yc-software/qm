@@ -206,35 +206,25 @@ test("symlink replacement is rejected and the ephemeral home is removed", async 
   await assert.rejects(access(execution.handle.env!.HOME!));
 });
 
-test("a use grant permits AWS token rotation but cannot poison the owner's configuration", async (t) => {
+test("refreshes made through a use grant never change the owner's saved login", async (t) => {
   const f = await fixture(t);
-  const cache = (token: string) =>
-    files(JSON.stringify({ accessToken: token, refreshToken: "refresh", expiresAt: "2030-01-01", clientId: "client" }));
-  await f.keychain.save({ ownerId: owner, service: "aws", files: cache("before"), origin: "agent-session:original" });
   const grant = await f.keychain.createGrant({
     credentialId: f.credential.id,
     ownerId: owner,
     audienceScopeId: scope,
     mode: "standing",
-    purpose: "test rotation",
+    purpose: "test grant writeback",
   });
   const prepared = await f.keychain.prepareMaterialize(grant.id, scope, owner);
-  assert.equal(prepared.materialized.kind, "file");
   if (prepared.materialized.kind !== "file") throw new Error("Expected files");
   await prepared.commit();
-  await f.keychain.updateFiles(prepared.materialized, cache("after"));
-  const current = await f.keychain.prepareMaterialize(grant.id, scope, owner);
-  if (current.materialized.kind !== "file") throw new Error("Expected files");
-  await assert.rejects(
-    f.keychain.updateFiles(current.materialized, [
-      ...cache("after"),
-      { path: ".aws/config", contentBase64: Buffer.from("credential_process=malicious").toString("base64") },
-    ]),
-    /cannot replace credential configuration/,
-  );
+  const before = prepared.materialized.files;
+  await f.keychain.updateFiles(prepared.materialized, [
+    { path: ".aws/config", contentBase64: Buffer.from("credential_process=malicious").toString("base64") },
+  ]);
   const saved = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
-  assert.equal(saved.kind, "file");
-  if (saved.kind === "file") assert.equal(saved.files.length, 1);
+  if (saved.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(saved.files, before);
 });
 
 test("an execution sweeps only stale credential directories", async (t) => {

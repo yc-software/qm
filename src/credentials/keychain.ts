@@ -869,7 +869,7 @@ export function createKeychain(deps: {
     if (!service) throw new KeychainError(400, "service required");
     let files: CredentialFile[] | undefined;
     if (input.files?.length) {
-      files = input.files.map((f) => ({ ...f, path: keychainFilePath(f.path) }));
+      files = checkedFiles(input.files.map((f) => ({ ...f, path: keychainFilePath(f.path) })));
     } else if (input.target && input.secret) {
       files = [
         {
@@ -1079,45 +1079,11 @@ export function createKeychain(deps: {
     save: saveCredential,
 
     async updateFiles(materialized, files) {
-      let normalized = files.map((file) => ({ ...file, path: keychainFilePath(file.path) }));
-      if (materialized.grantId && materialized.service === "aws") {
-        const roleCache = (file: CredentialFile) =>
-          /^\.aws\/cli\/cache\/[^/]+\.json$/.test(homeRelativePath(file.path));
-        normalized = [...normalized.filter((file) => !roleCache(file)), ...materialized.files.filter(roleCache)];
-      }
+      if (materialized.grantId) return;
+      const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
       if (fingerprint(normalized) === fingerprint(materialized.files)) return;
-      if (materialized.grantId) {
-        const original = new Map(materialized.files.map((file) => [homeRelativePath(file.path), file]));
-        for (const file of normalized) {
-          const prior = original.get(file.path);
-          if (prior?.contentBase64 === file.contentBase64) continue;
-          if (materialized.service !== "aws" || !/^\.aws\/sso\/cache\/[a-zA-Z0-9_-]+\.json$/.test(file.path) || !prior)
-            throw new KeychainError(403, "A credential-use grant cannot replace credential configuration");
-          const before = JSON.parse(Buffer.from(prior.contentBase64, "base64").toString("utf8"));
-          const after = JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8"));
-          const refreshFields = new Set(["accessToken", "refreshToken", "expiresAt"]);
-          if (
-            !after ||
-            typeof after !== "object" ||
-            Array.isArray(after) ||
-            !before ||
-            typeof before !== "object" ||
-            Array.isArray(before)
-          )
-            throw new KeychainError(403, "Invalid refreshed AWS token cache");
-          for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-            if (refreshFields.has(key)) {
-              if (after[key] !== undefined && typeof after[key] !== "string")
-                throw new KeychainError(403, "Invalid refreshed AWS token field");
-            } else if (JSON.stringify(before[key]) !== JSON.stringify(after[key]))
-              throw new KeychainError(403, "A credential-use grant cannot replace AWS registration metadata");
-          }
-        }
-        if (materialized.files.some((file) => !normalized.some((entry) => entry.path === homeRelativePath(file.path))))
-          throw new KeychainError(403, "A credential-use grant cannot remove credential files");
-      }
 
       if (!deps.creds.update) throw new Error("credential store does not support atomic file refresh");
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
@@ -1240,11 +1206,7 @@ export function createKeychain(deps: {
       const out: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }> = [];
       for (const grant of await activeGrantsFor(scopeId)) {
         const cred = await deps.creds.get(grant.credentialId);
-        if (
-          cred &&
-          cred.origin !== "device-flow-auto-capture" &&
-          (cred.managed === "connector" || !credExpired(cred, now()))
-        )
+        if (cred && (cred.managed === "connector" || !credExpired(cred, now())))
           out.push({ grant, credential: toMeta(cred) });
       }
       return out;
@@ -1650,15 +1612,13 @@ export interface KeychainManifestInput {
 }
 
 const SAVE_HINT =
-  "Saving logins (the owner's own DM only). ALWAYS save a token-style login to the keychain right after it succeeds — " +
-  "save device-flow and other CLI file logins with the `interactive-login` skill. Logins left on this computer are " +
-  "not durable, and only keychain entries can be granted to other conversations. " +
-  'Token-style: `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" ' +
+  "Saving logins (the owner's own DM only). Before running any CLI login, read the `interactive-login` skill and " +
+  "follow it from the first step: it logs in under a temporary home and saves the result. Never log in against this " +
+  "computer's $HOME; a token found there is not a saved login. Only keychain entries are durable and grantable. " +
+  'Save a token-style key right after it works: `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" ' +
   CAPABILITY_CURL_AUTH +
   ' -H \'content-type: application/json\' -d \'{"service":"github","secret":"<token>","envKey":"GITHUB_TOKEN","accountLabel":"<who the service says they are>","expiresAt":<ms epoch, if the service reports one>}\'` — ' +
   "verify first (e.g. `gh api user`) and pass what the service reports as `accountLabel`. " +
-  "File-style (one bundle per service — e.g. ~/.aws/config + ~/.aws/credentials together): pass " +
-  '`"files":[{"path":".aws/config","contentBase64":"<base64 of the file>"}, …]` instead of `secret`/`envKey`. ' +
   "Saved CLI logins are loaded only when requested through execute.credentials; updates made by the CLI are saved back after execution. If the provider can no longer refresh the session, re-run its interactive login.";
 
 function expiryNote(c: KeychainCredentialMeta, now: number, own: boolean): string {
@@ -1711,8 +1671,21 @@ function connectorLine(
   return `- ${who}: connected app ${cm.host}${account}${status} — credential id \`${cm.credentialId}\` — ${grantNote}`;
 }
 
-function listed(c: Pick<KeychainCredential, "managed" | "kind" | "origin">): boolean {
-  return !c.managed && c.kind !== "broker" && c.origin !== "device-flow-auto-capture";
+export const MAX_CREDENTIAL_FILES = 500;
+export const MAX_CREDENTIAL_BYTES = 8 * 1024 * 1024;
+
+function checkedFiles(files: CredentialFile[]): CredentialFile[] {
+  const bytes = files.reduce((sum, file) => sum + Buffer.byteLength(file.contentBase64, "base64"), 0);
+  if (files.length > MAX_CREDENTIAL_FILES || bytes > MAX_CREDENTIAL_BYTES)
+    throw new KeychainError(
+      413,
+      `A saved login is limited to ${MAX_CREDENTIAL_FILES} files and ${MAX_CREDENTIAL_BYTES} bytes`,
+    );
+  return files;
+}
+
+function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
+  return !c.managed && c.kind !== "broker";
 }
 
 export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {

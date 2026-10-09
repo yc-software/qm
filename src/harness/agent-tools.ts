@@ -1837,9 +1837,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "URL/code from the returned output and relay it to the user, then `watch` (or `poll`) until the " +
       "command exits — that's when the login is done. If a prompt needs an answer typed in, use " +
       "action=send_input. Never run a login with `execute` (it blocks the whole turn) and never `stop`/kill a " +
-      "login mid-flight — that throws away the pending approval and wedges it. Nothing is saved " +
-      "automatically: follow the `interactive-login` skill, which runs the login under a private HOME and saves it " +
-      "to the keychain afterward.",
+      "login mid-flight — that throws away the pending approval and wedges it. Read the `interactive-login` skill " +
+      "before starting one and run it as the skill says: under a temporary home, never this computer's $HOME, then " +
+      "saved to the keychain.",
     parameters: Type.Object({
       action: Type.Union(
         [

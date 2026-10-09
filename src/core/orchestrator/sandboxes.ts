@@ -246,15 +246,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.handle = handle;
     return handle;
   };
-  const skillsRoot = `${SKILLS_ROOT}/${turnSessionDir.split("/").at(-1)}`;
+  const skillsRoot = () => `${SKILLS_ROOT}/${turnSessionDir.split("/").at(-1)}`;
   const laidTrees = new Set<string>();
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
-    const treeKey = `${sandboxId ?? "default"}:${skillDir(skillsRoot, r)}`;
+    const treeKey = `${sandboxId ?? "default"}:${skillDir(skillsRoot(), r)}`;
     if (laidTrees.has(treeKey)) return;
     const start = Date.now();
     try {
       const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
-      await laySkillTree(deps.sandbox, handle, skillsRoot, r, bundles);
+      await laySkillTree(deps.sandbox, handle, skillsRoot(), r, bundles);
       laidTrees.add(treeKey);
     } catch (err) {
       deps.errors?.record(
@@ -296,13 +296,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const render = (root?: string) =>
       file === "SKILL.md"
         ? renderSkillBody(resolution, root)
-        : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot);
+        : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot());
     if (!shipsFiles) return { content: render(), sourceScopeId: resolution.skill.scopeId };
     const access = sandboxId ? await accessResource(sandboxId) : undefined;
-    if (access?.crossScope) return { content: render(skillsRoot), sourceScopeId: resolution.skill.scopeId };
+    if (access?.crossScope) return { content: render(skillsRoot()), sourceScopeId: resolution.skill.scopeId };
     const handle = access ? await provisionResource(access) : await provision();
     await materializeSkillTree(handle, resolution, sandboxId);
-    const root = `${handle.rootDir}/${skillsRoot}`;
+    const root = `${handle.rootDir}/${skillsRoot()}`;
     const pack = packRoot(root, resolution);
     return {
       content: render(root),
@@ -532,8 +532,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ),
     );
   };
-  const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
-    await pruneSkills(handle);
+  const clearStaleTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
     const paths = deps.sandbox.removeDirAndList
       ? await deps.sandbox.removeDirAndList(handle, turnSessionDir, TURN_FILES_DIR)
@@ -554,6 +553,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         deps.sandbox.removeDir(handle, dir).catch(swallowAs("orchestrator: stale turn file cleanup", undefined)),
       ),
     );
+  };
+  const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
+    await Promise.all([pruneSkills(handle), clearStaleTurnFiles(handle)]);
   };
   const hasLiveProcesses = async (handle: SandboxHandle, fallbackScope: ScopeId): Promise<boolean> => {
     if (!deps.processes) return false;

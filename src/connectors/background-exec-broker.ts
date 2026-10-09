@@ -6,6 +6,7 @@ import { pollProcess, processIsGone } from "../sandbox/process-poll.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
+import { withCleanup } from "../util/errors.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
@@ -199,8 +200,12 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         if (status.state === "exited") await exited(handle, processId);
         return { processId, output: mask(output), cursor, status, reattached: false };
       } catch (error) {
-        if (!launched) await credentials?.release?.();
-        throw error;
+        return withCleanup(
+          () => Promise.reject(error),
+          async () => {
+            if (!launched) await credentials?.release?.();
+          },
+        );
       }
     },
 

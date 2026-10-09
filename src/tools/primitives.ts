@@ -59,7 +59,7 @@ import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { mimeFromName } from "../core/attachments.ts";
-import { swallow, errMessage } from "../util/errors.ts";
+import { swallow, errMessage, withCleanup } from "../util/errors.ts";
 import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
@@ -875,26 +875,28 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             "command",
             execOpts?.signal,
           );
-          let r: ExecResult;
-          try {
-            const sandboxCommand = ownerAuth ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command) : command;
-            const commandHandle = Object.keys(commandEnv).length
-              ? { ...handle, env: { ...handle.env, ...commandEnv } }
-              : handle;
-            const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
-            const mask = createExactSecretValueMasker(Object.values(secretEnv));
-            try {
-              const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
-              r = { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
-            } catch (error) {
-              const message = errMessage(error);
-              const masked = mask(message);
-              if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
-              throw error;
-            }
-          } finally {
-            await fileExecution?.finish();
-          }
+          const r = await withCleanup(
+            async (): Promise<ExecResult> => {
+              const sandboxCommand = ownerAuth ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command) : command;
+              const commandHandle = Object.keys(commandEnv).length
+                ? { ...handle, env: { ...handle.env, ...commandEnv } }
+                : handle;
+              const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
+              const mask = createExactSecretValueMasker(Object.values(secretEnv));
+              try {
+                const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+                return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
+              } catch (error) {
+                const message = errMessage(error);
+                const masked = mask(message);
+                if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
+                throw error;
+              }
+            },
+            async () => {
+              await fileExecution?.finish();
+            },
+          );
           return reached ? { ...r, reached } : r;
         });
       });
@@ -1258,8 +1260,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               release,
             };
           } catch (error) {
-            await release();
-            throw error;
+            return withCleanup(() => Promise.reject(error), release);
           }
           return deps.backgroundBroker!.start(
             handle,
