@@ -10,6 +10,7 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { disclosedMemory } from "../src/memory/disclosure.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
@@ -111,7 +112,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
         { "x-agent-capability": cap },
       );
       assert.equal(res.status, 200);
-      assert.equal(context?.conversationScopeId, source);
+      assert.equal(context?.conversationScopeId, ORG, "an org write is sourced to the org, never to a forged scope");
       assert.equal(context?.sessionId, "trusted-session");
       assert.equal(context?.sensitivity, undefined);
       assert.equal(context?.inheritedRecords, undefined);
@@ -196,6 +197,30 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     );
     assert.equal(putRes.status, 200);
     assert.match(await built.memory.read(ORG), /org notebook curated/);
+  });
+
+  it("an org fact an admin saves from a DM is recalled in other org conversations, not with outsiders (#2126)", async () => {
+    await built.memory.replace(ORG, "");
+    const A1 = scopeId("personal", "A1");
+    const cap = await capFor("A1", { write: A1, orgWrite: ORG, read: [A1, ORG] });
+    await post(
+      "/v1/memory/facts",
+      { facts: ["The all-hands moved to Thursdays."], scope: "org" },
+      { "x-agent-capability": cap },
+    );
+    const admin = { id: "A1", type: "internal" as const };
+    const view = (targetScope: ScopeId, audience: Array<{ id: string; type: "internal" | "external" }>) =>
+      disclosedMemory(built.memory, {
+        actor: audience[0]!,
+        targetScope,
+        nativeScopes: [targetScope, ORG],
+        audience,
+        open: false,
+        currentScopeMembers: async () => audience,
+      }).read(ORG);
+    assert.match(await view(scopeId("channel", "general"), [admin, { id: "B1", type: "internal" }]), /Thursdays/);
+    assert.match(await view(scopeId("personal", "B1"), [{ id: "B1", type: "internal" }]), /Thursdays/);
+    assert.doesNotMatch(await view(scopeId("channel", "shared"), [admin, { id: "G1", type: "external" }]), /Thursdays/);
   });
 
   it('without scope:"org", an admin token still writes the turn\'s own notebook', async () => {
