@@ -5,7 +5,10 @@ import { live } from "lit/directives/live.js";
 import { tip } from "./tooltip.ts";
 import { Check, ChevronDown, Download, createElement, type IconNode } from "lucide";
 
-export { brandName } from "./document-title.ts";
+export function brandName(): string {
+  if (typeof document === "undefined") return "QM";
+  return document.querySelector<HTMLMetaElement>('meta[name="brand-self-label"]')?.content || "QM";
+}
 
 export function brandMark(): TemplateResult {
   return html`<span class="brand-mark" aria-hidden="true"></span>`;

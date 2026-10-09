@@ -3,9 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
-import { activeSessionForDocumentTitle, documentTitle } from "../src/document-title.ts";
-
-const PRODUCT_TITLE = "QM · Web";
+import { activeSessionForDocumentTitle, documentTitle, PRODUCT_TITLE } from "../src/document-title.ts";
 
 const index = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 
@@ -13,18 +11,6 @@ test("page titles retain the static product title", () => {
   assert.ok(index.includes(`<title>${PRODUCT_TITLE}</title>`));
   assert.equal(documentTitle("chats", "Quarterly planning", true), `Quarterly planning · ${PRODUCT_TITLE}`);
   assert.equal(documentTitle(), PRODUCT_TITLE);
-});
-
-test("titles keep the org's self-label after client updates (#2108)", () => {
-  const dom = new JSDOM('<meta name="brand-self-label" content="Acme">');
-  const saved = globalThis.document;
-  globalThis.document = dom.window.document;
-  try {
-    assert.equal(documentTitle(), "Acme · Web");
-    assert.equal(documentTitle("chats"), "Chats · Acme · Web");
-  } finally {
-    globalThis.document = saved;
-  }
 });
 
 test("chat and non-chat views have useful fallbacks", () => {

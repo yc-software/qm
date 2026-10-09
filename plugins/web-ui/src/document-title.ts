@@ -36,8 +36,7 @@ const VIEW_TITLES: Record<View, string> = {
 export function documentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): string {
   const title =
     view === "chats" && conversationOpen ? conversationTitle?.trim() || "New chat" : view && VIEW_TITLES[view];
-  const product = `${brandName()} · Web`;
-  return title ? `${title} · ${product}` : product;
+  return `${title ? `${title} · ` : ""}${brandName()} · Web`;
 }
 
 export function updateDocumentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): void {
