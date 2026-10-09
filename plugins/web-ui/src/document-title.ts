@@ -1,5 +1,4 @@
 import type { View } from "./shell-state";
-import { TITLE_SUFFIX } from "./title-suffix.ts";
 
 interface TitledSession {
   id: string;
@@ -12,10 +11,7 @@ interface ActiveConversation {
   threadRef: string | null;
 }
 
-export function brandName(): string {
-  if (typeof document === "undefined") return "QM";
-  return document.querySelector<HTMLMetaElement>('meta[name="brand-self-label"]')?.content || "QM";
-}
+export const PRODUCT_TITLE = (typeof document !== "undefined" && document.title) || "QM · Web";
 
 const VIEW_TITLES: Record<View, string> = {
   chats: "Chats",
@@ -36,7 +32,7 @@ const VIEW_TITLES: Record<View, string> = {
 export function documentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): string {
   const title =
     view === "chats" && conversationOpen ? conversationTitle?.trim() || "New chat" : view && VIEW_TITLES[view];
-  return `${title ? `${title} · ` : ""}${brandName()} ${TITLE_SUFFIX}`;
+  return title ? `${title} · ${PRODUCT_TITLE}` : PRODUCT_TITLE;
 }
 
 export function updateDocumentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): void {
