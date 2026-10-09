@@ -345,11 +345,10 @@ class FakeCore implements SlackCoreClient {
   async getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
     return this.agentRequests.get(requestId) ?? null;
   }
-  async reserveAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<SlackAgentRequestContext> {
-    const existing = this.agentRequests.get(requestId);
-    if (existing) return existing;
+  async reserveAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<boolean> {
+    if (this.agentRequests.has(requestId)) return false;
     this.agentRequests.set(requestId, record);
-    return record;
+    return true;
   }
   async dropAgentRequest(requestId: string): Promise<void> {
     this.agentRequests.delete(requestId);

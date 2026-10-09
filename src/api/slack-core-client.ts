@@ -131,7 +131,7 @@ export interface SlackCoreClient {
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   putAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<void>;
-  reserveAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<SlackAgentRequestContext>;
+  reserveAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<boolean>;
   dropAgentRequest(requestId: string): Promise<void>;
   getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null>;
   getAgentRequestRun(runId: string): Promise<Pick<Run, "request"> | null>;
@@ -227,7 +227,10 @@ export function createAgentRequestStore(map: DurableMap<SlackAgentRequestContext
   const live = (record: SlackAgentRequestContext | null) =>
     record && !record.settled && !agentRequestExpired(record) ? record : null;
   return {
-    reserveAgentRequest: (requestId, record) => map.putIfAbsent(requestId, record),
+    async reserveAgentRequest(requestId, record) {
+      if (!map.insertIfAbsent) throw new Error("agent request store requires atomic insert");
+      return map.insertIfAbsent(requestId, record);
+    },
     dropAgentRequest: async (requestId) => void (await map.delete(requestId)),
     async putAgentRequest(requestId, record) {
       if (!map.update) throw new Error("agent request store requires atomic update");

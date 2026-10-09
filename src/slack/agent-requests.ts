@@ -343,8 +343,7 @@ export function createAgentHandoffs(deps: {
       targetAgentLabel,
       dmChannel,
     };
-    const reserved = await core.reserveAgentRequest(requestId, pendingCtx);
-    if (reserved.createdAt !== pendingCtx.createdAt) return handoff;
+    if (!(await core.reserveAgentRequest(requestId, pendingCtx))) return handoff;
     try {
       const prompt = agentRequestMessage({ requestId, originAgentLabel, targetAgentLabel, task: ask.task });
       const dm = await client.chat.postMessage({

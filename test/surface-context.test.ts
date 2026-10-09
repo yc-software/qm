@@ -397,8 +397,6 @@ describe("surface-context pulls", async () => {
     };
     assert.equal(await status({ person: "<@U2>", task: "x" }, live), "400 bad_request");
     assert.equal(await status({ person: "U2", task: "x" }, {}), "409 unavailable");
-    assert.match(await status({ person: "U2", task: "x" }, { ...live, externalSlack: true }), /^40[39] /);
-    assert.match(await status({ person: "U2", task: "x" }, { ...live, scopeId: scopeId("group", "G9") }), /^40[39] /);
     assert.equal((await built.app.pendingContextRequests("slack")).length, 0);
   });
 });

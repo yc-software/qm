@@ -3,6 +3,7 @@ import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { awaitContextOutcome } from "../surface-context-puller.ts";
 import { askAgentAvailable } from "../../resolution/sharing-posture.ts";
+import { scopeId } from "../../types.ts";
 
 const SLACK_USER_ID = /^[UW][A-Z0-9]+$/;
 const FULFILL_WAIT_MS = 25_000;
@@ -24,12 +25,16 @@ async function askAgent(ctx: ApiCtx): Promise<void> {
   }
   const available =
     !!capability.runId &&
-    (await askAgentAvailable(deps.config, {
+    askAgentAvailable({
       surface: capability.surface,
       scopeId: capability.scopeId,
-      actorId: capability.actorId,
       external: !!capability.externalSlack,
-    }));
+      posture:
+        (await deps.config?.resolveSharingPostureDurable(
+          scopeId("personal", capability.actorId),
+          capability.scopeId,
+        )) ?? "isolated",
+    });
   if (!available) {
     return sendJson(res, 409, {
       error: "unavailable",

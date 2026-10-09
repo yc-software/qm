@@ -1,5 +1,4 @@
-import { parseScopeId, scopeId, type Principal, type ScopeId } from "../types.ts";
-import type { ScopedConfigStore } from "./config-store.ts";
+import { parseScopeId, type Principal, type ScopeId } from "../types.ts";
 
 export const SHARING_POSTURES = ["isolated", "open"] as const;
 export type SharingPosture = (typeof SHARING_POSTURES)[number];
@@ -45,10 +44,6 @@ export function askAgentConversation(c: AskAgentConversation): boolean {
   return c.surface === "slack" && !c.external && parseScopeId(c.scopeId).kind === "channel";
 }
 
-export async function askAgentAvailable(
-  config: Pick<ScopedConfigStore, "resolveSharingPostureDurable"> | undefined,
-  c: AskAgentConversation & { actorId: string },
-): Promise<boolean> {
-  if (!askAgentConversation(c)) return false;
-  return (await config?.resolveSharingPostureDurable(scopeId("personal", c.actorId), c.scopeId)) !== "open";
+export function askAgentAvailable(c: AskAgentConversation & { posture: SharingPosture | undefined }): boolean {
+  return askAgentConversation(c) && c.posture !== "open";
 }

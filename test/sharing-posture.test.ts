@@ -311,16 +311,20 @@ test("Open excludes memory notebook aliases with Windows separators", async () =
   assert.deepEqual(handles, []);
 });
 
-test("personal-agent handoffs are available only in Isolated internal Slack channels", async () => {
-  const posture = (value: "open" | "isolated") => ({ resolveSharingPostureDurable: async () => value });
-  const channel = { surface: "slack", scopeId: scopeId("channel", "C1"), external: false, actorId: "U1" };
-  assert.equal(await askAgentAvailable(posture("isolated"), channel), true);
-  assert.equal(await askAgentAvailable(posture("open"), channel), false);
+test("personal-agent handoffs are available only in Isolated internal Slack channels", () => {
+  const channel = {
+    surface: "slack",
+    scopeId: scopeId("channel", "C1"),
+    external: false,
+    posture: "isolated" as const,
+  };
+  assert.equal(askAgentAvailable(channel), true);
   for (const other of [
+    { posture: "open" as const },
     { scopeId: scopeId("group", "G1") },
     { scopeId: scopeId("personal", "U1") },
     { external: true },
     { surface: "web" },
   ])
-    assert.equal(await askAgentAvailable(posture("isolated"), { ...channel, ...other }), false);
+    assert.equal(askAgentAvailable({ ...channel, ...other }), false);
 });

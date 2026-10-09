@@ -1163,7 +1163,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
       const sharingPrompt = renderSharingPosturePrompt(actor, sharingSources);
       if (sharingPrompt) systemPrompt += `\n\n${sharingPrompt}`;
-      if (await askAgentAvailable(deps.config, { surface: input.surface, scopeId, actorId: actor.id, external }))
+      if (askAgentAvailable({ surface: input.surface, scopeId, external, posture: resolution.sharingPosture }))
         systemPrompt += `\n\n${ASK_AGENT_PROMPT}`;
       const scopeProfile = supportsScopeProfile(deps.sandbox)
         ? await deps.sandbox
