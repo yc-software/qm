@@ -51,15 +51,15 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const turn = async (text: string, room = false, actor = "U1", extra: Partial<TurnRequest> = {}) => {
     const result = await built.app.turn({
       surface: "test",
-      actor: { externalId: actor },
+      actor: { externalId: actor, provider: "slack" },
       origin: { kind: "human" },
       conversation: room
         ? {
             kind: "channel",
             channelRef: "C1",
             threadRef: "C1:shared-test",
-            audience: members.map((m) => ({ externalId: handle.get(m)! })),
-            publishMembers: members.map((m) => ({ externalId: handle.get(m)! })),
+            audience: members.map((m) => ({ externalId: handle.get(m)!, provider: "slack" as const })),
+            publishMembers: members.map((m) => ({ externalId: handle.get(m)!, provider: "slack" as const })),
           }
         : { kind: "dm", threadRef: `dm:${actor}:shared-test` },
       text,

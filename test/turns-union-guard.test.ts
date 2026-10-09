@@ -25,12 +25,12 @@ after(async () => {
 test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps other fields", async () => {
   const body = JSON.stringify({
     surface: "cron",
-    actor: { externalId: "internal:owner", provider: "slack" as const },
+    actor: { externalId: "internal:owner" },
     conversation: {
       kind: "channel",
       channelRef: "C9",
       threadRef: "t-union-guard",
-      audience: [{ externalId: "internal:owner", provider: "slack" as const }],
+      audience: [{ externalId: "internal:owner" }],
     },
     text: "x",
     triggered: true,
@@ -59,12 +59,12 @@ test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps 
 test("POST /v1/turns strips unattendedGrants from the external body", async () => {
   const body = JSON.stringify({
     surface: "cron",
-    actor: { externalId: "internal:owner", provider: "slack" as const },
+    actor: { externalId: "internal:owner" },
     conversation: {
       kind: "channel",
       channelRef: "C9",
       threadRef: "t-grants-guard",
-      audience: [{ externalId: "internal:owner", provider: "slack" as const }],
+      audience: [{ externalId: "internal:owner" }],
     },
     text: "x",
     triggered: true,
@@ -89,12 +89,12 @@ test("POST /v1/turns strips unattendedGrants from the external body", async () =
 test("POST /v1/turns strips nested owner-keychain union from typed automation origin", async () => {
   const body = JSON.stringify({
     surface: "cron",
-    actor: { externalId: "internal:owner", provider: "slack" as const },
+    actor: { externalId: "internal:owner" },
     conversation: {
       kind: "channel",
       channelRef: "C9",
       threadRef: "t-typed-union-guard",
-      audience: [{ externalId: "internal:owner", provider: "slack" as const }],
+      audience: [{ externalId: "internal:owner" }],
     },
     text: "x",
     origin: { kind: "automation", screenData: "external event", useOwnerKeychain: true },
@@ -114,7 +114,7 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
 test("POST /v1/turns does not let a typed origin override legacy automation provenance", async () => {
   const body = JSON.stringify({
     surface: "webhook",
-    actor: { externalId: "internal:owner", provider: "slack" as const },
+    actor: { externalId: "internal:owner" },
     conversation: { kind: "dm", threadRef: "t-origin-conflict" },
     text: "x",
     triggered: true,
@@ -136,7 +136,7 @@ test("POST /v1/turns does not let a typed origin override legacy automation prov
 test("POST /v1/turns does not let legacy liveness override typed automation provenance", async () => {
   const body = JSON.stringify({
     surface: "webhook",
-    actor: { externalId: "internal:owner", provider: "slack" as const },
+    actor: { externalId: "internal:owner" },
     conversation: { kind: "dm", threadRef: "t-reverse-origin-conflict" },
     text: "x",
     liveActor: true,
@@ -157,7 +157,7 @@ test("POST /v1/turns does not let legacy liveness override typed automation prov
 test("POST /v1/turns preserves legacy screen data omitted from a matching typed automation origin", async () => {
   const body = JSON.stringify({
     surface: "webhook",
-    actor: { externalId: "internal:owner", provider: "slack" as const },
+    actor: { externalId: "internal:owner" },
     conversation: { kind: "dm", threadRef: "t-origin-screen-data" },
     text: "x",
     triggered: true,
@@ -179,7 +179,7 @@ test("POST /v1/turns preserves legacy screen data omitted from a matching typed 
 test("POST /v1/turns rejects conflicting typed and legacy automation screen data", async () => {
   const body = JSON.stringify({
     surface: "webhook",
-    actor: { externalId: "internal:owner", provider: "slack" as const },
+    actor: { externalId: "internal:owner" },
     conversation: { kind: "dm", threadRef: "t-origin-screen-conflict" },
     text: "x",
     triggered: true,

@@ -333,7 +333,7 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
 
   await built.app.turn({
     surface: "test",
-    actor: { externalId: "U-alice", provider: "slack" as const },
+    actor: { externalId: "U-alice" },
     conversation: { kind: "dm", threadRef: "dm:D-alice" },
     text: "what was that digest?",
   });
@@ -477,7 +477,7 @@ test("a guest actor is refused (internal-only, input side)", async () => {
   const { app } = freshApp();
   const res = await app.turn({
     surface: "test",
-    actor: { externalId: "G1", provider: "slack" as const, isExternalGuest: true },
+    actor: { externalId: "G1", isExternalGuest: true },
     conversation: { kind: "dm", threadRef: "dm:G1:t1" },
     text: "hi",
   });
@@ -494,7 +494,7 @@ test("a channel with a non-internal audience member is refused (internal-only, o
       kind: "channel",
       threadRef: "C1:t1",
       channelRef: "C1",
-      audience: [internalActor, { externalId: "G9", provider: "slack" as const, isExternalGuest: true }],
+      audience: [internalActor, { externalId: "G9", isExternalGuest: true }],
     },
     text: "hello channel",
   });
@@ -877,7 +877,7 @@ test("env-delivery credentials are not offered to an external audience", async (
         threadRef: "ch:C9:t9",
         channelRef: "C9",
         audience: [internalActor],
-        publishMembers: [internalActor, { externalId: "visitor", provider: "slack" as const, isExternalGuest: true }],
+        publishMembers: [internalActor, { externalId: "visitor", isExternalGuest: true }],
       },
     }),
   );
@@ -1520,7 +1520,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
           threadRef: "grp:G1:det",
           channelRef: "G1",
           audience: [admin],
-          publishMembers: [admin, { externalId: "bob", provider: "slack" as const }],
+          publishMembers: [admin, { externalId: "bob" }],
         },
         text: "!run echo hi",
         liveActor: true,
@@ -1539,7 +1539,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
       threadRef: "grp:G1:det",
       channelRef: "G1",
       audience: [admin],
-      publishMembers: [admin, { externalId: "bob", provider: "slack" as const }],
+      publishMembers: [admin, { externalId: "bob" }],
     },
     text: "!sysprompt",
     liveActor: true,
@@ -1640,7 +1640,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
           threadRef: "ch:C9:t1",
           channelRef: "C9",
           audience: [admin],
-          publishMembers: [admin, { externalId: "visitor", provider: "slack" as const, isExternalGuest: true }],
+          publishMembers: [admin, { externalId: "visitor", isExternalGuest: true }],
         },
         text: "!run echo hi",
         liveActor: true,
@@ -4316,7 +4316,7 @@ test("activated resource defaults preserve an existing computer and stop eager p
   assert.equal(boxes.live, 0);
   const newSession = await built.app.turn(
     dm("hello", {
-      actor: { externalId: "new-user", provider: "slack" as const },
+      actor: { externalId: "new-user" },
       conversation: { kind: "dm", threadRef: "dm:new:t1" },
     }),
   );

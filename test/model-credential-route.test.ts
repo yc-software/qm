@@ -325,7 +325,7 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
 
     const turn = await srv.built.app.turn({
       surface: "web",
-      actor: { externalId: "alice", provider: "slack" as const },
+      actor: { externalId: "alice" },
       conversation: { kind: "dm", threadRef: "web:alice:openrouter-catalog" },
       text: "hello",
       model: "stealth/ox-alpha",
@@ -355,7 +355,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
     const turn = (threadRef: string, model: string) =>
       srv.built.app.turn({
         surface: "web",
-        actor: { externalId: "alice", provider: "slack" as const },
+        actor: { externalId: "alice" },
         conversation: { kind: "dm", threadRef },
         text: "hello",
         model,
@@ -465,7 +465,7 @@ test("web turns gate the requested and scope-selected harness against its real k
     const turn = (threadRef: string, overrides: { harness?: string; model?: string } = {}) =>
       srv.built.app.turn({
         surface: "web",
-        actor: { externalId: "alice", provider: "slack" as const },
+        actor: { externalId: "alice" },
         conversation: { kind: "dm", threadRef },
         text: "hello",
         async: true,
@@ -629,7 +629,7 @@ test("a stored scope runtime remains usable outside the legacy configured picker
     const turn = (threadRef: string, model?: string) =>
       srv.built.app.turn({
         surface: "web",
-        actor: { externalId: "alice", provider: "slack" as const },
+        actor: { externalId: "alice" },
         conversation: { kind: "dm", threadRef },
         text: "hello",
         ...(model ? { model } : {}),
@@ -658,7 +658,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
     await srv.built.config.flushScope("org:default-org");
     const rejected = await srv.built.app.turn({
       surface: "loop",
-      actor: { externalId: "alice", provider: "slack" as const },
+      actor: { externalId: "alice" },
       conversation: { kind: "dm", threadRef: "loop:test:item:runtime" },
       text: "Make it shorter",
       model: "claude-haiku-4-5",

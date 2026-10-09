@@ -110,7 +110,7 @@ describe("HTTP e2e (live Pi over the API)", { skip: NO_KEY ? "set ANTHROPIC_API_
   it("internal-only refuses a guest over HTTP (403)", { timeout: 30_000 }, async () => {
     const r = await turn({
       surface: "http-e2e",
-      actor: { externalId: "G1", provider: "slack" as const, isExternalGuest: true },
+      actor: { externalId: "G1", isExternalGuest: true },
       conversation: { kind: "dm", threadRef: "g1" },
       text: "hello",
     });

@@ -344,7 +344,7 @@ test("an addressed bare 'stop' still ABORTS a live UNPROMPTED run", async () => 
 function automationRun(channel: string, root: string): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "U-owner", provider: "slack" as const },
+    actor: { externalId: "U-owner" },
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [] },
     deliveryTarget: `slack:${channel}:${root}`,
     text: "check the deploy and report back",

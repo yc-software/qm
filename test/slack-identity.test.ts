@@ -36,10 +36,10 @@ test("createUserCache returns a fresh entry, then expires it past the TTL (fail-
 
 test("createUserCache evicts the least-recently-used entry past capacity, and a get() refreshes recency", () => {
   const c = createUserCache({ ttlMs: 10_000, max: 2 });
-  c.set("A", { actor: { externalId: "A", provider: "slack" as const } });
+  c.set("A", { actor: { externalId: "A" } });
   c.set("B", { actor: { externalId: "B", provider: "slack" as const } });
   assert.ok(c.get("A"));
-  c.set("C", { actor: { externalId: "C", provider: "slack" as const } });
+  c.set("C", { actor: { externalId: "C" } });
   assert.ok(c.get("A"));
   assert.equal(c.get("B"), undefined);
   assert.ok(c.get("C"));
@@ -132,7 +132,7 @@ test("probeIdentityMode is undecided on a page of only bots, deleted members, an
 
 test("computeChannelAudience detects a guest MEMBER of a private channel, not just Connect (scenario 27)", () => {
   const actor = { externalId: "U1", provider: "slack" as const };
-  const guest = { externalId: "G1", provider: "slack" as const, isExternalGuest: true };
+  const guest = { externalId: "G1", isExternalGuest: true };
   const internal = { externalId: "U2", provider: "slack" as const, isExternalGuest: false };
 
   const aud = computeChannelAudience(actor, [internal, guest], { is_ext_shared: false });
@@ -175,7 +175,7 @@ test("groupDmDisplayName renders Slack group DMs from internal member display na
     groupDmDisplayName([
       { externalId: "eric@acme", provider: "email" as const, displayName: "eric" },
       { externalId: "eric@acme", provider: "email" as const, displayName: "eric" },
-      { externalId: "guest", provider: "slack" as const, isExternalGuest: true, displayName: "guest" },
+      { externalId: "guest", isExternalGuest: true, displayName: "guest" },
     ]),
     "eric",
   );
@@ -209,7 +209,7 @@ test("computePublishMembers: WITHHELD on a Connect channel or any guest present"
     undefined,
     "Connect → owner-only",
   );
-  const withGuest = [{ externalId: "G1", provider: "slack" as const, isExternalGuest: true }];
+  const withGuest = [{ externalId: "G1", isExternalGuest: true }];
   assert.equal(
     computePublishMembers(actor, withGuest, true, { is_ext_shared: false }),
     undefined,
@@ -227,7 +227,7 @@ test("allInternalChannelMembers: all-internal + complete → deduped ids; WITHHE
   assert.equal(allInternalChannelMembers(internal, false, { is_private: true }), undefined, "incomplete → withheld");
   const withGuest = [
     { externalId: "U1", provider: "slack" as const, isExternalGuest: false },
-    { externalId: "G1", provider: "slack" as const, isExternalGuest: true },
+    { externalId: "G1", isExternalGuest: true },
   ];
   assert.equal(
     allInternalChannelMembers(withGuest, true, { is_private: true }),

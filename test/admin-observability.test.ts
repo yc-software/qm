@@ -639,7 +639,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
 
     const turn: TurnRequest = {
       surface: "slack",
-      actor: { externalId: "U-alice", provider: "slack" as const },
+      actor: { externalId: "U-alice" },
       conversation: { kind: "dm", threadRef: "dm:D-alice" },
       text: "what was that deploy note?",
     };

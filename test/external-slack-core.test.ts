@@ -33,7 +33,7 @@ function request(text: string): TurnRequest {
       threadRef: `${namespace}:C1:thread`,
       audience: [
         { externalId: "U1", provider: "slack" as const },
-        { externalId: "outsider", provider: "slack" as const, isExternalGuest: true },
+        { externalId: "outsider", isExternalGuest: true },
       ],
     },
     text,

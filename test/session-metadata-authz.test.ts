@@ -1,4 +1,3 @@
-import { testHandle } from "./support/principal.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -19,7 +18,7 @@ function freshApp() {
 function dm(text: string, thread: string, externalId: string): TurnRequest {
   return {
     surface: "test",
-    actor: { externalId, provider: testHandle(externalId).provider },
+    actor: { externalId },
     conversation: { kind: "dm", threadRef: thread },
     text,
   };
@@ -53,7 +52,7 @@ test("the single-session read applies the managed-project check the session list
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
   const outcome = await built.app.turn({
     surface: "web",
-    actor: { externalId: "member", provider: "slack" as const },
+    actor: { externalId: "member" },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:member:project" },
     text: "!run git push --force origin main",
   });

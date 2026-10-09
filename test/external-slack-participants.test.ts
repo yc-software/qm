@@ -14,7 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1", provider: "slack" as const };
-const guest = { externalId: "G9", provider: "slack" as const, isExternalGuest: true };
+const guest = { externalId: "G9", isExternalGuest: true };
 
 function externalChannelTurn(surface: string): TurnRequest {
   return {

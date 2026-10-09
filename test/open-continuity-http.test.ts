@@ -127,8 +127,8 @@ async function fixture(t: TestContext) {
     actor = "alice",
     room = true,
     audience: { externalId: string; provider?: "slack"; isExternalGuest?: boolean }[] = [
-      { externalId: "alice", provider: "slack" as const },
-      { externalId: "bob", provider: "slack" as const },
+      { externalId: "alice" },
+      { externalId: "bob" },
     ],
   ) => {
     const body = JSON.stringify({
@@ -174,10 +174,7 @@ test("HTTP Open continuity: personal sandbox follows owner into shared channel a
   await b.config.clearSharingPosture(`personal:${b.P.alice}`);
   await b.roster(["bob"]);
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
-  const guests = [
-    { externalId: "alice", provider: "slack" as const },
-    { externalId: "guest", provider: "slack" as const, isExternalGuest: true },
-  ];
+  const guests = [{ externalId: "alice" }, { externalId: "guest", isExternalGuest: true }];
   const refused = await b.turn(command("cat proof.txt"), "alice", true, guests);
   assert.equal(refused.http, 403);
   assert.equal(refused.status, "refused");
