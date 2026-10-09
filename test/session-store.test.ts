@@ -1142,3 +1142,17 @@ test("renewLease keeps a live turn's lock fresh and refuses stale or superseded 
 test("personal conversation counts exclude synthetic and inherited chats", async () => {
   await assertPersonalConversationParity(createMemorySessionStore(), "personal-count");
 });
+
+test("a zero limit returns no entries or tape records, matching Postgres LIMIT 0", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("channel", "C1");
+  const s = await store.getOrCreateByThread("ch:C1:limit0", "channel", scope);
+  const { lease } = await store.acquireLease(s.id);
+  assert.ok(lease);
+  await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+  await store.appendTape(lease, { kind: "annotation", payload: { note: "x" }, scopeLabel: scope });
+  assert.equal((await store.getEntries(s.id)).length, 1);
+  assert.equal((await store.getEntries(s.id, { limit: 0 })).length, 0);
+  assert.ok((await store.getTape(s.id)).length > 0);
+  assert.equal((await store.getTape(s.id, { limit: 0 })).length, 0);
+});

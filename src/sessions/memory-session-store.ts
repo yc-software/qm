@@ -319,6 +319,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const log = entries.get(sessionId) ?? [];
       const since = opts?.sinceSeq ?? 0;
       const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
+      if (opts?.limit === 0) return [];
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
@@ -404,6 +405,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const log = tape.get(sessionId) ?? [];
       const since = opts?.sinceSeq;
       const filtered = since !== undefined ? log.filter((r) => r.seq > since) : log;
+      if (opts?.limit === 0) return [];
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : [...filtered];
     },
 
