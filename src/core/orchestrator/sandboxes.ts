@@ -13,7 +13,7 @@ import {
   rehomeSkillPaths,
   renderSkillBody,
   skillDir,
-  SKILLS_DIR,
+  SKILLS_ROOT,
 } from "../../skills/materialize.ts";
 import { safeSkillFilePath, type SkillResolution } from "../../skills/skill-store.ts";
 import { isSafeSkillName } from "../../skills/skill-name.ts";
@@ -246,7 +246,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.handle = handle;
     return handle;
   };
-  const skillsRoot = `${turnFilesDir}/${SKILLS_DIR}`;
+  const skillsRoot = SKILLS_ROOT;
   const laidTrees = new Set<string>();
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
     const treeKey = `${sandboxId ?? "default"}:${skillDir(skillsRoot, r)}`;

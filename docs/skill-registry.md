@@ -78,10 +78,9 @@ visible, screened published skill and returns its SKILL.md, or a relative manife
 named by `path`, without creating or waking a sandbox. Unavailable skills and invalid
 paths return no file.
 
-When a skill ships supporting files or pack bundles, the same call lays them into the
-turn's private directory under `.agent-turn/<conversation>/skills/<name>/` (packs under
-`.packs/<id>/` beside it) and reports that path; the body's own `skills/<name>/` references
-are rewritten to it. That directory is wiped when the turn ends and before the next one
-starts, so nothing reconciles, locks, or sweeps: plain commands and filesystem reads never
-wait on skill synchronization, and revoked or archived content cannot outlive the turn
-that loaded it. Publish changes through the skill API to update the source.
+When a skill ships supporting files or pack bundles, the same call writes them to
+`.agent-skills/<name>/` on the computer (packs under `.agent-skills/.packs/<id>/`) and
+reports that path; the body's own `skills/<name>/` references are rewritten to it. The
+copy stays across turns, and each read overwrites it with the published version, so
+nothing reconciles, locks, or sweeps and plain commands never wait on skill
+synchronization. Publish changes through the skill API to update the source.
