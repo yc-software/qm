@@ -11,7 +11,11 @@ interface ActiveConversation {
   threadRef: string | null;
 }
 
-export const PRODUCT_TITLE = "QM · Web";
+// Lives here, not in ui.ts, so the title can read it without pulling in lit.
+export function brandName(): string {
+  if (typeof document === "undefined") return "QM";
+  return document.querySelector<HTMLMetaElement>('meta[name="brand-self-label"]')?.content || "QM";
+}
 
 const VIEW_TITLES: Record<View, string> = {
   chats: "Chats",
@@ -32,7 +36,8 @@ const VIEW_TITLES: Record<View, string> = {
 export function documentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): string {
   const title =
     view === "chats" && conversationOpen ? conversationTitle?.trim() || "New chat" : view && VIEW_TITLES[view];
-  return title ? `${title} · ${PRODUCT_TITLE}` : PRODUCT_TITLE;
+  const product = `${brandName()} · Web`;
+  return title ? `${title} · ${product}` : product;
 }
 
 export function updateDocumentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): void {
