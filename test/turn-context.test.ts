@@ -164,3 +164,15 @@ test("ambiguous file aliases fail closed in the shared reader", async () => {
   assert.ok(result && "error" in result);
   assert.match(result.error, /ambiguous shared handle/);
 });
+
+test("memory search across notebooks interleaves hits so one notebook can't fill the limit", async () => {
+  const { input, memory } = await fixture();
+  await memory.replace(
+    "personal:alice",
+    `# Memory\n\n${Array.from({ length: 30 }, (_, i) => `- deploy note ${i}`).join("\n")}`,
+  );
+  await memory.replace("channel:eng", "# Memory\n\n- deploy runbook lives in eng");
+  const hits = (await (await resolveTurnContext(input)).searchMemory("deploy", 20))!;
+  assert.equal(hits.length, 20);
+  assert.ok(hits.includes("[channel:eng] deploy runbook lives in eng"), "the channel hit isn't starved");
+});
