@@ -3344,7 +3344,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let firstChunkAt: number | undefined;
         let lastChunkAt: number | undefined;
         const emittedEntries: SessionEntry[] = [];
-        const delegatedTask = automatedTurn && !!input.sessionSenderId && !!input.displayText?.trim();
+        const delegatedTask =
+          automatedTurn && !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
         const syntheticPrompt =
           (input.proactiveOpener && !input.text.trim()) ||
           (automatedTurn && !delegatedTask) ||
