@@ -40,6 +40,8 @@ export interface FakeSprites {
   checkpoints(name: string): string[];
   execScripts(): string[];
   stallAfterRun(name: string): void;
+  /** Refuse the next exec upgrade for this sprite, the way a cold machine answers while it boots. */
+  refuseExecOnce(name: string): void;
   fail502(name: string): void;
   failNext(status: number, opts?: InjectedFailure): void;
   refuseRestart(name: string): void;
@@ -172,6 +174,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const calls: SpritesCall[] = [];
   const gateway502 = new Set<string>();
   const stallAfterRun = new Set<string>();
+  const refuseExecOnce = new Set<string>();
   const refusedRestart = new Set<string>();
   const unhealthy = new Map<string, string>();
   const health = new Map<string, { status: string; reason: string }>();
@@ -428,7 +431,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     calls.push({ method: "WS", path: url.pathname });
     const call = calls[calls.length - 1]!;
     return {
-      refused: !sprites.has(name) || gateway502.has(name),
+      refused: !sprites.has(name) || gateway502.has(name) || refuseExecOnce.delete(name),
       run: (stdin) => {
         const frames = runExec(name, argv, stdin);
         call.script = execScripts[execScripts.length - 1];
@@ -451,6 +454,9 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     execScripts: () => [...execScripts],
     stallAfterRun: (name) => {
       stallAfterRun.add(name);
+    },
+    refuseExecOnce: (name) => {
+      refuseExecOnce.add(name);
     },
     fail502: (name) => {
       gateway502.add(name);
@@ -490,6 +496,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       execScripts.length = 0;
       calls.length = 0;
       stallAfterRun.clear();
+      refuseExecOnce.clear();
       gateway502.clear();
       refusedRestart.clear();
       unhealthy.clear();

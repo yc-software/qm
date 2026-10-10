@@ -44,6 +44,8 @@ const HOME_DIR = "/home/sprite";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 export const SCRIPT_RUNNER = 's=$(mktemp) && cat > "$s" && sh "$s" </dev/null; rc=$?; rm -f "$s"; exit $rc';
 const EXIT_GRACE_MS = 60_000;
+export const EXEC_WAKE_RETRIES = 3;
+export const EXEC_WAKE_RETRY_DELAY_MS = 10_000;
 const GUEST_PROBE_TIMEOUT_SEC = 15;
 const KEEPALIVE_TIMEOUT_SEC = 20;
 const CHECKPOINT_INTERVAL_MS = 5 * 60_000;
@@ -100,6 +102,9 @@ export async function retrySpritesControl<T>(operation: () => Promise<T>, timeou
 
 const isMissing = (e: unknown): boolean => e instanceof APIError && e.statusCode === 404;
 
+/** A refused exec whose script never reached the shell, so re-sending it cannot run anything twice. */
+class ExecNotSubmittedError extends Error {}
+
 const describeCheck = (check: SpriteCheck): string => `${check.status}${check.reason ? ` (${check.reason})` : ""}`;
 
 export function processKeepaliveScript(processId: string): string {
@@ -125,6 +130,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   egressProxyAdditionalUrls?: string[];
   memoryMb?: number;
   checkpointIntervalMs?: number;
+  execRetryDelayMs?: number;
   snapshots?: HomeSnapshotStore;
   initializationStore?: DurableMap<{ pending: boolean }>;
   advisoryLock?: AdvisoryLock;
@@ -156,6 +162,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? CHECKPOINT_INTERVAL_MS;
+  const execRetryDelayMs = opts.execRetryDelayMs ?? EXEC_WAKE_RETRY_DELAY_MS;
 
   const ensured = new Set<string>();
   const resourcesApplied = new Set<string>();
@@ -191,8 +198,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       });
     const exited = new Promise<number>((resolve, reject) => {
       const fail = (detail: string): void => {
-        const phase = submissionStarted ? "script submission started; execution unknown" : "script not submitted";
-        reject(new Error(`sprites exec: WebSocket error (${phase}): ${detail}`));
+        const [phase, Failure] = submissionStarted
+          ? (["script submission started; execution unknown", Error] as const)
+          : (["script not submitted", ExecNotSubmittedError] as const);
+        reject(new Failure(`sprites exec: WebSocket error (${phase}): ${detail}`));
       };
       cmd.on("error", (e) => {
         const detail =
@@ -225,7 +234,24 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     }
   }
 
-  async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
+  // A cold sprite is booted by the very exec that is refused while it comes up, so the refusal is the wake.
+  async function wakeAndSpawn(name: string, argv: string[], stdin: Buffer, deadlineMs: number): Promise<RawExec> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await spawnExec(name, argv, stdin, deadlineMs);
+      } catch (e) {
+        if (!(e instanceof ExecNotSubmittedError) || attempt > EXEC_WAKE_RETRIES) throw e;
+        await wait(execRetryDelayMs);
+      }
+    }
+  }
+
+  async function execRaw(
+    name: string,
+    script: string,
+    timeoutSec: number,
+    { waitForWake = true }: { waitForWake?: boolean } = {},
+  ): Promise<ExecResult> {
     const uid = randomUUID();
     const out = `/tmp/.exec-${uid}.out`;
     const err = `/tmp/.exec-${uid}.err`;
@@ -236,12 +262,12 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const wrapped =
       `cat > ${body} <<'${eof}'\n${script}\n${eof}\n` +
       `timeout ${timeoutSec} sh ${body} > ${out} 2> ${err}; __rc=$?; printf '%s %s %s %s %s\\n' "$__rc" "$(wc -c < ${out})" "$(wc -c < ${err})" "${psi}" "${load}"; cat ${out} ${err}; rm -f ${out} ${err} ${body}`;
-    const r = await spawnExec(
-      name,
-      ["sh", "-c", SCRIPT_RUNNER],
-      Buffer.from(wrapped, "utf8"),
-      timeoutSec * 1000 + EXIT_GRACE_MS,
-    );
+    const argv = ["sh", "-c", SCRIPT_RUNNER];
+    const stdin = Buffer.from(wrapped, "utf8");
+    const deadlineMs = timeoutSec * 1000 + EXIT_GRACE_MS;
+    const r = waitForWake
+      ? await wakeAndSpawn(name, argv, stdin, deadlineMs)
+      : await spawnExec(name, argv, stdin, deadlineMs);
     const nl = r.stdout.indexOf(0x0a);
     const header = (nl < 0 ? r.stdout : r.stdout.subarray(0, nl)).toString("utf8").trim().split(/\s+/);
     if (r.rc !== 0 || nl < 0 || header.length < 3) {
@@ -638,7 +664,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       let guestResponsive = false;
       let pressure: ExecPressure | undefined;
       try {
-        const probe = await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC);
+        const probe = await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC, { waitForWake: false });
         guestResponsive = probe.code === 0;
         pressure = probe.pressure;
       } catch (e) {
