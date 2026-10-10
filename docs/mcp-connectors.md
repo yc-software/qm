@@ -3,6 +3,13 @@
 Administrators register HTTP MCP servers through `PUT /v1/admin/mcp-servers/:id`.
 Registration controls the outbound destination and the tools available to agents.
 
+`url` is the complete MCP POST endpoint. QM preserves its path and trailing slash;
+it does not append `/mcp`. Use a root URL for servers that serve MCP at `/`, or
+include the server's exact path (for example `/mcp` or `/api/tools/`). Existing
+registrations that relied on QM adding `/mcp` must add it explicitly. The existing
+client-credentials token URL convention is unchanged: remove trailing slashes and
+a final `/mcp` from the configured URL, then append `/token`.
+
 `credentialScope` selects the identity used for `tools/call`:
 
 - `shared` (the default for existing and new registrations): all callers use the

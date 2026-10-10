@@ -144,3 +144,60 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   assert.equal(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), "Bearer alice-only");
   assert.equal(calls, 1);
 });
+
+for (const path of ["", "/", "/mcp", "/api/tools", "/api/tools/"]) {
+  test(`MCP registration, discovery, and invocation use endpoint ${JSON.stringify(path)}`, async (t) => {
+    const dir = await mkdtemp(join(tmpdir(), "mcp-endpoint-"));
+    const built = buildApp(testConfig({ dataDir: dir }));
+    const requests: Array<{ path: string; method: string }> = [];
+    const remote = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const rpc = JSON.parse(Buffer.concat(chunks).toString());
+      requests.push({ path: req.url!, method: rpc.method });
+      if (req.url !== (path || "/")) {
+        res.writeHead(404).end();
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: rpc.id,
+          result:
+            rpc.method === "tools/list"
+              ? { tools: [{ name: "echo", inputSchema: { type: "object" } }] }
+              : { content: [{ type: "text", text: rpc.params.arguments.text }] },
+        }),
+      );
+    });
+    const api = createInsecureTestServer(built.app, {
+      admin: built.admin,
+      auditLog: built.auditLog,
+      mcpServers: built.mcpServers,
+      mcpToolService: built.mcpToolService,
+    });
+    t.after(async () => {
+      built.mcpToolService.close();
+      await Promise.all([remote, api].map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+      await rm(dir, { recursive: true, force: true });
+    });
+    remote.listen(0, "127.0.0.1");
+    api.listen(0, "127.0.0.1");
+    await Promise.all([once(remote, "listening"), once(api, "listening")]);
+    const url = `http://127.0.0.1:${(remote.address() as AddressInfo).port}${path}`;
+    const response = await fetch(`http://127.0.0.1:${(api.address() as AddressInfo).port}/v1/admin/mcp-servers/echo`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ url, auth: "none" }),
+    });
+    assert.equal(response.status, 200, await response.text());
+    assert.equal((await built.mcpServers.get("echo"))?.url, url);
+    await built.mcpToolService.refresh();
+    assert.ok(built.mcpToolService.toolDefs().some((tool) => tool.name === "echo_echo"));
+    assert.equal(await built.mcpToolService.call("echo_echo", { text: "endpoint preserved" }), "endpoint preserved");
+    assert.ok(requests.some((request) => request.method === "tools/list"));
+    assert.ok(requests.some((request) => request.method === "tools/call"));
+    assert.ok(requests.every((request) => request.path === (path || "/")));
+  });
+}

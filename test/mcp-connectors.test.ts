@@ -88,6 +88,40 @@ test("mcp client sends bearer auth", async () => {
   await assert.rejects(() => bad.listTools(), /HTTP 401/);
 });
 
+for (const path of ["", "/", "/mcp", "/mcp/", "/api/tools", "/api/tools/", "/tenant%20one/rpc"]) {
+  test(`mcp client preserves the configured endpoint ${JSON.stringify(path)}`, async () => {
+    const { fetch, calls } = fakeServerFetch({ requireBearer: "test-token" });
+    const url = `https://mcp.example.com${path}`;
+    const client = createMcpClient({ url, auth: { mode: "bearer", token: "test-token" }, fetchImpl: fetch });
+    await client.listTools();
+    await client.callTool("query", { q: "hello" });
+    assert.deepEqual(calls, [url, url]);
+  });
+}
+
+for (const path of ["/mcp", "/mcp/", "/tenant/mcp"]) {
+  test(`mcp client preserves client-credentials token routing for ${path}`, async () => {
+    const url = `https://mcp.example.com${path}`;
+    const tokenUrl = `https://mcp.example.com${path.replace(/\/$/, "").replace(/\/mcp$/, "")}/token`;
+    const calls: string[] = [];
+    const { fetch } = fakeServerFetch({ requireBearer: "minted-token" });
+    const client = createMcpClient({
+      url,
+      auth: { mode: "client-credentials", clientId: "test-client", clientSecret: "test-secret" },
+      fetchImpl: async (target, init) => {
+        calls.push(target);
+        if (target !== tokenUrl) return fetch(target, init);
+        assert.equal(init.method, "POST");
+        assert.equal(new URLSearchParams(init.body).get("grant_type"), "client_credentials");
+        return jsonResponse({ access_token: "minted-token", expires_in: 3600 });
+      },
+    });
+    await client.listTools();
+    await client.callTool("query", {});
+    assert.deepEqual(calls, [tokenUrl, url, url]);
+  });
+}
+
 test("server id validation", () => {
   assert.ok(isValidMcpServerId("salesforce"));
   assert.ok(isValidMcpServerId("crm-2"));
