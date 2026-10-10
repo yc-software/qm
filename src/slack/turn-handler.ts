@@ -184,6 +184,7 @@ export function createTurnHandler(deps: {
   const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
+  const botThreadBudget = createBotThreadBudget();
 
   async function botHasStakeInThread(
     client: any,
@@ -851,6 +852,13 @@ export function createTurnHandler(deps: {
   }
 
   async function dispatch(key: string, inc: Incoming, client: any): Promise<void> {
+    if (inc.botAuthored && !botThreadBudget.take(`${inc.channel}:${inc.threadTs ?? inc.ts}`, Date.now())) {
+      console.error(
+        `[slack-plugin] bot reply budget spent: ignoring bot message ch=${inc.channel} thread=${inc.threadTs ?? inc.ts} ts=${inc.ts}`,
+      );
+      inc.ackGate?.persisted();
+      return;
+    }
     const eventTs = Number.parseFloat(inc.ts);
     const gate = inc.ackGate;
     const stamped: Incoming = {
@@ -1007,4 +1015,32 @@ export function createTurnHandler(deps: {
   }
 
   return { handleIncoming, dispatch, handleReactionEvent, botHasStakeInThread };
+}
+
+const BOT_TURNS_PER_THREAD = 8;
+const BOT_TURN_WINDOW_MS = 10 * 60_000;
+
+/**
+ * Two bots that answer each other (or a bot that @-mentions QM on every reply) would loop forever:
+ * each message is a fresh event. Cap the turns bot-authored messages may start in one thread.
+ */
+function createBotThreadBudget(
+  limit = BOT_TURNS_PER_THREAD,
+  windowMs = BOT_TURN_WINDOW_MS,
+): { take(thread: string, now: number): boolean } {
+  const recent = new Map<string, number[]>();
+  return {
+    take(thread, now) {
+      const hits = (recent.get(thread) ?? []).filter((at) => now - at < windowMs);
+      if (hits.length >= limit) {
+        recent.set(thread, hits);
+        return false;
+      }
+      hits.push(now);
+      recent.delete(thread);
+      recent.set(thread, hits);
+      if (recent.size > 1000) recent.delete(recent.keys().next().value!);
+      return true;
+    },
+  };
 }
