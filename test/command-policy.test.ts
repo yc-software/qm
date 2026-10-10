@@ -505,3 +505,31 @@ test("SQL-looking text that is only data still passes (no false positives)", () 
     assert.equal(evaluateCommand(cmd, p).decision, "allow", `false positive on: ${cmd}`);
   }
 });
+
+test("force push variants and find -delete are gated by the org floor", () => {
+  for (const command of [
+    "git push -fu origin main",
+    "git push -fq origin main",
+    "git push -uf origin main",
+    "git push origin +main",
+    "git push origin +HEAD:main",
+    "git -c core.sshCommand=ssh push -f origin main",
+    "git -C repo push --force origin main",
+  ]) {
+    const r = evaluateCommand(command, defaultOrgPolicy());
+    assert.equal(r.decision, "require_approval", command);
+    assert.equal(r.reason, "force push", command);
+  }
+  for (const command of ["find . -name '*.tmp' -delete", "find build -type f -delete -print"]) {
+    const r = evaluateCommand(command, defaultOrgPolicy());
+    assert.equal(r.decision, "require_approval", command);
+  }
+  for (const command of [
+    "git push origin main",
+    "git push -u origin feature/x",
+    "git push origin main:main",
+    "find . -name '*.tmp' -print",
+    "find . -name delete-me",
+  ])
+    assert.equal(evaluateCommand(command, defaultOrgPolicy()).decision, "allow", command);
+});
