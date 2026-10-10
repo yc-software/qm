@@ -537,3 +537,23 @@ test("only public PostHog ingestion tokens may be configured as plaintext", () =
     }
   }
 });
+
+test("check warns that sandbox.env and sandbox.secretEnv do not reach agent computers (#351)", (t) => {
+  const d = deployment(() => undefined, {
+    sandbox: { app: "acme-sandboxes", env: { MY_TOOL_URL: "https://api.example.com" }, secretEnv: ["MY_TOOL_PAT"] },
+  });
+  t.after(() => rmSync(d.dir, { recursive: true, force: true }));
+  const out: string[] = [];
+  const log = console.log;
+  const warnFn = console.warn;
+  const errFn = console.error;
+  console.log = console.warn = console.error = (...a: unknown[]): void => void out.push(a.join(" "));
+  try {
+    runChecks(d.config, d.dir, join(d.dir, "sandbox"));
+  } finally {
+    console.log = log;
+    console.warn = warnFn;
+    console.error = errFn;
+  }
+  assert.match(out.join("\n"), /MY_TOOL_URL, MY_TOOL_PAT\) are not delivered to agent computers/);
+});
