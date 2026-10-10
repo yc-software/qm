@@ -11,7 +11,7 @@ import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
 
-const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
+const toolHandlers = new Map<string, (args: unknown, extra?: unknown) => Promise<unknown>>();
 
 let capturedOptions: Record<string, unknown> = {};
 
@@ -43,7 +43,12 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
         },
       };
     },
-    tool: (name: string, description: string, schema: unknown, handler: (args: unknown) => Promise<unknown>) => {
+    tool: (
+      name: string,
+      description: string,
+      schema: unknown,
+      handler: (args: unknown, extra?: unknown) => Promise<unknown>,
+    ) => {
       toolHandlers.set(name, handler);
       return { name, description, schema, handler };
     },
@@ -704,6 +709,19 @@ for (const surfaceTools of [false, true]) {
     assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
   });
 }
+
+test("Claude records bridged tool calls under the native tool_use id", async () => {
+  currentScript = async function* () {
+    await toolHandlers.get("finish_silently")!({}, { _meta: { "claudecode/toolUseId": "toolu_native" } });
+    yield resultMessage("");
+  };
+  const { turn, entries } = harnessTurn({ pollFire: true });
+  await createClaudeHarness().turns.runTurn(turn);
+  assert.deepEqual(
+    entries.filter((entry) => entry.type === "tool_call").map((entry) => (entry.payload as { callId: string }).callId),
+    ["toolu_native"],
+  );
+});
 
 test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
   const signals = createMemoryRunSignalStore();
