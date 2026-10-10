@@ -159,6 +159,7 @@ type ActiveTurn = {
   pendingSteers: Array<{ prompt: string; inputText: string; intake: SteerIntake }>;
   interrupt?: () => Promise<void>;
   stopped: boolean;
+  terminated: boolean;
 };
 
 type Runtime = {
@@ -538,7 +539,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           });
         }
         if (method === "item/agentMessage/delta" && threadId === state.threadId && typeof p.delta === "string") {
-          if (state.stopped) return;
+          if (state.stopped || state.terminated) return;
           const id = typeof p.itemId === "string" ? p.itemId : "";
           const item = state.publicMessages.get(id) ?? { type: "agentMessage" };
           item.text = (typeof item.text === "string" ? item.text : "") + p.delta;
@@ -549,7 +550,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if ((method === "item/started" || method === "item/completed") && p.item && typeof p.item === "object") {
           const item = p.item as CodexItem;
           if (threadId === state.threadId && item.type === "agentMessage") {
-            if (state.stopped) return;
+            if (state.stopped || state.terminated) return;
             const id = typeof item.id === "string" ? item.id : "";
             state.publicMessages.set(id, {
               ...item,
@@ -644,6 +645,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           const result = await tool.execute(callId, p.arguments ?? {});
           const output = bridgedToolText(result);
           state.responseItems.push({ type: "function_call_output", call_id: callId, output });
+          if (result.terminate) state.terminated = true;
           if (result.terminate || state.turn.cancel?.aborted)
             setImmediate(() => {
               const requestingTurnId = String(p.turnId ?? "");
@@ -1121,6 +1123,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         firstOutputAt: null,
         fallbackInputTokens: countTokens(JSON.stringify({ replay, input })),
         stopped: false,
+        terminated: false,
       };
       if (turn.tape) {
         await turn.tape({
