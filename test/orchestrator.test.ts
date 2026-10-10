@@ -4539,3 +4539,22 @@ for (const [securityPosture, securityScreen] of [
     assert.doesNotMatch(prompts, /NOT security-screened/);
   });
 }
+
+test("a completed turn stays ok when parking its computer fails afterward", async () => {
+  const built = freshApp();
+  const teardown = built.sandbox.teardown.bind(built.sandbox);
+  let parks = 0;
+  built.sandbox.teardown = async (handle, opts) => {
+    await teardown(handle, opts);
+    if (!opts?.destroy) {
+      parks++;
+      throw new Error("provider busy: cannot pause right now");
+    }
+  };
+  const first = await built.app.turn(dm("!run printf parked"));
+  assert.equal(first.status, "ok");
+  assert.match(first.reply ?? "", /parked/);
+  assert.ok(parks >= 1);
+  const second = await built.app.turn(dm("hello again"));
+  assert.equal(second.status, "ok", "the session lease was released despite the park failure");
+});
