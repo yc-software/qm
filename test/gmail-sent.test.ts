@@ -66,3 +66,29 @@ test("sent message details decode MIME text and reject non-sent messages", async
     (error: unknown) => error instanceof GmailReadError && error.status === 404,
   );
 });
+
+test("sent message bodies are decoded with their declared charset", async () => {
+  const body = (data: Buffer, contentType: string) => ({
+    id: "m1",
+    threadId: "t1",
+    labelIds: ["SENT"],
+    payload: {
+      mimeType: "text/plain",
+      headers: [{ name: "Content-Type", value: contentType }],
+      body: { data: data.toString("base64url") },
+    },
+  });
+  const latin1 = await getSentEmail("token", "m1", async () =>
+    Response.json(body(Buffer.from("Café crème", "latin1"), 'text/plain; charset="ISO-8859-1"')),
+  );
+  assert.equal(latin1.body, "Café crème");
+  const sjis = Buffer.from([0x82, 0xb1, 0x82, 0xf1, 0x82, 0xc9, 0x82, 0xbf, 0x82, 0xcd]);
+  const japanese = await getSentEmail("token", "m1", async () =>
+    Response.json(body(sjis, "text/plain; charset=Shift_JIS")),
+  );
+  assert.equal(japanese.body, "こんにちは");
+  const unknown = await getSentEmail("token", "m1", async () =>
+    Response.json(body(Buffer.from("plain"), "text/plain; charset=x-made-up")),
+  );
+  assert.equal(unknown.body, "plain");
+});
