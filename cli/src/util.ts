@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { accessSync, chmodSync, constants, existsSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { CliError, errMessage } from "./log.ts";
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -352,9 +352,32 @@ export function deploymentSecretValue(name: string, fileValue: string | undefine
   return fileValue === undefined || fileValue.trim() === "" ? process.env[name] : fileValue;
 }
 
-export function which(bin: string): boolean {
+export function which(bin: string, env: NodeJS.ProcessEnv = process.env, platform = process.platform): boolean {
+  const windows = platform === "win32";
+  const pathValue = env.PATH ?? env.Path ?? "";
+  const exts = windows
+    ? [
+        "",
+        ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+          .split(";")
+          .filter(Boolean)
+          .flatMap((ext) => [ext, ext.toLowerCase()]),
+      ]
+    : [""];
+  const candidates =
+    isAbsolute(bin) || /[\\/]/.test(bin)
+      ? [resolve(bin)]
+      : pathValue
+          .split(windows ? ";" : ":")
+          .filter(Boolean)
+          .map((dir) => join(dir, bin));
+  return candidates.some((base) => exts.some((ext) => isRunnable(base + ext, windows)));
+}
+
+function isRunnable(file: string, windows: boolean): boolean {
   try {
-    execFileSync("/bin/sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
+    if (!statSync(file).isFile()) return false;
+    if (!windows) accessSync(file, constants.X_OK);
     return true;
   } catch {
     return false;
