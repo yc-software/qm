@@ -661,6 +661,8 @@ test("parseDetectVerdict: a YES whose rationale contains 'no' still replies (anc
   assert.equal(parseDetectVerdict("YES — no question mark, but it's feedback aimed at you", true).respond, true);
   assert.equal(parseDetectVerdict("Verdict: YES (no mention needed)", false).respond, true);
   assert.equal(parseDetectVerdict("**YES** — follow-up to your work", false).respond, true);
+  assert.equal(parseDetectVerdict("YESThe newest message continues the thread", false).respond, true); // #2066
+  assert.equal(parseDetectVerdict("Yesterday it broke", false).respond, false);
 });
 
 test("parseDetectVerdict: NO verdicts stay silent even when the rationale contains 'yes'", () => {

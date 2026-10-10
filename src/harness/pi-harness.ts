@@ -278,7 +278,7 @@ export function parseDetectVerdict(out: string, reactionsEnabled: boolean): Harn
       ? { respond: false, reactions, reason: out.slice(0, 120) }
       : { respond: false, reason: out.slice(0, 120) };
   }
-  return { respond: /^yes\b/i.test(verdict), reason: out.slice(0, 120) };
+  return { respond: /^(?:yes|Yes|YES)(?![a-z])/.test(verdict), reason: out.slice(0, 120) };
 }
 
 function parseEmojiTokens(line: string): string[] {
