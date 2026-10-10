@@ -505,3 +505,73 @@ test("SQL-looking text that is only data still passes (no false positives)", () 
     assert.equal(evaluateCommand(cmd, p).decision, "allow", `false positive on: ${cmd}`);
   }
 });
+
+test("org floor flags only count inside the same rm / git push command", () => {
+  const p = defaultOrgPolicy();
+  const allowed = [
+    "rm -f a.txt && ls -lrt",
+    "rm x.log; grep -r foo .",
+    "rm -f build/app-react.js",
+    "rm tmp.txt && npm run build -- --report",
+    "rm a && cp -r b c",
+    "rm -f out.bin | tee -r",
+    "git push origin main && git log --oneline -f",
+    "git push origin main; tail -f log.txt",
+    "git push origin feature/fix-flaky",
+  ];
+  for (const c of allowed) assert.equal(evaluateCommand(c, p).decision, "allow", c);
+  const gated = [
+    "rm 'a;b' -rf",
+    'rm "my dir" -r',
+    "rm -v build -R",
+    "rm a\\;b -rf",
+    "git push x\\& -f",
+    "rm {-rf,} build",
+    "rm${IFS}-rf build",
+    "rm $IFS-rf build",
+    "rm build,-rf",
+    "rm *-rf* build",
+    "git push origin ?-f",
+    "git push origin {-f,}",
+    "git push${IFS}-f origin main",
+    "git${IFS}push -f origin main",
+    "rm build 2>&1 -rf",
+    "rm build &>/dev/null -rf",
+    "rm build >&2 -rf",
+    "rm build 1>&2 --recursive",
+    "git push origin main 2>&1 -f",
+    "git push origin main &>/dev/null --force",
+    "rm --r x",
+    "rm --re x",
+    "rm --recur x",
+    "rm --recursiv x",
+    "rm x --recursive",
+    "git push --f origin main",
+    "git push --forc origin main",
+    "git push origin main --force-with-lease",
+    "git push --force-with-lease=main origin",
+    "rm build <&0 -rf",
+    "rm build 0<&- -rf",
+    "rm ${x:-a;b} -rf",
+    "git push origin ${a:-;} --force",
+    "rm build\t-rf",
+    "rm build ~/x -rf",
+    "rm build >|out -rf",
+    "rm $(echo;) build -rf",
+    "rm `true;` build -rf",
+    "rm <(x;) -rf",
+    "git push origin $(echo;) -f",
+    "git push origin main >|log -f",
+    "echo hi; rm -rf build",
+    "git push origin main --force",
+    "git push 'origin' -f",
+    "true && git push -uf origin x",
+  ];
+  for (const c of gated) assert.equal(evaluateCommand(c, p).decision, "require_approval", c);
+});
+
+test("every org floor rule compiles under the safe-regex limits, so none is silently skipped", async () => {
+  const { compileSafeRegex } = await import("../src/util/safe-regex.ts");
+  for (const rule of defaultOrgPolicy().rules)
+    assert.doesNotThrow(() => compileSafeRegex(rule.pattern, "i"), rule.reason);
+});
