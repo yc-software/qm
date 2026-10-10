@@ -210,6 +210,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       }
       endpoint = await deps.provider.apply(d, materialized);
     }
+    if (!endpoint?.host) throw new Error(`deploy provider returned no endpoint for deployment ${id}`);
     if (alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, alwaysOn);
     if (endpoint.image && endpoint.image !== version.image) {
       await deps.deployStore.setVersionImage(id, version.version, endpoint.image);
@@ -222,6 +223,21 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     await deps.deployStore.setStatus(id, "running");
     await deps.deployStore.setAppliedVersion(id, version);
   };
+
+  const recoverMissingEndpoint = async (d: Deployment): Promise<DeployEndpoint> =>
+    withDeployLock(d.id, async () => {
+      const cur = (await deps.deployStore.get(d.id)) ?? d;
+      if (cur.endpoint != null) return cur.endpoint;
+      const version = currentVersionOf(cur);
+      if (!version) throw new Error(`deployment ${cur.id} is running without an endpoint or a current version`);
+      console.error(
+        "%s",
+        `[deploy] ${cur.name ?? cur.id} was running without an endpoint; re-applying v${version.version}`,
+      );
+      const fresh = await applyVersion(cur.id, version, cur.appliedVersion ?? cur.currentVersion);
+      await markVersionRunning(cur.id, version.version, fresh);
+      return fresh;
+    });
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
     if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
@@ -543,9 +559,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      if (!d || d.status !== "running" || d.endpoint == null) return { status: "not_found" };
+      if (!d || d.status !== "running") return { status: "not_found" };
       if (!opts.bypassAcl && !(await reachAllowed(d, principalId))) return { status: "denied" };
-      const endpoint = await liveEndpoint(d);
+      const endpoint = d.endpoint == null ? await recoverMissingEndpoint(d) : await liveEndpoint(d);
       await deps.deployStore.touch(d.id, Date.now()).catch((e) => swallow("deploy reach touch", e));
       return { status: "ok", id: d.id, endpoint };
     },

@@ -326,3 +326,58 @@ test("reachDeployment: admin bypass reaches running deployments without owner sc
   assert.equal((await app.reachDeployment(personal.id, "U2")).status, "denied");
   assert.equal((await app.reachDeployment(personal.id, "", { bypassAcl: true })).status, "ok");
 });
+
+test("reachDeployment re-applies a running deployment that lost its endpoint instead of 404ing forever (#375)", async () => {
+  const deployStore = createDeployStore();
+  let applies = 0;
+  const deploy = createDeployService({
+    deployStore,
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => {
+        applies++;
+        return { host: "127.0.0.1", port: 19999 };
+      },
+      destroy: async () => {},
+    },
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    acl: createAclStore(),
+    deployDir: mkdtempSync(join(tmpdir(), "reach-")),
+  });
+  const d = await deploy.deploy({
+    ownerScopeId: scopeId("org", "default-org"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+  });
+  await deployStore.setEndpoint(d.id, null);
+  const error = console.error;
+  console.error = () => {};
+  try {
+    const reach = await deploy.reachDeployment(d.id, "U1");
+    assert.equal(reach.status, "ok");
+  } finally {
+    console.error = error;
+  }
+  assert.equal(applies, 2);
+  assert.equal((await deployStore.get(d.id))?.endpoint?.host, "127.0.0.1");
+});
+
+test("a provider that returns no endpoint fails the deploy instead of marking it running (#375)", async () => {
+  const deployStore = createDeployStore();
+  const deploy = createDeployService({
+    deployStore,
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => undefined as never,
+      destroy: async () => {},
+    },
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    acl: createAclStore(),
+    deployDir: mkdtempSync(join(tmpdir(), "reach-")),
+  });
+  await assert.rejects(
+    deploy.deploy({ ownerScopeId: scopeId("org", "default-org"), createdBy: "U1", entrypoint: "x", files: [] }),
+    /returned no endpoint/,
+  );
+});
