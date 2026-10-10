@@ -303,6 +303,17 @@ export async function forkSession(
   });
 }
 
+export async function editSubmittedMessage(
+  id: string,
+  seq: number,
+  text: string,
+): Promise<{ session: CoreSession; entries: SessionEntry[] }> {
+  return api<{ session: CoreSession; entries: SessionEntry[] }>(
+    `/api/sessions/${encodeURIComponent(id)}/messages/${seq}/edit`,
+    { method: "POST", body: JSON.stringify({ text }) },
+  );
+}
+
 export function forkCutSeq(
   entries: SessionEntry[],
   messages: readonly unknown[],
@@ -418,6 +429,7 @@ export interface SessionEntry {
   seq?: number;
   parentSeq?: number | null;
   truncated?: boolean;
+  editable?: boolean;
 }
 
 export interface ToolActivity {
@@ -1745,6 +1757,7 @@ interface HistoryUserMessage {
   edited?: boolean;
   deleted?: boolean;
   subagentMail?: SubagentMailRef;
+  editable?: boolean;
 }
 
 export interface SubagentMailRef {
@@ -1877,7 +1890,7 @@ function userEntryText(payload: unknown): string | null {
 }
 
 export function userEntryMessage(
-  entry: Pick<SessionEntry, "payload" | "seq" | "createdAt">,
+  entry: Pick<SessionEntry, "payload" | "seq" | "createdAt" | "editable">,
 ): HistoryUserMessage | null {
   const payload = entry.payload as {
     text?: string;
@@ -1897,6 +1910,7 @@ export function userEntryMessage(
     role: "user",
     ...(typeof payload?.runId === "string" ? { runId: payload.runId } : {}),
     ...(entry.seq !== undefined ? { entrySeq: entry.seq } : {}),
+    ...(entry.editable ? { editable: true } : {}),
     content: text,
     timestamp: entry.createdAt,
     ...(mail ? { subagentMail: mail } : {}),

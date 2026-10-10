@@ -112,6 +112,27 @@ test("debounced: an autonomous turn is skipped and never joins the live actor's 
   assert.deepEqual(calls, ["User said:\nhi\n\nAssistant replied:\nhello"], "one flush, the live turn only");
 });
 
+test("debounced capture rechecks governance before a queued flush writes", async () => {
+  let allowed = true;
+  const { memory } = freshMemory();
+  const strategy = createPerTurnStrategy({
+    harness: { oneShot: () => Promise.resolve("- Revoked fact") },
+    memory,
+    captureQuietMs: 30,
+    captureAllowed: async () => allowed,
+  });
+  await strategy.onTurnEnd!({
+    scopeId: SCOPE,
+    conversationScopeId: "channel:private",
+    input: "remember this",
+    reply: "okay",
+    actorId: "U1",
+  });
+  allowed = false;
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(await memory.read(SCOPE), "");
+});
+
 test("automatic capture carries the full turn and delivery context", async () => {
   const captures: Array<Parameters<ReturnType<typeof freshMemory>["memory"]["capture"]>> = [];
   const { memory } = freshMemory();

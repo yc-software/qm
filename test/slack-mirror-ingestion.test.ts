@@ -42,6 +42,7 @@ function fixture(
         ["C1", []],
         ["D1", []],
       ]),
+    channelIdentityResolved: async () => true,
     classifyUserCached: async (_client: unknown, id: string) => ({
       ok: true,
       actor: { externalId: id, displayName: "Teammate" },
@@ -156,6 +157,54 @@ test("hidden messages never enter context or dispatch", async () => {
   assert.deepEqual(f.events, []);
   assert.deepEqual(f.dispatches, []);
   assert.deepEqual(f.inbox, []);
+});
+
+test("external participants allow known guests but never unresolved ambient identity", async () => {
+  const actorById: Record<string, any> = {
+    U1: { externalId: "U1" },
+    UX: { externalId: "UX", isExternalGuest: true },
+    UU: { externalId: "UU", identityFailure: "unresolved_principal" },
+  };
+  const directory = {
+    getChannelInfo: async () => ({ id: "C1" }),
+    allInternalRosters: async () => new Map(),
+    channelIdentityResolved: async (_client: unknown, channel: string) => channel !== "CU",
+    classifyUserCached: async (_client: unknown, id: string) => ({ ok: true, actor: actorById[id] }),
+  };
+  const f = fixture({ external: true, directory });
+  await f.mirror.mirrorMessageEvent({ channel: "C1", channel_type: "channel", user: "UX", ts: "1", text: "guest" }, {});
+  await f.mirror.mirrorMessageEvent(
+    { channel: "C1", channel_type: "channel", user: "UU", ts: "2", text: "unresolved sender" },
+    {},
+  );
+  await f.mirror.mirrorMessageEvent(
+    { channel: "CU", channel_type: "channel", user: "U1", ts: "3", text: "unresolved roster" },
+    {},
+  );
+  assert.deepEqual(
+    f.events.map((event) => event.text),
+    ["guest"],
+  );
+});
+
+test("external participants never bypass a failed ambient sender lookup", async () => {
+  const f = fixture({
+    external: true,
+    directory: {
+      getChannelInfo: async () => ({ id: "C1" }),
+      allInternalRosters: async () => new Map(),
+      channelIdentityResolved: async () => true,
+      classifyUserCached: async () => ({
+        ok: false,
+        actor: { externalId: "UF", identityFailure: "directory_lookup_failed" },
+      }),
+    },
+  });
+  await f.mirror.mirrorMessageEvent(
+    { channel: "C1", channel_type: "channel", user: "UF", ts: "1", text: "lookup failed" },
+    {},
+  );
+  assert.deepEqual(f.events, []);
 });
 
 test("a system-message edit arriving first is already handled", async () => {

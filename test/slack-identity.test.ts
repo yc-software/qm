@@ -60,10 +60,11 @@ test("classifyUser email mode keys members on their normalized work email", () =
   assert.equal(a.isExternalGuest, false);
 });
 
-test("classifyUser email mode fails closed to guest when a member has no visible email", () => {
+test("classifyUser email mode distinguishes an unresolved own-team principal from a guest", () => {
   const a = classifyUser({ id: "U1", team_id: TEAM }, TEAM, "email");
   assert.equal(a.externalId, "U1");
-  assert.equal(a.isExternalGuest, true);
+  assert.equal(a.isExternalGuest, false);
+  assert.equal(a.identityFailure, "unresolved_principal");
 });
 
 test("classifyUser email mode keeps bots on their Slack id and non-guest", () => {

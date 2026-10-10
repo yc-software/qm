@@ -20,6 +20,7 @@ test("Lit mounts Governance without wrappers or duplicate ids", () => {
       "security-posture",
       "auto-flagger",
       "sharing-posture",
+      "memory-policy",
       "command-policy",
       "egress",
       "ambient-policy",
@@ -31,6 +32,42 @@ test("Lit mounts Governance without wrappers or duplicate ids", () => {
     }
     const ids = [...dom.window.document.querySelectorAll("[id]")].map((node) => node.id);
     assert.equal(new Set(ids).size, ids.length);
+  } finally {
+    dom.window.close();
+  }
+});
+test("memory policy edits capture and recall independently", () => {
+  const dom = setup();
+  try {
+    dom.window.eval(
+      'governanceUI.load({memoryPolicy:{capture:"writable",recall:"visible"},memoryPolicyOverride:null},"channel:private")',
+    );
+    assert.ok(dom.window.document.querySelector("#memory-policy-inherit"));
+    assert.match(dom.window.document.getElementById("card-memory-policy")!.textContent!, /Following parent/);
+    const recall = dom.window.document.getElementById("memory-recall") as HTMLSelectElement;
+    recall.value = "off";
+    recall.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    assert.deepEqual(dom.window.eval('governanceUI.collect("memory-policy")'), {
+      capture: "writable",
+      recall: "off",
+    });
+  } finally {
+    dom.window.close();
+  }
+});
+test("memory policy appears only for canonical conversation and organization scopes", () => {
+  const dom = setup();
+  try {
+    for (const scope of ["personal:U1", "channel:C1", "group:G1", "org:O1"]) {
+      dom.window.eval(`governanceUI.load({memoryPolicy:{capture:"off",recall:"writable"}},${JSON.stringify(scope)})`);
+      assert.equal(dom.window.document.getElementById("card-memory-policy")!.classList.contains("hidden"), false);
+      assert.match(
+        dom.window.document.getElementById("card-memory-policy")!.textContent!,
+        /capture off; recall\s+writable/i,
+      );
+    }
+    dom.window.eval('governanceUI.load({memoryPolicy:{capture:"off",recall:"off"}},"team:T1")');
+    assert.equal(dom.window.document.getElementById("card-memory-policy")!.classList.contains("hidden"), true);
   } finally {
     dom.window.close();
   }

@@ -83,6 +83,7 @@ import {
   signalLiveRun,
   attachPendingApprovals,
   entriesToMessages,
+  editSubmittedMessage,
   fetchEntry,
   fetchTranscript,
   fetchSessionApprovals,
@@ -229,6 +230,7 @@ interface SettledRowKey {
   speakerLabel: string | undefined;
   edited: boolean;
   deleted: boolean;
+  submittedEditState: string;
   tpl: TemplateResult | typeof nothing;
 }
 const settledRowCache = new WeakMap<object, SettledRowKey>();
@@ -399,6 +401,14 @@ export function createChatSurface(
   let ctaText = CHAT_CTAS[0]!;
   let workTicker: ReturnType<typeof setInterval> | null = null;
   let liveWorkExpanded = false;
+  let submittedEdit: {
+    sessionId: string;
+    threadRef: string;
+    seq: number;
+    original: string;
+    text: string;
+    saving: boolean;
+  } | null = null;
 
   function notePendingSessionOnSend(): void {
     if (!chatState.threadRef || chatState.sessionId !== null) return;
@@ -415,6 +425,7 @@ export function createChatSurface(
 
   function teardownActiveChat(): void {
     transcriptViewport.dispose();
+    submittedEdit = null;
     transcriptRefreshGeneration++;
     readOnlyView = null;
     readonlyApprove = null;
@@ -1709,6 +1720,11 @@ export function createChatSurface(
     const speakerLabel = speakerLabelFor(message);
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
+    const entrySeq = messageEntrySeqs(message)[0];
+    let submittedEditState = "";
+    if (submittedEdit?.sessionId === chatState.sessionId && submittedEdit.seq === entrySeq) {
+      submittedEditState = submittedEdit.saving ? "saving" : "editing";
+    }
     const day = new Date().toDateString();
     const hit = settledRowCache.get(message as object);
     if (
@@ -1727,7 +1743,8 @@ export function createChatSurface(
       hit.forking === forking &&
       hit.speakerLabel === speakerLabel &&
       hit.edited === edited &&
-      hit.deleted === deleted
+      hit.deleted === deleted &&
+      hit.submittedEditState === submittedEditState
     ) {
       return hit.tpl;
     }
@@ -1748,6 +1765,7 @@ export function createChatSurface(
       speakerLabel,
       edited,
       deleted,
+      submittedEditState,
       tpl,
     });
     return tpl;
@@ -1801,6 +1819,11 @@ export function createChatSurface(
             : nothing,
           meta: messageMeta(message, index),
         });
+      const entrySeq = messageEntrySeqs(message)[0];
+      const activeEdit =
+        submittedEdit && submittedEdit.sessionId === chatState.sessionId && submittedEdit.seq === entrySeq
+          ? submittedEdit
+          : null;
       return html`
         <article
           class="message-row user-row ${steered ? "steered-row" : ""}"
@@ -1809,18 +1832,22 @@ export function createChatSurface(
         >
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
           ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
-          <div
-            class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
-            ?hidden=${!messageText(message).trim() && !edited && !deleted}
-          >
-            <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
-              ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
-            </div>
-            <button class="pin-toggle" type="button" hidden aria-expanded="false">
-              <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
-            </button>
-          </div>
+          ${
+            activeEdit
+              ? submittedEditForm(activeEdit)
+              : html`<div
+                  class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
+                  ?hidden=${!messageText(message).trim() && !edited && !deleted}
+                >
+                  <div class="pin-content">
+                    ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
+                    ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
+                  </div>
+                  <button class="pin-toggle" type="button" hidden aria-expanded="false">
+                    <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
+                  </button>
+                </div>`
+          }
           ${
             sendFailure
               ? html`<div class="send-failure">
@@ -1831,7 +1858,7 @@ export function createChatSurface(
                 </div>`
               : nothing
           }
-          ${messageMeta(message, index)}
+          ${messageMeta(message, index, Boolean((message as { editable?: boolean }).editable))}
         </article>
       `;
     }
@@ -1948,7 +1975,7 @@ export function createChatSurface(
     return role === "user" || role === "user-with-attachments" ? slackWireToPlain(raw) : stripSlackDirectives(raw);
   }
 
-  function messageMeta(message: AgentMessage, index: number): TemplateResult | typeof nothing {
+  function messageMeta(message: AgentMessage, index: number, editable = false): TemplateResult | typeof nothing {
     const text = copyableText(message).trim();
     const ts = (message as { timestamp?: number }).timestamp;
     if (!text && ts === undefined) return nothing;
@@ -1983,6 +2010,20 @@ export function createChatSurface(
             : nothing
         }
         ${
+          editable && chatState.sessionId && messageEntrySeqs(message).length && !isReadOnlySlackView()
+            ? html`<button
+                class="msg-copy msg-edit"
+                type="button"
+                ${tip("Edit and rerun in a fork")}
+                aria-label="Edit message and rerun in a fork"
+                ?disabled=${Boolean(submittedEdit?.saving)}
+                @click=${() => beginSubmittedEdit(message)}
+              >
+                ${icon(Pencil, 13)}
+              </button>`
+            : nothing
+        }
+        ${
           forkable
             ? html`<button
                 class="msg-copy msg-fork"
@@ -1999,6 +2040,97 @@ export function createChatSurface(
         }
       </div>
     `;
+  }
+
+  function beginSubmittedEdit(message: AgentMessage): void {
+    const sessionId = chatState.sessionId;
+    const threadRef = chatState.threadRef;
+    const seq = messageEntrySeqs(message)[0];
+    if (!sessionId || !threadRef || seq === undefined || submittedEdit?.saving) return;
+    const original = copyableText(message);
+    submittedEdit = { sessionId, threadRef, seq, original, text: original, saving: false };
+    drawActiveChat();
+    requestAnimationFrame(() => {
+      const input = chatState.host?.querySelector<HTMLTextAreaElement>(`.submitted-edit-input[data-seq="${seq}"]`);
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
+
+  function cancelSubmittedEdit(): void {
+    if (submittedEdit?.saving) return;
+    submittedEdit = null;
+    drawActiveChat();
+  }
+
+  function submittedEditForm(edit: NonNullable<typeof submittedEdit>): TemplateResult {
+    return html`<div class="submitted-edit queued-chip queued-editing">
+      <textarea
+        class="queued-edit-input submitted-edit-input"
+        data-seq=${edit.seq}
+        aria-label="Edit submitted message"
+        rows="5"
+        .value=${edit.text}
+        ?disabled=${edit.saving}
+        @input=${(event: Event) => {
+          if (submittedEdit === edit) edit.text = (event.target as HTMLTextAreaElement).value;
+        }}
+        @keydown=${(event: KeyboardEvent) => {
+          if (event.isComposing || edit.saving) return;
+          if (event.key === "Escape") {
+            event.preventDefault();
+            cancelSubmittedEdit();
+          } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            void saveSubmittedEdit(edit);
+          }
+        }}
+      ></textarea>
+      <span class="submitted-edit-note">Creates a new conversation from before this message.</span>
+      <button type="button" class="queued-steer" ?disabled=${edit.saving} @click=${() => void saveSubmittedEdit(edit)}>
+        ${edit.saving ? "Saving…" : "Save and rerun"}
+      </button>
+      <button type="button" class="queued-steer" ?disabled=${edit.saving} @click=${cancelSubmittedEdit}>Cancel</button>
+    </div>`;
+  }
+
+  async function saveSubmittedEdit(edit: NonNullable<typeof submittedEdit>): Promise<void> {
+    if (submittedEdit !== edit || edit.saving) return;
+    const text = edit.text.trim();
+    if (!text || text === edit.original.trim()) return;
+    edit.saving = true;
+    drawActiveChat();
+    try {
+      const forked = await editSubmittedMessage(edit.sessionId, edit.seq, text);
+      if (submittedEdit !== edit || chatState.sessionId !== edit.sessionId || chatState.threadRef !== edit.threadRef)
+        return;
+      const split = inheritedTranscript(forked.session, forked.entries ?? []);
+      submittedEdit = null;
+      ctx.composer.carryModelPick(edit.threadRef, forked.session.threadRef);
+      mountContinuable(
+        forked.session.threadRef,
+        forked.session.id,
+        forked.session.scopeId,
+        entriesToMessages(split.current, transcriptModel()),
+        forked.session.channelName ?? null,
+        forked.session,
+        entriesToMessages(split.inherited, transcriptModel()),
+      );
+      const mountedAgent = chatState.agent;
+      if (mountedAgent) await refreshTranscriptFromEntries(mountedAgent);
+      await refreshSessions({ silent: true });
+      renderList();
+      resumeIfIdle();
+    } catch (err) {
+      if (submittedEdit === edit && chatState.sessionId === edit.sessionId) {
+        ctx.composer.state.error = errMessage(err, "Could not edit and rerun the message.");
+      }
+    } finally {
+      if (submittedEdit === edit) {
+        edit.saving = false;
+        if (chatState.sessionId === edit.sessionId) drawActiveChat();
+      }
+    }
   }
 
   async function forkFromMessage(index: number): Promise<void> {
