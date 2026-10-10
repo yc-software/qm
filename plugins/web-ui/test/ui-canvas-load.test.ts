@@ -12,7 +12,7 @@ test("redraws during an in-flight canvas fetch do not restart it", async () => {
     await new Promise<void>((resolve) => (release = resolve));
     return new Response(JSON.stringify({ canvas: null }), { status: 200 });
   }) as typeof fetch;
-  appState.me = { email: "a@example.com" } as typeof appState.me;
+  appState.me = { email: "a@example.com" } as unknown as typeof appState.me;
   let redraws = 0;
   const owner = { chat: { state: { sessionId: "s-livelock" }, redraw: () => redraws++ } } as unknown as Parameters<
     typeof uiCanvasPanel
