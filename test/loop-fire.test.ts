@@ -983,49 +983,59 @@ test("a failed followup rejects so the composer can retain uploaded attachments"
   assert.equal((await s.items.get(item.id))?.thread?.at(-1)?.role, "system");
 });
 
-test("triage groups a flood read-only so only the representative is worked, with the rest as evidence", async () => {
-  const s = service((req) => {
-    const text = req.text ?? "";
-    if (text.startsWith("[Loop triage]")) {
-      const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
-      return `\`\`\`json\n${JSON.stringify({
-        items: ids.map((id, index) => ({
-          id,
-          priority: index === 0 ? "urgent" : "low",
-          reason: "checkout is down",
-          ...(index > 0 ? { groupWith: ids[0] } : {}),
-        })),
-      })}\n\`\`\``;
-    }
-    if (stage(req) === "intake")
-      return '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-2", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-3", "sourceSummary": "TypeError"}]\n```';
-    return HAPPY(req);
+for (const clockStep of [0, 1]) {
+  test(`triage groups a flood read-only with ${clockStep}ms clock steps`, async (t) => {
+    let now = 1_700_000_000_000;
+    t.mock.method(Date, "now", () => (now += clockStep));
+    const s = service((req) => {
+      const text = req.text ?? "";
+      if (text.startsWith("[Loop triage]")) {
+        const data = text.match(/```untrusted-data\n([\s\S]*?)\n```/);
+        assert.ok(data);
+        const entries = JSON.parse(data[1]!) as Array<{ id: string; sourceKey: string }>;
+        const ids = entries.sort((a, b) => a.sourceKey.localeCompare(b.sourceKey)).map((item) => item.id);
+        return `\`\`\`json\n${JSON.stringify({
+          items: ids.map((id, index) => ({
+            id,
+            priority: index === 0 ? "urgent" : "low",
+            reason: "checkout is down",
+            ...(index > 0 ? { groupWith: ids[0] } : {}),
+          })),
+        })}\n\`\`\``;
+      }
+      if (stage(req) === "intake")
+        return '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-2", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-3", "sourceSummary": "TypeError"}]\n```';
+      return HAPPY(req);
+    });
+    const loop = await makeLoop(s.loops);
+    await s.loops.update(loop.id, {
+      triage: {
+        prioritize: { enabled: true, instructions: "production incidents first" },
+        consolidate: { enabled: true },
+      },
+    });
+    await s.fire.fire(loop.id, "f1");
+    const triageTurn = s.turns.find((turn) => turn.text?.startsWith("[Loop triage]"));
+    assert.equal(triageTurn?.readOnly, true);
+    assert.match(triageTurn?.text ?? "", /production incidents first/);
+    const workTurns = s.turns.filter((turn) => stage(turn) === "work");
+    assert.equal(workTurns.length, 1);
+    assert.match(workTurns[0]!.text ?? "", /similarItems/);
+    const items = await s.items.byLoop(loop.id);
+    const representative = items.find((item) => item.status === "ready")!;
+    assert.equal(representative.sourceKey, "SENTRY-1");
+    assert.equal(representative.triage?.priority, "urgent");
+    assert.deepEqual(
+      items
+        .filter((item) => item.id !== representative.id)
+        .map((item) => [item.status, item.triage?.groupId, item.triage?.priority]),
+      [
+        ["queued", representative.id, "low"],
+        ["queued", representative.id, "low"],
+      ],
+    );
   });
-  const loop = await makeLoop(s.loops);
-  await s.loops.update(loop.id, {
-    triage: {
-      prioritize: { enabled: true, instructions: "production incidents first" },
-      consolidate: { enabled: true },
-    },
-  });
-  await s.fire.fire(loop.id, "f1");
-  const triageTurn = s.turns.find((turn) => turn.text?.startsWith("[Loop triage]"));
-  assert.equal(triageTurn?.readOnly, true);
-  assert.match(triageTurn?.text ?? "", /production incidents first/);
-  const workTurns = s.turns.filter((turn) => stage(turn) === "work");
-  assert.equal(workTurns.length, 1);
-  assert.match(workTurns[0]!.text ?? "", /similarItems/);
-  const items = await s.items.byLoop(loop.id);
-  const representative = items.find((item) => item.status === "ready")!;
-  assert.equal(representative.triage?.priority, "urgent");
-  assert.deepEqual(
-    items.filter((item) => item.id !== representative.id).map((item) => [item.status, item.triage?.groupId]),
-    [
-      ["queued", representative.id],
-      ["queued", representative.id],
-    ],
-  );
-});
+}
 
 test("triage does not run for a loop whose owner lacks the loop_triage flag", async () => {
   const s = service(HAPPY, { triageEnabledFor: async () => false });

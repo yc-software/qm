@@ -4,41 +4,41 @@ This repository defines one QM deployment. The `@yc-software/qm` dependency supp
 the deployment engine; this repository owns the organization-specific config,
 sandbox layer, provider coordinates, and generated Slack manifests.
 
-The automated release gate is `qm check --live`, including its private live
-session canary. The task is complete only after that gate passes, the
+For Fly and AWS, the automated release gate is `qm check --live`, including its
+private live session canary. Local Docker uses the checks in `references/docker.md`.
+The task is complete only after the selected target's checks pass, the
 administrator can sign in and receive a real web response, and, when Slack is
 requested, the bot replies in a test channel.
 
 ## 1. Collect choices and authorization
 
-Before cloud mutation, read `qm.config.jsonc` when it exists. Its `target` is
+Before deployment changes, read `qm.config.jsonc` when it exists. Its `target` is
 the selected provider; confirm it with the operator and do not offer to change
 it in place. If the repository has not been initialized, collect:
 
-- hosting target: a cloud provider — Fly.io, AWS, or Porter. Recommend Fly.io
-  when the operator has no preference. Porter deploys onto a Kubernetes
-  cluster in the operator's own cloud account and has no `qm` CLI target:
-  choosing it switches this workflow to `references/porter.md`, which drives
-  the Porter CLI and dashboard directly. The docker target runs everything on
-  the local machine, is for a quick local test drive only, and is outside this
-  workflow; never present it as the recommended path for a real deployment;
+- hosting target: local Docker, Fly.io, AWS, or Porter. Offer local Docker
+  alongside the cloud options, not as a separate or excluded workflow. Ask
+  whether the operator wants to run on their own machine or in the cloud;
+  recommend Fly.io only when they want cloud hosting and have no preference.
+  Porter deploys onto a Kubernetes cluster in the operator's own cloud account
+  and has no `qm` CLI target: follow `references/porter.md` instead;
 - the first administrator's verified work email;
-- how people sign in: the built-in `auth` broker, which emails a one-time link,
-  or an external OIDC provider. Ask whether the company runs on Slack before
-  assuming the broker — Slack sign-in needs no email transport, no sending
-  domain, and no DNS, and domain verification is the step most likely to stall
-  a deploy. Recommend Slack sign-in to a Slack workspace and the broker
-  otherwise;
-- model provider: Anthropic, OpenAI, or OpenRouter (one key that routes to
-  many models). This is a deployment choice, not a post-deploy one: it becomes
-  `modelProvider` in `qm.config.jsonc`, which makes that provider's API key a
-  required secret. Collect the key in the same pass as the other credentials —
-  a deployment that cannot answer one message is not finished. An operator who
-  genuinely wants to defer omits `modelProvider` and adds the key from the
-  Admin page later, but do not offer that as the default;
+- how people sign in: the built-in `auth` broker supports email and password
+  for getting started without email delivery, or one-time email links; an
+  external OIDC provider is another option. Ask whether the company runs on
+  Slack, which needs no email transport or DNS. Read
+  `.codex/skills/deploy-qm/references/sign-in.md` before collecting credentials;
+- model access: an existing LiteLLM-style router endpoint, or a direct
+  Anthropic, OpenAI, or OpenRouter key. Ask about an existing router before
+  requesting a new provider account. Direct keys use `modelProvider` in
+  `qm.config.jsonc`; routers follow
+  `.codex/skills/deploy-qm/references/model-gateway.md`. Collect the chosen
+  endpoint and credentials in the same pass — a deployment that cannot
+  answer one message is not finished;
 - model;
-- region and provider account or organization;
-- whether the provider hostname is acceptable;
+- for cloud hosting, region and provider account or organization; for local
+  Docker, the host machine and available ports;
+- whether localhost or the provider hostname is acceptable;
 - connectors to enable, including whether to add Slack now.
 
 The deployment slug is a local name for this deployment — it appears in the
@@ -49,8 +49,10 @@ the default `appPrefix`, and app names like `<prefix>-core` must be free on
 fly.dev; on a collision set a distinctive `appPrefix` rather than renaming
 the organization.
 
-Explain the selected provider's billable resources and confirm the provider
-identity, region, resource list, and expected billing.
+For cloud hosting, explain the billable resources and confirm provider identity,
+region, resource list, and expected billing. For local Docker, confirm the Docker
+context, host resources, port exposure, and permission to run containers. No
+cloud account is required; model usage can still incur charges.
 
 Changing providers means initializing a new empty deployment directory. Never
 rewrite only `target`; provider config, files, secret rules, and teardown
@@ -65,7 +67,7 @@ and the derived slug, then initialize its root with the current CLI:
 
 ```bash
 npm exec --yes --package=@yc-software/qm@latest -- \
-  qm init . --org <slug> --target <fly-or-aws> --model-provider <provider>
+  qm init . --org <slug> --target <docker-or-fly-or-aws> --model-provider <provider>
 npm install
 ```
 
@@ -76,6 +78,8 @@ that bootstraps it.
 `--model-provider` takes `anthropic`, `openai`, or `openrouter` and defaults to
 `anthropic`. It writes `modelProvider` into the scaffolded config, which is what
 promotes that provider's key from an optional fallback to a required secret.
+For a router, there is no `--model-provider litellm` value: remove the scaffold's
+`modelProvider` before `qm setup` and apply the gateway reference instead.
 
 For an already-initialized clone, install reproducibly. Use `npm ci` when
 `package-lock.json` exists; otherwise use `npm install` to create it:
@@ -93,20 +97,22 @@ git check-ignore --quiet .env
 ```
 
 Never print, paste into chat, or commit `.env`. Never initialize over an
-existing deployment config.
+existing deployment config. For local Docker, read
+`.codex/skills/deploy-qm/references/docker.md` now and apply its service, public
+origin, and local agent-computer settings before configuring sign-in or secrets.
 
 ## 3. Configure the administrator, sign-in, and the base model
 
 Set the exact lowercased administrator email in `.env` as
 `ADMIN_GRANTS=<email>:org_admin`.
 
-Follow the sign-in route chosen in step 1. Only the `auth` broker needs an email
-transport; skip to "Slack sign-in" below when the operator picked Slack, and
-skip `references/email.md` entirely with it.
+Follow the sign-in route chosen in step 1. Only email-link sign-in needs an
+email transport. Password setup is in `references/sign-in.md`; skip email
+configuration for that route or an external OIDC provider.
 
 ### The built-in broker
 
-The `auth` broker emails a one-time link. There is no identity provider to
+The `auth` broker supports password sign-in and one-time email links. There is no identity provider to
 register: the CLI generates the broker's signing key and the portal's client
 credentials and derives every `OIDC_*` value from `publicUrl`. Setting any of
 them by hand is refused.
@@ -117,7 +123,7 @@ It needs the deployment's local signing secret and creates no account or role
 grant. Keep the link private. `qm setup` asks whether to configure email now;
 skip that step for an initial administrator-only deployment.
 
-For ordinary user sign-in, the operator supplies a way to send emails. Do not ask them to
+For email-link sign-in, the operator supplies a way to send emails. Do not ask them to
 pick a transport by name; ask what they already use for email. An existing
 mail account or relay (Google Workspace, Postmark, SES, Fastmail) means SMTP —
 recommend it, since it needs no DNS work — and only an operator who prefers
@@ -182,8 +188,10 @@ mint limits, the boot refusals, and what anonymous visitors are denied.
 
 ### The base model
 
-Whichever sign-in route the deployment takes, the base model needs a key in the
-same pass. `modelProvider` decides which one `qm setup` asks for —
+For a router, follow `references/model-gateway.md` and skip the direct-key
+instructions below. Gateway-only deployments are configured, not deferred.
+
+For direct providers, the base model needs a key in the same pass. `modelProvider` decides which one `qm setup` asks for —
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` — and the wizard
 prints where to mint it. The operator owns the billing relationship, so they
 create the key; you only place it. It is a required secret, so `qm doctor` calls
@@ -209,12 +217,14 @@ leave a deployment modelless without saying so.
 Read exactly one provider reference now and follow its provider-specific
 preflight and setup order:
 
+- Local Docker: `.codex/skills/deploy-qm/references/docker.md`
 - Fly.io: `.codex/skills/deploy-qm/references/fly.md`
 - AWS: `.codex/skills/deploy-qm/references/aws.md`
 
 ## 4. Deploy and prove the web surface
 
-Follow the selected provider reference, then run:
+Follow the selected provider reference. For local Docker, use its local checks:
+`check --live` is not implemented for that target. For Fly and AWS, run:
 
 ```bash
 npm exec qm -- check --live
@@ -230,7 +240,9 @@ error log, and archives itself. It does not recall or capture administrator
 memory. Fly runs it inside the core machine; AWS runs it as a one-off task on
 the core service's private network. It does not add a public session endpoint.
 
-Open `adminOnboardingUrl` from the JSON output and confirm Model provider
+On the gateway route, verify the discovered model and real response as described
+in `references/model-gateway.md`; do not require a direct-provider key card.
+For direct providers, open `adminOnboardingUrl` from the JSON output and confirm Model provider
 reports the chosen vendor as configured, sourced from the environment. It does
 when `modelProvider` is set: the key travelled with the rest of the deployment
 secrets, so there is nothing to paste here. Enter and validate a key on that
@@ -248,7 +260,7 @@ Open `webUiUrl`, sign in as the seeded administrator, send a message, and
 receive a real model response. Use a specific request rather than a greeting,
 then confirm its generated sidebar title replaces the `Web chat` fallback. A
 missing title is one failed runtime assertion; inspect the core error log and
-rerun `check --live` before continuing. Ask the agent to create a fresh UUID in
+rerun the selected target's acceptance checks before continuing. Ask the agent to create a fresh UUID in
 `/root/workspace/qm-computer-proof.txt`, then use the provider reference's
 independent proof to verify that UUID outside the model transcript.
 
@@ -285,16 +297,17 @@ Return:
 - the web, Admin onboarding, Admin connectors, and user connections URLs;
 - how people sign in, and the Slack SSO app link when that is the route;
 - Slack bot app and test-channel links when enabled;
-- provider, account or organization, and region;
+- hosting target; cloud account and region, or local Docker context and ports;
 - the base model provider and where its key lives — the deployment `.env` or the
   Admin page — so the operator knows what to rotate and where;
 - pass/fail for health, the private live session canary, sign-in, manual web
   chat and generated title, agent-computer proof, connector visibility, user
   OAuth, Slack reply, conformance, and an idempotent deployment rerun;
-- `npm exec qm -- status`, logs, rollback, and teardown commands;
+- `npm exec qm -- status`, logs, and the target's recovery and teardown commands;
 - recurring cost or manual work still owned by the operator, including model
   usage billed directly by the provider.
 
-Do not claim completion with a missing test or placeholder. If blocked, leave
+Mark unsupported checks explicitly as not available, never as passed.
+Do not claim completion with a missing required test or placeholder. If blocked, leave
 the repository resumable and name the exact next human action without exposing
 a secret.
