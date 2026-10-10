@@ -279,10 +279,15 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
 
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     return withSession(name, async (session) => {
-      const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
+      const r = await session.runCommand(`sh -c ${shq(`timeout -k 5 ${timeoutSec} sh -c ${shq(script)}; exit $?`)}`, {
         timeoutMs: timeoutSec * 1000 + 30_000,
       });
-      return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+      return {
+        stdout: r.stdout,
+        stderr: r.stderr,
+        code: r.exitCode,
+        timedOut: r.exitCode === 124 || r.exitCode === 137,
+      };
     });
   }
 
