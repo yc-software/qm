@@ -169,12 +169,14 @@ export function startSignalPoll(
   const declined = new Set<string>();
   let draining = false;
   let redrain = false;
+  let redrainForced = false;
   let accepting = true;
   let inFlight: Promise<void> = Promise.resolve();
   const drain = (forced = false): void => {
     if (!accepting && !forced) return;
     if (draining) {
       redrain = true;
+      redrainForced ||= forced;
       return;
     }
     draining = true;
@@ -209,8 +211,10 @@ export function startSignalPoll(
       .finally(() => {
         draining = false;
         if (redrain) {
+          const forcedAgain = redrainForced;
           redrain = false;
-          drain();
+          redrainForced = false;
+          drain(forcedAgain);
         }
       });
   };
