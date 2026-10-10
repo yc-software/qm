@@ -70,6 +70,14 @@ export function mailerFor(cfg: AuthConfig): Mailer | null {
   return cfg.transport === "smtp" ? smtpMailer(cfg) : resendMailer(cfg);
 }
 
+function encodeAddressHeader(value: string): string {
+  const clean = value.replace(/[\r\n]+/g, " ").trim();
+  const angled = /^(.*?)\s*<([^<>]+)>$/.exec(clean);
+  if (!angled || /^[\x20-\x7E]*$/.test(clean)) return encodeHeader(clean);
+  const name = angled[1]!.replace(/^"(.*)"$/, "$1").trim();
+  return name ? `${encodeHeader(name)} <${angled[2]}>` : `<${angled[2]}>`;
+}
+
 function encodeHeader(value: string): string {
   const clean = value.replace(/[\r\n]+/g, " ").trim();
   return /^[\x20-\x7E]*$/.test(clean) ? clean : `=?UTF-8?B?${Buffer.from(clean, "utf8").toString("base64")}?=`;
@@ -87,8 +95,8 @@ export function renderMessage(cfg: AuthConfig, message: OutgoingEmail, nowMs = D
   const boundary = `qm-${randomBytes(12).toString("hex")}`;
   const domain = senderAddress(cfg.emailFrom).split("@")[1] ?? "localhost";
   const headers = [
-    `From: ${encodeHeader(cfg.emailFrom)}`,
-    `To: ${encodeHeader(message.to)}`,
+    `From: ${encodeAddressHeader(cfg.emailFrom)}`,
+    `To: ${encodeAddressHeader(message.to)}`,
     `Subject: ${encodeHeader(message.subject)}`,
     `Date: ${new Date(nowMs).toUTCString()}`,
     `Message-ID: <${randomBytes(16).toString("hex")}@${domain}>`,
