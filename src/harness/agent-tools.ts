@@ -114,6 +114,15 @@ export interface ToolContextRef {
   toolApprovalGate?: (tool: string) => boolean;
 }
 
+/** The newest user message in a goal work digest. */
+function lastUserLine(work: string): string | undefined {
+  const line = work
+    .split("\n")
+    .reverse()
+    .find((l) => l.startsWith("user: "));
+  return line?.slice("user: ".length);
+}
+
 function text(s: string) {
   return { content: [{ type: "text" as const, text: s }], details: {} };
 }
@@ -3948,7 +3957,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       "Register a goal for this session when the user explicitly asks for sustained, self-directed work " +
       '("grind on X for 30 minutes", "do 20 minutes of research", "keep going until the tests are green"); never infer ' +
-      "one from an ordinary request. A request that names a duration or amount of work IS such a request: create the goal " +
+      'one from an ordinary request. A message that starts with "Goal:" always asks for one. A request that names a duration or amount of work IS such a request: create the goal ' +
       "FIRST, before doing any of the work, with the floor set to exactly the amount the user named (20 minutes = " +
       "minMs 1200000; never subtract time already spent). Do this even when the task looks hard, slow or impossible: " +
       "the user asked for the effort, so create the goal and spend it rather than explaining why you will stop. Once registered the harness enforces it: trying to end a reply while the goal " +
@@ -3991,8 +4000,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
       let record: GoalRecord;
       try {
+        const request = lastUserLine(ref.goalRecentWork?.() ?? "");
         record = createGoalRecord({
           objective: p.objective,
+          ...(request ? { request } : {}),
           ...(p.floor ? { floor: p.floor } : {}),
           ...(p.token_cap !== undefined ? { capTokens: p.token_cap } : {}),
         });
@@ -4127,6 +4138,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ? await ref
             .governGoal({
               objective: goal.objective,
+              ...(goal.request ? { request: goal.request } : {}),
               trigger: "completion",
               recentWork: ref.goalRecentWork?.() ?? "",
               evidence,
@@ -4153,7 +4165,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           applied.verdict !== "pause",
         );
       }
-      delete goal.governor;
+      goal.governor = verdict;
       goal.status = "complete";
       goal.updatedAt = Date.now();
       goal.completionNote = p.note;

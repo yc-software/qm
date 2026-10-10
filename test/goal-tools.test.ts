@@ -160,7 +160,7 @@ test("a governor rejection keeps the goal active and feeds its reasons into the 
   ref.governGoal = async () => ({ verdict: "complete", reasons: "ok" });
   await update.execute("u2", { status: "complete", note: "npm test: 0 failures" });
   assert.equal(ref.goal?.status, "complete");
-  assert.equal(ref.goal?.governor, undefined);
+  assert.deepEqual(ref.goal?.governor, { verdict: "complete", reasons: "ok" });
 });
 
 test("a completion request can draw a step back, then a pause that ends the goal's turn until the user replies", async () => {

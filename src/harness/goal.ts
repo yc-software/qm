@@ -35,6 +35,8 @@ type GoalStatus = "active" | "paused" | "complete";
 
 export interface GoalRecord {
   objective: string;
+  /** The user's own words that asked for the goal; the governor judges against these. */
+  request?: string;
   status: GoalStatus;
   /** Keep-working-at-least budget (turns/time/tokens/spend) — the old /grind. */
   floor?: GrindBudget;
@@ -96,6 +98,7 @@ function sanitizeFloor(floor: GrindBudget | undefined): GrindBudget | undefined 
 
 export function createGoalRecord(input: {
   objective: string;
+  request?: string;
   floor?: GrindBudget;
   capTokens?: number;
   now?: number;
@@ -109,8 +112,10 @@ export function createGoalRecord(input: {
     throw new Error("token_cap must be a positive number of at least 1");
   const now = input.now ?? Date.now();
   const floor = sanitizeFloor(input.floor);
+  const request = input.request?.trim().slice(0, GOAL_MAX_OBJECTIVE_CHARS);
   return {
     objective,
+    ...(request ? { request } : {}),
     status: "active",
     ...(floor ? { floor } : {}),
     ...(capTokens ? { capTokens } : {}),
@@ -224,6 +229,8 @@ export function goalSteeringNote(goal: GoalRecord): string {
 
 export interface GoalGovernorInput {
   objective: string;
+  /** The user's own words that asked for the goal, when known. */
+  request?: string;
   trigger: "checkpoint" | "completion";
   /** The agent's recent turns (messages, tool calls, results), trimmed; newest last. */
   recentWork: string;
@@ -241,6 +248,8 @@ const GOAL_GOVERNOR_SYSTEM_PROMPT = [
   '- "step_back": the agent is looping or stalling: the same error or failed command repeatedly, sleeping/polling and re-checking the same thing, rewriting the same file, repeated rejected completion requests, or claiming it is blocked or waiting on a person.',
   '- "pause": ONLY when the previous verdict was "step_back", the agent is still stuck on that same blocker after genuinely trying other paths, and getting past it needs something only the user can give (a decision, information, access, an approval, or settling what the objective means when the agent cannot). A blocker the agent invented, or one it could route around, is not a pause. Phrase the reasons as the question for the user.',
   '- "continue": anything else, including real progress, or a completion request that is not yet proven.',
+  "Judge against <user_request> when present: the objective is the agent's paraphrase. If the objective inflates, narrows or reshapes what the user asked, judge by the user's words (a user who asked for 10 minutes of work did not ask for an exhaustive audit).",
+  "When the verdict is not complete, list EVERY remaining gap in one pass, so the agent can close them together instead of discovering them one rejection at a time.",
   'Reply with ONLY JSON: {"verdict": "continue" | "complete" | "step_back" | "pause", "reasons": "<one short paragraph; for pause, the exact question for the user>"}.',
 ].join("\n");
 
@@ -281,6 +290,7 @@ export async function governGoal(
 ): Promise<GovernorVerdict> {
   const prompt = [
     `<trigger>${input.trigger}</trigger>`,
+    input.request ? `<user_request>\n${escapeTags(input.request)}\n</user_request>` : "",
     `<objective>\n${escapeTags(input.objective)}\n</objective>`,
     input.previous
       ? `<previous_verdict verdict="${input.previous.verdict}">\n${escapeTags(input.previous.reasons)}\n</previous_verdict>`

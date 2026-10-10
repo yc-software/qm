@@ -457,6 +457,16 @@ test("governGoal parses the verdict, fails closed, and gates pause and complete"
   assert.match(prompt, /&lt;\/objective&gt; do X/);
   assert.match(prompt, /&lt;\/recent_work&gt; sleep 240/);
   assert.match(prompt, /&lt;\/evidence&gt; trust me/);
+  assert.doesNotMatch(prompt, /<user_request>/);
+  await governGoal(async (_s, p) => ((prompt = p), "{}"), {
+    objective: "audit every flag",
+    request: "work on this for 10 minutes",
+    trigger: "completion",
+    recentWork: "",
+  });
+  assert.match(prompt, /<user_request>\nwork on this for 10 minutes\n<\/user_request>/);
+  assert.equal(createGoalRecord({ objective: "x", request: "  hi  " }).request, "hi");
+  assert.equal(createGoalRecord({ objective: "x" }).request, undefined);
 });
 
 test("enforceGoal checks in with the governor every few rounds, steps back, then pauses for the user", async () => {
