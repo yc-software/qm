@@ -60,7 +60,7 @@ sequenceDiagram
     B->>B: leave the session running
   else park the scope
     B->>E: POST /v2/agents/sessions/{id}/checkpoints
-    B->>V: Download<br/>portable tar home snapshot
+    B->>V: Download<br/>portable tar home snapshot<br/>(durable only with a snapshot bucket)
     B->>E: POST /v2/agents/sessions/{id}/pause
   else destroy the scope
     B->>E: DELETE /v2/agents/sessions/{id}
@@ -80,11 +80,11 @@ What the PR adds
 - `src/sandbox/managed-agents-sandbox-agent.proto`, a vendored copy of our guest proto with the internal annotations stripped, loaded at runtime through `@grpc/proto-loader`. No build step and no generated code in the tree.
 - `src/sandbox/managed-agents-sandbox.ts`. Provision creates or resumes the session and waits for it to become usable. Run is `Exec` over the tunnel. Files are `Upload` and `Download` rather than base64 through exec, since we have real transfer RPCs. Process sessions, read-only layers, layer tool install, home snapshots and blob staging come from the shared exec helpers unchanged.
 - Scope recovery without local state. Session names are team-unique among non-terminal sessions and `ListSessions` takes a `?name=` filter, so the backend can re-adopt a running sandbox after losing its durable record, the way the E2B backend re-adopts by sandbox metadata. `sandboxScopeName` already produces names that fit our 64-character, not-UUID-shaped rule.
-- Profile: `writablePersistence: "provider_managed"`, `processSessions: true`, `parksOnTeardown: true`, and `egressEnforcement: "domain"`. That last one is real rather than aspirational — a Managed Agents sandbox gets NAT egress with a per-session host allowlist, and the manifest's `permissions.network` block narrows within it.
+- Profile: `writablePersistence: "provider_managed"`, `processSessions: true`, `parksOnTeardown: true`, and `egressEnforcement: "domain"` when `DO_AGENTS_EGRESS_PROXY_URL` is set (the proxy host becomes the session's egress allowlist), `"none"` otherwise. The domain mode is real rather than aspirational — a Managed Agents sandbox gets NAT egress with a per-session host allowlist.
 - A `permissions` block on the session that sets `defaultAction: allow` and allows `bash`. Our managed exec path is approval-gated by default, which means every command would wait on a human decision through our approval router. qm runs its own approval gates at its own tool boundary and fires many commands per turn, so two gating systems in series would just deadlock. qm's posture stays authoritative; ours gets out of the way. This is deliberate and we would rather state it here than have it discovered later.
 
 What it does not do
 
 - No idle reaping from qm's side. Our control plane owns the idle timeout, set per session with `DO_AGENTS_IDLE_TIMEOUT_SEC` and bounded by tenant policy. Paused sessions still count against team quota, which is worth knowing before pointing a large deployment at us.
-- A QM template, optional. `agent: none` lands on our own bare base template, so `DO_AGENTS_TEMPLATE` is an override rather than a requirement; an unprovisioned name fails session create. `deploy/do-managed-agents/Dockerfile` defines it: `node:24-slim` plus the tools agent prompts reach for by name (`jq`, `rg`, `unzip`, `wget`, alongside git, curl and Python), with `HOME=/workspace/home`. It is registered as the `qm-sandbox` team template on the agentless `sandbox` base, and qm advertises those extra tools in the sandbox profile only when `DO_AGENTS_TEMPLATE` is set. Baking layer tool files into it is a follow-up.
+- A QM template, optional. `agent: none` lands on our own bare base template, so `DO_AGENTS_TEMPLATE` is an override rather than a requirement; an unprovisioned name fails session create. `deploy/do-managed-agents/Dockerfile` defines it: `node:24-slim` plus the tools agent prompts reach for by name (`jq`, `rg`, `unzip`, `wget`, alongside git, curl and Python), with `HOME=/workspace/home`. `deploy/do-managed-agents/register-template.sh` builds it and registers it as a team template (default name `qm-sandbox`) on the agentless `sandbox` base, once per DO team. qm advertises those extra tools in the sandbox profile only when `DO_AGENTS_TEMPLATE` is set. Baking layer tool files into it is a follow-up.
 - No new CLI target. `qm init` still deploys core to Docker, Fly or AWS. This only changes where the computers live.
