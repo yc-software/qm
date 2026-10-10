@@ -199,3 +199,14 @@ test("history view excludes tool results from search and reopening while retaini
   assert.match(openSessionEntry(view, 2)!, /Oakland/);
   assert.deepEqual(forModelContext(entries), entries);
 });
+
+for (const [name, text] of [
+  ["head clip", `${"😀".repeat(400)} needle`],
+  ["window clip", `${"x".repeat(1)}${"😀".repeat(300)} needle ${"😀".repeat(300)}`],
+] as const) {
+  test(`search hits never split a surrogate pair (${name})`, () => {
+    const hits = searchSessionEntries([entry(1, "assistant", { text })], "needle", 5);
+    assert.equal(hits.length, 1);
+    assert.ok(hits[0]!.isWellFormed(), "hit text is well-formed UTF-16");
+  });
+}

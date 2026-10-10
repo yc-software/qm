@@ -10,10 +10,10 @@ function clipHit(text: string, terms: string[]): string {
   const lower = text.toLowerCase();
   const positions = terms.map((t) => lower.indexOf(t)).filter((i) => i >= 0);
   const first = positions.length ? Math.min(...positions) : 0;
-  if (first + MATCH_LEAD_CHARS <= MAX_HIT_CHARS) return `${text.slice(0, MAX_HIT_CHARS)}…`;
+  if (first + MATCH_LEAD_CHARS <= MAX_HIT_CHARS) return `${headSlice(text, MAX_HIT_CHARS)}…`;
   const start = first - MATCH_LEAD_CHARS;
   const end = start + MAX_HIT_CHARS;
-  return `…${text.slice(start, end)}${end < text.length ? "…" : ""}`;
+  return `…${headSlice(tailSlice(text, text.length - start), MAX_HIT_CHARS)}${end < text.length ? "…" : ""}`;
 }
 
 function entryText(entry: SessionEntry): string {
