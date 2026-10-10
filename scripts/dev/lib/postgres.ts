@@ -67,12 +67,28 @@ export interface LocalPostgres {
   url: string;
 }
 
-export async function ensureLocalPostgres(worktree: string, log: (msg: string) => void): Promise<LocalPostgres> {
-  const container = process.env.DEV_INSTANCE_POSTGRES_CONTAINER || "qm-dev-postgres";
-  const port = process.env.DEV_INSTANCE_POSTGRES_PORT || "55432";
-  const image = process.env.DEV_INSTANCE_POSTGRES_IMAGE || POSTGRES_IMAGE;
-  const password = process.env.DEV_INSTANCE_POSTGRES_PASSWORD || "qm-dev";
-  const volume = process.env.DEV_INSTANCE_POSTGRES_VOLUME || "qm-dev-postgres-data";
+export function localPostgresSettings(env: NodeJS.ProcessEnv): {
+  container: string;
+  port: string;
+  image: string;
+  password: string;
+  volume: string;
+} {
+  return {
+    container: env.DEV_INSTANCE_POSTGRES_CONTAINER || "qm-dev-postgres",
+    port: env.DEV_INSTANCE_POSTGRES_PORT || "55432",
+    image: env.DEV_INSTANCE_POSTGRES_IMAGE || POSTGRES_IMAGE,
+    password: env.DEV_INSTANCE_POSTGRES_PASSWORD || "qm-dev",
+    volume: env.DEV_INSTANCE_POSTGRES_VOLUME || "qm-dev-postgres-data",
+  };
+}
+
+export async function ensureLocalPostgres(
+  worktree: string,
+  log: (msg: string) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<LocalPostgres> {
+  const { container, port, image, password, volume } = localPostgresSettings(env);
   const dbName = worktreeDbName(worktree);
 
   if (!(await ensureDockerDaemon(log))) throw new Error("docker daemon unavailable");

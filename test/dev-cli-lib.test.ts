@@ -8,6 +8,7 @@ import { spawnCommand } from "../scripts/dev/lib/proc.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { envSha, errMessage, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
+import { localPostgresSettings } from "../scripts/dev/lib/postgres.ts";
 import {
   clearSlotFlag,
   ensureStore,
@@ -646,5 +647,16 @@ test("spawnCommand routes Windows batch shims through cmd.exe with quoted argume
     assert.deepEqual(spawnCommand("npm", args, env, "darwin"), { cmd: "npm", args, windowsVerbatimArguments: false });
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("local Postgres settings come from the assembled dev env, not only process.env (#221)", () => {
+  const prior = process.env.DEV_INSTANCE_POSTGRES_PORT;
+  delete process.env.DEV_INSTANCE_POSTGRES_PORT;
+  try {
+    assert.equal(localPostgresSettings({ DEV_INSTANCE_POSTGRES_PORT: "65432" }).port, "65432");
+    assert.equal(localPostgresSettings({}).port, "55432");
+  } finally {
+    if (prior !== undefined) process.env.DEV_INSTANCE_POSTGRES_PORT = prior;
   }
 });
