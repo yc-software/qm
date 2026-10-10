@@ -888,7 +888,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
 async function updateSkill(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   const id = ctx.params.id!;
-  const b = (body ?? {}) as { principalId?: unknown; description?: unknown; body?: unknown };
+  const b = (body ?? {}) as { principalId?: unknown; description?: unknown; body?: unknown; baseVersion?: unknown };
 
   let principalId: string;
   if (capability) {
@@ -898,6 +898,9 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
     }
     principalId = b.principalId;
+  }
+  if (b.baseVersion !== undefined && !(typeof b.baseVersion === "number" && Number.isInteger(b.baseVersion))) {
+    return sendJson(res, 400, { error: "bad_request", message: "baseVersion must be an integer" });
   }
   if (b.description !== undefined && typeof b.description !== "string") {
     return sendJson(res, 400, { error: "bad_request", message: "description must be a string" });
@@ -909,7 +912,15 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   if (typeof b.description === "string") patch.description = b.description;
   if (typeof b.body === "string") patch.body = b.body;
   const liveActor = capability ? livePersonCapability(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
+  const updated = await app.updateOwnedSkill(id, principalId, patch, {
+    liveActor,
+    ...(typeof b.baseVersion === "number" ? { baseVersion: b.baseVersion } : {}),
+  });
+  if (updated === "version_conflict")
+    return sendJson(res, 409, {
+      error: "conflict",
+      message: "This skill changed since you opened it. Reload it and reapply your edit.",
+    });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
