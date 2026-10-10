@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { jwtClaims } from "../util/jwt.ts";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -12,16 +13,10 @@ export function asObject(value: unknown): JsonObject | null {
 }
 
 export function codexOAuthJwtAccountIdFromToken(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.split(".").length !== 3) return undefined;
-  try {
-    const payload = asObject(JSON.parse(Buffer.from(value.split(".")[1] ?? "", "base64url").toString("utf8")));
-    const claims = payload ? asObject(payload["https://api.openai.com/auth"]) : null;
-    return typeof claims?.chatgpt_account_id === "string" && claims.chatgpt_account_id
-      ? claims.chatgpt_account_id
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const claims = asObject(jwtClaims(value)?.["https://api.openai.com/auth"]);
+  return typeof claims?.chatgpt_account_id === "string" && claims.chatgpt_account_id
+    ? claims.chatgpt_account_id
+    : undefined;
 }
 
 export function codexOAuthJwtAccountId(value: unknown): string | undefined {
