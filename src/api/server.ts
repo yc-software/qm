@@ -233,7 +233,7 @@ async function verifyCapability(
           ...(capability.members ? { members: capability.members } : {}),
         }))
   ) {
-    sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
+    sendJson(res, 403, { error: "forbidden", message: "the acting user is not a current member of this conversation" });
     return null;
   }
   if (requiredAud && capability.aud !== requiredAud) {

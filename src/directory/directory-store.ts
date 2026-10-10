@@ -1,5 +1,9 @@
 import type { PrincipalType } from "../types.ts";
-import { samePerson } from "./person.ts";
+import { personIds, samePerson } from "./person.ts";
+
+function hasPerson(members: ReadonlySet<string> | undefined, principalId: string): boolean {
+  return !!members && personIds(principalId).some((id) => members.has(id));
+}
 
 export interface DirectoryMember {
   principalId: string;
@@ -197,7 +201,7 @@ export function createDirectoryStore(): DirectoryStore {
     async channelMember(channelId, principalId) {
       if (channels.some((channel) => channel.channelId === channelId && channel.isPrivate && channel.isExternal))
         return false;
-      return channelMembers?.get(channelId)?.has(principalId) ?? false;
+      return hasPerson(channelMembers?.get(channelId), principalId);
     },
     async channelMemberIds(channelId) {
       if (!knownChannelRosters?.has(channelId)) return undefined;
@@ -206,7 +210,7 @@ export function createDirectoryStore(): DirectoryStore {
     async channelMembership(channelId, principalId) {
       const channel = channels.find((candidate) => candidate.channelId === channelId);
       if (!channel || !knownChannelRosters?.has(channelId)) return undefined;
-      const member = channelMembers?.get(channelId)?.has(principalId) ?? false;
+      const member = hasPerson(channelMembers?.get(channelId), principalId);
       return member || channel.isPrivate === true ? member : undefined;
     },
     async channelPrivacy(channelId) {
@@ -260,13 +264,13 @@ export function createDirectoryStore(): DirectoryStore {
       return { kind: "none" };
     },
     async groupMember(groupId, principalId) {
-      return groupMembers?.get(groupId)?.has(principalId) ?? false;
+      return hasPerson(groupMembers?.get(groupId), principalId);
     },
     async groupMembership(groupId, principalId) {
       if (!groupsSynced) return undefined;
       if (!listedGroupIds?.has(groupId)) return false;
       if (!knownGroupRosters?.has(groupId)) return undefined;
-      return groupMembers?.get(groupId)?.has(principalId) ?? false;
+      return hasPerson(groupMembers?.get(groupId), principalId);
     },
     async listGroupsFor(principalId) {
       const memberships = groupMembers;

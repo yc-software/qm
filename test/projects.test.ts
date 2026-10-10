@@ -268,6 +268,36 @@ test("capability scope checks follow current shared rosters", async () => {
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
 });
 
+test("capability scope checks honor a linked identity's room membership", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-linked-")) }));
+  await built.app.upsertDirectory([
+    { principalId: "slack-person@example.com", displayName: "Person", type: "internal" },
+  ]);
+  await built.directory.replaceChannels(
+    [{ channelId: "C-private", name: "private", isPrivate: true }],
+    [{ channelId: "C-private", principalId: "slack-person@example.com" }],
+    1,
+  );
+  await built.directory.replaceGroups([{ groupId: "G1", principalId: "slack-person@example.com" }], 1);
+  const check = (actorId: string, scopeId: string) => built.app.authorizesCapabilityScope({ actorId, scopeId });
+
+  assert.equal(await check("web-person", "channel:C-private"), false);
+  await built.principalLinks.link({
+    principalId: "slack-person@example.com",
+    canonicalId: "web-person",
+    evidence: "test: verified Slack account",
+    linkedBy: "web-person",
+  });
+  assert.equal(await check("web-person", "channel:C-private"), true);
+  assert.equal(await check("web-person", "group:G1"), true);
+  assert.equal(await check("someone-else", "channel:C-private"), false);
+
+  await built.directory.replaceChannels([{ channelId: "C-private", name: "private", isPrivate: true }], [], 2);
+  assert.equal(await check("web-person", "channel:C-private"), false);
+  await built.principalLinks.unlink("slack-person@example.com");
+  assert.equal(await check("web-person", "group:G1"), false);
+});
+
 test("channel capabilities bridge legacy public rosters but still honor deactivation", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-transition-")) }));
   await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);

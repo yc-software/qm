@@ -33,7 +33,10 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
     }
     if (!(await ctx.app.authorizesCapabilityScope(claims))) {
       req.resume();
-      sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
+      sendJson(res, 403, {
+        error: "forbidden",
+        message: "the acting user is not a current member of this conversation",
+      });
       return null;
     }
     return { via: "capability" };

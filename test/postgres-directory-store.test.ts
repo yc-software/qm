@@ -481,3 +481,29 @@ test("pg live channel observations survive older snapshots but yield to later re
   await pool.end();
   await directoryObservationCases(store);
 });
+
+test("pg directory: room membership follows a person's linked identities", { skip }, async () => {
+  const { installPrincipalLinks } = await import("../src/directory/person.ts");
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replaceChannels(
+    [{ channelId: "C-linked", name: "linked", isPrivate: true }],
+    [{ channelId: "C-linked", principalId: "slack-person@example.com" }],
+  );
+  await store.replaceGroups([{ groupId: "G-linked", principalId: "slack-person@example.com" }], Date.now(), [
+    "G-linked",
+  ]);
+  assert.equal(await store.channelMembership("C-linked", "web-person"), false);
+  installPrincipalLinks({
+    canonical: (key) => (key === "slack-person@example.com" ? "web-person" : undefined),
+    aliases: (key) => (key === "web-person" ? ["slack-person@example.com"] : []),
+  });
+  try {
+    assert.equal(await store.channelMembership("C-linked", "web-person"), true);
+    assert.equal(await store.channelMember("C-linked", "web-person"), true);
+    assert.equal(await store.groupMembership("G-linked", "web-person"), true);
+    assert.equal(await store.groupMember("G-linked", "web-person"), true);
+    assert.equal(await store.channelMembership("C-linked", "someone-else"), false);
+  } finally {
+    installPrincipalLinks(null);
+  }
+});
