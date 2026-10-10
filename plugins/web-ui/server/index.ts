@@ -4,7 +4,6 @@ import { flushErrorReporting, reportBackendError } from "../../chassis/src/error
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
-import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
@@ -1671,14 +1670,6 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
     },
   },
-  ...uiCanvasRoutes({
-    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
-    coreFetch,
-    relayCore,
-    relay,
-    json,
-    readJson,
-  }),
   {
     method: "GET",
     path: "/api/inbox",
