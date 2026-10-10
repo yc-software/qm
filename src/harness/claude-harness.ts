@@ -363,9 +363,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       const schema = fromJSONSchema(definition.parameters as Parameters<typeof fromJSONSchema>[0]) as ZodObject;
       return tool(definition.name, definition.description, schema.shape, async (args, extra) => {
         const nativeId = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta?.["claudecode/toolUseId"];
-        if (typeof nativeId !== "string")
-          console.error(`claude harness: ${definition.name} call has no native tool_use id`);
         const callId = typeof nativeId === "string" ? nativeId : randomBytes(8).toString("hex");
+        if (callId !== nativeId) console.error(`claude harness: ${definition.name} call has no native tool_use id`);
         try {
           const result = await definition.execute(callId, args);
           if (result.terminate || ref.pausedOnApproval || ref.silentRequested) setImmediate(terminateProvider);
