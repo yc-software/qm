@@ -4,6 +4,7 @@ import { flushErrorReporting, reportBackendError } from "../../chassis/src/error
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
+import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
@@ -1670,72 +1671,14 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
     },
   },
-  {
-    method: "GET",
-    path: "/api/ui-canvas/:sessionId",
-    handle: async (c) => {
-      const { req, res, user, params } = c;
-      if (resolveIdentity(req)?.impersonator) return json(res, 403, { error: "forbidden" });
-      const qs = new URLSearchParams({ principalId: user });
-      return relayCore(res, "GET", `/v1/ui/canvases/${encodeURIComponent(params.sessionId!)}?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/ui-canvas/:sessionId/script.js",
-    handle: async (c) => {
-      const { req, res, user, params, url } = c;
-      if (resolveIdentity(req)?.impersonator) return json(res, 403, { error: "forbidden" });
-      const sessionId = params.sessionId!;
-      const qs = new URLSearchParams({ principalId: user });
-      const r = await coreFetch("GET", `/v1/ui/canvases/${encodeURIComponent(sessionId)}?${qs.toString()}`);
-      let canvas: { js?: unknown; rev?: unknown } | undefined;
-      try {
-        canvas = (JSON.parse(r.text) as { canvas?: { js?: unknown; rev?: unknown } }).canvas;
-      } catch {
-        canvas = undefined;
-      }
-      if (r.status !== 200 || typeof canvas?.js !== "string") return json(res, 404, { error: "not_found" });
-      if (String(canvas.rev) !== url.searchParams.get("rev")) return json(res, 409, { error: "stale_revision" });
-      res.writeHead(200, {
-        "content-type": "application/javascript; charset=utf-8",
-        "cache-control": "no-store",
-        "x-content-type-options": "nosniff",
-      });
-      res.end(
-        `((canvas) => {\n${canvas.js}\n})(window.qmUiCanvasTake?.(${JSON.stringify(sessionId)}, ${Number(canvas.rev)}));\n`,
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/ui-canvas/observe/:callId",
-    handle: async (c) => {
-      const { req, res, user, params } = c;
-      if (resolveIdentity(req)?.impersonator) return json(res, 403, { error: "forbidden" });
-      const body = await readJson<{ snapshot?: unknown }>(req, res, false);
-      if (!body) return;
-      const path = `/v1/ui/observe/${encodeURIComponent(params.callId!)}/result`;
-      return relayCore(res, "POST", path, JSON.stringify({ snapshot: body.snapshot, principalId: user }));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/ui-canvas/:sessionId",
-    handle: async (c) => {
-      const { req, res, user, params } = c;
-      if (resolveIdentity(req)?.impersonator) return json(res, 403, { error: "forbidden" });
-      const body = await readJson<{ pinned?: unknown; dismiss?: unknown }>(req, res, false);
-      if (!body) return;
-      const path = `/v1/ui/canvases/${encodeURIComponent(params.sessionId!)}`;
-      return relayCore(
-        res,
-        "POST",
-        path,
-        JSON.stringify({ pinned: body.pinned, dismiss: body.dismiss, principalId: user }),
-      );
-    },
-  },
+  ...uiCanvasRoutes({
+    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
+    coreFetch,
+    relayCore,
+    relay,
+    json,
+    readJson,
+  }),
   {
     method: "GET",
     path: "/api/inbox",

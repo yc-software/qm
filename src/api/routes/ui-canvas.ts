@@ -17,6 +17,7 @@ import { sendJson } from "../http.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
 import { audit, isObj } from "./shared.ts";
+import { swallow } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const OBSERVE_TIMEOUT_MS = 15_000;
@@ -186,7 +187,7 @@ async function observe(ctx: ApiCtx): Promise<void> {
   try {
     outcome = await waitForClientResult(deps.signals, turn.runId, callId, { timeoutMs: OBSERVE_TIMEOUT_MS });
   } finally {
-    await deps.uiState!.delete(pendingId);
+    await deps.uiState!.delete(pendingId).catch((error: unknown) => swallow("ui observe pending cleanup", error));
   }
   audit(deps, {
     principalId: turn.actorId,

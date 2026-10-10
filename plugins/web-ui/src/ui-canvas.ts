@@ -1,9 +1,10 @@
 import { html, nothing, render } from "lit";
 import { ChevronDown, ChevronUp, Pin, PinOff, X } from "lucide";
-import { api, withBase, type CoreSession, type SessionStateEvent } from "./core-bridge.ts";
+import { api, ApiError, withBase, type CoreSession, type SessionStateEvent } from "./core-bridge.ts";
 import type { ConvCtx, Conversation } from "./conv-types.ts";
 import { appState } from "./shell-state.ts";
 import { icon } from "./ui.ts";
+import { reportHandledError } from "./browser-errors.ts";
 import { errMessage, swallow } from "../../chassis/src/errors.ts";
 
 type Owner = Pick<ConvCtx, "chat" | "composer">;
@@ -81,10 +82,15 @@ function load(sessionId: string, owner?: Owner): void {
   loading.set(sessionId, state);
   void api<{ canvas: CanvasRecord }>(`/api/ui-canvas/${encodeURIComponent(sessionId)}`)
     .then((r) => r.canvas)
-    .catch(() => null)
+    .catch((error: unknown) => {
+      if (error instanceof ApiError && error.status === 404) return null;
+      reportHandledError("ui_canvas_load", error);
+      return undefined;
+    })
     .then((canvas) => {
       loading.delete(sessionId);
       if (state.dirty) return load(sessionId);
+      if (canvas === undefined) return void waiting.delete(sessionId);
       loaded.set(sessionId, canvas);
       const panel = panels.get(sessionId);
       if (panel && !canvas) disposePanel(panel);
@@ -310,7 +316,9 @@ async function answerObserve(
     });
   await post(snapshot)
     .catch((error: unknown) => post({ error: `the snapshot could not be delivered: ${errMessage(error)}` }))
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      if (!(error instanceof ApiError && error.status === 404)) reportHandledError("ui_observe_deliver", error);
+    });
 }
 
 function stylesheetText(): string {
@@ -339,12 +347,7 @@ async function screenshot(target: HTMLElement): Promise<{ dataUrl?: string; erro
 }
 
 function findTarget(selector: string | undefined): Element | null {
-  if (!selector) return document.documentElement;
-  try {
-    return document.querySelector(selector);
-  } catch {
-    return null;
-  }
+  return selector ? document.querySelector(selector) : document.documentElement;
 }
 
 const byteLength = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
