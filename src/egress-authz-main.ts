@@ -7,7 +7,7 @@ import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } f
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
-import { errMessage } from "./util/errors.ts";
+import { errMessage, swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./config.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
@@ -128,7 +128,7 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
   async function checkStatus(
     req: IncomingMessage,
     authority: string,
-  ): Promise<{ status: 200 | 403; upstream?: string }> {
+  ): Promise<{ status: 200 | 403 | 407; upstream?: string }> {
     const host = hostFromAuthority(authority);
     if (!host) return { status: 403 };
     const portText = authority.match(/:(\d+)$/)?.[1];
@@ -137,11 +137,14 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
     if (portText) port = Number(portText);
     if (!Number.isInteger(port) || port < 1 || port > 65_535) return { status: 403 };
     const token = tokenFromRequest(req);
-    const claims = await claimsFor(token, deps);
+    const challenge = !token && deps.tokenless !== "open";
+    const claims = challenge ? undefined : await claimsFor(token, deps);
     let policy: EgressPolicy | undefined = DENY_ALL;
     if (claims) policy = claims.egress;
-    else if (!token && deps.tokenless === "open") policy = OPEN;
-    const d = await decide(host, policy, lookup);
+    else if (!token) policy = OPEN;
+    const d: { allow: boolean; verdict: EgressVerdict; address?: string } = challenge
+      ? { allow: false, verdict: "denied" }
+      : await decide(host, policy, lookup);
     try {
       deps.audit.record({
         source: "proxy",
@@ -152,8 +155,9 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
         principalId: claims?.actorId ?? "unknown",
       });
     } catch (error) {
-      void error;
+      swallow("egress-authz: audit record", error);
     }
+    if (challenge) return { status: 407 };
     if (!d.allow || !d.address) return { status: 403 };
     return { status: 200, upstream: isIP(d.address) === 6 ? `[${d.address}]:${port}` : `${d.address}:${port}` };
   }

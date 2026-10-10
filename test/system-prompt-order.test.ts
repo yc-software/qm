@@ -563,6 +563,25 @@ test("Slack turns get the terse-response style instruction; other surfaces do no
   assert.doesNotMatch(nonSlack.reply ?? "", /## Talking on Slack/);
   assert.doesNotMatch(nonSlack.reply ?? "", /a couple of sentences/);
 });
+test("Slack offers personal-agent handoffs only in Isolated internal channels", async () => {
+  const { orchestrator: orch, config } = buildOrchestrator();
+  const turn = (kind: Conversation["kind"], threadRef: string): OrchestratorInput => ({
+    surface: "slack",
+    actor,
+    conversation: { kind, threadRef, channelRef: "C1", audience: [actor], publishMembers: [actor] },
+    text: "!sysprompt",
+    origin: { kind: "human" },
+  });
+  const prompt = async (input: OrchestratorInput) => (await orch.handleTurn(input)).reply ?? "";
+
+  assert.match(await prompt(turn("channel", "C1:isolated")), /self-API reach with \{recipient, task\}/);
+  assert.doesNotMatch(await prompt(turn("group", "G1:isolated")), /\{recipient, task\}/);
+  assert.doesNotMatch(await prompt(slackDm("dm:U1:handoff", "!sysprompt")), /\{recipient, task\}/);
+
+  await config.setSharingPosture(scopeId("org", ORG), "open");
+  assert.doesNotMatch(await prompt(turn("channel", "C1:open")), /\{recipient, task\}/);
+});
+
 test("a project session names its linked Slack home channel; unlinked projects get no block", async () => {
   const managedGroups = {
     recognizes: (ref: string) => ref.startsWith("web-project-"),

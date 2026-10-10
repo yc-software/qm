@@ -72,7 +72,7 @@ describe("surface-context pulls", async () => {
         signingSecret: SECRET,
       }),
     );
-    server = createServer(built.app, { signingSecret: SECRET });
+    server = createServer(built.app, { signingSecret: SECRET, config: built.config });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     await built.app.upsertDirectory([
@@ -364,5 +364,41 @@ describe("surface-context pulls", async () => {
     const done = await built.app.getContextRequest(r.id);
     assert.equal((done as any)?.query?.viewerToken, undefined, "a fulfilled row still carries no token");
     await built.app.deleteContextRequest(r.id);
+  });
+  it("reach with a task reports a sent handoff only after the Slack side confirms it", async () => {
+    const token = await cap({ surface: "slack", runId: "run-ask-1", liveActor: true });
+    const asking = post("/v1/reach", { recipient: "U2", task: "republish the page" }, { "x-agent-capability": token });
+    const query = await fulfillNext(() => ({
+      messages: [],
+      handoff: { requestId: "h1", target: "Carol's personal agent" },
+    }));
+    assert.deepEqual(query.askAgent, { runId: "run-ask-1", targetUserId: "U2", task: "republish the page" });
+    const res = await asking;
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+    assert.equal(body.ok, true);
+    assert.match(body.message, /Carol's personal agent[\s\S]*Nothing has run yet/);
+  });
+
+  it("reach with a task passes a Slack refusal back as a failure instead of claiming success", async () => {
+    const token = await cap({ surface: "slack", runId: "run-ask-2", liveActor: true });
+    const asking = post("/v1/reach", { recipient: "U2", task: "check it" }, { "x-agent-capability": token });
+    await fulfillNext(() => ({ error: "couldn't open a DM to Carol" }));
+    const res = await asking;
+    assert.equal(res.status, 409);
+    assert.equal(((await res.json()) as any).message, "couldn't open a DM to Carol");
+  });
+
+  it("reach with a task is refused outside a live turn in an internal Slack channel", async () => {
+    const live = { surface: "slack", runId: "run-ask-3" };
+    const status = async (body: unknown, claims: Record<string, unknown>) => {
+      const res = await post("/v1/reach", body, { "x-agent-capability": await cap(claims) });
+      return `${res.status} ${((await res.json()) as any).error}`;
+    };
+    assert.equal(await status({ recipient: "U2", channel: "C1", task: "x" }, live), "400 bad_request");
+    assert.equal(await status({ recipient: "U2", task: "x", files: ["a.txt"] }, live), "400 bad_request");
+    assert.equal(await status({ recipient: "Nobody Here", task: "x" }, live), "404 recipient_not_found");
+    assert.equal(await status({ recipient: "U2", task: "x" }, {}), "409 unavailable");
+    assert.equal((await built.app.pendingContextRequests("slack")).length, 0);
   });
 });

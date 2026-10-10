@@ -76,15 +76,6 @@ export {
   createApprovalRegistry,
 } from "./approval-cards.ts";
 export {
-  type AgentRequestActionId,
-  AGENT_REQUEST_ACTION_IDS,
-  type AgentRequestDirective,
-  agentRequestMessage,
-  AGENT_REQUEST_INSTRUCTION,
-  extractAgentRequests,
-  stripAgentRequestDirectives,
-} from "./agent-requests.ts";
-export {
   encodeTs,
   decodeTs,
   REACTION_INSTRUCTION,

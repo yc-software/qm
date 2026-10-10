@@ -231,6 +231,11 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
       : undefined;
   const g = isObj(b.group) ? b.group : undefined;
   const group = g && typeof g.groupId === "string" && g.groupId ? { groupId: g.groupId } : undefined;
+  const h = isObj(b.handoff) ? b.handoff : undefined;
+  const handoff =
+    h && typeof h.requestId === "string" && typeof h.target === "string"
+      ? { requestId: h.requestId, target: h.target }
+      : undefined;
   const outcome =
     typeof b.error === "string"
       ? { error: b.error }
@@ -242,6 +247,7 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
             ...(typeof b.note === "string" ? { note: b.note } : {}),
             ...(file ? { file } : {}),
             ...(group ? { group } : {}),
+            ...(handoff ? { handoff } : {}),
           } satisfies SurfaceContextResult,
         };
   const ok = await app.fulfillContextRequest(id, outcome);

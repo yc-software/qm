@@ -23,6 +23,7 @@ import {
   type TaskListPresenter,
   DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
+  REACTION_INSTRUCTION,
   botIdentityArgs,
   buildReactionTurnText,
   createAckPresenter,
@@ -74,14 +75,12 @@ import type { Mirror } from "./mirror.ts";
 import type { ConversationSerializer } from "./conversation-view.ts";
 import { reactionTallies } from "./conversation-view.ts";
 import type { SlackReactionEvent } from "./payloads.ts";
-import type { Approvals } from "./approvals.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
   cleanAgentReplyForSlack,
   conversationPlaceLabel,
-  slackSurfaceInstructions,
 } from "./messaging.ts";
 
 interface Incoming {
@@ -147,7 +146,6 @@ export function createTurnHandler(deps: {
   mirror: Mirror;
   readHistory?: SlackHistoryReader;
   serializer: ConversationSerializer;
-  approvals: Approvals;
   ackEmoji: AckEmojiPicker;
   ackEmojiCandidates?: () => readonly string[] | null;
   ids: BotIdentity;
@@ -166,19 +164,8 @@ export function createTurnHandler(deps: {
     ensureOpts?: { pinNew?: boolean },
   ) => void;
 }): TurnHandler {
-  const {
-    core,
-    flow,
-    directory,
-    mirror,
-    serializer,
-    approvals,
-    ackEmoji,
-    ids,
-    threads,
-    deduper,
-    externalParticipantsEnabled,
-  } = deps;
+  const { core, flow, directory, mirror, serializer, ackEmoji, ids, threads, deduper, externalParticipantsEnabled } =
+    deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
   const { mirrorMessageEvent } = mirror;
   const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
@@ -334,7 +321,7 @@ export function createTurnHandler(deps: {
         ? {
             location: "a direct message with the user",
             details: { channel: inc.channel, ...(inc.threadTs ? { thread_ts: inc.threadTs } : {}) },
-            instructions: slackSurfaceInstructions(inc.kind),
+            instructions: REACTION_INSTRUCTION,
             reactionGuidance: REACTION_DETECT_GUIDANCE,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           }
@@ -347,7 +334,7 @@ export function createTurnHandler(deps: {
                 : {}),
               ...(replyThreadTs ? { thread_ts: replyThreadTs } : {}),
             },
-            instructions: slackSurfaceInstructions(inc.kind),
+            instructions: REACTION_INSTRUCTION,
             reactionGuidance: REACTION_DETECT_GUIDANCE,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           };
@@ -706,14 +693,8 @@ export function createTurnHandler(deps: {
         return;
       }
       if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
-      const { text: replyBody, reactions, agentRequests } = cleanAgentReplyForSlack(result.reply ?? "");
-      const actionableAgentRequests = !deps.externalAccess && inc.kind === "channel" ? agentRequests : [];
-      const hasNonText = !!(
-        result.attachments?.length ||
-        reactions.length ||
-        actionableAgentRequests.length ||
-        result.pendingApprovals?.length
-      );
+      const { text: replyBody, reactions } = cleanAgentReplyForSlack(result.reply ?? "");
+      const hasNonText = !!(result.attachments?.length || reactions.length || result.pendingApprovals?.length);
       let reply = result.stopped ? "Stopped." : "(no response)";
       if (replyBody) reply = toSlackMrkdwn(replyBody);
       else if (hasNonText) reply = "";
@@ -739,22 +720,6 @@ export function createTurnHandler(deps: {
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
         await applyAndLogReactions(client, inc.channel, inc.ts, directives);
-        if (actionableAgentRequests.length) {
-          await approvals.postAgentRequests(
-            client,
-            {
-              requesterId: inc.userId,
-              channel: inc.channel,
-              ...(replyThreadTs ? { replyThreadTs } : {}),
-              threadOnly: true,
-              kind: conversationKind,
-              ...(channelName ? { channelName } : {}),
-              audience,
-              ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-            },
-            actionableAgentRequests,
-          );
-        }
         await settleAck();
         await finishTaskAck();
       };

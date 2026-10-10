@@ -7,6 +7,8 @@ import { hasParentPathSegment } from "../../sandbox/sandbox.ts";
 import { resolveEnvironmentId } from "../../environments/environment-store.ts";
 import { errMessage } from "../../util/errors.ts";
 import { scopeId, type OutgoingAttachment } from "../../types.ts";
+import { awaitContextOutcome } from "../surface-context-puller.ts";
+import { askAgentAvailable } from "../../resolution/sharing-posture.ts";
 
 type ReachBody = {
   recipient?: unknown;
@@ -19,7 +21,72 @@ type ReachBody = {
   react?: unknown;
   delete?: unknown;
   files?: unknown;
+  task?: unknown;
 };
+
+const SLACK_USER_ID = /^[UW][A-Z0-9]+$/;
+
+async function askAgent(ctx: ApiCtx, b: ReachBody, task: string): Promise<void> {
+  const { res, app, deps } = ctx;
+  const cap = ctx.capability!;
+  const extra = [b.channel, b.participants, b.react, b.delete, b.files, b.threadTs].some((v) => v !== undefined);
+  if (typeof b.recipient !== "string" || extra) {
+    return sendJson(res, 400, { error: "bad_request", message: "task goes to one recipient, with no other options" });
+  }
+  const where = { surface: cap.surface, scopeId: cap.scopeId, external: !!cap.externalSlack };
+  const posture =
+    cap.runId && (await deps.config?.resolveSharingPostureDurable(scopeId("personal", cap.actorId), cap.scopeId));
+  if (!cap.runId || !askAgentAvailable({ ...where, posture: posture || "isolated" })) {
+    return sendJson(res, 409, {
+      error: "unavailable",
+      message:
+        "asking a personal agent works only during a live turn in an internal, Isolated Slack channel; in Open conversations do the work yourself with the requester's own access",
+    });
+  }
+  let person = b.recipient.trim();
+  let recipient: { principalId: string; displayName: string } | undefined;
+  if (!SLACK_USER_ID.test(person)) {
+    const r = await app.resolveReachTarget({ recipient: person }, cap.actorId);
+    if (!r.ok) {
+      return sendJson(res, r.status, {
+        error: r.error,
+        message: r.message,
+        ...(r.candidates && { candidates: r.candidates }),
+      });
+    }
+    recipient = r.recipient;
+    person = r.recipient?.slackId ?? r.recipient?.principalId ?? "";
+    if (!SLACK_USER_ID.test(person)) {
+      return sendJson(res, 404, {
+        error: "recipient_not_found",
+        message: `${b.recipient} has no linked Slack account`,
+      });
+    }
+  }
+  const request = await app.createContextRequest("slack", {
+    count: 1,
+    askAgent: { runId: cap.runId, targetUserId: person, task: task.slice(0, 4000) },
+  });
+  const outcome = await awaitContextOutcome(app, request.id, { waitMs: 25_000, pollMs: 100 });
+  if (outcome.status === "done" && outcome.result.handoff) {
+    return sendJson(res, 200, {
+      ok: true,
+      requestId: outcome.result.handoff.requestId,
+      ...(recipient && { recipient }),
+      message: `Sent the request to ${outcome.result.handoff.target} for approval and posted its status in this thread. Nothing has run yet; the result posts here only if they approve.`,
+    });
+  }
+  if (outcome.status === "timeout") {
+    return sendJson(res, 504, {
+      error: "timeout",
+      message: "Slack didn't confirm the request in time; sending the same recipient and task again is safe",
+    });
+  }
+  return sendJson(res, 409, {
+    error: "not_sent",
+    message: outcome.status === "failed" && outcome.error ? outcome.error : "the request was not sent",
+  });
+}
 
 function parseFiles(v: unknown): { ok: true; files: string[] } | { ok: false; message: string } {
   if (v === undefined) return { ok: true, files: [] };
@@ -59,6 +126,12 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   if (rate && !rate.allowed)
     return sendJson(res, 429, { error: "rate_limited", message: "too many outbound actions; try again later" });
   const b = (isObj(body) ? body : {}) as ReachBody;
+  if (b.task !== undefined) {
+    if (typeof b.task !== "string" || !b.task.trim()) {
+      return sendJson(res, 400, { error: "bad_request", message: "task must be a non-empty string" });
+    }
+    return askAgent(ctx, b, b.task.trim());
+  }
   let text: string | undefined;
   if (typeof b.text === "string") text = b.text;
   else if (typeof b.message === "string") text = b.message;

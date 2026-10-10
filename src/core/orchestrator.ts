@@ -36,7 +36,7 @@ import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
-import { renderSharingPosturePrompt } from "../resolution/sharing-posture.ts";
+import { ASK_AGENT_PROMPT, askAgentAvailable, renderSharingPosturePrompt } from "../resolution/sharing-posture.ts";
 import { resolveReachableChannel } from "../resolution/scope-reach.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
@@ -1157,6 +1157,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
       const sharingPrompt = renderSharingPosturePrompt(actor, sharingSources);
       if (sharingPrompt) systemPrompt += `\n\n${sharingPrompt}`;
+      if (askAgentAvailable({ surface: input.surface, scopeId, external, posture: resolution.sharingPosture }))
+        systemPrompt += `\n\n${ASK_AGENT_PROMPT}`;
       const scopeProfile = supportsScopeProfile(deps.sandbox)
         ? await deps.sandbox
             .profileFor(memoryScopeId, swarmBinding?.sandboxId)

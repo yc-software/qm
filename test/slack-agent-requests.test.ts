@@ -1,11 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  agentRequestMessage,
-  createThreadTracker,
-  extractAgentRequests,
-  stripAgentRequestDirectives,
-} from "../src/slack/lib.ts";
+import { createThreadTracker } from "../src/slack/lib.ts";
+import { agentRequestMessage } from "../src/slack/agent-requests.ts";
 import { createApprovals } from "../src/slack/approvals.ts";
 import { createTurnFlow } from "../src/slack/turn-flow.ts";
 import {
@@ -25,9 +21,9 @@ test("agentRequestMessage builds a personal-agent approval prompt", () => {
     task: "Check whether browse-agent works with the personal ANTHROPIC_API_KEY, but do not reveal the key.",
   });
   assert.match(msg.text, /asking Carol's personal agent/);
-  const section = msg.blocks.find((b) => b.type === "section") as any;
+  const section = msg.blocks.find((b: any) => b.type === "section") as any;
   assert.match(section.text.text, /#project-alpha agent → Carol's personal agent/);
-  const actions = msg.blocks.find((b) => b.type === "actions") as any;
+  const actions = msg.blocks.find((b: any) => b.type === "actions") as any;
   assert.deepEqual(
     actions.elements.map((e: any) => [e.text.text, e.action_id, e.value]),
     [
@@ -37,32 +33,27 @@ test("agentRequestMessage builds a personal-agent approval prompt", () => {
   );
 });
 
-test("extractAgentRequests pulls an ask-agent directive out and strips it from the reply", () => {
-  const r = extractAgentRequests(
-    "I need Carol's personal setup for that.\n\n[[ask-agent: <@U2> | Check whether browse-agent can use your ANTHROPIC_API_KEY without revealing it.]]",
-  );
-  assert.deepEqual(r.requests, [
-    {
-      targetUserId: "U2",
-      task: "Check whether browse-agent can use your ANTHROPIC_API_KEY without revealing it.",
+const CHANNEL_RUN = {
+  request: {
+    surface: "slack",
+    actor: { id: "una@example.com", type: "internal" },
+    conversation: {
+      kind: "channel",
+      threadRef: "C1:1.1",
+      channelRef: "C1",
+      channelName: "proj",
+      audience: [
+        { id: "una@example.com", type: "internal" },
+        { id: "carol@example.com", type: "internal" },
+      ],
     },
-  ]);
-  assert.equal(r.text, "I need Carol's personal setup for that.");
-});
+    deliveryTarget: "C1:1.1",
+  },
+};
 
-test("extractAgentRequests handles raw user ids, streamed partial stripping, and code examples", () => {
-  assert.deepEqual(extractAgentRequests("[[ask-agent: U2 | run a quick check]]").requests, [
-    { targetUserId: "U2", task: "run a quick check" },
-  ]);
-  assert.equal(stripAgentRequestDirectives("asking [[ask-agent: <@U2> | run it]] now"), "asking  now");
-  assert.equal(stripAgentRequestDirectives("asking [[ask-agent: <@U2> | run"), "asking ");
-
-  const inline = extractAgentRequests("Use `[[ask-agent: <@U2> | task]]` to ask a personal agent.");
-  assert.deepEqual(inline.requests, []);
-  assert.equal(inline.text, "Use `[[ask-agent: <@U2> | task]]` to ask a personal agent.");
-});
-
-function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Record<string, unknown> } = {}) {
+function durableFixture(
+  opts: { turnResults?: TurnResult[]; coreOverrides?: Record<string, unknown>; actor?: Record<string, unknown> } = {},
+) {
   const store = new Map<string, SlackAgentRequestContext>();
   const storedApprovals = new Map<string, unknown>();
   const submitted: any[] = [];
@@ -75,6 +66,9 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
     ackRunDelivery: async () => {},
     reportRunEditRef: async () => {},
     getApproval: async (id: string) => storedApprovals.get(id) ?? null,
+    reserveAgentRequest: async (id: string, record: SlackAgentRequestContext) =>
+      !store.has(id) && !!store.set(id, record),
+    dropAgentRequest: async (id: string) => void store.delete(id),
     putAgentRequest: async (id: string, record: SlackAgentRequestContext) => void store.set(id, record),
     getAgentRequest: async (id: string) => store.get(id) ?? null,
     takeAgentRequest: async (id: string) => {
@@ -82,6 +76,7 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
       store.delete(id);
       return record;
     },
+    getAgentRequestRun: async (runId: string) => (runId === "run-1" ? CHANNEL_RUN : null),
     agentRequestForApproval: async (approvalId: string) => {
       for (const record of store.values()) {
         if (record.approvalRequestIds?.includes(approvalId)) return record;
@@ -91,7 +86,7 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
     ...opts.coreOverrides,
   } as unknown as SlackCoreClient;
   const directory = {
-    classifyActor: async () => ({ externalId: "carol@example.com", displayName: "Carol" }),
+    classifyActor: async () => opts.actor ?? { externalId: "carol@example.com", displayName: "Carol" },
     classifyUserCached: async () => ({ actor: { externalId: "carol@example.com", displayName: "Carol" } }),
   } as never;
   const posts: any[] = [];
@@ -141,26 +136,67 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
         });
     return { approvals, click };
   };
+  const ask = (runId = "run-1") =>
+    newInstance().approvals.handoffs.askFromRun(client, { runId, targetUserId: "U2", task: "run the check" });
   const postRequest = async () => {
-    await newInstance().approvals.postAgentRequests(
-      client,
-      {
-        requesterId: "U1",
-        channel: "C1",
-        replyThreadTs: "1.1",
-        threadOnly: true,
-        kind: "channel",
-        channelName: "proj",
-        audience: [{ externalId: "U2", displayName: "Carol" }],
-      },
-      [{ targetUserId: "U2", task: "run the check" }],
-    );
+    const outcome = await ask();
+    assert.ok("handoff" in outcome, JSON.stringify(outcome));
     const card = posts.find((p) => p.channel === "D-CAROL");
     const actions = card.blocks.find((b: any) => b.type === "actions");
-    return { requestId: String(actions.elements[0].value), cardTs: "100.2", statusTs: "100.1" };
+    return { requestId: String(actions.elements[0].value), cardTs: "100.1", statusTs: "100.2" };
   };
-  return { core, store, storedApprovals, submitted, posts, updates, ephemerals, client, newInstance, postRequest };
+  return { core, store, storedApprovals, submitted, posts, updates, ephemerals, client, newInstance, postRequest, ask };
 }
+
+test("asking a personal agent from a channel turn sends the consent DM, posts the status in the thread, and reports success", async () => {
+  const f = durableFixture();
+  const outcome = await f.ask();
+  assert.ok("handoff" in outcome);
+  assert.equal((outcome as any).handoff.target, "Carol's personal agent");
+  assert.deepEqual(
+    f.posts.map((p) => [p.channel, p.thread_ts ?? null]),
+    [
+      ["D-CAROL", null],
+      ["C1", "1.1"],
+    ],
+  );
+  assert.match(String(f.posts[1].text), /#proj agent → Carol's personal agent[\s\S]*Waiting for Carol to approve/);
+  assert.equal(f.store.size, 1);
+});
+
+test("asking a personal agent is refused without posting anything when the run or target doesn't qualify", async () => {
+  const cases: Array<[string, Parameters<typeof durableFixture>[0], string]> = [
+    ["finished run", {}, "run-gone"],
+    ["bot target", { actor: { externalId: "B1", displayName: "Helper", isBot: true } }, "run-1"],
+    ["outsider", { actor: { externalId: "dave@example.com", displayName: "Dave" } }, "run-1"],
+    ["guest", { actor: { externalId: "carol@example.com", displayName: "Carol", isExternalGuest: true } }, "run-1"],
+  ];
+  for (const [label, opts, runId] of cases) {
+    const f = durableFixture(opts);
+    const outcome = await f.ask(runId);
+    assert.ok("error" in outcome, label);
+    assert.equal(f.posts.length, 0, label);
+    assert.equal(f.store.size, 0, label);
+  }
+});
+
+test("a consent DM that Slack rejects is reported as a failure and leaves no waiting status behind", async () => {
+  const f = durableFixture();
+  f.client.chat.postMessage = async () => {
+    throw new Error("channel_not_found");
+  };
+  const outcome = await f.ask();
+  assert.match((outcome as any).error, /couldn't send the request to Carol: channel_not_found/);
+  assert.equal(f.store.size, 0);
+});
+
+test("asking again with the same person and task returns the first request instead of sending a second card", async () => {
+  const f = durableFixture();
+  const first = await f.ask();
+  const posted = f.posts.length;
+  assert.deepEqual(await f.ask(), first);
+  assert.equal(f.posts.length, posted);
+});
 
 test("a Run click on an instance that did not post the card recovers the request and completes the handoff", async () => {
   const f = durableFixture();
@@ -213,14 +249,11 @@ test("a click that loses the claim race to another instance stays silent", async
 });
 
 test("a store outage answers the click with a retry nudge instead of expiring the card", async () => {
-  const f = durableFixture({
-    coreOverrides: {
-      getAgentRequest: async () => {
-        throw new Error("db down");
-      },
-    },
-  });
+  const f = durableFixture();
   const { requestId, cardTs } = await f.postRequest();
+  f.core.getAgentRequest = async () => {
+    throw new Error("db down");
+  };
 
   await f.newInstance().click("agent_request_run", requestId, { ts: cardTs });
 
@@ -308,7 +341,10 @@ test("the agent-request store expires stale records and sweeps them on put", asy
   assert.equal((await store.getAgentRequest("fresh"))?.requestId, "fresh");
   assert.equal((await store.agentRequestForApproval("req-new"))?.requestId, "fresh");
   assert.equal((await store.takeAgentRequest("fresh"))?.requestId, "fresh");
-  assert.equal(await map.get("fresh"), null);
+  assert.equal(await store.takeAgentRequest("fresh"), null, "a taken request can't be taken twice");
+  assert.equal(await store.reserveAgentRequest("fresh", record("fresh", 0)), false, "the taken request stays reserved");
+  await store.putAgentRequest("fresh", record("fresh", 0));
+  assert.equal(await store.getAgentRequest("fresh"), null, "a late write can't revive a settled request");
 });
 
 test("a handoff command approval recovered on a fresh instance still reports back to the origin channel", async () => {
@@ -345,41 +381,11 @@ test("a handoff command approval recovered on a fresh instance still reports bac
   assert.equal(f.store.size, 0, "the durable record is settled once the handoff completes");
 });
 
-test("a directive wrapped onto a new line or with a long id still files the request and keeps the tail", () => {
-  const wrapped = extractAgentRequests("hi [[ask-agent:\n<@U2> | task]] tail text");
-  assert.equal(wrapped.requests.length, 1);
-  assert.match(wrapped.text, /tail text$/);
-  const longId = "<@U2>" + " ".repeat(500);
-  const over = extractAgentRequests(`hi [[ask-agent:${longId}| task]] tail text`);
-  assert.equal(over.requests.length, 0);
-  assert.match(over.text, /tail text$/, "an over-long id is left alone instead of truncating the reply");
-});
-
 test("a react directive followed by a huge whitespace run strips in linear time", () => {
   const start = process.hrtime.bigint();
   extractReactions("thanks [[react:" + " ".repeat(100000) + "]x");
   extractReactions("[[react: eyes]] tail" + " ".repeat(100000) + "no newline");
   assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 200);
-});
-
-test("a malformed closed directive is stripped without filing, and an unrelated ]] later does not resurrect a trailing one", () => {
-  const leak = extractAgentRequests(
-    "I'll ask [[ask-agent: <@U2> no pipe here]] and also [[ask-agent: <@U3> | real]] done",
-  );
-  assert.equal(leak.requests.length, 1);
-  assert.match(leak.text, /^I'll ask\s+and also\s+done$/);
-  const open = extractAgentRequests("see [docs](y)]] then [[ask-agent: <@U2> | never closed");
-  assert.equal(open.requests.length, 0);
-  assert.equal(open.text, "see [docs](y)]] then");
-});
-
-test("the leftover strip is case-insensitive and safe on non-ASCII text", () => {
-  const out = extractAgentRequests("İstanbul plan: İİİ ok [[ask-agent: <@U2> | never closed");
-  assert.equal(out.text, "İstanbul plan: İİİ ok");
-  assert.equal(out.requests.length, 0);
-  const start = process.hrtime.bigint();
-  extractAgentRequests(("[[ask-agent:" + "x".repeat(88)).repeat(10000));
-  assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 100);
 });
 
 test("an early approval has durable handoff context without making the original Run button reusable", async () => {
