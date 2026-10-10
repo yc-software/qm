@@ -2535,6 +2535,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
           }
+          // A retried run regenerates its reply; drop what the failed attempt streamed.
+          if ((input.attempt ?? 1) > 1) deps.turnStream?.restart(input.runId);
           deps.turnStream?.begin(input.runId);
         }
 
@@ -3884,6 +3886,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
               if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
                 spineFirstBlock += chunk;
+            },
+            onMessageStart: () => {
+              if (input.runId && !input.surfaceTools) deps.turnStream?.markMessageStart(input.runId);
+            },
+            onMessageRetracted: () => {
+              if (input.runId && !input.surfaceTools) deps.turnStream?.retractMessage(input.runId);
             },
             onToolCallStart: (name: string) => {
               if (!earlyTaskAck || name === surfaceName) return;

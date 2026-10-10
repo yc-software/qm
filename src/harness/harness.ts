@@ -153,6 +153,10 @@ export interface HarnessTurnInput {
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
+  /** An assistant message is starting; a later onMessageRetracted drops its streamed text. */
+  onMessageStart?(): void;
+  /** The provider attempt behind the current assistant message failed and is being retried. */
+  onMessageRetracted?(): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;

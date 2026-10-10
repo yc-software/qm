@@ -298,6 +298,8 @@ export interface App {
       attachments?: Array<{ name: string; mimetype: string; sizeBytes: number }>;
     };
     partial?: string;
+    /** Bumped when streamed text is withdrawn (a failed attempt); clients replace, not append. */
+    partialEpoch?: number;
     alive?: boolean;
     stale?: boolean;
     replying?: boolean;

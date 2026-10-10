@@ -505,6 +505,7 @@ export interface RunPoll {
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
   partial?: string;
+  partialEpoch?: number;
   alive?: boolean;
   stale?: boolean;
   replyComplete?: boolean;
@@ -1349,6 +1350,8 @@ function runPath(runId: string, suffix: string): string {
 
 export interface Acc {
   acc: string;
+  /** Server partialEpoch the accumulated text belongs to. */
+  epoch?: number;
   lastProgressAt: number;
   staleSince?: number;
 }
@@ -1418,7 +1421,13 @@ function applyRun(
   }
   setWorkStale(work, run.stale === true, notify);
   const p = typeof run.partial === "string" ? run.partial : "";
-  if (p.length > st.acc.length) {
+  if ((run.partialEpoch ?? 0) !== (st.epoch ?? 0)) {
+    // The server withdrew text from a failed attempt: replace instead of appending.
+    st.epoch = run.partialEpoch ?? 0;
+    st.lastProgressAt = now();
+    st.acc = "";
+    pushDelta(stream, partial, st, p);
+  } else if (p.length > st.acc.length) {
     st.lastProgressAt = now();
     pushDelta(stream, partial, st, p);
   }
@@ -1581,11 +1590,15 @@ async function streamRunViaSse(
     clearTimeout(timer);
     timer = setTimeout(abort, SSE_SILENCE_MS);
   };
-  const processor = new StreamProcessor({
-    initialMessages: [{ id: runId, role: "assistant", parts: [{ type: "text", content: st.acc }] }],
-    events: { onTextUpdate: (_id, text) => pushDelta(stream, partial, st, text) },
-  });
-  processor.processChunk({ type: EventType.TEXT_MESSAGE_START, messageId: runId, role: "assistant" });
+  const startProcessor = (): StreamProcessor => {
+    const next = new StreamProcessor({
+      initialMessages: [{ id: runId, role: "assistant", parts: [{ type: "text", content: st.acc }] }],
+      events: { onTextUpdate: (_id, text) => pushDelta(stream, partial, st, text) },
+    });
+    next.processChunk({ type: EventType.TEXT_MESSAGE_START, messageId: runId, role: "assistant" });
+    return next;
+  };
+  let processor = startProcessor();
   const append = (delta: string): void => {
     if (!delta) return;
     st.lastProgressAt = now();
@@ -1612,6 +1625,12 @@ async function streamRunViaSse(
         append(delta);
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
+        if ((run.partialEpoch ?? 0) !== (st.epoch ?? 0)) {
+          st.epoch = run.partialEpoch ?? 0;
+          st.acc = "";
+          pushDelta(stream, partial, st, "");
+          processor = startProcessor();
+        }
         if (typeof run.partial === "string" && run.partial.length > st.acc.length)
           append(run.partial.slice(st.acc.length));
         // Completion must carry the final result, including files and approvals.
