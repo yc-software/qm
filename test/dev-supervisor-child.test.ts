@@ -75,6 +75,31 @@ test("a crashed child is auto-restarted with backoff", async () => {
   rmSync(lock, { recursive: true, force: true });
 });
 
+test("shutdown prevents initial starts and restarts even while a child is stopping", async () => {
+  const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
+  const port = await freeTcpPort();
+  let canStart = true;
+  const child = new Child(
+    spec(lock, port),
+    lock,
+    () => {},
+    () => {},
+    () => canStart,
+  );
+  try {
+    assert.equal((await child.start()).ok, true);
+    const restarting = child.restart();
+    canStart = false;
+    assert.equal((await restarting).ok, false);
+    assert.equal((await child.start()).ok, false);
+    assert.equal(child.proc, null);
+    assert.equal(await tcpPortOpen(port), false);
+  } finally {
+    await child.stop();
+    rmSync(lock, { recursive: true, force: true });
+  }
+});
+
 test("startup leaves occupied ports untouched and retries after they become free", async () => {
   const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
   const port = await freeTcpPort();

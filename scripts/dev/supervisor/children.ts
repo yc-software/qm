@@ -29,12 +29,20 @@ export class Child {
   private lockDir: string;
   private log: (msg: string) => void;
   private onCrash: (child: Child) => void;
+  private canStart: () => boolean;
 
-  constructor(spec: ChildSpec, lockDir: string, log: (msg: string) => void, onCrash: (child: Child) => void) {
+  constructor(
+    spec: ChildSpec,
+    lockDir: string,
+    log: (msg: string) => void,
+    onCrash: (child: Child) => void,
+    canStart = () => true,
+  ) {
     this.spec = spec;
     this.lockDir = lockDir;
     this.log = log;
     this.onCrash = onCrash;
+    this.canStart = canStart;
   }
 
   logFile(): string {
@@ -46,6 +54,7 @@ export class Child {
   }
 
   async start(): Promise<{ ok: boolean; detail?: string }> {
+    if (!this.canStart()) return { ok: false, detail: "shutdown in progress" };
     this.stopRequested = false;
     this.state = "starting";
     this.lastSpawnAt = Date.now();

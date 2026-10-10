@@ -84,6 +84,12 @@ Use `npm run dev-instance:both` when testing both surfaces together. Bare
 `npm run dev-instance` defaults to web for new instances and preserves the surface
 on reload. Switch an existing instance with an explicit surface command.
 
+For systemd or another service manager, use `bash scripts/dev-instance.sh up --foreground`.
+It waits for the supervisor, forwards SIGTERM/SIGINT for graceful shutdown, and exits
+nonzero if the supervisor dies unexpectedly. Supervisor output goes to stderr; child
+logs remain available through `dev logs`. Stop an existing detached instance with
+`bash scripts/dev-instance.sh down` before starting it in the foreground.
+
 ## How it works
 
 Every turn runs through a central core, which can use a variety of models and harnesses

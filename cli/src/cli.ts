@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { CliError, bold, dim, errMessage, note, ok, red } from "./log.ts";
@@ -165,7 +166,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
     --sandbox-dir <path>                   path to the sandbox layer dir (default: sandbox/ in the deploy dir)
 
 ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
-  dev up [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
+  dev up [--foreground] [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
                                            run the supervised contributor engine in scripts/dev/
   dev --ci [up|down]                       CI mode: core only (Slack in-process), no pool lease (live-e2e)
 
@@ -297,6 +298,7 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectUnknownFlags(flags, [
         "json",
         "force",
+        "foreground",
         "strict",
         "rotate",
         "f",
@@ -313,13 +315,21 @@ async function dispatch(argv: string[]): Promise<void> {
       const root = gitTopLevel();
       const configPath = findConfigPath(root);
       const orgId = strFlag(flags, "org") ?? (configPath && readConfigOrgId(configPath)) ?? "acme";
-      const result = spawnSync(process.execPath, [join(root, "scripts/dev/cli.ts"), ...argv.slice(1)], {
+      const child = spawn(process.execPath, [join(root, "scripts/dev/cli.ts"), ...argv.slice(1)], {
         cwd: root,
         stdio: "inherit",
         env: { ...process.env, DEV_INSTANCE_ORG_ID: orgId },
       });
-      if (result.error) throw result.error;
-      process.exitCode = result.status ?? 1;
+      const forward = (signal: NodeJS.Signals) => child.kill(signal);
+      process.on("SIGTERM", forward);
+      process.on("SIGINT", forward);
+      try {
+        const [code] = await once(child, "exit");
+        process.exitCode = code ?? 1;
+      } finally {
+        process.off("SIGTERM", forward);
+        process.off("SIGINT", forward);
+      }
       return;
     }
 
