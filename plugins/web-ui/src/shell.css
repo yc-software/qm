@@ -11222,6 +11222,16 @@ h3.ambient-field-label {
     letter-spacing: 0.04em;
     color: var(--muted-foreground);
   }
+  /* The top bar is its own stacking layer; lift it while its sheet is open so the sheet covers the composer. */
+  .chat-topbar:has(.menu-popover:not([hidden])) {
+    z-index: 60;
+  }
+  .session-tools-more .menu-option {
+    align-items: center;
+  }
+  .session-tools-more .menu-option-copy {
+    flex: 1;
+  }
   .menu-control.settings-control[data-align="right"] .menu-popover {
     width: auto !important;
   }
