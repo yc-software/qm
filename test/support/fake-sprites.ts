@@ -30,9 +30,17 @@ export interface InjectedFailure {
   match?: (call: { method: string; path: string }) => boolean;
 }
 
+export interface SpriteCreation {
+  name?: string;
+  wait_for_capacity?: boolean;
+  config?: { ram_mb?: number; cpus?: number };
+}
+
 export interface FakeSprites {
   baseUrl: string;
   calls: SpritesCall[];
+  /** The create request as the provider received it, or undefined when no sprite of that name was ever created. */
+  creation(name: string): SpriteCreation | undefined;
   homeDir(name: string): string;
   names(): string[];
   policy(name: string): NetworkRule[] | null;
@@ -167,6 +175,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const sprites = new Map<string, { home: string }>();
   const policies = new Map<string, NetworkRule[]>();
   const resources = new Map<string, { limitMB: number }>();
+  const creations = new Map<string, SpriteCreation>();
   const checkpoints = new Map<string, Array<{ id: string; createTime: string; dir: string }>>();
   const execScripts: string[] = [];
   const calls: SpritesCall[] = [];
@@ -305,9 +314,10 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
           { status: 429, headers: { "retry-after": String(retry) } },
         );
       }
-      const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { name?: string };
+      const body = JSON.parse(toBuf(init?.body).toString() || "{}") as SpriteCreation;
       const name = body.name ?? "unnamed";
       ensureDir(name);
+      creations.set(name, body);
       return Response.json({ name, status: "running" });
     }
     if (!one) return notFound("route");
@@ -485,7 +495,9 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       writeFileSync(join(home, ".proc-loadavg"), `${p.load1} 0.00 0.00 1/100 1\n`);
     },
     restarts: () => [...restarts],
+    creation: (name) => creations.get(name),
     reset: () => {
+      creations.clear();
       for (const name of Array.from(sprites.keys())) deleteSprite(name);
       execScripts.length = 0;
       calls.length = 0;

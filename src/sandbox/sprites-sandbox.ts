@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
-import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
+import {
+  APIError,
+  SpritesClient,
+  type Checkpoint,
+  type CreateSpriteOptions,
+  type SpriteCheck,
+  type SpriteConfig,
+  type StreamMessage,
+} from "@fly/sprites";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -124,6 +132,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   egressProxyUrl?: string;
   egressProxyAdditionalUrls?: string[];
   memoryMb?: number;
+  cpus?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
   initializationStore?: DurableMap<{ pending: boolean }>;
@@ -156,6 +165,15 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? CHECKPOINT_INTERVAL_MS;
+  const spriteConfig: SpriteConfig = {
+    ...(opts.memoryMb !== undefined ? ({ ramMB: opts.memoryMb } satisfies SpriteConfig) : {}),
+    ...(opts.cpus !== undefined ? ({ cpus: opts.cpus } satisfies SpriteConfig) : {}),
+  };
+  // Size is only honoured at creation, so an unconfigured sandbox must send no config at all and keep the provider default.
+  const createSpriteOptions: CreateSpriteOptions = {
+    waitForCapacity: true,
+    ...(Object.keys(spriteConfig).length > 0 ? { config: spriteConfig } : {}),
+  };
 
   const ensured = new Set<string>();
   const resourcesApplied = new Set<string>();
@@ -475,7 +493,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         }
         const scope = base.scopeFor(name);
         try {
-          if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+          if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, createSpriteOptions));
           await applyResources(name);
           const hydrated = homeSnapshots && scope ? await homeSnapshots.hydrateHome(scope, name) : false;
           await initializationStore.delete(name);
@@ -494,7 +512,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     isProvisioned: (name) => ensured.has(name),
     async recreateScratch(name) {
       if (await spriteExists(name)) await deleteSprite(name);
-      await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+      await attempt(`create ${name}`, () => client.createSprite(name, createSpriteOptions));
       await applyResources(name);
       ensured.add(name);
     },
@@ -517,7 +535,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       get notInstalled() {
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
-      cpus: SPRITE_CPUS,
+      cpus: opts.cpus ?? SPRITE_CPUS,
       ...(opts.memoryMb !== undefined ? { memoryMb: opts.memoryMb } : {}),
       diskGb: SPRITE_DISK_GB,
       homeDir: HOME_DIR,
