@@ -33,6 +33,22 @@ test("a closing paren stays when the URL itself contains the opener", () => {
   ]);
 });
 
+test("unmatched URL closers stay in prose while balanced brackets stay linked", () => {
+  const cases = [
+    ["[https://example.com/guide]", "https://example.com/guide"],
+    ["{https://example.com/api}", "https://example.com/api"],
+    ["https://example.com/docs[latest]", "https://example.com/docs[latest]"],
+    ["https://example.com/object{key}", "https://example.com/object{key}"],
+    ["http://[2001:db8::1]/status", "http://[2001:db8::1]/status"],
+    ["https://example.com/a(b)[c]{d})]}.", "https://example.com/a(b)[c]{d}"],
+  ];
+  for (const [input, href] of cases) {
+    const segments = splitLinks(input);
+    assert.equal(segments.find((segment) => segment.kind === "link")?.href, href, input);
+    assert.equal(segments.map((segment) => (segment.kind === "link" ? segment.href : segment.text)).join(""), input);
+  }
+});
+
 test("multiple URLs each become their own segment", () => {
   const segs = splitLinks("a https://one.test b http://two.test c");
   assert.deepEqual(
