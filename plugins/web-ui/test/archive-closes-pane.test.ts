@@ -20,10 +20,23 @@ test("archiving a session closes any surface still showing it", () => {
   assert.match(close, /conv\.newChat\(\);/, "outside the canvas the main view drops the archived session");
 
   const archived = fn(sessions, "setArchived");
-  assert.match(archived, /if \(archived && s\.id\) closeSessionSurfaces\(s\.id\);/);
+  assert.match(archived, /const closed = archived && s\.id && closeSessionSurfaces\(s\.id\);/);
   assert.ok(
     archived.indexOf("closeSessionSurfaces") < archived.indexOf("persistSessionPatch"),
     "close the surface before the patch round-trip so the UI reacts immediately",
   );
   assert.doesNotMatch(archived, /!archived.*closeSessionSurfaces/s, "unarchiving must not close anything");
+});
+
+test("archiving the open chat lands on the next chat instead of a new one", () => {
+  const archived = fn(sessions, "setArchived");
+  assert.match(archived, /archived && appState\.currentView === "chats" \? sessionBelow\(s\)/);
+  assert.match(
+    archived,
+    /closed && next && !\(focusedPaneConversation\(\) \?\? mainConversation\(\)\)\.state\.sessionId\) void openSession\(next\)/,
+    "only fill a blank chat",
+  );
+  const below = fn(sessions, "sessionBelow");
+  assert.match(below, /filter\(\(x\) => !x\.archived\)/, "never land on another archived chat");
+  assert.match(below, /list\[i \+ 1\] \?\? list\[i - 1\]/, "prefer the chat below, else the one above");
 });
