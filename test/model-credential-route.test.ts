@@ -564,6 +564,35 @@ test("surface-config reports Codex ChatGPT OAuth without making it a Pi credenti
   }
 });
 
+test("surface-config follows the org runtime selection instead of the deployment harness", async () => {
+  const srv = start({ harness: "codex", codexAuthFile: "/tmp/codex-auth.json" });
+  type SurfaceConfig = {
+    harnessId: string;
+    baseModel: string;
+    webuiModels: string[];
+    modelProviderConfigured: boolean;
+  };
+  try {
+    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
+    const deployment = (await (await fetch(`${srv.base}/v1/surface-config`)).json()) as SurfaceConfig;
+    assert.equal(deployment.harnessId, "codex");
+    assert.deepEqual(deployment.webuiModels, []);
+    assert.equal(deployment.modelProviderConfigured, true);
+
+    await srv.built.config.setRuntimeSelectionLatest("org:default-org", {
+      harnessId: "pi",
+      modelId: "claude-sonnet-5",
+    });
+    const overridden = (await (await fetch(`${srv.base}/v1/surface-config`)).json()) as SurfaceConfig;
+    assert.equal(overridden.harnessId, "pi");
+    assert.equal(overridden.baseModel, "claude-sonnet-5");
+    assert.deepEqual(overridden.webuiModels, ["claude-sonnet-5"]);
+    assert.equal(overridden.modelProviderConfigured, true);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("a claude harness with an OAuth token counts as configured without corrupting store statuses", async () => {
   const srv = start({
     harness: "claude",
