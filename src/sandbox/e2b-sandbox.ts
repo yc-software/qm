@@ -1,4 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
+import { takeTimeoutMarker, withGroupTimeout } from "./exec-timeout.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -295,10 +296,12 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     return withSession(name, async (session) => {
-      const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
+      const guard = withGroupTimeout(script, timeoutSec);
+      const r = await session.runCommand(`sh -c ${shq(guard.script)}`, {
         timeoutMs: timeoutSec * 1000 + 30_000,
       });
-      return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+      const { stderr, timedOut } = takeTimeoutMarker(r.stderr, guard.nonce);
+      return { stdout: r.stdout, stderr, code: r.exitCode, timedOut };
     });
   }
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { takeTimeoutMarker, withGroupTimeout } from "./exec-timeout.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -261,7 +262,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       stdout: decodeStream(name, "stdout", r.stdoutB64, r.stdout, r.stdoutTruncated),
       stderr: decodeStream(name, "stderr", r.stderrB64, r.stderr, r.stderrTruncated),
       code: r.exitCode,
-      timedOut: r.exitCode === 124,
+      timedOut: false,
     };
   }
 
@@ -269,8 +270,10 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     `${machinePath(id)}/files${absPath.split("/").map(encodeURIComponent).join("/")}`;
 
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
-    const guarded = `timeout ${timeoutSec} sh -c ${shq(script)}`;
-    if (timeoutSec <= EXEC_SYNC_MAX_SEC) return postExec(name, guarded, timeoutSec);
+    const guard = withGroupTimeout(script, timeoutSec);
+    const guarded = `sh -c ${shq(guard.script)}`;
+    const unmark = (r: ExecResult): ExecResult => ({ ...r, ...takeTimeoutMarker(r.stderr, guard.nonce) });
+    if (timeoutSec <= EXEC_SYNC_MAX_SEC) return unmark(await postExec(name, guarded, timeoutSec));
     const uid = randomUUID();
     const out = `${HOME_DIR}/.qm-exec-${uid}.out`;
     const err = `${HOME_DIR}/.qm-exec-${uid}.err`;
@@ -289,7 +292,13 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       }
       await sleep(EXEC_POLL_MS);
     }
-    return postExec(name, `__rc=$(cat ${rcf}); cat ${out}; cat ${err} >&2; rm -f ${out} ${err} ${rcf}; exit $__rc`, 60);
+    return unmark(
+      await postExec(
+        name,
+        `__rc=$(cat ${rcf}); cat ${out}; cat ${err} >&2; rm -f ${out} ${err} ${rcf}; exit $__rc`,
+        60,
+      ),
+    );
   }
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
