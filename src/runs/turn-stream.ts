@@ -87,8 +87,13 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   return {
     begin(runId) {
       const entry = runs.get(runId);
-      if (entry) entry.replying = true;
-      else runs.set(runId, makeEntry());
+      if (entry) {
+        entry.replying = true;
+        if (entry.timer) {
+          clearTimeout(entry.timer);
+          entry.timer = null;
+        }
+      } else runs.set(runId, makeEntry());
       opts.onChange?.(runId);
     },
 
