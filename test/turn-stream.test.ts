@@ -474,3 +474,28 @@ test("monitor wakes persist engagement after the reply gate", async () => {
     await built.runtime.stop();
   }
 });
+
+test("markers written after an ended run was evicted expire again instead of living forever", async () => {
+  const stream = createTurnStream({ graceMs: 20 });
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let i = 0; i < 200; i++) {
+    stream.begin(`r${i}`);
+    stream.end(`r${i}`);
+  }
+  await wait(40);
+  for (let i = 1; i < 200; i++) stream.markSurfacePosted(`r${i}`);
+  stream.markReplyDone("r1");
+  await wait(40);
+  for (let i = 1; i < 200; i++) assert.equal(stream.surfacePosted(`r${i}`), false);
+  assert.equal(stream.isReplyDone("r1"), false);
+});
+
+test("a run that begins again after ending stays live until it ends again", async () => {
+  const stream = createTurnStream({ graceMs: 20 });
+  stream.begin("r");
+  stream.end("r");
+  stream.begin("r");
+  stream.publish("r", "again");
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(stream.snapshot("r"), "again");
+});
