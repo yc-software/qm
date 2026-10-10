@@ -46,11 +46,8 @@ import {
   layoutNeedsSessionList,
   MAX_PANES,
   MAX_TILES,
-  paneNeedsSessionList,
   serializedTileCount,
-  v1PaneSeeds,
   type DropEdge,
-  type PaneSeed,
   type SplitEdge,
 } from "./split-layout";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
@@ -112,13 +109,11 @@ interface PaneDrag {
   existing(): IDockviewPanel | null;
 }
 
-type PendingSeed = { kind: "v2"; layout: SerializedDockview } | { kind: "v1"; seeds: PaneSeed[] };
-
 let canvasHost: HTMLElement | null = null;
 let dockApi: DockviewApi | null = null;
 let toastEl: HTMLElement | null = null;
 let lastLayout: SerializedDockview | null = null;
-let pendingSeed: PendingSeed | null = null;
+let pendingLayout: SerializedDockview | null = null;
 const paneContents = new Map<string, PaneContent>();
 const paneTabs = new Set<PaneTab>();
 const groupActions = new Set<GroupActions>();
@@ -303,15 +298,13 @@ function ensureCanvas(): boolean {
   appState.mainEl.replaceChildren(canvasHost);
   mainConversation().state.host = null;
   dockApi = buildDock();
-  const seed = pendingSeed;
-  pendingSeed = null;
+  const layout = pendingLayout;
+  pendingLayout = null;
   try {
     if (lastLayout) {
       dockApi.fromJSON(lastLayout);
-    } else if (seed?.kind === "v2") {
-      dockApi.fromJSON(seed.layout);
-    } else if (seed?.kind === "v1") {
-      seedFromV1(dockApi, seed.seeds);
+    } else if (layout) {
+      dockApi.fromJSON(layout);
     }
   } catch {
     disposeDock();
@@ -348,23 +341,6 @@ function addPane(
     params: { ...params },
     ...(position ? { position } : {}),
   });
-}
-
-function seedFromV1(api: DockviewApi, seeds: PaneSeed[]): void {
-  const placed: IDockviewPanel[] = [];
-  for (const [i, seed] of seeds.entries()) {
-    const params: PaneParams = {
-      ...(seed.sessionId ? { sessionId: seed.sessionId } : {}),
-      ...(seed.threadRef ? { threadRef: seed.threadRef } : {}),
-    };
-    let ref = placed[i - 2];
-    if (i === 1) ref = placed[0];
-    else if (seeds.length === 3) ref = placed[1];
-    placed.push(
-      addPane(params, i === 0 ? undefined : { referencePanel: ref!.id, direction: i === 1 ? "right" : "below" }),
-    );
-  }
-  persist();
 }
 
 function edgeToDirection(edge: SplitEdge): "left" | "right" | "above" | "below" {
@@ -432,26 +408,20 @@ function adoptPersisted(raw: unknown): void {
   if (isPhone()) {
     if (typeof (raw as { updatedAt?: unknown }).updatedAt === "number")
       persistedUpdatedAt = (raw as { updatedAt: number }).updatedAt;
-    pendingSeed = null;
+    pendingLayout = null;
     splitState.active = false;
     return;
   }
   const o = raw as { v?: unknown; active?: unknown; layout?: unknown; updatedAt?: unknown };
-  if (o.v === 2) {
-    if (typeof o.updatedAt === "number") persistedUpdatedAt = o.updatedAt;
-    pendingSeed = null;
-    splitState.active = false;
-    if (o.active !== true || !o.layout || typeof o.layout !== "object") return;
-    const panels = (o.layout as { panels?: object }).panels;
-    const n = panels && typeof panels === "object" ? Object.keys(panels).length : 0;
-    if (n < 1 || n > MAX_PANES || serializedTileCount(o.layout) > MAX_TILES) return;
-    pendingSeed = { kind: "v2", layout: o.layout as SerializedDockview };
-    splitState.active = true;
-    return;
-  }
-  const seeds = v1PaneSeeds(raw);
-  if (!seeds) return;
-  pendingSeed = { kind: "v1", seeds };
+  pendingLayout = null;
+  splitState.active = false;
+  if (o.v !== 2) return;
+  if (typeof o.updatedAt === "number") persistedUpdatedAt = o.updatedAt;
+  if (o.active !== true || !o.layout || typeof o.layout !== "object") return;
+  const panels = (o.layout as { panels?: object }).panels;
+  const n = panels && typeof panels === "object" ? Object.keys(panels).length : 0;
+  if (n < 1 || n > MAX_PANES || serializedTileCount(o.layout) > MAX_TILES) return;
+  pendingLayout = o.layout as SerializedDockview;
   splitState.active = true;
 }
 
@@ -487,9 +457,8 @@ export async function adoptRemoteSplit(pending: Promise<UiStateRecord | null>): 
 }
 
 export function restoredCanvasNeedsSessionList(): boolean {
-  if (!pendingSeed) return false;
-  if (pendingSeed.kind === "v1") return pendingSeed.seeds.some((seed) => paneNeedsSessionList(seed));
-  return layoutNeedsSessionList(pendingSeed.layout);
+  if (!pendingLayout) return false;
+  return layoutNeedsSessionList(pendingLayout);
 }
 
 export function mountRestoredCanvas(restoreOnly = false): boolean {

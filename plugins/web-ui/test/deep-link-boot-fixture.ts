@@ -55,6 +55,37 @@ export const SESSION = {
   title: "Deep linked chat",
 };
 
+export function savedCanvas(params: { sessionId?: string; threadRef?: string }[]): object {
+  return {
+    v: 2,
+    active: true,
+    layout: {
+      grid: {
+        root: {
+          type: "branch",
+          data: params.map((_, i) => ({ type: "leaf", data: { views: [`p${i}`], activeView: `p${i}`, id: `g${i}` } })),
+        },
+        width: 1000,
+        height: 800,
+        orientation: "HORIZONTAL",
+      },
+      panels: Object.fromEntries(
+        params.map((p, i) => [
+          `p${i}`,
+          {
+            id: `p${i}`,
+            contentComponent: "pane",
+            tabComponent: "pane",
+            params: p,
+            title: "Conversation",
+          },
+        ]),
+      ),
+      activeGroup: "g0",
+    },
+  };
+}
+
 export async function harness(opts: HarnessOptions): Promise<Harness> {
   const session = opts.session ?? SESSION;
   let transcriptStatus = opts.transcriptStatus;
@@ -65,15 +96,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   if (opts.savedCanvas)
     dom.window.localStorage.setItem(
       "web-ui:split-canvas:v1",
-      JSON.stringify({
-        v: 1,
-        active: true,
-        root: {
-          kind: "split",
-          a: { kind: "leaf", threadRef: "web:tester:old-a" },
-          b: { kind: "leaf", threadRef: "web:tester:old-b" },
-        },
-      }),
+      JSON.stringify(savedCanvas([{ threadRef: "web:tester:old-a" }, { threadRef: "web:tester:old-b" }])),
     );
   if (opts.slackReturn)
     dom.window.sessionStorage.setItem(

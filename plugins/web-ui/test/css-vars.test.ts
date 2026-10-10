@@ -37,8 +37,6 @@ test("colored session actions keep their row hue at rest and on hover", () => {
 
 test("conversation colors use solid fills from the refined spectrum palette on every list surface", () => {
   assert.match(tsSource, /const SESSION_COLORS = \["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899"\]/);
-  assert.equal(tsSource.match(/const color = displaySessionColor\(s\.color\);/g)?.length, 2);
-  assert.match(tsSource, /const current = displaySessionColor\(s\.color\);/);
   assert.doesNotMatch(tsSource, /#d2664d|#b98a52|#7d884f|#5f8b83|#527d99|#8b5d52/);
   assert.match(shellCss, /conic-gradient\(#f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #ec4899, #f43f5e\)/);
   for (const rule of [

@@ -796,7 +796,7 @@ function isActiveRow(s: CoreSession): boolean {
 
 function chatPageRow(s: CoreSession): TemplateResult {
   const readOnly = !isContinuable(s, appState.me?.user ?? "");
-  const color = displaySessionColor(s.color);
+  const color = s.color?.toLowerCase() ?? null;
   return html`
     <div class="list-row chat-row ${color ? "colored" : ""}" style=${color ? `--session-color:${color}` : nothing}>
       <a
@@ -975,7 +975,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
   const working = sessionWorking(s);
-  const color = displaySessionColor(s.color);
+  const color = s.color?.toLowerCase() ?? null;
   let titleContent: string | TemplateResult = groupDmTitle(s);
   if (refreshingTitle || pendingForkThreads.has(s.threadRef)) {
     titleContent = html`<span class="sheen-label title-sheen thinking-sheen" data-sheen=${title}>${title}</span>`;
@@ -1209,23 +1209,8 @@ function sessionMenuPopover(s: CoreSession): TemplateResult {
 }
 
 const SESSION_COLORS = ["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899"] as const;
-const LEGACY_SESSION_COLORS = new Map([
-  ["#ef4444", SESSION_COLORS[0]],
-  ["#f59e0b", SESSION_COLORS[1]],
-  ["#22c55e", SESSION_COLORS[2]],
-  ["#3b82f6", SESSION_COLORS[3]],
-  ["#a855f7", SESSION_COLORS[4]],
-  ["#ec4899", SESSION_COLORS[5]],
-]);
-
-function displaySessionColor(color: string | null | undefined): string | null {
-  if (!color) return null;
-  const normalized = color.toLowerCase();
-  return LEGACY_SESSION_COLORS.get(normalized) ?? normalized;
-}
-
 function sessionColorRow(s: CoreSession): TemplateResult {
-  const current = displaySessionColor(s.color);
+  const current = s.color?.toLowerCase() ?? null;
   const isPreset = SESSION_COLORS.includes(current as (typeof SESSION_COLORS)[number]);
   return html`
     <div class="session-menu-colors" role="group" aria-label="Row color">
