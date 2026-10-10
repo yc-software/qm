@@ -94,11 +94,10 @@ This is a distributed system that needs work to endure through deploys and crash
 - **Completed runs with missing replies:** A run was durably marked complete, but enqueueing its delivery depended on an in-process `onTerminal` callback. A crash between completion and enqueue left finished work with no delivery. The fix scans persisted terminal runs and reconstructs missing deliveries. _Status:_ fixed in [qm#2053](https://github.com/yc-software/qm/pull/2053).
 - **Webhook work already in flight:** `runOnce` guarded running webhook work with a process-local `inflight` Set, while the receiver's durable idempotency check recognized only committed fires. A retry routed to another instance during a long turn could start the same work again. _Status:_ still present on main; [qm#1943](https://github.com/yc-software/qm/pull/1943) proposes shared Postgres claims and includes a two-instance regression test.
 
-### Config-matrix expansion (11 examples)
+### Config-matrix expansion (10 examples)
 
 Helpful KPIs here are: how many env vars do we have? how large is the database schema? Implicit modes in the form of conditionals, text matching or hard-coded flags also count. The combined footprint of this config matrix is currently enormous and makes our task much more difficult. Driving this down is critical and PRs that reduce the size of these will be rewarded.
 
-- **Adding a provider that subtly deviates from the general sandbox contract (this has been done several times).** For example, ordinary teardown parks E2B, AWS, and local Docker computers, while Modal needs different handling. [qm#1748](https://github.com/yc-software/qm/pull/1748) removes a `backend !== "modal"` locking exception and introduces a `parksOnTeardown` profile property; the distinct lifecycle behaviors remain part of the matrix.
 - **[qm#1784](https://github.com/yc-software/qm/pull/1784)** (2026-09-30): Security screening had three overlapping env knobs (SECURITY_SCREEN_BACKEND, SECURITY_SCREEN_ALL_POSTURES, SECURITY_SCREEN_PROXY_ROLLOUT) plus per-posture inboundScreening; collapsed into one SECURITY_SCREEN=off|observe|enforce. _Status:_ wound back in [qm#1784](https://github.com/yc-software/qm/pull/1784).
 - **[qm#1747](https://github.com/yc-software/qm/pull/1747)** (2026-09-30): New SANDBOX_CAPABILITY_TTL_HOURS env var (48h default, or 0/none for non-expiring bearer tokens) right after #1518 hard-set 48h.
 - **[qm#1619](https://github.com/yc-software/qm/pull/1619)** (2026-09-25): Separate org runtime defaults for conversations, crons/loops and sub-agents, then per-cron overrides (#1593) and a fallback runtime (#1743): four overlapping runtime settings with precedence rules.
@@ -110,10 +109,11 @@ Helpful KPIs here are: how many env vars do we have? how large is the database s
 - **[qm#876](https://github.com/yc-software/qm/pull/876)** (2026-09-02): Porter added as yet another SANDBOX_BACKEND and DEPLOY_PROVIDER (plus a Helm chart), shortly after Modal and E2B.
 - **[qm#478](https://github.com/yc-software/qm/pull/478)** (2026-08-13): Added smolmachines as yet another sandbox backend, then SMOLMACHINES_CPUS/MEMORY_MB/DISK_GB env knobs ([qm#507](https://github.com/yc-software/qm/pull/507)).
 
-### Provider drift (1 example)
+### Provider drift (2 examples)
 
 Every sandbox provider should give the agent the same machine. When one provider's image or behavior quietly differs, the agent hits failures that only reproduce there.
 
+- **Adding a provider that subtly deviates from the general sandbox contract (this has been done several times).** For example, ordinary teardown parks E2B, AWS, and local Docker computers, while Modal needs different handling. [qm#1748](https://github.com/yc-software/qm/pull/1748) removes a `backend !== "modal"` locking exception and introduces a `parksOnTeardown` profile property; the distinct lifecycle behaviors remain part of the matrix.
 - **AWS CLI v1 on E2B and Modal** (2026-10-09): The E2B and Modal sandbox images came with no AWS CLI at all. When the agent needed `aws`, it ran `pip install awscli`, and pip only has version 1. Version 1 can't do device-code sign-in. The Fly, Porter and Superserve images already included version 2, so only these two were missing it.
 
 ### God files (4 examples)
