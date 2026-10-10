@@ -5,7 +5,7 @@ import { registerDeployAccessActions } from "./deploy-access.ts";
 import { SlackPluginStartCleanupError } from "../surfaces/slack-runtime.ts";
 import { createSlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { createSlackHistoryReader } from "./history.ts";
-import { reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { createEnvelopeStaging } from "./envelope-staging.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import bolt from "@slack/bolt";
@@ -537,6 +537,7 @@ export async function startSlackPlugin(
     deliveriesPollInFlight = true;
     void deliveries
       .pollDeliveries(app.client)
+      .catch(reportFailureAs("slack: delivery poll", false))
       .then((ranAsLeader) => {
         if (!ranAsLeader && !stopped && !followerRetry) {
           followerRetry = setTimeout(() => {
