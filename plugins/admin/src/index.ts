@@ -33,6 +33,7 @@ function signedHeaders(method: string, corePath: string, rawBody: string): Recor
 }
 
 const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8")
+  .replace(/\r\n?/g, "\n")
   .replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH)
   .replace('"__GOVERNANCE_UI__";', () => buildGovernanceUI())
   .replace(
