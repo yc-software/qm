@@ -164,6 +164,23 @@ jobs:
       - name: Install root dependencies
         if: needs.reuse.outputs.reusable != 'true'
         run: npm ci
+      - name: Deployment layer tests
+        shell: bash
+        run: |
+          for test_dir in deploy/layers/*/test; do
+            [ -d "$test_dir" ] || continue
+            layer="${test_dir%/test}"
+            if [ ! -f "$layer/package.json" ] || [ ! -f "$layer/package-lock.json" ]; then
+              echo "Layer $layer has tests but no package manifest and lockfile" >&2
+              exit 1
+            fi
+            if ! node -e 'const layer = require(`./${process.argv[1]}`); process.exit(layer.scripts?.["test:ci"] ? 0 : 1)' "$layer/package.json"; then
+              echo "Layer $layer has tests but no test:ci script" >&2
+              exit 1
+            fi
+            npm ci --prefix "$layer"
+            npm run --prefix "$layer" test:ci
+          done
       - name: Build the CLI package
         if: needs.reuse.outputs.reusable != 'true'
         working-directory: cli
