@@ -380,20 +380,38 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     : [...registeredMigrations.entries()];
   for (const [databaseUrl, registered] of databases) {
     if (!registered?.size) continue;
-    await migrationQueue(databaseUrl, async () => {
-      const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() }));
-      try {
-        await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
-        await applyPgMigrations(
-          pool,
-          [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
-        );
-      } finally {
-        await pool.end();
-      }
+    await applyPgSchema(databaseUrl, {
+      before: [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])],
+      migrations: [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
     });
   }
+}
+
+const openPgPoolVerifications = new Map<string, Set<Set<string>>>();
+
+async function applyPgSchema(
+  connectionString: string,
+  schema: { before?: readonly PgMigration[]; migrations: readonly PgMigration[]; after?: readonly PgMigration[] },
+  verified?: Set<string>,
+): Promise<void> {
+  const { before = [], migrations, after = [] } = schema;
+  const keys = [
+    ...[...before, ...after].map((item) => `maintenance:${item.id}:${item.checksum}`),
+    ...migrations.map((item) => `migration:${item.id}:${item.checksum}`),
+  ];
+  await migrationQueue(connectionString, async () => {
+    if (verified && keys.every((key) => verified.has(key))) return;
+    const pool = await retainPool(connectionString, "migration");
+    try {
+      await applyPgMaintenance(pool, before);
+      await applyPgMigrations(pool, migrations);
+      await applyPgMaintenance(pool, after);
+    } finally {
+      await releasePool(connectionString, pool, "migration");
+    }
+    const verifiedPools = verified ? [verified] : (openPgPoolVerifications.get(connectionString) ?? []);
+    for (const poolVerified of verifiedPools) for (const key of keys) poolVerified.add(key);
+  });
 }
 
 export function createPgPool(connectionString: string): PgPool;
@@ -440,23 +458,17 @@ export function createPgPool(
   let queryPoolP: Promise<Pool> | null = null;
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
-  async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
-    return migrationQueue(connectionString, async () => {
-      const instance = await retainPool(connectionString, "migration");
-      try {
-        return await fn(instance);
-      } finally {
-        await releasePool(connectionString, instance, "migration");
-      }
-    });
-  }
+  const verified = new Set<string>();
+  const openOnDatabase = openPgPoolVerifications.get(connectionString) ?? new Set<Set<string>>();
+  openOnDatabase.add(verified);
+  openPgPoolVerifications.set(connectionString, openOnDatabase);
   async function ready(): Promise<void> {
     if (closed) throw new Error("Postgres store is closed");
-    await (readyP ??= withMigrationPool(async (instance) => {
-      await applyPgMaintenance(instance, preMigrationMaintenance);
-      await applyPgMigrations(instance, migrations);
-      await applyPgMaintenance(instance, postMigrationMaintenance);
-    }).catch((error) => {
+    await (readyP ??= applyPgSchema(
+      connectionString,
+      { before: preMigrationMaintenance, migrations, after: postMigrationMaintenance },
+      verified,
+    ).catch((error) => {
       readyP = null;
       throw error;
     }));
@@ -546,6 +558,9 @@ export function createPgPool(
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
+    const stillOpen = openPgPoolVerifications.get(connectionString);
+    stillOpen?.delete(verified);
+    if (stillOpen?.size === 0) openPgPoolVerifications.delete(connectionString);
     await readyP?.catch(() => {});
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
@@ -562,7 +577,7 @@ export function createPgPool(
     registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
-    await withMigrationPool((instance) => applyPgMigrations(instance, [migration]));
+    await applyPgSchema(connectionString, { migrations: [migration] }, verified);
   }
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(
