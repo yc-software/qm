@@ -19,6 +19,7 @@ export function turnDeliveryProvenance(input: {
   sourceScopeId: ScopeId;
   sourceThreadRef: string;
   sourceSessionId?: string;
+  sourceRunId?: string;
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
 }): DeliveryProvenance {
@@ -29,6 +30,7 @@ export function turnDeliveryProvenance(input: {
     sourceScopeId: input.sourceScopeId,
     sourceThreadRef: input.sourceThreadRef,
     ...(input.sourceSessionId !== undefined ? { sourceSessionId: input.sourceSessionId } : {}),
+    ...(input.sourceRunId !== undefined ? { sourceRunId: input.sourceRunId } : {}),
     ...(input.sourceUserSeq !== undefined ? { sourceUserSeq: input.sourceUserSeq } : {}),
     ...(input.sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq: input.sourceAssistantEntrySeq } : {}),
   };

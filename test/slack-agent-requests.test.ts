@@ -1,3 +1,4 @@
+import { installPrincipalLinks } from "../src/directory/person.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -10,6 +11,7 @@ import { createApprovals } from "../src/slack/approvals.ts";
 import { createTurnFlow } from "../src/slack/turn-flow.ts";
 import {
   createAgentRequestStore,
+  createSlackCoreClient,
   type SlackAgentRequestContext,
   type SlackCoreClient,
 } from "../src/api/slack-core-client.ts";
@@ -76,6 +78,8 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
     reportRunEditRef: async () => {},
     getApproval: async (id: string) => storedApprovals.get(id) ?? null,
     putAgentRequest: async (id: string, record: SlackAgentRequestContext) => void store.set(id, record),
+    reserveAgentRequest: async (id: string, record: SlackAgentRequestContext) =>
+      store.get(id) ?? (store.set(id, record), record),
     getAgentRequest: async (id: string) => store.get(id) ?? null,
     takeAgentRequest: async (id: string) => {
       const record = store.get(id) ?? null;
@@ -99,7 +103,11 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
   const ephemerals: any[] = [];
   let nextTs = 0;
   const client = {
-    conversations: { open: async () => ({ channel: { id: "D-CAROL" } }) },
+    conversations: {
+      open: async () => ({ channel: { id: "D-CAROL" } }),
+      replies: async () => ({ messages: [] }),
+      history: async () => ({ messages: [] }),
+    },
     chat: {
       postMessage: async (body: any) => {
         posts.push(body);
@@ -145,6 +153,7 @@ function durableFixture(opts: { turnResults?: TurnResult[]; coreOverrides?: Reco
     await newInstance().approvals.postAgentRequests(
       client,
       {
+        dedupeKey: "TURN1",
         requesterId: "U1",
         channel: "C1",
         replyThreadTs: "1.1",
@@ -308,7 +317,9 @@ test("the agent-request store expires stale records and sweeps them on put", asy
   assert.equal((await store.getAgentRequest("fresh"))?.requestId, "fresh");
   assert.equal((await store.agentRequestForApproval("req-new"))?.requestId, "fresh");
   assert.equal((await store.takeAgentRequest("fresh"))?.requestId, "fresh");
-  assert.equal(await map.get("fresh"), null);
+  assert.equal((await map.get("fresh"))?.settled, true);
+  assert.equal(await store.getAgentRequest("fresh"), null);
+  assert.equal(await store.takeAgentRequest("fresh"), null);
 });
 
 test("a handoff command approval recovered on a fresh instance still reports back to the origin channel", async () => {
@@ -411,4 +422,160 @@ test("an early approval has durable handoff context without making the original 
   release();
   await first;
   assert.equal(f.store.size, 0);
+});
+
+function runDispatchFixture() {
+  const map = createMemoryMap<SlackAgentRequestContext>();
+  const store = createAgentRequestStore(map);
+  const run = {
+    createdAt: Date.now(),
+    request: {
+      surface: "slack",
+      actor: { id: "alice@example.com", type: "internal" },
+      conversation: {
+        kind: "channel",
+        channelRef: "C1",
+        threadRef: "slack:channel:C1:1.1",
+        audience: [{ id: "carol@example.com", type: "internal" }],
+      },
+      deliveryTarget: "C1:1.1",
+    },
+  };
+  const posts: any[] = [];
+  let failDm = false;
+  let loseDmResponse = false;
+  const client = {
+    conversations: {
+      open: async () => ({ channel: { id: "D2" } }),
+      replies: async ({ channel }: any) => ({ messages: posts.filter((p) => p.channel === channel) }),
+      history: async ({ channel }: any) => ({ messages: posts.filter((p) => p.channel === channel) }),
+    },
+    chat: {
+      postMessage: async (args: any) => {
+        if (args.channel === "D2") {
+          const id = args.blocks.find((b: any) => b.type === "actions").elements[0].value;
+          assert.ok(await store.getAgentRequest(id), "consent exists before clickable card");
+          if (failDm) throw new Error("temporary Slack failure");
+        }
+        const posted = { ...args, ts: `100.${posts.length + 1}` };
+        posts.push(posted);
+        if (args.channel === "D2" && loseDmResponse) {
+          loseDmResponse = false;
+          throw new Error("lost response");
+        }
+        return { ts: posted.ts };
+      },
+    },
+  };
+  const core = createSlackCoreClient({
+    agentRequests: map,
+    runs: { get: async () => run, onTerminal: () => {} },
+  } as never);
+  const actor = { externalId: "carol@example.com", isExternalGuest: false, isBot: false };
+  const instance = () =>
+    createApprovals({
+      core: core as never,
+      directory: { classifyActor: async () => actor } as never,
+      flow: {} as never,
+      threads: createThreadTracker(),
+      ids: {} as never,
+    });
+  const dispatch = (channel = "C1", thread = "1.1") =>
+    instance().postRunAgentRequests(client, "RUN1", channel, thread, [
+      { targetUserId: "U2", task: "Check the report." },
+    ]);
+  return {
+    map,
+    store,
+    run,
+    actor,
+    posts,
+    dispatch,
+    setFailDm: (v: boolean) => {
+      failDm = v;
+    },
+    loseDmResponse: () => {
+      loseDmResponse = true;
+    },
+  };
+}
+
+test("run-backed handoffs recover, dedupe replays and retain consumed tombstones", async () => {
+  const f = runDispatchFixture();
+  f.loseDmResponse();
+  await f.dispatch();
+  await f.dispatch();
+  assert.equal(f.posts.length, 2, "status and one consent card despite lost response and replay");
+  const [id, record] = (await f.map.entries())[0]!;
+  assert.equal(record.requesterId, "alice@example.com");
+  const claims = await Promise.all([f.store.takeAgentRequest(id), f.store.takeAgentRequest(id)]);
+  assert.equal(claims.filter(Boolean).length, 1);
+  await f.store.putAgentRequest(id, record);
+  await f.dispatch();
+  assert.equal(f.posts.length, 2, "replay after consent cannot reopen the request");
+  assert.equal(await f.store.getAgentRequest(id), null);
+});
+
+test("a failed handoff is reported once and a replay does not reopen it", async () => {
+  const f = runDispatchFixture();
+  f.setFailDm(true);
+  await f.dispatch();
+  f.setFailDm(false);
+  await f.dispatch();
+  assert.equal(f.posts.filter((p) => p.channel === "D2").length, 0);
+  assert.match(f.posts.at(-1)!.text, /couldn't send the personal-agent request/);
+  assert.equal(f.posts.length, 2);
+});
+
+test("run-backed handoffs reject another destination, DM source, expired run and unauthorized recipients", async () => {
+  for (const change of [
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      f.run.request.deliveryTarget = "C-other:1.1";
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      f.run.request.conversation.kind = "dm";
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      f.run.createdAt -= 8 * 86400_000;
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      f.run.request.surface = "web";
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      (f.run.request as Record<string, unknown>).externalSlack = { serviceCredentials: [] };
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      f.run.request.conversation.audience = [];
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      f.actor.isBot = true;
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      f.actor.isExternalGuest = true;
+    },
+    (f: ReturnType<typeof runDispatchFixture>) => {
+      f.run.request.conversation.audience[0]!.type = "guest";
+    },
+  ]) {
+    const f = runDispatchFixture();
+    change(f);
+    await f.dispatch();
+    assert.equal((await f.map.entries()).length, 0);
+    assert.equal(f.posts.filter((p) => p.channel === "D2").length, 0);
+  }
+});
+
+test("run-backed handoffs match linked principals without expanding the audience", async () => {
+  const f = runDispatchFixture();
+  f.run.request.conversation.audience[0]!.id = "oidc:carol";
+  installPrincipalLinks({
+    canonical: (id) => (id === "carol@example.com" ? "oidc:carol" : undefined),
+    aliases: () => [],
+  });
+  try {
+    await f.dispatch();
+    assert.equal(f.posts.filter((p) => p.channel === "D2").length, 1);
+  } finally {
+    installPrincipalLinks(null);
+  }
 });
