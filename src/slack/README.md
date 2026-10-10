@@ -183,7 +183,7 @@ the tokens, core simply runs without Slack.
   the buttons are posted alongside the reply. Clicking re-runs the turn with the command approved.
 - **Channel agents can ask personal agents.** If a task in an Isolated internal channel needs a
   member's personal setup (their env, browser login, resident CLI, connected app, or private files),
-  the channel agent calls `POST /v1/ask-agent`, which returns only once the request was sent. In Open
+  the channel agent calls `POST /v1/reach` with `task`, which returns only once the request was sent. In Open
   conversations the agent uses the requester's own access directly instead. The
   request appears in the original thread as `#channel agent → Name's personal agent`, and the target
   person gets a DM with **Run with my setup** / **Decline** buttons. If they approve, the plugin runs

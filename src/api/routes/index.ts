@@ -26,7 +26,6 @@ import { loopRoutes } from "./loops.ts";
 import { reachRoutes } from "./reach.ts";
 import { directoryRoutes } from "./directory.ts";
 import { contextRoutes } from "./context.ts";
-import { askAgentRoutes } from "./ask-agent.ts";
 import { pinRoutes } from "./pins.ts";
 import { surfaceCacheRoutes } from "./surface-cache.ts";
 import { environmentRoutes } from "./environments.ts";
@@ -106,7 +105,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...loopIngressRoutes,
   ...directoryRoutes,
   ...contextRoutes,
-  ...askAgentRoutes,
   ...pinRoutes,
   ...surfaceCacheRoutes,
   ...environmentRoutes,

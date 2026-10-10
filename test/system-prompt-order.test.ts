@@ -574,12 +574,12 @@ test("Slack offers personal-agent handoffs only in Isolated internal channels", 
   });
   const prompt = async (input: OrchestratorInput) => (await orch.handleTurn(input)).reply ?? "";
 
-  assert.match(await prompt(turn("channel", "C1:isolated")), /POST \/v1\/ask-agent/);
-  assert.doesNotMatch(await prompt(turn("group", "G1:isolated")), /ask-agent/);
-  assert.doesNotMatch(await prompt(slackDm("dm:U1:handoff", "!sysprompt")), /ask-agent/);
+  assert.match(await prompt(turn("channel", "C1:isolated")), /self-API reach with \{recipient, task\}/);
+  assert.doesNotMatch(await prompt(turn("group", "G1:isolated")), /\{recipient, task\}/);
+  assert.doesNotMatch(await prompt(slackDm("dm:U1:handoff", "!sysprompt")), /\{recipient, task\}/);
 
   await config.setSharingPosture(scopeId("org", ORG), "open");
-  assert.doesNotMatch(await prompt(turn("channel", "C1:open")), /ask-agent/);
+  assert.doesNotMatch(await prompt(turn("channel", "C1:open")), /\{recipient, task\}/);
 });
 
 test("a project session names its linked Slack home channel; unlinked projects get no block", async () => {

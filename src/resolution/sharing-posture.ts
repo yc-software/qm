@@ -27,7 +27,7 @@ export function renderSharingPosturePrompt(actor: Principal, sourceScopes: reado
 }
 
 export const ASK_AGENT_PROMPT =
-  "For another person's private logins, keys or files, POST /v1/ask-agent {person: their Slack id, task}; they approve by DM. " +
+  "For another person's private logins, keys or files, call self-API reach with {recipient, task}; they approve by DM. " +
   "Say you've asked only after it returns ok.";
 
 interface AskAgentConversation {
@@ -36,7 +36,7 @@ interface AskAgentConversation {
   external: boolean;
 }
 
-export function askAgentConversation(c: AskAgentConversation): boolean {
+function askAgentConversation(c: AskAgentConversation): boolean {
   return c.surface === "slack" && !c.external && parseScopeId(c.scopeId).kind === "channel";
 }
 
