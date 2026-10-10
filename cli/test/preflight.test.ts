@@ -185,6 +185,34 @@ test("email preflight fails check on rejected SMTP credentials and warns on stra
   }
 });
 
+test("email preflight skips AUTH for an IP-authenticated relay and refuses a half-configured pair", async () => {
+  const smtp = await fakeSmtp("right");
+  const config = {
+    ...CONFIG,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(smtp.port), SMTP_TLS: "none" } },
+  };
+  const relay: [string, string][] = [
+    ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
+    ["SMTP_HOST", "127.0.0.1"],
+  ];
+  try {
+    assert.equal(emailTransportConfigured(config, new Map(relay)), true);
+    const lines = await quietAsync(() => emailTransportPreflight(config, new Map(relay)));
+    assert.ok(lines.some((line) => line.includes("reachable without credentials")));
+    for (const half of [
+      ["SMTP_USERNAME", "user"],
+      ["SMTP_PASSWORD", "right"],
+    ] as const) {
+      await assert.rejects(
+        () => emailTransportPreflight(config, new Map([...relay, half])),
+        (e: unknown) => e instanceof CliError && /SMTP_USERNAME and SMTP_PASSWORD must be set together/.test(e.message),
+      );
+    }
+  } finally {
+    await smtp.close();
+  }
+});
+
 test("email preflight warns when SMTP values are set but the transport is resend", async () => {
   const config = { ...CONFIG, env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } } };
   const lines = await quietAsync(() =>
