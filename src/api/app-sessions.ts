@@ -656,7 +656,9 @@ export function createSessionMethods(
             resource: memberId,
             scopeLabel: projectScopeId(project.id),
           });
-        await reconcileProjectMember(project, memberId, false);
+        const removed = existing.memberIds.filter((member) => samePerson(member, memberId));
+        for (const member of removed.length ? removed : [memberId])
+          await reconcileProjectMember(project, member, false);
       });
       if (result.status === "ok") {
         return { ...result, project: await projectView(result.project) };

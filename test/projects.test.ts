@@ -1261,3 +1261,42 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   await runNowSettled(built.scheduler, inactiveCron.id);
   assert.equal((await built.crons.get(inactiveCron.id))?.enabled, false);
 });
+
+test("project roster changes and renames match people by identity, not exact id spelling", async () => {
+  const store = createProjectStore();
+  const project = await store.create({ name: "P", ownerId: "owner@example.com" });
+  assert.equal((await store.addMember(project.id, "owner@example.com", "pal@example.com")).status, "ok");
+  const removed = await store.removeMember(project.id, "owner@example.com", "Pal@Example.com");
+  assert.equal(removed.status, "ok");
+  assert.deepEqual((await store.get(project.id))!.memberIds, ["owner@example.com"]);
+  assert.equal((await store.rename(project.id, "Owner@Example.com", "Renamed")).status, "ok");
+});
+
+test("removing a member by a differently cased email closes their session windows", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-alias-remove-")) }));
+  await built.app.upsertDirectory([
+    { principalId: "owner@example.com", displayName: "Owner", type: "internal" },
+    { principalId: "pal@example.com", displayName: "Pal", type: "internal" },
+  ]);
+  const project = (await built.app.createProject("owner@example.com", "Alias removal"))!;
+  assert.equal((await built.app.addProjectMember(project.id, "owner@example.com", "pal@example.com")).status, "ok");
+  const result = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "owner@example.com" },
+    conversation: {
+      kind: "group",
+      channelRef: projectGroupRef(project.id),
+      threadRef: "web:owner@example.com:alias-remove",
+      audience: [],
+    },
+    text: "hello",
+  });
+  assert.equal(result.status, "ok", JSON.stringify(result));
+  const open = async () =>
+    (await built.sessions.listParticipants()).filter(
+      (window) => window.principalId === "pal@example.com" && window.validTo === null,
+    );
+  assert.ok((await open()).length > 0);
+  assert.equal((await built.app.removeProjectMember(project.id, "owner@example.com", "Pal@Example.com")).status, "ok");
+  assert.deepEqual(await open(), []);
+});
