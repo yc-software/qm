@@ -1555,6 +1555,15 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "DELETE",
+    path: "/api/projects/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "DELETE", `/v1/projects/${encodeURIComponent(id)}`, JSON.stringify({ principalId: user }));
+    },
+  },
+  {
     method: "POST",
     path: "/api/projects/:id/members",
     handle: async (c) => {

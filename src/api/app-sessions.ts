@@ -82,6 +82,7 @@ export function createSessionMethods(
   | "addProjectMember"
   | "removeProjectMember"
   | "renameProject"
+  | "deleteProject"
   | "setProjectSlackChannel"
   | "listScopeResources"
   | "managesScope"
@@ -742,6 +743,20 @@ export function createSessionMethods(
         return { ...result, project: await projectView(result.project) };
       }
       return result;
+    },
+
+    async deleteProject(id, principalId) {
+      if (!deps.projects) return { status: "not_found" };
+      const result = await deps.projects.remove(id, principalId);
+      if (result.status !== "ok") return result;
+      deps.auditLog.record({
+        at: Date.now(),
+        principalId,
+        action: "project.delete",
+        resource: result.project.id,
+        scopeLabel: projectScopeId(result.project.id),
+      });
+      return { ...result, project: await projectView(result.project) };
     },
 
     async listScopeResources(principalId, scope) {
