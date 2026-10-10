@@ -5160,95 +5160,23 @@ a.connector-widget:focus-visible {
   font-size: var(--font-13);
   line-height: 1.5;
 }
-.skill-registry-controls {
-  max-width: 960px;
-  margin: 10px auto 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.skill-filter-fields {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.skill-result-count {
-  max-width: 960px;
-  margin: 8px auto 2px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.skill-group {
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-  padding: 2px 0;
-}
-.skill-group:last-child {
-  border-bottom: 0;
-}
-.skill-variant {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-}
-.skill-variant:hover {
-  background: var(--secondary);
-}
-.skill-variant.archived {
-  opacity: 0.72;
-}
-.skill-variant-main {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(110px, 0.34fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 16px;
-  color: inherit;
+.skill-row {
   text-decoration: none;
 }
-.skill-variant-main::after {
-  position: absolute;
-  inset: 0;
-  content: "";
-  cursor: pointer;
+.skill-row.archived {
+  opacity: 0.72;
 }
-.skill-variant:has(.skill-variant-main:focus-visible) {
-  outline: 2px solid color-mix(in srgb, var(--foreground) 34%, transparent);
-  outline-offset: 2px;
+.skill-row .list-row-title {
+  flex: 0 0 210px;
 }
-.skill-variant-main:focus-visible {
-  outline: none;
-}
-.skill-variant-name,
-.skill-variant-description {
+.skill-row-description {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.skill-variant-name {
-  color: var(--foreground);
-  font-family: inherit;
-  font-size: var(--font-13);
-  font-weight: 550;
-}
-.skill-variant-description {
   color: var(--muted-foreground);
-  font-size: var(--font-13-5);
-  line-height: 1.35;
-}
-.skill-variant-state {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
+  font-size: var(--font-13);
 }
 .skill-empty {
   display: flex;
@@ -5257,22 +5185,12 @@ a.connector-widget:focus-visible {
   gap: 10px;
 }
 @media (max-width: 620px) {
-  .skill-registry-controls {
-    align-items: stretch;
-    flex-direction: column;
+  .skill-row {
+    flex-wrap: wrap;
+    gap: 4px 12px;
   }
-  .skill-filter-fields {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  .skill-filter-fields .list-select,
-  .skill-filter-fields .field-select {
-    min-width: 0;
-    width: 100%;
-  }
-  .skill-variant-main {
-    grid-template-columns: minmax(80px, 0.42fr) minmax(0, 1fr);
-    gap: 10px;
+  .skill-row .list-row-title {
+    flex-basis: 100%;
   }
 }
 .card .actions {
@@ -6386,24 +6304,52 @@ a.connector-widget:focus-visible {
   cursor: pointer;
 }
 .file-list,
-.file-groups,
+.list-groups,
 .deploy-list,
 .files-page .file-drop {
   width: min(960px, 100%);
   margin-inline: auto;
 }
-.file-scope-group {
-  margin-top: 18px;
+.list-group {
+  border-bottom: 1px solid var(--border);
 }
-.file-scope-group:first-child {
-  margin-top: 6px;
+.list-group summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
 }
-.file-scope-group h2 {
-  margin: 0;
-  padding: 0 12px 5px;
+.list-group summary::-webkit-details-marker {
+  display: none;
+}
+.list-group summary::before {
+  content: "›";
+  color: var(--muted-foreground);
+  transition: transform 120ms;
+}
+.list-group[open] summary::before {
+  transform: rotate(90deg);
+}
+.list-group summary:hover {
+  background: var(--accent);
+}
+.list-group-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.list-group-count,
+.list-group-time {
   color: var(--muted-foreground);
   font-size: 12px;
-  font-weight: 600;
+}
+.list-group[open] > .list-rows {
+  padding-left: 24px;
+  box-sizing: border-box;
 }
 .file-row,
 .deploy-row {
@@ -7250,6 +7196,10 @@ a.connector-widget:focus-visible {
   }
 }
 .cron-list-controls {
+  width: min(960px, 100%);
+  box-sizing: border-box;
+  margin-inline: auto;
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: 6px;

@@ -3,8 +3,8 @@ import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2 } from "lucide";
 import { api, userSendMessage } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
-import { listBackLink, listPageTpl } from "./list-page";
-import { contextsState, ensureContexts, scopeChip } from "./contexts";
+import { groupListRows, listBackLink, listPageTpl, listTabsTpl } from "./list-page";
+import { contextsState, ensureContexts, scopeChip, scopeTitle } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { startNewChat } from "./sessions";
@@ -66,6 +66,7 @@ const CRON_TABS: Array<{ value: CronTab; label: string }> = [
   { value: "archived", label: "Archived" },
 ];
 
+let cronsGrouped = true;
 let cronList: CronView[] = [];
 let visibleCronList: CronView[] = [];
 let cronsScope: string | null = null;
@@ -231,41 +232,29 @@ function drawCronsPage(): void {
         !cronsSearch.trim() ||
         `${cronTitle(c)} ${cronText(c)} ${c.scopeName ?? ""}`.toLowerCase().includes(cronsSearch.trim().toLowerCase()),
     )
-    .sort((a, b) => b.c.createdAt - a.c.createdAt);
+    .sort((a, b) => (b.c.lastFiredAt ?? b.c.createdAt) - (a.c.lastFiredAt ?? a.c.createdAt));
   const archived = all.filter(({ c }) => c.archived);
   const yours = all.filter(({ c, mine }) => mine && !c.archived);
   const yoursEnabled = yours.filter(({ c }) => c.enabled);
   const yoursDisabled = yours.filter(({ c }) => !c.enabled);
   const shared = all.filter(({ c, mine }) => !mine && !c.archived);
-  const ownsAny = all.some(({ mine }) => mine);
   const counts: Record<CronTab, number> = {
     yours: yoursEnabled.length,
     shared: shared.filter(({ c }) => c.enabled).length,
     archived: archived.length,
   };
 
-  const rows: TemplateResult[] = [];
-  if (cronActionNotice) {
-    rows.push(html`<div class="action-notice">${cronActionNotice}</div>`);
-    cronActionNotice = "";
-  }
-  if (all.length) rows.push(cronTabs(counts, shared.length > 0));
-  if (cronTab === "yours") {
-    rows.push(...yoursEnabled.map(({ c }) => cronPageRow(c, true)));
-    if (all.length && !yoursEnabled.length)
-      rows.push(cronEmptyRow(ownsAny ? "No active crons." : "None of your own crons yet."));
-    if (yoursDisabled.length) {
-      rows.push(cronDisabledToggle(yoursDisabled.length));
-      if (showDisabledCrons) rows.push(...yoursDisabled.map(({ c }) => cronPageRow(c, true)));
-    }
-  } else if (cronTab === "shared") {
-    rows.push(...shared.map(({ c }) => cronPageRow(c, false)));
-    if (!shared.length) rows.push(cronEmptyRow("No crons shared with you."));
-  } else {
-    rows.push(...archived.map(({ c, mine }) => cronPageRow(c, mine)));
-    if (!archived.length) rows.push(cronEmptyRow("Nothing archived."));
-  }
+  const notice = cronActionNotice;
+  cronActionNotice = "";
+  let visible = archived;
+  if (cronTab === "yours") visible = showDisabledCrons ? yours : yoursEnabled;
+  else if (cronTab === "shared") visible = shared;
   let empty = "No crons yet.";
+  if (all.length) {
+    if (cronTab === "archived") empty = "Nothing archived.";
+    else if (cronTab === "shared") empty = "No crons shared with you.";
+    else empty = "No active crons.";
+  }
   if (cronsNotice) empty = cronsNotice;
   else if (cronsLoading && cronList.length === 0 && visibleCronList.length === 0) empty = "Loading crons…";
   else if (cronsScope) empty = "No crons in this context.";
@@ -283,7 +272,24 @@ function drawCronsPage(): void {
           drawCronsPage();
         },
       },
-      rows,
+      filters: html`${notice ? html`<div class="action-notice">${notice}</div>` : nothing}
+      ${all.length ? cronTabs(counts, shared.length > 0) : nothing}
+      ${cronTab === "yours" && yoursDisabled.length ? cronDisabledToggle(yoursDisabled.length) : nothing}`,
+      rows: visible.map(({ c, mine }) => cronPageRow(c, mine)),
+      groups: groupListRows(
+        visible,
+        ({ c }) => c.ownerScopeId,
+        ({ c }) => c.scopeName || scopeTitle(c.ownerScopeId),
+        ({ c, mine }) => cronPageRow(c, mine),
+        ({ c }) => c.lastFiredAt ?? c.createdAt,
+      ),
+      grouping: {
+        value: cronsGrouped,
+        onChange: (value) => {
+          cronsGrouped = value;
+          drawCronsPage();
+        },
+      },
       empty,
     })}`,
     cronsPageHost,
@@ -300,32 +306,16 @@ function toggleDisabledCrons(): void {
   drawCronsPage();
 }
 
-function cronEmptyRow(text: string): TemplateResult {
-  return html`<div class="empty compact cron-filter-empty">${text}</div>`;
-}
-
 function cronTabs(counts: Record<CronTab, number>, hasShared: boolean): TemplateResult {
   const tabs = CRON_TABS.filter(
     (t) => t.value === "yours" || (t.value === "shared" && hasShared) || counts[t.value] > 0 || cronTab === t.value,
   );
-  return html`
-    <div class="cron-list-controls" role="tablist" aria-label="Cron view">
-      ${tabs.map(
-        (t) => html`
-          <button
-            type="button"
-            role="tab"
-            aria-selected=${cronTab === t.value}
-            class="cron-filter-chip ${cronTab === t.value ? "active" : ""}"
-            @click=${() => setCronTab(t.value)}
-          >
-            <span>${t.label}</span>
-            <span class="cron-filter-count">${counts[t.value]}</span>
-          </button>
-        `,
-      )}
-    </div>
-  `;
+  return listTabsTpl(
+    "Cron view",
+    tabs.map((tab) => ({ ...tab, count: counts[tab.value] })),
+    cronTab,
+    setCronTab,
+  );
 }
 
 function cronDisabledToggle(count: number): TemplateResult {

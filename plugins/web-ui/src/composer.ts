@@ -154,6 +154,9 @@ export interface SkillItem {
   assetCount?: number;
   requiredCapabilities?: string[];
   createdBy?: string;
+  lastUsedAt?: number;
+  updatedAt?: number;
+  createdAt?: number;
   files?: Array<{ path: string; executable?: boolean }>;
 }
 interface SkillMatch {
