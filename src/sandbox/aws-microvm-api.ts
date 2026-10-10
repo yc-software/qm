@@ -119,7 +119,7 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
           signal,
           ...(payload ? { body: payload } : {}),
         }),
-      method === "POST" ? "refused" : "idempotent",
+      method !== "POST" || (body as { clientToken?: unknown } | undefined)?.clientToken ? "idempotent" : "refused",
     );
     const text = await res.text();
     let json: unknown = undefined;

@@ -228,3 +228,39 @@ test("runMicrovm retries a throttled create but never an ambiguous server error"
   await assert.rejects(api2.runMicrovm(run), /-> 502: bad gateway/);
   assert.equal(broken.calls.length, 1);
 });
+
+test("runMicrovm with a clientToken retries a lost response with the same token instead of giving up", async () => {
+  const bodies: string[] = [];
+  let created = 0;
+  const fetchImpl = (async (_url: string, init?: RequestInit) => {
+    bodies.push(String(init?.body ?? ""));
+    created = 1;
+    if (bodies.length === 1) throw new TypeError("fetch failed");
+    return new Response(JSON.stringify({ microvmId: "mvm-1", state: "PENDING" }), { status: 200 });
+  }) as typeof fetch;
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const res = await api.runMicrovm({
+    imageIdentifier: "img",
+    ingressNetworkConnectors: [],
+    egressNetworkConnectors: [],
+    clientToken: "scope-a-123",
+  });
+  assert.equal(res.microvmId, "mvm-1");
+  assert.equal(created, 1);
+  assert.equal(bodies.length, 2);
+  assert.equal(JSON.parse(bodies[0]!).clientToken, "scope-a-123");
+  assert.equal(JSON.parse(bodies[1]!).clientToken, "scope-a-123");
+});
+
+test("runMicrovm without a clientToken still does not retry a lost response", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls++;
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  await assert.rejects(
+    api.runMicrovm({ imageIdentifier: "img", ingressNetworkConnectors: [], egressNetworkConnectors: [] }),
+  );
+  assert.equal(calls, 1);
+});
