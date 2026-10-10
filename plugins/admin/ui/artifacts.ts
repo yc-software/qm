@@ -1012,7 +1012,10 @@ export function live(root: HTMLElement, d: Data, c: Context) {
           r.sessionScope ? c.scopeCell(r.sessionScope) : { text: "-", cls: "mono" },
           { node: c.typeBadge(r.sessionType) },
           {
-            node: badge(`${r.attempts}/${r.maxAttempts}`, r.status === "failed" || r.attempts > 1 ? "warn" : "muted"),
+            node: badge(
+              `${r.attempts}/${r.maxAttempts}${r.handbacks ? ` · ${r.handbacks} handed back` : ""}`,
+              r.status === "failed" || r.attempts - (r.handbacks ?? 0) > 1 ? "warn" : "muted",
+            ),
             cls: "num",
           },
           { text: r.workerId || "-", cls: "mono" },

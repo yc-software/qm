@@ -29,6 +29,7 @@ export interface Run {
   turnUserSeq: number | null;
   dedupKey: string | null;
   attempts: number;
+  handbacks: number;
   errorAttempts: number;
   maxAttempts: number;
   leaseToken: string | null;
@@ -133,8 +134,15 @@ export function releasesDedupKey(result: TurnResult): boolean {
   return result.refusalKind === "session_busy";
 }
 
-export function errorParks(run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts">, maxClaims?: number): boolean {
-  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && run.attempts >= maxClaims);
+export function crashClaims(run: Pick<Run, "attempts" | "handbacks">): number {
+  return run.attempts - run.handbacks;
+}
+
+export function errorParks(
+  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "handbacks">,
+  maxClaims?: number,
+): boolean {
+  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && crashClaims(run) >= maxClaims);
 }
 
 export function leaseLapsed(run: Pick<Run, "status" | "leaseExpiresAt">, asOf: number): boolean {

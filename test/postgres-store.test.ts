@@ -2235,6 +2235,7 @@ test(
       assert.equal(released?.leaseExpiresAt, null);
       assert.equal(released?.workerId, null);
       assert.equal(released?.attempts, claimCount, "claim count untouched");
+      assert.equal(released?.handbacks, 1, "the handback is recorded durably");
       assert.equal(released?.errorAttempts, 0, "a drain is not an error");
 
       const reclaimed = await runs.claimById(r.id, "w2", 60_000);
@@ -2250,6 +2251,32 @@ test(
     }
   },
 );
+
+test("pg run store: handbacks are exempt from the claim cap; expired leases still count", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!, { maxClaims: 2 });
+  try {
+    const r = (await runs.enqueue({ sessionId: "sHandbackCap", request: turn("long turn"), maxAttempts: 99 })).run;
+    for (let i = 0; i < 4; i++) {
+      const claimed = await runs.claimById(r.id, "draining", 60_000);
+      assert.equal(await runs.releaseLease(r.id, claimed!.leaseToken!), true);
+    }
+    for (const expected of [
+      { requeued: 1, parked: 0 },
+      { requeued: 0, parked: 1 },
+    ]) {
+      const crashed = await runs.claimById(r.id, "dead", 60_000);
+      assert.equal(await runs.heartbeat(r.id, crashed!.leaseToken!, -1), true);
+      assert.deepEqual(await runs.reapExpired(), expected);
+    }
+    const parked = await runs.get(r.id);
+    assert.equal(parked?.status, "failed");
+    assert.equal(parked?.attempts, 6, "attempts stays monotonic");
+    assert.equal(parked?.handbacks, 4);
+    assert.match((parked?.result as { reason?: string })?.reason ?? "", /parked after 2 claims/);
+  } finally {
+    await close();
+  }
+});
 
 test("pg run store: delivery state round-trips; onTerminal fires once with it", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);

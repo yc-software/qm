@@ -329,7 +329,7 @@ import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createWorker, type Worker } from "./runs/worker.ts";
+import { CRASH_SHUTDOWN, createWorker, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
@@ -424,35 +424,36 @@ export interface Runtime {
   setBackgroundAdmission(canClaim: () => boolean, active: () => boolean): void;
   stopBackground(): Promise<void>;
   backgroundDrained(): Promise<void>;
-  stop(): Promise<void>;
-  releaseInFlightRuns(): Promise<void>;
+  stop(crashed?: boolean): Promise<void>;
+  releaseInFlightRuns(crashed?: boolean): Promise<void>;
 }
 
 export function stopWithBackstop(
   runtime: Pick<Runtime, "stop" | "releaseInFlightRuns">,
   shutdownDrainMs: number,
   label: string,
-  beforeExit?: () => void,
+  opts?: { beforeExit?: () => void; crashed?: boolean },
 ): void {
+  const crashed = opts?.crashed ?? false;
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
+    void Promise.race([runtime.releaseInFlightRuns(crashed), sleep(3_000, { unref: true })]).finally(async () => {
       await flushErrorReporting();
       process.exit();
     });
   }, shutdownDrainMs + 5_000);
   hardExit.unref();
-  void runtime.stop().then(
+  void runtime.stop(crashed).then(
     async () => {
       await flushErrorReporting();
       clearTimeout(hardExit);
-      beforeExit?.();
+      opts?.beforeExit?.();
       process.exit();
     },
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
+      void Promise.race([runtime.releaseInFlightRuns(crashed), sleep(3_000, { unref: true })]).finally(async () => {
         await flushErrorReporting();
         process.exit(1);
       });
@@ -2723,13 +2724,13 @@ export function buildApp(
     backgroundStopping = draining;
     return draining;
   }
-  async function releaseInFlightRuns(): Promise<void> {
-    inlineShutdown.abort();
+  async function releaseInFlightRuns(crashed = false): Promise<void> {
+    inlineShutdown.abort(crashed ? CRASH_SHUTDOWN : undefined);
     await Promise.all([
       withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
-      ...workers.map((w) => w.releaseInFlight()),
+      ...workers.map((w) => w.releaseInFlight(crashed)),
     ]);
   }
   const runtime: Runtime = {
@@ -2754,7 +2755,7 @@ export function buildApp(
       await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
     },
     releaseInFlightRuns,
-    async stop() {
+    async stop(crashed = false) {
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
@@ -2762,7 +2763,7 @@ export function buildApp(
         ),
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await releaseInFlightRuns();
+      await releaseInFlightRuns(crashed);
       await drain.stop();
       stopStreamSync();
       await Promise.all(

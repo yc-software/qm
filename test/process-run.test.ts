@@ -257,12 +257,35 @@ test("finalAttempt also marks the claim-cap park — an error on an over-claimed
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 5 });
   for (let i = 0; i < 2; i++) {
     const r = await runs.claim("w1", 5_000);
-    await runs.releaseLease(r!.id, r!.leaseToken!);
+    await runs.heartbeat(r!.id, r!.leaseToken!, -1);
+    await runs.reapExpired();
   }
   const third = await runs.claim("w1", 5_000);
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, third!), /hiccup/);
   assert.equal(seen[0]?.finalAttempt, true, "claim cap reached — an error is terminal despite error budget left");
   assert.equal((await runs.get(third!.id))?.status, "failed");
+});
+
+test("finalAttempt ignores graceful handbacks — a deploy-cut run keeps its claim budget", async () => {
+  const { runs } = createMemoryRunStore({ maxClaims: 3 });
+  const seen: OrchestratorInput[] = [];
+  const orchestrator = fakeOrchestrator(async (input) => {
+    seen.push(input);
+    return { status: "ok", reply: "done" };
+  });
+
+  await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 5 });
+  for (let i = 0; i < 5; i++) {
+    const r = await runs.claim("w1", 5_000);
+    await runs.releaseLease(r!.id, r!.leaseToken!);
+  }
+  const sixth = await runs.claim("w1", 5_000);
+  assert.equal(sixth?.attempts, 6, "attempts stays monotonic across handbacks");
+  assert.equal(sixth?.handbacks, 5);
+  await processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, sixth!);
+  assert.equal(seen[0]?.attempt, 6, "the ledger attempt is the monotonic claim number");
+  assert.equal(seen[0]?.finalAttempt, false, "handbacks are not crash claims");
+  assert.equal((await runs.get(sixth!.id))?.status, "done");
 });
 
 function scriptedHeartbeat(runs: RunStore, script: Array<boolean | Error>): RunStore {
