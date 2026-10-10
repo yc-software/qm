@@ -39,6 +39,7 @@ import {
   exchangeCode,
   fetchUserinfo,
   resolvePrincipal,
+  SignInDenied,
   verifyIdToken,
   type OidcConfig,
   type PrincipalRule,
@@ -578,6 +579,19 @@ export function signInErrorHtml(
     extra: `<p class="reason"><strong>Details</strong>${escapeHtml(detail)}</p>`,
     actions: `<a class="btn primary" href="${retryPath}">Try signing in again</a>`,
     help: "Still stuck? Check that your account has access, then contact your admin.",
+  });
+}
+
+export function signInDeniedHtml(detail: string): string {
+  return cardPage({
+    title: "Access denied",
+    heading: "This account can't sign in here",
+    msg: "Signing in again with the same account won't help. Use an account your admin has approved, or ask your admin for access.",
+    icon: LOCK_ICON,
+    warn: true,
+    extra: `<p class="reason"><strong>Details</strong>${escapeHtml(detail)}</p>`,
+    actions: `<a class="btn primary" href="/auth/login">Sign in with a different account</a>`,
+    help: "Only your admin can change who is allowed to sign in.",
   });
 }
 
@@ -1580,7 +1594,7 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
   const allowed = await adminProbeAttempt(claims.email);
   if (allowed === null)
     return sendHtml(res, 503, signInErrorHtml("Admin access could not be checked. Please try again."));
-  if (!allowed) return sendHtml(res, 403, signInErrorHtml("This account does not have admin access."));
+  if (!allowed) return sendHtml(res, 403, signInDeniedHtml("This account does not have admin access."));
   try {
     const claimsStore = coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal");
     if (!(await claimOnce(claimsStore, `admin-login:${claims.jti}`, claims.expiresAtMs))) return fail();
@@ -1731,7 +1745,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     const claims = await verifyIdToken(OIDC, idToken, tmp.nonce);
     if (OIDC.expectedTeamId) {
       const team = claims["https://slack.com/team_id"];
-      if (team !== OIDC.expectedTeamId) throw new Error("workspace not permitted");
+      if (team !== OIDC.expectedTeamId) throw new SignInDenied("workspace not permitted");
     }
     const info = await fetchUserinfo(OIDC, accessToken);
     const infoSub = typeof info.sub === "string" ? info.sub : "";
@@ -1743,6 +1757,10 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     const rawName = info.name ?? claims.name;
     if (typeof rawName === "string") name = rawName.trim().slice(0, 200);
   } catch (e) {
+    if (e instanceof SignInDenied) {
+      setSession(res, [clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES)]);
+      return sendHtml(res, 403, signInDeniedHtml(e.message));
+    }
     return fail(errMessage(e, "sign-in failed"));
   }
 
