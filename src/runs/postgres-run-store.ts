@@ -529,9 +529,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
     ): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
+      const ageCutoff = opts?.maxAgeMs === undefined ? null : now - opts.maxAgeMs;
       const { rows } = await q(
-        "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
-        [now],
+        "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND (lease_expires_at <= $1 OR started_at < $2)",
+        [now, ageCutoff],
       );
       const expired = rows.map(rowToRun);
       let requeued = 0;
@@ -541,8 +542,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
         const fenceToken = randomUUID();
         const fenced = await q(
-          "UPDATE runs SET lease_token=$1, lease_expires_at=$5 WHERE id=$2 AND lease_token=$3 AND status='running' AND lease_expires_at <= $4 RETURNING id",
-          [fenceToken, run.id, run.leaseToken, now, now + FENCE_HOLD_MS],
+          "UPDATE runs SET lease_token=$1, lease_expires_at=$5 WHERE id=$2 AND lease_token=$3 AND status='running' AND (lease_expires_at <= $4 OR started_at < $6) RETURNING id",
+          [fenceToken, run.id, run.leaseToken, now, now + FENCE_HOLD_MS, ageCutoff],
         );
         if (!fenced.rows[0]) continue;
         if (onRetired) await onRetired([run.sessionId]);
