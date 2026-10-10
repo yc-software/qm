@@ -7,6 +7,18 @@ import {
   createApprovalRegistry,
 } from "../src/slack/lib.ts";
 
+test("two pending approvals sharing a request id render one card, not duplicate block_ids (#1735)", () => {
+  const msg = approvalMessage([
+    { requestId: "shared-id", command: "sandbox exec", reason: "strict gate" },
+    { requestId: "shared-id", command: "sandbox exec", reason: "strict gate" },
+  ]);
+  const actionBlockIds = msg.blocks
+    .filter((b: Record<string, unknown>) => b.type === "actions")
+    .map((b: Record<string, unknown>) => b.block_id);
+  assert.equal(actionBlockIds.length, 1);
+  assert.equal(new Set(actionBlockIds).size, actionBlockIds.length, "block_ids must be unique for Slack");
+});
+
 test("approvalMessage builds Block Kit buttons for all approval choices", () => {
   const msg = approvalMessage([{ requestId: "req-1", command: "git push --force origin main", reason: "force push" }]);
   assert.match(msg.text, /Approval needed/);

@@ -4321,6 +4321,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ? `${command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
                 : command,
             );
+            // Two gated calls with the same command label in one turn hash to the
+            // same request id; the pending store keys by it, so they are one
+            // approval, not two — and a second card would die on Slack's
+            // duplicate block_id check (#1735).
+            if (prepared.some((item) => item.requestId === requestId)) continue;
             const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
             prepared.push({
               requestId,
