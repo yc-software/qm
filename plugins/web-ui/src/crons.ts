@@ -198,9 +198,10 @@ export async function renderCronsPage(): Promise<void> {
     cronsScope = contextsState.selected;
     contextsState.selected = null;
   } else cronsScope = null;
+  const refresh = refreshCrons({ showLoading: cronList.length === 0 && visibleCronList.length === 0 });
   await ensureContexts();
   drawCronsPage();
-  const loaded = await refreshCrons({ showLoading: cronList.length === 0 && visibleCronList.length === 0 });
+  const loaded = await refresh;
   const wanted = pendingCronId;
   pendingCronId = null;
   if (appState.currentView !== "crons") return;

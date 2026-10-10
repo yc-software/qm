@@ -44,7 +44,7 @@ test("opening a cron from the list pushes history, so Back returns to the list",
 });
 
 test("a failed load is never reported as a missing cron", () => {
-  assert.match(source, /const loaded = await refreshCrons/);
+  assert.match(source, /const refresh = refreshCrons[\s\S]*?const loaded = await refresh;/);
   assert.match(source, /if \(!loaded\) return drawCronsPage\(\);/);
   const body = source.slice(source.indexOf("export async function renderCronsPage"));
   assert.ok(body.indexOf("if (!loaded)") < body.indexOf("wasn't found"));
@@ -53,6 +53,6 @@ test("a failed load is never reported as a missing cron", () => {
 test("a pending deep-linked cron is consumed even when the view changed mid-load", () => {
   const body = source.slice(source.indexOf("export async function renderCronsPage"));
   const consume = body.indexOf("pendingCronId = null");
-  const guard = body.indexOf('appState.currentView !== "crons") return', body.indexOf("await refreshCrons"));
+  const guard = body.indexOf('appState.currentView !== "crons") return', body.indexOf("const loaded = await refresh;"));
   assert.ok(consume !== -1 && guard !== -1 && consume < guard);
 });

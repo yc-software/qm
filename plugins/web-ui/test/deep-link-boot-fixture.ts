@@ -13,6 +13,10 @@ export interface Harness {
   releaseApprovals: () => void;
   releaseRuntimeConfig: () => void;
   releaseRemoteSplit: () => void;
+  releaseContexts: () => void;
+  ensureContexts: (force?: boolean) => Promise<CoreContext[]>;
+  resetContexts: () => void;
+  contextsState: { list: CoreContext[]; loaded: boolean };
   sessionsReady: () => Promise<void>;
   refreshSessions: () => Promise<boolean>;
   boot: () => Promise<void>;
@@ -36,6 +40,7 @@ interface HarnessOptions {
   holdApprovals?: boolean;
   holdRuntimeConfig?: boolean;
   holdRemoteSplit?: boolean;
+  holdContexts?: boolean;
   remoteCanvas?: unknown;
   listSessions?: unknown[];
   contexts?: CoreContext[];
@@ -116,6 +121,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   let releaseApprovals = (): void => {};
   let releaseRuntimeConfig = (): void => {};
   let releaseRemoteSplit = (): void => {};
+  let releaseContexts = (): void => {};
+  const contextsHeld = new Promise<void>((resolve) => (releaseContexts = resolve));
   const runtimeHeld = new Promise<void>((resolve) => (releaseRuntimeConfig = resolve));
   const remoteSplitHeld = new Promise<void>((resolve) => (releaseRemoteSplit = resolve));
   const approvalsHeld = new Promise<void>((resolve) => (releaseApprovals = resolve));
@@ -189,6 +196,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       await sessionsHeld;
       return Response.json({ sessions: opts.listSessions ?? [] });
     }
+    if (path === "/api/contexts" && opts.holdContexts) await contextsHeld;
     return Response.json({ contexts: opts.contexts ?? [], items: [], crons: [] });
   };
 
@@ -251,6 +259,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const sessions = await vite.ssrLoadModule("/src/sessions.ts");
   const conversations = await vite.ssrLoadModule("/src/conversations.ts");
   const split = await vite.ssrLoadModule("/src/split.ts");
+  const contexts = await vite.ssrLoadModule("/src/contexts.ts");
   return {
     requests,
     setTranscriptStatus: (status) => {
@@ -267,6 +276,10 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     releaseApprovals,
     releaseRuntimeConfig,
     releaseRemoteSplit,
+    releaseContexts,
+    ensureContexts: contexts.ensureContexts as Harness["ensureContexts"],
+    resetContexts: contexts.resetContextsState as Harness["resetContexts"],
+    contextsState: contexts.contextsState as Harness["contextsState"],
     sessionsReady: sessions.sessionsReady as () => Promise<void>,
     refreshSessions: sessions.refreshSessions as () => Promise<boolean>,
     boot: shell.boot as () => Promise<void>,
@@ -289,6 +302,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       releaseApprovals();
       releaseRuntimeConfig();
       releaseRemoteSplit();
+      releaseContexts();
       for (let drain = 0; drain < 5 && inFlight.size; drain++) {
         await Promise.allSettled(inFlight);
         await new Promise((resolve) => realSetTimeout(resolve, 0));
