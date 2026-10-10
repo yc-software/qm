@@ -1,6 +1,6 @@
 import { sendJson } from "../http.ts";
 import { errMessage } from "../../util/errors.ts";
-import type { SwarmCaller } from "../../swarms/swarm-service.ts";
+import { SwarmAccessDeniedError, SwarmNotFoundError, type SwarmCaller } from "../../swarms/swarm-service.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -31,7 +31,14 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
         });
         return sendJson(res, 200, { messages });
       }
-      return sendJson(res, 200, await app.swarms.inspect(caller));
+      if (caller.kind === "human" && !(await app.swarms.enabledFor(caller.actorId))) return sendJson(res, 200, null);
+      try {
+        return sendJson(res, 200, await app.swarms.inspect(caller));
+      } catch (error) {
+        if (caller.kind === "human" && (error instanceof SwarmNotFoundError || error instanceof SwarmAccessDeniedError))
+          return sendJson(res, 200, null);
+        throw error;
+      }
     }
     if (!isObj(body)) throw new Error("expected an object");
     const allowed = new Set([
