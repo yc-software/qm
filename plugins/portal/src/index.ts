@@ -593,8 +593,7 @@ export function nonAdminDeniedHtml(o: { sub: string; org: string }): string {
         <p>Admin rights come from your organization's admin grants. If you need access, ask an existing admin to grant it.</p>
       </div>`,
     actions: `<a class="btn primary" href="/">Back to your surfaces</a>
-        <a class="btn ghost" href="/admin/">Try again</a>
-        <a class="btn ghost" href="/">Open the assistant instead</a>`,
+        <a class="btn ghost" href="/admin/">Try again</a>`,
     help: "You can keep using every surface available to your account.",
   });
 }
