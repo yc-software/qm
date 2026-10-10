@@ -10,7 +10,6 @@ import { awaitContextOutcome } from "../surface-context-puller.ts";
 const SURFACE_CONTEXT_MAX_MESSAGES = 200;
 const SURFACE_CONTEXT_DEFAULT_MESSAGES = 100;
 const FULFILL_WAIT_MS = 25_000;
-const FULFILL_POLL_MS = 100;
 const PENDING_WAIT_CAP_MS = 20_000;
 const PENDING_POLL_MS = 100;
 
@@ -144,7 +143,10 @@ async function awaitOutcome(
   onDone: (result: SurfaceContextResult) => void | Promise<void>,
 ): Promise<void> {
   const { res, app } = ctx;
-  const outcome = await awaitContextOutcome(app, requestId, { waitMs, pollMs: FULFILL_POLL_MS });
+  const controller = new AbortController();
+  if (res.destroyed) controller.abort();
+  else res.once("close", () => controller.abort());
+  const outcome = await awaitContextOutcome(app, requestId, { waitMs, signal: controller.signal });
   if (outcome.status === "done") return onDone(outcome.result);
   if (outcome.status === "failed") {
     return sendJson(res, 502, { error: "surface_error", message: outcome.error ?? "the surface couldn't answer that" });
