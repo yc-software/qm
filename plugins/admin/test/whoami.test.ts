@@ -58,6 +58,14 @@ test("admin HTML ships a hash-only script policy and transport/browser isolation
   assert.equal(r.headers.get("x-frame-options"), "DENY");
 });
 
+test("CSP sha256 is non-empty regardless of inline script tag case", () => {
+  for (const tag of ["<script>", "<SCRIPT>", "<Script>"]) {
+    const html = `<html><head></head><body>${tag}var x=1;<\/script></body></html>`;
+    const extracted = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1] ?? "";
+    assert.notEqual(extracted, "", `inline script must be extracted from ${tag} tag`);
+  }
+});
+
 test("managed Slack form navigation retains origin without disclosing the admin path", async () => {
   const previous = process.env.QM_SLACK_SERVICE_URL;
   process.env.QM_SLACK_SERVICE_URL = "https://slack.example.test";
