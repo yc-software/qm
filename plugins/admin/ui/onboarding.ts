@@ -170,12 +170,14 @@ export class Onboarding {
     const status = this.providers.find((row) => row.provider === provider);
     const harnessAuth = models.data.harnessAuth;
     const harnessReady = Boolean(harnessAuth && harnessAuth.provider === provider);
-    const ready = Boolean(baseModel) && (Boolean(status?.configured) || harnessReady);
+    const customProvider = Boolean(baseModel && provider && this.providers.length && !status);
+    const ready = Boolean(baseModel) && (Boolean(status?.configured) || harnessReady || customProvider);
     let summary = "No base model is configured yet. Pick a provider and model below.";
     if (baseModel) {
       summary = baseModel + " cannot run until its " + this.label(provider) + " key is configured.";
       if (harnessReady)
         summary = baseModel + " · authenticated by the " + harnessAuth.harnessId + " harness — no API key needed.";
+      if (customProvider) summary = baseModel + " · served by the " + provider + " custom provider";
       if (status?.configured)
         summary = baseModel + " · " + (status.source === "admin" ? "admin-managed key" : "deployment key");
     }

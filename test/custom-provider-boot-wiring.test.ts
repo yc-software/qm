@@ -34,6 +34,11 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
   try {
     assert.notEqual(defaultModelForHarness("pi", deps.baseModelDefault), "acme-large");
 
+    const configured = async (): Promise<boolean | undefined> =>
+      ((await (await fetch(`${base}/v1/surface-config`)).json()) as { modelProviderConfigured?: boolean })
+        .modelProviderConfigured;
+    assert.equal(await configured(), false);
+
     const list = await fetch(`${base}/v1/admin/custom-providers`, { headers: ADMIN });
     assert.equal(list.status, 200);
 
@@ -52,6 +57,7 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
     assert.equal(put.status, 200);
 
     assert.equal(defaultModelForHarness("pi", deps.baseModelDefault), "acme-large");
+    assert.equal(await configured(), true);
 
     const runtime = await fetch(
       `${base}/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org`,
