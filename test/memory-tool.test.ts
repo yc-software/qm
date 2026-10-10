@@ -294,3 +294,54 @@ test("explicit capture uses the conversation origin rather than the notebook des
   assert.equal(await tool.memoryRemember(["synthetic fact"]), 1);
   assert.equal(context?.conversationScopeId, "group:origin");
 });
+
+test("the `memory` tool refuses oversized facts and notebooks instead of pasting them into every prompt", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-cap-")));
+  const memory = createMemoryService(workspace);
+  const personal = scopeId("personal", "U1");
+  await workspace.ensureScope(personal);
+  const ref: ToolContextRef = {
+    current: ctxFor({ scope: personal, workspace, memory }),
+    emit: () => {},
+    scopeLabel: personal,
+  };
+  const memoryTool = createAgentTools(ref).find((t) => t.name === "memory");
+  assert.match(
+    textOf(await call(memoryTool, { action: "remember", facts: ["x".repeat(2_001)] })),
+    /at most 2000 characters/,
+  );
+  assert.match(
+    textOf(await call(memoryTool, { action: "remember", facts: Array.from({ length: 51 }, (_, i) => `f${i}`) })),
+    /at most 50 facts/,
+  );
+  assert.match(
+    textOf(await call(memoryTool, { action: "rewrite", content: `# Memory\n\n- ${"y".repeat(64_000)}` })),
+    /at most 64000 characters/,
+  );
+  assert.equal(await memory.read(personal), "", "nothing was written");
+  assert.match(textOf(await call(memoryTool, { action: "remember", facts: ["short fact"] })), /Remembered 1 fact/);
+});
+
+test("a notebook already over the cap can still be curated down, but not grown", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-grand-")));
+  const memory = createMemoryService(workspace);
+  const personal = scopeId("personal", "U1");
+  await workspace.ensureScope(personal);
+  const big = `# Memory\n\n${Array.from({ length: 900 }, (_, i) => `- legacy fact ${i} ${"z".repeat(80)}`).join("\n")}`;
+  await memory.replace(personal, big);
+  const current = (await memory.read(personal)).length;
+  assert.ok(current > 64_000);
+  const ref: ToolContextRef = {
+    current: ctxFor({ scope: personal, workspace, memory }),
+    emit: () => {},
+    scopeLabel: personal,
+  };
+  const memoryTool = createAgentTools(ref).find((t) => t.name === "memory");
+  const shrunk = big.split("\n").slice(0, -100).join("\n");
+  assert.ok(shrunk.length > 64_000 && shrunk.length < current);
+  assert.match(textOf(await call(memoryTool, { action: "rewrite", content: shrunk })), /Rewrote/);
+  assert.match(
+    textOf(await call(memoryTool, { action: "rewrite", content: `${shrunk}\n${"- more ".repeat(3_000)}` })),
+    /at most \d+ characters/,
+  );
+});
