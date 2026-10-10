@@ -188,6 +188,16 @@ test("endsAtRecordedToolResult accepts only a real trailing tool result", () => 
   const healed = { role: "toolResult", content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }] };
   assert.equal(endsAtRecordedToolResult([{ role: "user" }, result]), true);
   assert.equal(endsAtRecordedToolResult([{ role: "user" }, healed]), false);
+  const legacyHealed = {
+    role: "toolResult",
+    content: [
+      {
+        type: "text",
+        text: "[interrupted — a routine platform deploy restarted the agent while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]",
+      },
+    ],
+  };
+  assert.equal(endsAtRecordedToolResult([{ role: "user" }, legacyHealed]), false);
   assert.equal(endsAtRecordedToolResult([{ role: "user" }, { role: "assistant" }]), false);
   assert.equal(endsAtRecordedToolResult([{ role: "user" }]), false);
   assert.equal(endsAtRecordedToolResult([]), false);

@@ -112,7 +112,7 @@ import {
   type SeededMessage,
 } from "./replay.ts";
 import { assistantDroppedAtReplay, ELIDED_IMAGE_TEXT, planTapeSeed, withResumedToolResult } from "./tape-fold.ts";
-import { estimateHistoryTokens, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { estimateHistoryTokens, isInterruptedToolResult } from "./context-compaction.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
@@ -686,7 +686,7 @@ interface PiAgentWithPayloadHook {
 
 export function endsAtRecordedToolResult(messages: readonly unknown[]): boolean {
   const last = messages.at(-1) as { role?: unknown; content?: unknown } | undefined;
-  return last?.role === "toolResult" && textFromContent(last.content) !== INTERRUPTED_TOOL_RESULT;
+  return last?.role === "toolResult" && !isInterruptedToolResult(textFromContent(last.content));
 }
 
 function continueAssistantTurn(session: AgentSession): Promise<void> {

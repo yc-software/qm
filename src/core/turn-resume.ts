@@ -118,17 +118,17 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   };
 }
 
-const ROUTINE = "This was a routine platform deploy; it is common and almost never worth mentioning to the user.";
+const ROUTINE = "This was a routine platform restart; it is common and almost never worth mentioning to the user.";
 const CONTINUE = "Continue from where you left off; don't start over or repeat completed steps.)";
 
 export function resumeNote(opts?: {
   strategy?: ResumeStrategy;
   backgroundJobs?: boolean;
-  cause?: "deploy" | "runtime-change";
+  cause?: "restart" | "runtime-change";
 }): string {
   const strategy = opts?.strategy ?? { kind: "note" };
   if (strategy.kind === "restart") {
-    return `${NOTE_HEAD} your previous attempt at the request above was interrupted before it recorded any work (a routine platform deploy), so there is nothing to pick up. Start the request now.)`;
+    return `${NOTE_HEAD} your previous attempt at the request above was interrupted before it recorded any work (a routine platform restart), so there is nothing to pick up. Start the request now.)`;
   }
   const parts =
     strategy.kind === "retry"

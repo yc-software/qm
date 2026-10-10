@@ -16,8 +16,13 @@ function headTailSlice(s: string, maxChars: number, tailChars: number): string {
   return headSlice(s, maxChars - tailChars - notice.length) + notice + tailSlice(s, tailChars);
 }
 
-export const INTERRUPTED_TOOL_RESULT =
-  "[interrupted — a routine platform deploy restarted the agent while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]";
+const INTERRUPTED_MARK = "[interrupted —";
+
+export const INTERRUPTED_TOOL_RESULT = `${INTERRUPTED_MARK} a routine platform restart stopped the agent while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]`;
+
+export function isInterruptedToolResult(text: string): boolean {
+  return text.startsWith(INTERRUPTED_MARK);
+}
 
 export const CONTEXT_SUMMARY_HEADER =
   "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
