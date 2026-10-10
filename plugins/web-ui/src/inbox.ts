@@ -1085,14 +1085,18 @@ async function setUpSync(loopId?: string): Promise<void> {
 }
 
 async function syncNow(viewId: string): Promise<void> {
-  const crons = syncLoops(viewId).flatMap((loop) => (loop.syncCron ? [loop.syncCron] : []));
-  if (!crons.length || inboxState.syncBusy) return;
+  const loops = syncLoops(viewId).filter((loop) => loop.syncCron);
+  if (!loops.length || inboxState.syncBusy) return;
   inboxState.syncBusy = true;
   drawAll();
   try {
-    for (const cron of crons)
-      await api(`/api/crons/${encodeURIComponent(cron.id)}/run`, { method: "POST", body: "{}" });
+    for (const loop of loops) {
+      if (!loop.syncCron!.enabled)
+        await api("/api/inbox/sync-cron", { method: "POST", body: JSON.stringify({ enabled: true, loopId: loop.id }) });
+      await api(`/api/crons/${encodeURIComponent(loop.syncCron!.id)}/run`, { method: "POST", body: "{}" });
+    }
     notify("Sync kicked off. New items appear as the agent finishes drafting.");
+    await refreshInbox({ silent: true });
   } catch (e) {
     notify(`Couldn't start a sync: ${e instanceof Error ? e.message : e}`);
   } finally {
@@ -1735,6 +1739,7 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
   const crons = loops.flatMap((loop) => (loop.syncCron ? [loop.syncCron] : []));
   const moving = inboxState.migrationPending;
   if (!crons.length && !moving) return nothing;
+  const syncHint = crons.some((cron) => !cron.enabled) ? "Turn sync back on and run it now" : "Sync now";
   const status =
     crons.length === 1 ? syncStatusLabel(crons[0]!) : `${crons.filter((cron) => cron.enabled).length} syncs on`;
   return html`<span class="inbox-sync-line">
@@ -1743,7 +1748,7 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
       busyLabel: "Syncing…",
       busy: inboxState.syncBusy,
       disabled: moving,
-      tooltip: moving ? MIGRATION_HINT : "Sync now",
+      tooltip: moving ? MIGRATION_HINT : syncHint,
       action: () => void syncNow(surface.viewId),
     })}
     <span class="inbox-sync-status" role=${moving ? "status" : nothing}>${moving ? MIGRATION_STATUS : status}</span>
