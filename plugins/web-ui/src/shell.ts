@@ -153,6 +153,8 @@ export const ADMIN_BASE = (() => {
 })();
 export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
 
+let historySession: string | null = null;
+
 export function syncUrlFromState(sessionOverride?: string | null): void {
   const chatState = mainConversation().state;
   const fromState =
@@ -162,7 +164,13 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
   const seq = messageLinkSeq(location.search);
   if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
-  if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
+  const chatsRoute = appState.currentView === "chats" && (!linked.view || linked.view === "chats");
+  if (chatsRoute && sessionId && historySession && sessionId !== historySession) {
+    if (linked.session !== historySession)
+      history.replaceState(null, "", deepLinkPath(UI_BASE, "chats", historySession, contextsState.selected));
+    history.pushState(null, "", next);
+  } else if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
+  if (chatsRoute && sessionId) historySession = sessionId;
 }
 
 const appEl = document.getElementById("app");
@@ -972,7 +980,20 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
   replaceChildrenPreservingFocus(appState.mainEl, host);
 }
 
+function routeChatsHistory(): void {
+  const { view, session } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  if (view && view !== "chats") return;
+  const current = splitState.active ? singlePaneSessionId() : mainConversation().state.sessionId;
+  if ((session ?? null) === (current ?? null)) return;
+  historySession = session;
+  if (!session) return void startNewChat();
+  const known = sessionsState.list.find((s) => s.id === session);
+  if (known) void openSession(known);
+  else location.reload();
+}
+
 window.addEventListener("popstate", () => {
+  if (appState.currentView === "chats") return void routeChatsHistory();
   const routed = ["crons", "webhooks", "inbox", "skills"];
   if (!routed.includes(appState.currentView)) return;
   const { view, item } = parseDeepLink(UI_BASE, location.pathname, location.search);

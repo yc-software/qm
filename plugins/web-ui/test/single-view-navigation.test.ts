@@ -59,6 +59,7 @@ test("single-pane navigation follows the pane identity without depending on the 
   const splitState = { active: true };
   const appState = { currentView: "chats" };
   let url = "/";
+  const pushed: string[] = [];
   const sync = runInNewContext(
     compile(
       `${functionSource(split, "singlePaneSessionId")}\n${functionSource(shell, "syncUrlFromState")}\nsyncUrlFromState;`,
@@ -83,8 +84,13 @@ test("single-pane navigation follows the pane identity without depending on the 
           return new URL(url, "https://qm.example").search;
         },
       },
+      historySession: null,
       history: {
         replaceState: (_state: unknown, _title: string, next: string) => {
+          url = next;
+        },
+        pushState: (_state: unknown, _title: string, next: string) => {
+          pushed.push(next);
           url = next;
         },
       },
@@ -108,6 +114,7 @@ test("single-pane navigation follows the pane identity without depending on the 
   dockApi.panels = [{ params: {} }];
   sync();
   assert.equal(url, "/");
+  assert.deepEqual(pushed, ["/s/second", "/s/third"], "moving to another conversation adds a history entry");
   dockApi.panels[0]!.params.sessionId = "created";
   sync();
   assert.equal(url, "/s/created");
