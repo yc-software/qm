@@ -154,3 +154,20 @@ test("regrouping moves only the item and hands its old group to the oldest remai
     { a: "a", b: "b", c: "b", d: "a" },
   );
 });
+
+test("the work queue ranks a group by its most urgent member, like the inbox does", async () => {
+  const s = await flood();
+  const { a, b, c, d } = s.ids as Record<string, string>;
+  await triage(s, [
+    { id: a!, priority: "low" },
+    { id: b!, priority: "urgent", groupWith: a! },
+    { id: c!, priority: "high" },
+    { id: d!, priority: "normal" },
+  ]);
+  const items = await s.ledger.byLoop(LOOP);
+  assert.equal(items.find((item) => item.id === b)!.triage?.groupId, a);
+  assert.deepEqual(
+    workOrder(s.loop, await s.ledger.queued(LOOP), items).map((item) => item.sourceKey),
+    ["a", "c", "d"],
+  );
+});
