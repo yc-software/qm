@@ -1383,6 +1383,31 @@ test(
       );
       const emptyRow = all.find((r) => r.id === empty.id)!;
       assert.deepEqual([emptyRow.firstMessage, emptyRow.lastMessage], ["", ""], "an entry-less legacy row is blank");
+      assert.deepEqual(
+        [...(await s.lastUserMessages([ids[1]!, empty.id, junk.id]))],
+        [[ids[1]!, "close 1"]],
+        "lastUserMessages derives legacy previews and omits rows without a usable user turn",
+      );
+      const query = pg.Client.prototype.query;
+      const sent: string[] = [];
+      pg.Client.prototype.query = function (...args: any[]): any {
+        sent.push(typeof args[0] === "string" ? args[0] : String(args[0]?.text ?? ""));
+        return Reflect.apply(query, this, args);
+      };
+      try {
+        assert.equal((await s.lastUserMessages([ids[2]!])).get(ids[2]!), "close 2");
+      } finally {
+        pg.Client.prototype.query = query;
+      }
+      assert.ok(
+        sent.some((sql) => sql.includes("session_entries")),
+        "the legacy row derives its last preview",
+      );
+      assert.equal(
+        sent.some((sql) => sql.includes("first_user")),
+        false,
+        "lastUserMessages never fetches the opening user payload",
+      );
 
       const { lease } = await s.acquireLease(ids[0]!);
       await s.append(lease!, { type: "user", payload: { text: "fresh" }, scopeLabel: scope });
