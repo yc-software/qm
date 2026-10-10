@@ -87,6 +87,7 @@ async function runTurnEnforcingGoal(
           govern: (previous: GovernorVerdict | undefined) =>
             input.governGoal!({
               objective: goal.objective,
+              ...(goal.request ? { request: goal.request } : {}),
               trigger: "checkpoint",
               recentWork: goalWorkFromEntries([...input.history.slice(-40), ...emitted]),
               ...(previous ? { previous } : {}),
