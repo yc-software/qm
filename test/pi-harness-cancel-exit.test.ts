@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 import { createGoalRecord, latestGoalRecord } from "../src/harness/goal.ts";
+import { NonRetryableTurnError, ProviderTurnError } from "../src/core/turn-error.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry, NewTapeRecord } from "../src/sessions/session-store.ts";
@@ -114,6 +115,71 @@ test("a genuine provider error racing a cancel still fails the turn instead of c
       ),
       false,
       "no completeness checkpoint is stamped over the failure",
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a transient provider error reaches the run worker after one request, with no hidden Pi retries", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
+  const realFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = (async () => {
+    requests++;
+    return new Response(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }), {
+      status: 529,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof globalThis.fetch;
+  const goal = createGoalRecord({ objective: "keep going", floor: { minMs: 32_400_000 }, capTokens: 50_000 });
+  try {
+    const turn = cancelTurn("transient-single-retry", new AbortController().signal, sink);
+    turn.history = [
+      {
+        type: "tool_result",
+        payload: { tool: "goal", action: "create", goal },
+        seq: 0,
+        sessionId: turn.session.id,
+        parentSeq: null,
+        createdAt: 1,
+        scopeLabel: turn.scopeLabel,
+      },
+    ];
+    await assert.rejects(harness.turns.runTurn(turn), ProviderTurnError);
+    assert.equal(requests, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a context overflow Pi cannot compact fails the turn instead of replying with the previous answer", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        type: "error",
+        error: { type: "invalid_request_error", message: "prompt is too long: 250000 tokens > 200000 maximum" },
+      }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    )) as typeof globalThis.fetch;
+  try {
+    const turn = cancelTurn("overflow-not-compacted", new AbortController().signal, sink);
+    turn.history = [0, 1].map((seq): SessionEntry => ({
+      sessionId: "overflow-not-compacted",
+      seq,
+      parentSeq: seq ? 0 : null,
+      type: seq ? "assistant" : "user",
+      payload: { text: seq ? "PREVIOUS ANSWER" : "earlier ask" },
+      scopeLabel: turn.scopeLabel,
+      createdAt: seq + 1,
+    }));
+    await assert.rejects(
+      harness.turns.runTurn(turn),
+      (err: Error) => err instanceof NonRetryableTurnError && /prompt is too long/.test(err.message),
     );
   } finally {
     globalThis.fetch = realFetch;
