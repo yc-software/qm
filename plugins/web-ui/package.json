@@ -50,7 +50,7 @@
     "@types/node": "^24.0.0",
     "@types/papaparse": "5.5.2",
     "jsdom": "^29.1.1",
-    "katex": "^0.16.47",
+    "katex": "^0.18.2",
     "typescript": "^5.8.2",
     "vite": "^7.1.6"
   },
