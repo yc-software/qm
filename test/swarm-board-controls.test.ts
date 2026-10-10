@@ -98,3 +98,20 @@ test("pausing and stopping the root's direct children cascades across a 120-work
   assert.ok(workers.every((w) => swarm.messages[0]!.notifications[w.id]?.state !== "queued"));
   assert.equal((await fixture.service.inspect(fixture.caller)).peers.length, 121);
 });
+
+test("a paused worker's pending message fails once the swarm expires", async () => {
+  const fixture = await swarmFixture();
+  const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "one", text: "Work" });
+  await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "paused" });
+  await fixture.service.sweep();
+  await fixture.store.update(fixture.root.id, (swarm) => {
+    swarm.expiresAt = Date.now() - 1;
+  });
+  await fixture.service.sweep();
+  const swarm = (await fixture.store.get(fixture.root.id))!;
+  assert.equal(swarm.messages[0]!.notifications[worker!.id]!.state, "failed");
+  assert.equal(
+    (await fixture.store.pending()).some((s) => s.id === fixture.root.id),
+    false,
+  );
+});

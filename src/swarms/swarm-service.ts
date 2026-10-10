@@ -373,8 +373,9 @@ export function createSwarmService(deps: {
         const recipient = memberById(swarm, recipientId);
         if (!recipient || recipient.state === "reserved") continue;
         const control = controlState(swarm, recipient.id);
-        if (control === "paused") continue;
-        if (recipient.state === "failed" || control === "stopped" || Date.now() >= swarm.expiresAt) {
+        const expired = Date.now() >= swarm.expiresAt;
+        if (control === "paused" && !expired) continue;
+        if (recipient.state === "failed" || control === "stopped" || expired) {
           await step(() =>
             store.update(swarm.id, (current) => {
               current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = { state: "failed" };
