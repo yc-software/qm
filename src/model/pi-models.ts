@@ -475,11 +475,26 @@ export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }>
   (m) => m.base,
 ).map((m) => ({ id: m.id, name: m.name }));
 
+/**
+ * OpenRouter publishes -1 per token for variable-priced routers (openrouter/auto), which the
+ * catalog stores as -1,000,000 $/MTok. Priced as-is, every call books a large negative cost and
+ * cancels real spend, so an unknown rate is treated as unpriced (0) instead.
+ */
+function withoutVariablePriceSentinels(model: PiModel): PiModel {
+  const cost = model.cost as unknown as Record<string, unknown> | undefined;
+  if (!cost) return model;
+  const negative = (["input", "output", "cacheRead", "cacheWrite"] as const).filter(
+    (key) => typeof cost[key] === "number" && (cost[key] as number) < 0,
+  );
+  if (!negative.length) return model;
+  return { ...model, cost: { ...model.cost, ...Object.fromEntries(negative.map((key) => [key, 0])) } };
+}
+
 function builtinModel(id: string): PiModel | undefined {
   for (const provider of MODEL_PROVIDERS) {
     const m = getModel(provider, id);
     if (!m) continue;
-    return m;
+    return withoutVariablePriceSentinels(m);
   }
   return undefined;
 }
@@ -520,8 +535,8 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
     maxTokens: definition.maxTokens,
     reasoning: definition.reasoning,
     cost: {
-      input: definition.cost.input,
-      output: definition.cost.output,
+      input: Math.max(0, definition.cost.input),
+      output: Math.max(0, definition.cost.output),
       cacheRead: 0,
       cacheWrite: 0,
     },
