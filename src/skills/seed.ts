@@ -121,7 +121,7 @@ async function upsertSeedSkillUnsafe(
 
 export async function installSeedSkills(
   skills: SkillStore,
-  opts: { dir: string; scopeId: ScopeId; createdBy?: string; reviewer?: string },
+  opts: { dir: string; scopeId: ScopeId; createdBy?: string; reviewer?: string; retireRemoved?: boolean },
 ): Promise<SeedInstallResult> {
   if (!existsSync(opts.dir)) return { installed: [], updated: [], skipped: [] };
   const createdBy = opts.createdBy ?? "system:skills-seed";
@@ -136,6 +136,14 @@ export async function installSeedSkills(
     manifest.files = readSkillFiles(skillDir);
     const outcome = await upsertSeedSkill(skills, { scopeId: opts.scopeId, manifest, createdBy, reviewer });
     result[outcome === "foreign" ? "skipped" : outcome].push(manifest.name);
+  }
+
+  if (opts.retireRemoved) {
+    const seeded = new Set([...result.installed, ...result.updated, ...result.skipped]);
+    for (const s of await skills.list()) {
+      if (s.scopeId !== opts.scopeId || s.createdBy !== createdBy || s.status === "archived") continue;
+      if (!seeded.has(s.manifest.name)) await skills.archive(s.id);
+    }
   }
 
   return result;

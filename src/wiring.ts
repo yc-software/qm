@@ -744,7 +744,7 @@ export function buildApp(
   let skillsReady: Promise<void>;
   if (config.seedSkills) {
     const installCatalogs = async (): Promise<void> => {
-      await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope });
+      await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, retireRemoved: true });
       for (const dir of config.pluginSkillDirs) {
         if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
         await installSeedSkills(skills, {

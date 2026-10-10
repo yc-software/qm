@@ -3,7 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHmac } from "node:crypto";
@@ -145,6 +145,25 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
   const guarded = await installSeedSkills(skills, { dir: userDir, scopeId: org });
   assert.deepEqual(guarded, { installed: [], updated: [], skipped: ["mine"] });
   assert.equal((await skills.get(mine.id))!.manifest.description, "user authored");
+});
+
+test("installSeedSkills with retireRemoved archives its own skills whose seed was deleted", async () => {
+  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const org = scopeId("org", "default-org");
+  const dir = mkdtempSync(join(tmpdir(), "seed-retire-"));
+  writeSeedSkill(dir, "kept", "kept", "# Kept");
+  writeSeedSkill(dir, "gone", "gone", "# Gone");
+  await installSeedSkills(skills, { dir, scopeId: org, retireRemoved: true });
+  await skills.create({
+    scopeId: org,
+    manifest: { name: "other", description: "user authored", requiredCapabilities: [], body: "# Other" },
+    createdBy: "user:carol",
+  });
+  rmSync(join(dir, "gone"), { recursive: true });
+
+  await installSeedSkills(skills, { dir, scopeId: org, retireRemoved: true });
+  const status = new Map((await skills.list()).map((s) => [s.manifest.name, s.status]));
+  assert.deepEqual(Object.fromEntries(status), { kept: "published", gone: "archived", other: "draft" });
 });
 
 test("concurrent upserts of the same scope+name serialize into one record (no duplicate creates)", async () => {
