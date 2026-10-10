@@ -139,3 +139,36 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
   ]);
   assert.equal(maxActive, 1, "two redeploys on one deployment never ran apply() concurrently");
 });
+
+test("waking after a failed redeploy boots the last version that ran, not the broken candidate", async () => {
+  const deployStore = createDeployStore();
+  const applied: string[] = [];
+  let asleep = false;
+  const provider: DeployProvider = {
+    profile: { managedScaleToZero: false },
+    apply: async (_d, v) => {
+      if (v.entrypoint === "broken") throw new Error("PORT never listened");
+      applied.push(v.entrypoint);
+      asleep = false;
+      return { host: "127.0.0.1", port: 5000 };
+    },
+    resolveEndpoint: async () => (asleep ? null : { host: "127.0.0.1", port: 5000 }),
+    destroy: async () => {},
+  };
+  const deploy = createDeployService({
+    deployStore,
+    provider,
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    acl: createAclStore(),
+    deployDir: mkdtempSync(join(tmpdir(), "wake-")),
+  });
+  const owner = scopeId("personal", "U1");
+  const d = await deploy.deploy({ ownerScopeId: owner, createdBy: "U1", entrypoint: "good", files: [] });
+  await assert.rejects(deploy.redeploy(d.id, { entrypoint: "broken", files: [] }), /PORT never listened/);
+  assert.equal((await deployStore.get(d.id))!.currentVersion, 2, "the pointer still records the request");
+
+  asleep = true;
+  const reach = await deploy.reachDeployment(d.id, "U1");
+  assert.equal(reach.status, "ok");
+  assert.deepEqual(applied, ["good", "good"], "the wake re-applied v1");
+});

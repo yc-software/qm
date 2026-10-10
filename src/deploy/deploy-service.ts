@@ -234,7 +234,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     }
     return withDeployLock(d.id, async () => {
       const cur = (await deps.deployStore.get(d.id)) ?? d;
-      const v = currentVersionOf(cur) ?? version;
+      // Wake what last ran, not what was last requested: after a failed redeploy currentVersion
+      // still names the broken candidate, and booting it would take a working app down.
+      const lastGood =
+        cur.appliedVersion === undefined ? undefined : cur.versions.find((x) => x.version === cur.appliedVersion);
+      const v = lastGood ?? currentVersionOf(cur) ?? version;
       const again = await deps.provider.resolveEndpoint!(cur, v);
       if (again) {
         if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
