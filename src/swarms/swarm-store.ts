@@ -30,7 +30,12 @@ export interface SwarmMember {
   control?: "paused" | "stopped";
   attempts: number;
   cleanupPending?: boolean;
+  released?: boolean;
   error?: string;
+}
+
+export function holdsWorkerSandbox(member: SwarmMember): boolean {
+  return member.state === "ready" && member.sandboxId === member.id && !member.released;
 }
 
 export interface SwarmMessage {
@@ -177,7 +182,9 @@ export function createSwarmStore(
         const next = decode(value);
         mutate(next);
         next.pending =
-          next.members.some((member) => member.state === "reserved" || member.cleanupPending) ||
+          next.members.some(
+            (member) => member.state === "reserved" || member.cleanupPending || holdsWorkerSandbox(member),
+          ) ||
           next.messages.some((message) =>
             Object.values(message.notifications).some((item) => item.state === "pending"),
           );

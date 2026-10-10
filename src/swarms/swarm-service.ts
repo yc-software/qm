@@ -16,6 +16,7 @@ import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import {
   assertSwarmOpen,
+  holdsWorkerSandbox,
   SWARM_LIMITS,
   type Swarm,
   type SwarmMember,
@@ -403,6 +404,27 @@ export function createSwarmService(deps: {
     }
   }
 
+  async function releaseFinishedWorkers(
+    swarm: Swarm,
+    step: <Result>(start: () => Promise<Result>) => Promise<Result>,
+  ): Promise<void> {
+    const expired = Date.now() >= swarm.expiresAt;
+    for (const member of swarm.members.filter(holdsWorkerSandbox)) {
+      if (!expired && controlState(swarm, member.id) !== "stopped") continue;
+      const runIds = swarm.messages.flatMap((message) => message.notifications[member.id]?.runId ?? []);
+      const statuses = await Promise.all(runIds.map((runId) => step(() => runs.get(runId))));
+      if (statuses.some((run) => run && (run.status === "running" || run.status === "pending"))) continue;
+      const inventory = await step(() => deps.sandboxes.list(swarm.ownerId, swarm.scopeId));
+      if (inventory.sandboxes.some((resource) => resource.id === member.id))
+        await step(() => deps.sandboxes.retire(swarm.ownerId, member.id));
+      await step(() =>
+        store.update(swarm.id, (current) => {
+          current.members.find((peer) => peer.id === member.id)!.released = true;
+        }),
+      );
+    }
+  }
+
   async function reconcile(rootId: string, phase: "resources" | "delivery"): Promise<void> {
     const deadline = Date.now() + SWARM_LIMITS.reconcileMs;
     const claim = deps.lock.tryWithLock?.bind(deps.lock) ?? deps.lock.withLock.bind(deps.lock);
@@ -429,6 +451,8 @@ export function createSwarmService(deps: {
           await deliver(swarm, step);
           return;
         }
+        await releaseFinishedWorkers(swarm, step);
+        swarm = (await step(() => store.get(rootId))) ?? swarm;
         for (const member of swarm.members.filter((peer) => peer.state === "reserved")) {
           let provisioningTimedOut = false;
           try {
@@ -536,7 +560,9 @@ export function createSwarmService(deps: {
           if (active.has(swarm.id)) continue;
           if (
             phase === "resources" &&
-            !swarm.members.some((member) => member.state === "reserved" || member.cleanupPending)
+            !swarm.members.some(
+              (member) => member.state === "reserved" || member.cleanupPending || holdsWorkerSandbox(member),
+            )
           )
             continue;
           if (active.size >= SWARM_LIMITS.sweepConcurrency) return;
