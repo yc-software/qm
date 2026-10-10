@@ -19,6 +19,9 @@ that fits the user's intent. Personal and shared accounts are both valid choices
 is an automatic fallback when the other fails. If the intended account is unclear before
 a write, ask. Do not infer permission from a login merely being present on the computer.
 
+The user may have more than one authenticated method for reaching a service. Before
+telling them you can't do something, confirm there are no alternate routes.
+
 - **Personal login:** use the authorized `gh`, `glab`, or Git login. Check the active
   provider account (for example, `gh api user --jq .login`) and the Git transport's auth
   configuration; a CLI API identity alone does not prove which account Git will use.
