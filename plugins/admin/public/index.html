@@ -7280,7 +7280,10 @@
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
         if (st.view === "metrics" && st.phase) p.set("phase", st.phase);
-        if (st.view === "spend" && st.range) p.set("range", st.range);
+        if (st.view === "spend" && st.from && st.to) {
+          p.set("from", st.from);
+          p.set("to", st.to);
+        } else if (st.view === "spend" && st.range) p.set("range", st.range);
         if (st.view === "slack" && st.container) p.set("container", st.container);
         if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
         if (st.view === "judgments" && st.container) p.set("container", st.container);
@@ -7346,6 +7349,8 @@
           mem: p.get("mem") || null,
           phase: p.get("phase") || null,
           range: p.get("range") || null,
+          from: p.get("from") || null,
+          to: p.get("to") || null,
           historyKind: normalizedHistoryKind,
           page: Math.max(1, parseInt(p.get("page"), 10) || 1),
           cursor: p.get("cursor") || null,
@@ -9334,8 +9339,22 @@
         });
       }
       const SPEND_RANGES = { "7d": 7, "30d": 30, "90d": 90 };
+      function customSpendWindow(st) {
+        const day = (value) => {
+          const t = /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? Date.parse(value + "T00:00:00.000Z") : NaN;
+          return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === value ? t : null;
+        };
+        const from = day(st.from);
+        const to = day(st.to);
+        return from !== null && to !== null && from < to ? { from: st.from, to: st.to } : null;
+      }
       function spendQuery(st) {
         const DAY = 86400000;
+        const custom = customSpendWindow(st);
+        if (custom) {
+          const days = (Date.parse(custom.to) - Date.parse(custom.from)) / DAY;
+          return new URLSearchParams({ ...custom, bucket: days > 62 ? "week" : "day" }).toString();
+        }
         const range = SPEND_RANGES[st.range] ? st.range : "30d";
         const to = Math.floor(Date.now() / DAY) * DAY + DAY;
         const iso = (t) => new Date(t).toISOString().slice(0, 10);
@@ -9354,8 +9373,10 @@
           shortName,
           plural,
           range: urlToState().range || "30d",
+          custom: customSpendWindow(urlToState()),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),
-          setRange: (range) => go({ ...urlToState(), view: "spend", range }),
+          setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
+          setCustomRange: (from, to) => go({ ...urlToState(), view: "spend", range: null, from, to }),
           downloadCsv: (breakdown = "entity") => {
             const a = document.createElement("a");
             a.href =
