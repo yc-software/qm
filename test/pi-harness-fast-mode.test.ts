@@ -352,6 +352,7 @@ async function runTurn(
               "gpt-6-astra": "openai/gpt-6-astra",
               "gpt-6-astra-ultrafast": "openai/gpt-6-astra",
               "claude-sonnet-5": "anthropic/claude-sonnet-5",
+              "claude-opus-5-5": "anthropic/claude-opus-5-5",
             },
           },
         }
@@ -444,6 +445,20 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
   assert.equal(payloads[0]?.model, "anthropic/claude-sonnet-5");
   assert.equal(betas[0]?.includes(BINDING_BETA) ?? false, false);
   assert.equal("block_binding" in (payloads[0]!.thinking as object), false);
+});
+
+test("gateway-routed Claude fast requests omit speed and record the standard price", async () => {
+  const { rows, payloads, betas } = await runTurn(
+    "opus-gateway-fast",
+    "claude-opus-5-5",
+    true,
+    () => anthropicReply("routed", ANTHROPIC_WIRE_USAGE),
+    true,
+  );
+  assert.equal(payloads.length, 1);
+  assert.equal("speed" in payloads[0]!, false);
+  assert.equal(betas[0]?.includes("fast-mode") ?? false, false);
+  assertUsd(rows[0]!.usage!.costUsd, 0.06);
 });
 
 test("a refusal fallback prices each step on its actual model and tier", async () => {
