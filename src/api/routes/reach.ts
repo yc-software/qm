@@ -33,9 +33,10 @@ async function askAgent(ctx: ApiCtx, b: ReachBody, task: string): Promise<void> 
   if (typeof b.recipient !== "string" || extra) {
     return sendJson(res, 400, { error: "bad_request", message: "task goes to one recipient, with no other options" });
   }
-  const posture = await deps.config?.resolveSharingPostureDurable(scopeId("personal", cap.actorId), cap.scopeId);
   const where = { surface: cap.surface, scopeId: cap.scopeId, external: !!cap.externalSlack };
-  if (!cap.runId || !askAgentAvailable({ ...where, posture: posture ?? "isolated" })) {
+  const posture =
+    cap.runId && (await deps.config?.resolveSharingPostureDurable(scopeId("personal", cap.actorId), cap.scopeId));
+  if (!cap.runId || !askAgentAvailable({ ...where, posture: posture || "isolated" })) {
     return sendJson(res, 409, {
       error: "unavailable",
       message:
