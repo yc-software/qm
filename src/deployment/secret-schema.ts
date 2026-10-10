@@ -13,6 +13,7 @@ type SecretGate =
   | "agent37"
   | "superserve"
   | "porter-deploy"
+  | "agent37-deploy"
   | "fly-shared-deploy"
   | "fly-deploy"
   | "aws-deploy-gate"
@@ -43,7 +44,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "DATABASE_URL", requiredWhen: "postgres" },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
-  { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
+  { name: "AGENT37_API_KEY", requiredWhen: ["agent37", "agent37-deploy"] },
   { name: "SUPERSERVE_API_KEY", requiredWhen: "superserve" },
   { name: "E2B_API_KEY", requiredWhen: "e2b" },
   { name: "MODAL_TOKEN_ID", requiredWhen: "modal" },
@@ -74,6 +75,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   agent37: (env) => sandboxBackendSelected(env, "agent37"),
   superserve: (env) => sandboxBackendSelected(env, "superserve"),
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
+  "agent37-deploy": (env) => env.DEPLOY_PROVIDER === "agent37" && !env.AGENT37_DEPLOY_API_KEY?.trim(),
   "fly-shared-deploy": (env) => env.DEPLOY_PROVIDER === "fly" && Boolean(env.FLY_DEPLOY_SHARED_APP_NAME?.trim()),
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
   "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN || env.DEPLOY_APPS_DOMAIN),

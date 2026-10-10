@@ -201,8 +201,16 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
           { kind: "env-equals", service: "core", name: "SANDBOX_SECONDARY_BACKEND", value: "agent37" },
         ],
       },
+      optionalOtherwise: true,
     },
-    description: "Agent37 API key for the agent-computer substrate.",
+    description: "Agent37 API key for agent computers and for published apps.",
+    generate: "mint a key in the Agent37 dashboard (https://agent37.com/dashboard/cloud/api-keys)",
+  },
+  {
+    name: "AGENT37_DEPLOY_API_KEY",
+    service: "core",
+    required: false,
+    description: "Agent37 API key for published apps, when they run on a different workspace than the agent computers.",
     generate: "mint a key in the Agent37 dashboard (https://agent37.com/dashboard/cloud/api-keys)",
   },
   {

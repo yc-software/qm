@@ -185,6 +185,7 @@ import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "./deploy/porter-deploy-provider.ts";
+import { createAgent37DeployProvider, type StoredAgent37DeployBody } from "./deploy/agent37-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
 import { createDeployService } from "./deploy/deploy-service.ts";
 import {
@@ -1649,6 +1650,12 @@ export function buildApp(
         ...config.porterDeploy,
         advisoryLock,
         store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
+      }),
+    agent37: () =>
+      createAgent37DeployProvider({
+        ...config.agent37Deploy,
+        advisoryLock,
+        store: artifactMap<StoredAgent37DeployBody>("agent37_deploy_bodies"),
       }),
   };
   if (

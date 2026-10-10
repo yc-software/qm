@@ -37,6 +37,27 @@ function secretByName(config: QmConfig, name: string): ComputedSecret {
   return secret;
 }
 
+test("Agent37 deploy-only credentials do not require a separate sandbox key", () => {
+  for (const override of ["", "  ", "deploy-key"]) {
+    const config = makeConfig({
+      env: { core: { SANDBOX_BACKEND: "local", DEPLOY_PROVIDER: "agent37", AGENT37_DEPLOY_API_KEY: override } },
+    });
+    const required = computedSecrets(config).find((secret) => secret.name === "AGENT37_API_KEY")?.required ?? false;
+    assert.equal(required, false);
+  }
+  const config = makeConfig({
+    env: { core: { SANDBOX_BACKEND: "agent37", DEPLOY_PROVIDER: "agent37", AGENT37_DEPLOY_API_KEY: "deploy-key" } },
+  });
+  assert.equal(secretByName(config, "AGENT37_API_KEY").required, true);
+  const deployOnly = makeConfig({ env: { core: { SANDBOX_BACKEND: "local", DEPLOY_PROVIDER: "agent37" } } });
+  const values = new Map([["AGENT37_DEPLOY_API_KEY", "deploy-key"]]);
+  assert.equal(serviceSecretValue(deployOnly, "core", "AGENT37_DEPLOY_API_KEY", values), "deploy-key");
+  assert.equal(
+    serviceSecretValue(deployOnly, "core", "AGENT37_API_KEY", new Map([["AGENT37_API_KEY", "shared-key"]])),
+    "shared-key",
+  );
+});
+
 test("a dual-role secret (sandbox.secretEnv + virtual service) needs BOTH names on core", () => {
   const config = makeConfig({
     services: ["core", "slack"],

@@ -240,6 +240,7 @@ upstream source history to merge.
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
 - [`docs/principal-links.md`](./docs/principal-links.md) — one person, several sign-ins: linking principals
+- [`docs/agent37.md`](./docs/agent37.md) — running qm on Agent37
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
 - [`docs/superserve.md`](./docs/superserve.md) — using Superserve for agent sandboxes
 - [`.env.example`](./.env.example) — every knob, documented in place
