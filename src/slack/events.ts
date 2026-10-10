@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import {
   channelPrivacyChange,
   createDeduper,
@@ -33,6 +34,8 @@ interface MessageArgs {
   client: any;
   context: { ackGate?: AckGate };
 }
+
+const MAX_BOT_THREAD_FOLLOWUPS = 3;
 
 export function registerSlackEvents(
   app: {
@@ -99,6 +102,7 @@ export function registerSlackEvents(
     }
   };
   const { dispatch, handleReactionEvent, botHasStakeInThread } = handler;
+  const botFollowups = new LRUCache<string, number>({ max: 1000 });
   const { mirrorMessageEvent, pushSurfaceEvents } = mirror;
   const { syncForUnseenGroup, forceDirectorySync } = directory;
   const eventIdentity = async (
@@ -317,6 +321,19 @@ export function registerSlackEvents(
             `[slack-plugin] thread-follow skipped: no bot stake detected in thread ch=${m.channel} thread_ts=${m.thread_ts} ts=${m.ts}`,
           );
           return;
+        }
+        const followKey = `${m.channel}:${threadTs}`;
+        if (m.bot_id || m.subtype === "bot_message") {
+          const count = (botFollowups.get(followKey) ?? 0) + 1;
+          if (count > MAX_BOT_THREAD_FOLLOWUPS) {
+            console.error(
+              `[slack-plugin] thread-follow skipped: ${count - 1} bot-authored follow-ups without a person ch=${m.channel} thread_ts=${threadTs}`,
+            );
+            return;
+          }
+          botFollowups.set(followKey, count);
+        } else {
+          botFollowups.delete(followKey);
         }
         const key = dedupeKey({
           event_id: eventId,

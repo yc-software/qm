@@ -1828,3 +1828,47 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
     await f.stop();
   }
 });
+
+test("a peer bot replying in a QM thread stops re-triggering QM after three follow-ups until a person speaks", async () => {
+  const f = await fixture();
+  try {
+    f.client.usersById.set("B1", { id: "B1", team_id: "T1", is_bot: true, name: "peerbot", profile: {} });
+    f.client.channelsById.set("C1", { id: "C1", name: "general", is_member: true, is_private: false });
+    f.client.membersByChannel.set("C1", ["U1", "B1", "UBOT"]);
+    const thread: any[] = [
+      { channel: "C1", user: "U1", text: "kick off", ts: "400.1" },
+      { channel: "C1", user: "UBOT", text: "on it", ts: "400.2", thread_ts: "400.1" },
+    ];
+    f.client.messagesByChannel.set("C1", thread);
+    const say = async (i: number, fromBot: boolean) => {
+      const msg = fromBot
+        ? {
+            channel: "C1",
+            channel_type: "channel",
+            subtype: "bot_message",
+            user: "B1",
+            bot_id: "B-PEER",
+            text: `bot ${i}`,
+            ts: `400.${300 + i}`,
+            thread_ts: "400.1",
+          }
+        : {
+            channel: "C1",
+            channel_type: "channel",
+            user: "U1",
+            text: `person ${i}`,
+            ts: `400.${300 + i}`,
+            thread_ts: "400.1",
+          };
+      thread.push(msg, { channel: "C1", user: "UBOT", text: `qm ${i}`, ts: `400.${300 + i}1`, thread_ts: "400.1" });
+      await f.app.emitMessage(msg, `Ev-loop-${i}`);
+    };
+    for (let i = 0; i < 10; i++) await say(i, true);
+    assert.equal(f.core.turns.length, 3);
+    await say(10, false);
+    await say(11, true);
+    assert.equal(f.core.turns.length, 5);
+  } finally {
+    await f.stop();
+  }
+});
