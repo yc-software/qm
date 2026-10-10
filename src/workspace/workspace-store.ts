@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile, readdir, opendir, rm } from "node:fs/promises";
-import { join, resolve, relative, isAbsolute, dirname } from "node:path";
+import { join, resolve, relative, isAbsolute, dirname, sep } from "node:path";
 import type { ScopeId } from "../types.ts";
 import { scopeStorageKey } from "../util/scope-storage-key.ts";
 
@@ -16,7 +16,7 @@ export interface WorkspaceStore {
 function safeJoin(baseDir: string, relPath: string): string {
   const target = resolve(baseDir, relPath);
   const rel = relative(baseDir, target);
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new Error(`path escapes workspace: ${relPath}`);
   }
   return target;
