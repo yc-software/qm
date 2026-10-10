@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { fetchWithRetry } from "../util/async.ts";
-import { errMessage, withRequestId } from "../util/errors.ts";
+import { errMessage, swallowAs, withRequestId } from "../util/errors.ts";
 import { openManagedAgentsTunnel, SANDBOX_AGENT_PORT, type ManagedAgentsTunnel } from "./managed-agents-tunnel.ts";
 
 export interface ManagedAgentsCommandResult {
@@ -228,14 +228,6 @@ const isGuestGone = (err: unknown): boolean => {
   return code === GRPC_NOT_FOUND || code === GRPC_UNAVAILABLE;
 };
 
-const isMissingPath = (err: unknown): boolean => {
-  const code = grpcCode(err);
-  if (code === GRPC_NOT_FOUND) return true;
-  if (code !== GRPC_INTERNAL) return false;
-  const e = err as GrpcCallError;
-  return /\b404\b|does not exist|no such file/i.test(`${e.details ?? ""} ${e.message ?? ""}`);
-};
-
 type ProtoLoader = typeof import("@grpc/proto-loader");
 type Grpc = typeof import("@grpc/grpc-js");
 
@@ -361,7 +353,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
   }
 
   async function failure(action: string, sessionId: string, res: Response): Promise<Error> {
-    const raw = await res.text().catch(() => "");
+    const raw = await res.text().catch(swallowAs(`do-managed-agents ${action} ${sessionId}: read error body`, ""));
     let message = raw.slice(0, 200);
     try {
       const parsed = JSON.parse(raw) as { error?: { message?: string } };
@@ -491,7 +483,40 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
           agent.close();
           await tunnel.close();
         })
-        .catch(() => undefined);
+        .catch(swallowAs(`do-managed-agents ${sessionId}: disconnect`, undefined));
+    }
+
+    async function download(absPath: string): Promise<Uint8Array | null> {
+      const { agent } = await connect();
+      return new Promise<Uint8Array | null>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        const stream = agent.Download({ path: absPath, as_archive: false, chunk_size_bytes: DOWNLOAD_CHUNK_BYTES });
+        let settled = false;
+        const settle = (fn: () => void): void => {
+          if (settled) return;
+          settled = true;
+          fn();
+        };
+        stream.on("data", ((frame: DownloadFrame) => {
+          if (frame.chunk?.length) chunks.push(frame.chunk);
+        }) as (arg: never) => void);
+        stream.on("error", ((err: unknown) => {
+          settle(() => {
+            if (grpcCode(err) === GRPC_NOT_FOUND) {
+              resolve(null);
+              return;
+            }
+            const detail = guestDetail(err);
+            void disconnect();
+            reject(
+              grpcCode(err) === GRPC_UNAVAILABLE
+                ? new ManagedAgentsSandboxGoneError(sessionId, detail)
+                : new Error(`do-managed-agents download ${absPath} failed: ${detail}`, { cause: err }),
+            );
+          });
+        }) as (arg: never) => void);
+        stream.on("end", (() => settle(() => resolve(new Uint8Array(Buffer.concat(chunks))))) as (arg: never) => void);
+      });
     }
 
     const guestDetail = (err: unknown): string => lastTunnel?.lastFailure() ?? errMessage(err);
@@ -534,7 +559,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
                   );
                 });
               },
-              () => undefined,
+              swallowAs(`do-managed-agents ${sessionId}: stall probe`, undefined),
             );
           }, stallProbeMs);
           watchdog.unref();
@@ -570,10 +595,15 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
                 reject(new ManagedAgentsHitlRejectedError(sessionId));
                 return;
               }
+              if (exit?.exit_code === undefined) {
+                void disconnect();
+                reject(new ManagedAgentsCommandLostError(sessionId, "the command stream ended without an exit status"));
+                return;
+              }
               resolve({
                 stdout: Buffer.concat(out).toString("utf8"),
                 stderr: Buffer.concat(errOut).toString("utf8"),
-                exitCode: exit?.exit_code ?? -1,
+                exitCode: exit.exit_code,
               });
             });
           }) as (arg: never) => void);
@@ -591,38 +621,14 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
       },
 
       async readFileBytes(absPath): Promise<Uint8Array | null> {
-        const { agent } = await connect();
-        return new Promise<Uint8Array | null>((resolve, reject) => {
-          const chunks: Buffer[] = [];
-          const stream = agent.Download({ path: absPath, as_archive: false, chunk_size_bytes: DOWNLOAD_CHUNK_BYTES });
-          let settled = false;
-          const settle = (fn: () => void): void => {
-            if (settled) return;
-            settled = true;
-            fn();
-          };
-          stream.on("data", ((frame: DownloadFrame) => {
-            if (frame.chunk?.length) chunks.push(frame.chunk);
-          }) as (arg: never) => void);
-          stream.on("error", ((err: unknown) => {
-            settle(() => {
-              if (isMissingPath(err)) {
-                resolve(null);
-                return;
-              }
-              const detail = guestDetail(err);
-              void disconnect();
-              reject(
-                grpcCode(err) === GRPC_UNAVAILABLE
-                  ? new ManagedAgentsSandboxGoneError(sessionId, detail)
-                  : new Error(`do-managed-agents download ${absPath} failed: ${detail}`),
-              );
-            });
-          }) as (arg: never) => void);
-          stream.on("end", (() => settle(() => resolve(new Uint8Array(Buffer.concat(chunks))))) as (
-            arg: never,
-          ) => void);
-        });
+        try {
+          return await download(absPath);
+        } catch (err) {
+          if (grpcCode((err as { cause?: unknown }).cause) !== GRPC_INTERNAL) throw err;
+          const probe = await this.runCommand(`test -e '${absPath.replaceAll("'", "'\\''")}'`, { timeoutMs: 30_000 });
+          if (probe.exitCode === 1) return null;
+          throw err;
+        }
       },
 
       async writeFileBytes(absPath, data): Promise<void> {

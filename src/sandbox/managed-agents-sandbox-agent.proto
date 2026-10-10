@@ -2,9 +2,6 @@ syntax = "proto3";
 
 package do.teams.hosted_agents.runtime.sandbox_agent.v1;
 
-// The subset of the in-guest sandbox-agent gRPC surface this backend calls.
-// Field numbers and names match the server; the RPCs and messages qm does not
-// use are omitted rather than reproduced.
 service SandboxAgentService {
   rpc Exec(stream ExecRequest) returns (stream ExecOutput);
   rpc Upload(stream UploadRequest) returns (UploadResponse);
@@ -20,12 +17,11 @@ message ExecRequest {
 }
 
 message ExecStart {
-  // argv[0] is the program. No shell is spawned unless the caller asks for
-  // one, so qm passes ["/bin/bash", "-c", command].
+
   repeated string argv = 1;
   string workdir = 2;
   map<string, string> env = 3;
-  // Hard timeout; 0 means none. Enforced in the guest with SIGTERM then SIGKILL.
+
   int64 timeout_seconds = 4;
 }
 
@@ -44,7 +40,7 @@ message ExecOutput {
 message ExecExit {
   int32 exit_code = 1;
   int64 duration_ms = 2;
-  // Set when an in-guest approval check rejected the command; exit_code is -1.
+
   bool hitl_rejected = 3;
   bool timed_out = 4;
 }
@@ -58,16 +54,16 @@ message UploadRequest {
 }
 
 message UploadHeader {
-  // Absolute path inside the guest. Transfer is confined to the workspace root.
+
   string path = 1;
-  // POSIX mode; zero takes the guest default.
+
   uint32 mode = 2;
-  // True when the payload is a tar archive to extract under path.
+
   bool is_archive = 3;
 }
 
 message UploadEnd {
-  // Optional hex SHA-256 of the payload; the guest fails the upload on mismatch.
+
   string sha256 = 1;
 }
 
@@ -79,7 +75,7 @@ message UploadResponse {
 message DownloadRequest {
   string path = 1;
   bool as_archive = 2;
-  // Read buffer size in bytes; zero takes the guest default.
+
   uint32 chunk_size_bytes = 3;
 }
 
@@ -92,7 +88,7 @@ message DownloadChunk {
 }
 
 message DownloadHeader {
-  // -1 when unknown, as for a streaming archive.
+
   int64 size_bytes = 1;
   bool is_archive = 2;
 }

@@ -225,7 +225,9 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
       } catch (e) {
         reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
         sessionByName.delete(name);
-        await client.kill(session.sessionId).catch(() => undefined);
+        await client.kill(session.sessionId).catch((err: unknown) => {
+          reportError("sandbox_hydrate", "orphan_kill_failed", errMessage(err), scope);
+        });
         throw new Error(
           `do-managed-agents provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`,
           {
@@ -301,11 +303,11 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
       os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "tar", "python3", "gh", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "tar", "python3", ...(opts.extraTools ?? [])]);
       },
       get notInstalled() {
         return visibleNotInstalled(
-          ["jq", "rg", "unzip", "wget", "aws", "gcloud", "kubectl", "flyctl", "glab"],
+          ["jq", "rg", "unzip", "wget", "gh", "aws", "gcloud", "kubectl", "flyctl", "glab"],
           opts.extraTools ?? [],
         );
       },
@@ -552,7 +554,7 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
           machine,
           recovery,
           provisioned: true,
-          guestResponsive: r.exitCode === 0 && /responsive/.test(r.stdout),
+          guestResponsive: r.exitCode === 0 && r.stdout.trim() === "responsive",
         };
       } catch (e) {
         return {

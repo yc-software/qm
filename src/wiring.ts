@@ -1152,19 +1152,13 @@ export function buildApp(
           ...(await environments.list()).map((environment) => environment.id),
         ],
         legacySandboxes: async () => {
-          const [e2b, modal, aws, superserve, managedAgents] = await Promise.all([
+          const [e2b, modal, aws, superserve] = await Promise.all([
             e2bBodies.entries(),
             modalBodies.entries(),
             awsBodies.entries(),
             superserveBodies.entries(),
-            managedAgentsBodies.entries(),
           ]);
           return [
-            ...managedAgents.map(([scopeId, body]) => ({
-              scopeId,
-              backend: "do-managed-agents" as const,
-              machineId: body.sandboxId,
-            })),
             ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
             ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
             ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
