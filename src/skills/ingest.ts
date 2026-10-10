@@ -9,6 +9,7 @@ export interface RepoFile {
   path: string;
   text: string;
   binary: boolean;
+  executable?: boolean;
 }
 export interface FetchedRepo {
   commit: string;
@@ -70,7 +71,7 @@ function collectAssets(repo: FetchedRepo, skillDir: string): SkillFile[] | null 
     } catch {
       return null;
     }
-    out.push({ path: safe, content: f.text });
+    out.push({ path: safe, content: f.text, ...(f.executable ? { executable: true } : {}) });
   }
   return out.sort((a, b) => {
     if (a.path < b.path) return -1;
@@ -150,7 +151,7 @@ export function collectSharedBundle(repo: FetchedRepo, config?: PackConfig): Ski
     } catch {
       continue;
     }
-    out.push({ path: safe, content: f.text });
+    out.push({ path: safe, content: f.text, ...(f.executable ? { executable: true } : {}) });
   }
   return out.sort((a, b) => {
     if (a.path < b.path) return -1;

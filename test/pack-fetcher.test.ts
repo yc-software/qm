@@ -26,6 +26,8 @@ function makeSourceRepo(): { dir: string; sha: string } {
     "---\nname: demo\ndescription: d\nscope: company\n---\n# Body",
   );
   writeFileSync(join(dir, "skills", "demo", "scripts", "foo.py"), "print('hi')");
+  writeFileSync(join(dir, "skills", "demo", "scripts", "run.sh"), "#!/bin/sh\necho hi");
+  chmodSync(join(dir, "skills", "demo", "scripts", "run.sh"), 0o755);
   writeFileSync(join(dir, "bin.dat"), Buffer.from([0, 1, 2, 3, 0]));
   g("add", "-A");
   g("commit", "-q", "-m", "init");
@@ -58,6 +60,8 @@ test("fetches the tree at a pinned sha; flags binary; excludes .git", async () =
     assert.ok(!paths.some((p) => p === ".git" || p.startsWith(".git/")));
     assert.equal(repo.files.find((f) => f.path === "bin.dat")!.binary, true);
     assert.equal(repo.files.find((f) => f.path === "skills/demo/SKILL.md")!.binary, false);
+    assert.equal(repo.files.find((f) => f.path === "skills/demo/scripts/run.sh")!.executable, true);
+    assert.equal(repo.files.find((f) => f.path === "skills/demo/scripts/foo.py")!.executable, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
