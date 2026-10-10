@@ -24,6 +24,7 @@ import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import {
   UI_STATE_KEY_PATTERN,
+  isReservedUiStateKey,
   UI_STATE_MAX_BYTES,
   UI_STATE_MAX_FUTURE_SKEW_MS,
   storeUiState,
@@ -540,7 +541,7 @@ async function getUiState(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
   const principalId = url.searchParams.get("principalId");
   const key = url.searchParams.get("key") ?? "";
-  if (!principalId || !UI_STATE_KEY_PATTERN.test(key))
+  if (!principalId || !UI_STATE_KEY_PATTERN.test(key) || isReservedUiStateKey(key))
     return sendJson(res, 400, { error: "bad_request", message: "principalId and a valid key required" });
   if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
   const rec = await deps.uiState.get(uiStateId(principalId, key));
@@ -552,7 +553,7 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
   const b = body as { principalId?: unknown; key?: unknown; value?: unknown; updatedAt?: unknown };
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   const key = typeof b.key === "string" ? b.key : "";
-  if (!principalId || !UI_STATE_KEY_PATTERN.test(key))
+  if (!principalId || !UI_STATE_KEY_PATTERN.test(key) || isReservedUiStateKey(key))
     return sendJson(res, 400, { error: "bad_request", message: "principalId and a valid key required" });
   if (b.value === undefined) return sendJson(res, 400, { error: "bad_request", message: "value required" });
   if (Buffer.byteLength(JSON.stringify(b.value)) > UI_STATE_MAX_BYTES)

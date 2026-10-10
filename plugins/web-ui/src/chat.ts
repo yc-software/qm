@@ -208,6 +208,7 @@ import { decorateTextCodeBlocks } from "./text-code";
 import { createTranscriptViewport } from "./transcript-viewport";
 import { suggestedActivities } from "./suggested-activities";
 import { reportHandledError } from "./browser-errors.ts";
+import { uiCanvasPanel } from "./ui-canvas";
 
 installMarkdownSanitizer();
 
@@ -1569,7 +1570,7 @@ export function createChatSurface(
                 </div>`
               : nothing
           }
-          ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
+          ${uiCanvasPanel(ctx)} ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
           <section class="chat-scroll" tabindex="0" aria-label="Conversation">
             ${pinnedStrip()}

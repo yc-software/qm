@@ -13279,3 +13279,46 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   white-space: pre-wrap;
   min-width: 80px;
 }
+.ui-canvas {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 7;
+  width: min(480px, calc(100% - 16px));
+  max-height: calc(100% - 140px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 10px;
+  background: var(--background, #fff);
+  overflow: hidden;
+}
+.ui-canvas.collapsed {
+  width: auto;
+}
+.ui-canvas-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border, #d0d0d0);
+}
+.ui-canvas.collapsed .ui-canvas-head {
+  border-bottom: 0;
+}
+.ui-canvas-title {
+  flex: 1;
+  font-weight: 600;
+}
+.ui-canvas-body {
+  overflow: auto;
+  min-height: 0;
+}
+.ui-canvas.collapsed .ui-canvas-body {
+  display: none;
+}
+.ui-canvas-head .icon-btn {
+  width: 24px;
+  height: 24px;
+}

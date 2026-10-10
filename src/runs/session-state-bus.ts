@@ -1,6 +1,9 @@
 import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
 
-type SessionState = "working" | "awaiting_approval" | "idle" | "metadata";
+type SessionState = "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
+
+export type UiSignal =
+  { kind: "canvas" } | { kind: "observe"; callId: string; selector?: string; css?: boolean; screenshot?: boolean };
 
 export interface SessionStateEvent {
   threadRef: string;
@@ -8,6 +11,7 @@ export interface SessionStateEvent {
   participants?: string[];
   participantsShed?: boolean;
   state: SessionState;
+  ui?: UiSignal;
   at: number;
 }
 

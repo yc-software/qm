@@ -11,6 +11,10 @@ export const UI_STATE_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const UI_STATE_MAX_BYTES = 65536;
 export const UI_STATE_MAX_FUTURE_SKEW_MS = 300_000;
 
+export function isReservedUiStateKey(key: string): boolean {
+  return key.startsWith("ui-canvas-") || key.startsWith("ui-observe-");
+}
+
 export function uiStateId(principalId: string, key: string): string {
   return `${principalId}#${key}`;
 }

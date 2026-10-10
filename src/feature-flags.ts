@@ -11,6 +11,7 @@ export const FEATURE_NAMES = [
   "external_app_sharing",
   "loop_triage",
   "swarms",
+  "ui_canvas",
 ] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 

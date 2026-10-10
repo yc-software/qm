@@ -377,6 +377,17 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: (m, p) =>
+      (p === "/v1/ui/canvas" && ["GET", "POST", "DELETE"].includes(m)) || (m === "POST" && p === "/v1/ui/observe"),
+    when: () => false,
+    routes: [
+      { method: "GET", path: "/v1/ui/canvas", summary: "read this conversation's web UI canvas" },
+      { method: "POST", path: "/v1/ui/canvas", summary: "write, update, replace or pin the canvas (ui-canvas skill)" },
+      { method: "DELETE", path: "/v1/ui/canvas", summary: "dismiss the canvas" },
+      { method: "POST", path: "/v1/ui/observe", summary: "snapshot the person's open web UI (ui-state skill)" },
+    ],
+  },
+  {
     match: onPath("POST", "/v1/share"),
     when: () => false,
     routes: [
