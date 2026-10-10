@@ -339,6 +339,18 @@ function computerBackends() {
   return { aws, sprites };
 }
 
+test("parking backends lock the computer exclusively only to park it, not to keep it warm", async () => {
+  const { router, sprites, resources } = build({ "personal:a": resource("r1", "sprites") });
+  sprites.profile.parksOnTeardown = true;
+  const h = await router.provision(layersFor("personal:a"));
+  await router.teardown(h, { keepWarm: true });
+  await router.teardown(h);
+  assert.deepEqual(resources.locks.slice(1), [
+    { id: "r1", exclusive: false },
+    { id: "r1", exclusive: true },
+  ]);
+});
+
 test("computer status/restart target the resource's backing scope under its lock", async () => {
   const { aws, sprites } = computerBackends();
   const resources = stubResources({ "personal:s": resource("s", "sprites") });

@@ -19,6 +19,7 @@ export interface SandboxResource {
   availableActions?: string[];
   machineId?: string;
   cleanupPending?: boolean;
+  holders?: string[];
   spec?: AgentComputerSpec;
   error?: string;
 }
@@ -60,6 +61,8 @@ export interface SandboxResources {
   restart(actorId: string, id: string): Promise<void>;
   retire(actorId: string, id: string): Promise<void>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
+  hold(id: string, runId: string): Promise<void>;
+  release(id: string, runId: string | undefined, isLive: (runId: string) => Promise<boolean>): Promise<boolean>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
@@ -126,6 +129,28 @@ export function createSandboxResources(opts: {
     initialize,
     get,
     use,
+    async hold(id, runId) {
+      await opts.records.update!(id, (current) =>
+        current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },
+      );
+    },
+    async release(id, runId, isLive) {
+      const record = runId
+        ? await opts.records.update!(id, (current) => ({
+            ...current,
+            holders: (current.holders ?? []).filter((holder) => holder !== runId),
+          }))
+        : await opts.records.get(id);
+      const others = record?.holders ?? [];
+      const live = await Promise.all(others.map(isLive));
+      const ended = others.filter((_, index) => !live[index]);
+      if (ended.length)
+        await opts.records.update!(id, (current) => ({
+          ...current,
+          holders: (current.holders ?? []).filter((holder) => !ended.includes(holder)),
+        }));
+      return live.includes(true);
+    },
     async retire(actorId, id) {
       await initialize();
       const record = await get(id);
@@ -189,7 +214,7 @@ export function createSandboxResources(opts: {
         let availableActions = actionsFor(backend).filter((action) => action !== "create");
         if (record.state === "retired")
           availableActions = (record.cleanupPending || record.error) && backend?.destroyScope ? ["retire"] : [];
-        sandboxes.push({ ...record, availableActions });
+        sandboxes.push({ ...record, holders: undefined, availableActions });
       }
       const providers = (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
         .filter(([, backend]) => !!backend)
