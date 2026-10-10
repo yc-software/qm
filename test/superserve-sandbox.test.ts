@@ -1,6 +1,6 @@
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -71,6 +71,58 @@ test("output is capped while the command runs, and the exit code survives", asyn
   assert.equal(small.stdout, "ok");
   assert.equal(small.stderr, "bad");
   assert.doesNotMatch(small.stderr, /truncated/);
+});
+
+test("commands and the next turn's provision keep working when the temp directory cannot be written", async () => {
+  const h = await sandbox.provision(layers);
+  const nextTurn = make();
+  const saved = process.env.TMPDIR;
+  process.env.TMPDIR = "/dev/null/unwritable";
+  try {
+    const r = await sandbox.run(h, "printf hello; printf warn >&2; exit 3");
+    assert.deepEqual([r.code, r.stdout, r.stderr], [3, "hello", "warn"]);
+    const next = await nextTurn.provision(layers);
+    const after = await nextTurn.run(next, "echo still-here");
+    assert.equal(after.stdout.trim(), "still-here");
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+  }
+});
+
+test("a nearly full disk has its package caches cleared before the turn, and nothing else", async () => {
+  const errors: Array<{ code: string; message: string }> = [];
+  sandbox = make({ onError: (e: { code: string; message: string }) => errors.push(e) });
+  await sandbox.provision(layers);
+  const home = fake.homeDir(scopeName());
+  const seeded = [".cache/go-build/a", ".npm/_cacache/b", ".bun/install/cache/c", ".cache/pip/d", ".cache/yarn/e"];
+  const kept = [".cache/ms-playwright/f", "workspace/review/g", "go/pkg/mod/h"];
+  for (const rel of [...seeded, ...kept]) {
+    mkdirSync(join(home, rel, ".."), { recursive: true });
+    writeFileSync(join(home, rel), "x");
+  }
+  const bin = mkdtempSync(join(tmpdir(), "fake-df-"));
+  workspaceRoots.push(bin);
+  writeFileSync(
+    join(bin, "df"),
+    '#!/bin/sh\nif [ -e "$2/.cache/go-build" ]; then p=95; else p=40; fi\necho "Filesystem 1024-blocks Used Available Capacity Mounted on"\necho "/dev/root 100 $p 0 $p% /"\n',
+  );
+  chmodSync(join(bin, "df"), 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${bin}:${savedPath}`;
+  try {
+    await make({ onError: (e: { code: string; message: string }) => errors.push(e) }).provision(layers);
+  } finally {
+    process.env.PATH = savedPath;
+  }
+  for (const rel of seeded) assert.equal(existsSync(join(home, rel)), false, rel);
+  for (const rel of kept) assert.equal(existsSync(join(home, rel)), true, rel);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]!.code, "disk_relief");
+  assert.match(errors[0]!.message, /95% full; cleared package caches, now 40% full/);
+
+  await make({ onError: (e: { code: string; message: string }) => errors.push(e) }).provision(layers);
+  assert.equal(errors.length, 1, "a disk with room left is not touched");
 });
 
 test("commands are run under a timeout that force-kills a process ignoring SIGTERM", async () => {
