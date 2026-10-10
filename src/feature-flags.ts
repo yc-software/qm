@@ -45,18 +45,24 @@ export function createFeatureFlagStore(
     },
     async setEnabled(featureName, scope, on, updatedBy) {
       if (!updatedBy.trim()) throw new Error("feature flag updater must not be empty");
-      const current = await backing.get(key(featureName));
-      const scopes = new Set(current?.enabledScopes ?? []);
-      if (on) scopes.add(scope);
-      else scopes.delete(scope);
-      const record = {
-        featureName,
-        enabledScopes: [...scopes].sort(),
-        updatedAt: now(),
-        updatedBy,
+      const edit = (current: FeatureFlagRecord | null): FeatureFlagRecord => {
+        const scopes = new Set(current?.enabledScopes ?? []);
+        if (on) scopes.add(scope);
+        else scopes.delete(scope);
+        return { featureName, enabledScopes: [...scopes].sort(), updatedAt: now(), updatedBy };
       };
-      await backing.put(key(featureName), record);
-      return record;
+      for (;;) {
+        const updated = backing.update
+          ? await backing.update(key(featureName), edit)
+          : await backing.get(key(featureName)).then(async (current) => {
+              if (!current) return null;
+              const next = edit(current);
+              await backing.put(key(featureName), next);
+              return next;
+            });
+        if (updated) return updated;
+        await backing.putIfAbsent(key(featureName), edit(null));
+      }
     },
   };
 }
