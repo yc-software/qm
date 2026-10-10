@@ -1425,8 +1425,12 @@ export function scaleCost<T>(cost: T, factor: number): T {
 
 export { modelSupportsFastMode } from "../model/pi-models.ts";
 
-export function wantsFastMode(fastMode: boolean | undefined, modelId: string | undefined): boolean {
-  return fastMode === true && modelSupportsFastMode(modelId);
+export function wantsFastMode(fastMode: boolean | undefined, modelId: string | undefined, routed = false): boolean {
+  return (
+    fastMode === true &&
+    modelSupportsFastMode(modelId) &&
+    !(routed && resolveModel(modelId!)?.api === "anthropic-messages")
+  );
 }
 
 function thinkingBindingApplies(model: Pick<Model<Api>, "api" | "compat"> | undefined): boolean {
@@ -1850,7 +1854,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
         const baseModel = getRequiredModel(desiredModelId, !dispatched.providerKeys);
         const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
-        const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
+        const wantFast = wantsFastMode(
+          dispatched.runtime?.fastMode,
+          desiredModelId,
+          !!turnModelGateway?.models[desiredModelId],
+        );
         const ref: TurnSession["ref"] = {
           current: dispatched.tools,
           documents: dispatched.documents,
@@ -2262,7 +2270,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
             );
             const custom = configured?.modelId === fallbackId ? configured : undefined;
-            const wantFast = wantsFastMode(custom?.fastMode ?? turn.runtime?.fastMode, fallbackId);
+            const wantFast = wantsFastMode(
+              custom?.fastMode ?? turn.runtime?.fastMode,
+              fallbackId,
+              !!turnModelGateway?.models[fallbackId],
+            );
             await entry.agentSession.setModel(
               withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
             );
