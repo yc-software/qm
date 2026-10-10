@@ -214,8 +214,16 @@ cards["card-connectors"] = () => {
       </div>
       <label style="display: block; margin-bottom: 8px"
         >Connector
-        <select id="conn-provider" style="width: 100%"></select
-      ></label>
+        <select
+          id="conn-provider"
+          style="width: 100%"
+          ?disabled=${!!s.editing || !s.catalog.length}
+          @change=${(e: Event) => s.change("provider", (e.target as HTMLSelectElement).value)}
+        >
+          ${s.catalog.map((c) => html`<option value=${c.provider} .selected=${c.provider === s.draft.provider}>${context.connectorName(c.provider)}</option>`)}
+          ${s.catalog.length ? nothing : html`<option>No connectors available</option>`}
+        </select></label
+      >
       <div id="conn-guide" class="hint" style="margin: 0 0 12px">${connectorGuide()}</div>
       <label style="display: block; margin-bottom: 8px"
         >Client ID
@@ -259,7 +267,7 @@ cards["card-connectors"] = () => {
       ><button
         class=${classMap({ primary: true, hidden: !s.editor })}
         id="conn-save"
-        ?disabled=${s.saving}
+        ?disabled=${s.saving || !s.catalog.length}
         @click=${() => s.save()}
       >
         ${s.editing ? "Save changes" : "Save connector"}</button
