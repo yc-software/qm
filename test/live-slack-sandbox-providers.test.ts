@@ -64,6 +64,7 @@ test("every provider has its own parallel execution scenario", () => {
   assert.deepEqual(sandboxProviders.toSorted(), [
     "agent37",
     "aws",
+    "do-managed-agents",
     "e2b",
     "local",
     "modal",
@@ -159,7 +160,7 @@ test("explicit provider selection retains strict coverage without treating defer
       "sandbox-execute-modal",
     ],
   );
-  assert.equal(selectSandboxProviderScenarios("all").length, 9);
+  assert.equal(selectSandboxProviderScenarios("all").length, 10);
   assert.deepEqual(selectSandboxProviderScenarios(undefined), []);
   for (const value of ["", "sprites,", "typo", "sprites,sprites", "all,sprites", "constructor", "__proto__"])
     assert.throws(() => selectSandboxProviderScenarios(value));

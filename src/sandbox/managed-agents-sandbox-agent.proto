@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package do.teams.hosted_agents.runtime.sandbox_agent.v1;
+
+service SandboxAgentService {
+  rpc Exec(stream ExecRequest) returns (stream ExecOutput);
+  rpc Upload(stream UploadRequest) returns (UploadResponse);
+  rpc Download(DownloadRequest) returns (stream DownloadChunk);
+}
+
+message ExecRequest {
+  oneof request {
+    ExecStart start = 1;
+    bytes stdin = 2;
+    ExecSignal signal = 3;
+  }
+}
+
+message ExecStart {
+
+  repeated string argv = 1;
+  string workdir = 2;
+  map<string, string> env = 3;
+
+  int64 timeout_seconds = 4;
+}
+
+message ExecSignal {
+  int32 signal = 1;
+}
+
+message ExecOutput {
+  oneof output {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    ExecExit exit = 3;
+  }
+}
+
+message ExecExit {
+  int32 exit_code = 1;
+  int64 duration_ms = 2;
+
+  bool hitl_rejected = 3;
+  bool timed_out = 4;
+}
+
+message UploadRequest {
+  oneof request {
+    UploadHeader header = 1;
+    bytes chunk = 2;
+    UploadEnd end = 3;
+  }
+}
+
+message UploadHeader {
+
+  string path = 1;
+
+  uint32 mode = 2;
+
+  bool is_archive = 3;
+}
+
+message UploadEnd {
+
+  string sha256 = 1;
+}
+
+message UploadResponse {
+  string path = 1;
+  int64 bytes_written = 2;
+}
+
+message DownloadRequest {
+  string path = 1;
+  bool as_archive = 2;
+
+  uint32 chunk_size_bytes = 3;
+}
+
+message DownloadChunk {
+  oneof output {
+    DownloadHeader header = 1;
+    bytes chunk = 2;
+    DownloadEnd end = 3;
+  }
+}
+
+message DownloadHeader {
+
+  int64 size_bytes = 1;
+  bool is_archive = 2;
+}
+
+message DownloadEnd {
+  string sha256 = 1;
+}

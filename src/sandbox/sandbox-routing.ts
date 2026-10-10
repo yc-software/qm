@@ -17,7 +17,16 @@ import {
 } from "./sandbox.ts";
 
 export type SandboxBackendName =
-  "sprites" | "aws" | "local" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "superserve";
+  | "sprites"
+  | "aws"
+  | "local"
+  | "smolmachines"
+  | "e2b"
+  | "modal"
+  | "porter"
+  | "agent37"
+  | "superserve"
+  | "do-managed-agents";
 
 export class NoDefaultSandboxError extends Error {
   constructor() {

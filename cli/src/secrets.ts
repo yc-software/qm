@@ -171,6 +171,14 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "E2B API key used by the e2b sandbox backend (from e2b.dev dashboard).",
   },
   {
+    name: "DO_AGENTS_API_TOKEN",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "do-managed-agents" } },
+    description:
+      "DigitalOcean IAM token for the DigitalOcean Managed Agents sandbox backend. Carries the team identity that owns the sandbox sessions, and authenticates both the session REST calls and the port-forward tunnel that carries exec and file transfer.",
+    generate: "doctl auth init   # then create a personal access token at cloud.digitalocean.com/account/api/tokens",
+  },
+  {
     name: "MODAL_TOKEN_ID",
     service: "core",
     required: { when: { kind: "sandbox-backend", backend: "modal" } },
