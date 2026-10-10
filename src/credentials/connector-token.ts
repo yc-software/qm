@@ -28,6 +28,8 @@ export function withOperatorTokenFallback(
       store.connectorTokenStatus(host, principalId, accountType),
     connectorDerivedAuth: (host, principalId, accountType) =>
       store.connectorDerivedAuth(host, principalId, accountType),
+    ownConnectorAccessToken: (host, principalId, accountType) =>
+      store.connectorAccessToken(host, principalId, accountType),
     async connectorAccessToken(host, principalId, accountType) {
       const token = await store.connectorAccessToken(host, principalId, accountType);
       if (token !== null) return token;

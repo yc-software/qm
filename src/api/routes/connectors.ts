@@ -12,6 +12,8 @@ import {
   type OAuthClientResolver,
   type AccountType,
   type OAuthState,
+  revokeAtProvider,
+  type ProviderRevokeResult,
 } from "../../connectors/oauth.ts";
 import { bestOAuthTokenStatus, CONNECTOR_STATUS_ACCOUNT_TYPES } from "../../credentials/connector-status.ts";
 import type { DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
@@ -421,6 +423,35 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { principalId, providers: await connectorProviderStatus(deps, principalId) });
 }
 
+/** Ask the provider to end each distinct grant the person holds before QM forgets the tokens. Only the person's
+ * own stored token is used — never an operator fallback token, which would revoke access for everyone. */
+async function revokeProviderGrants(
+  deps: ServerDeps,
+  providerName: string,
+  hosts: readonly string[],
+  principalId: string,
+): Promise<ProviderRevokeResult[]> {
+  const store = deps.connectorTokens;
+  let own: ((host: string, principalId: string, accountType?: string) => Promise<string | null>) | undefined;
+  if (store?.ownConnectorAccessToken) own = store.ownConnectorAccessToken.bind(store);
+  else if (store && !store.operatorFallbackHosts && typeof store.connectorAccessToken === "function")
+    own = store.connectorAccessToken.bind(store);
+  if (!own) return [];
+  const tokens = new Set<string>();
+  for (const h of hosts)
+    for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES) {
+      const t = await own(h, principalId, at).catch(() => null);
+      if (t) tokens.add(t);
+    }
+  const results: ProviderRevokeResult[] = [];
+  for (const t of tokens) {
+    const r = await revokeAtProvider(providerName, t, deps.oauthFetch ? { fetchImpl: deps.oauthFetch } : {});
+    if (r.startsWith("failed")) console.warn(`[connectors] provider revocation for ${providerName}: ${r}`);
+    results.push(r);
+  }
+  return results;
+}
+
 export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!deps.connectorTokens)
@@ -448,11 +479,24 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
     const provider = PROVIDERS[providerName];
     if (!provider)
       return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });
+    const providerRevocation = await revokeProviderGrants(deps, providerName, provider.hosts, principalId);
     for (const h of provider.hosts)
       for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES)
         await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
-    audit(deps, { principalId, action: "connector.oauth.revoked", resource: providerName, scopeLabel: principalId });
-    return sendJson(res, 200, { ok: true, principalId, provider: providerName, hosts: provider.hosts });
+    audit(deps, {
+      principalId,
+      action: "connector.oauth.revoked",
+      resource: providerName,
+      scopeLabel: principalId,
+      ...(providerRevocation.length ? { detail: `provider: ${providerRevocation.join(", ")}` } : {}),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      principalId,
+      provider: providerName,
+      hosts: provider.hosts,
+      providerRevocation,
+    });
   }
   for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES)
     await deps.connectorTokens.deleteConnectorToken(host, principalId, at);
