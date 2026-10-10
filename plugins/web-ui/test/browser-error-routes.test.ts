@@ -19,6 +19,8 @@ process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 delete process.env.POSTHOG_API_KEY;
 process.env.SENTRY_BROWSER_DSN = "https://public@sentry.example.com/1";
 process.env.SENTRY_RELEASE = "release-1";
+process.env.QM_VERSION = "0.1.13";
+process.env.GIT_SHA = "9143874b0123456789abcdef0123456789abcdef";
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, "127.0.0.1", resolve));
@@ -52,4 +54,12 @@ test("browser error config requires authentication and excludes impersonation", 
   assert.equal((await (await fetch(`${base}/me`, { headers: headers("admin") })).json()).browserErrors, undefined);
   coreStatus = 503;
   assert.equal((await fetch(`${base}/me`, { headers: headers() })).status, 503);
+});
+
+test("me reports the running QM version and commit, including while impersonating", async () => {
+  coreStatus = 200;
+  for (const imp of [undefined, "admin"]) {
+    const body = await (await fetch(`${base}/me`, { headers: headers(imp) })).json();
+    assert.deepEqual(body.build, { version: "0.1.13", sha: "9143874" });
+  }
 });

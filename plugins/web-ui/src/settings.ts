@@ -17,7 +17,8 @@ const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
 
-const QM_MAC_DOWNLOAD_URL = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
+const QM_REPO_URL = "https://github.com/yc-software/qm";
+const QM_MAC_DOWNLOAD_URL = `${QM_REPO_URL}/releases/download/desktop-v0.1.0/QM-mac-arm64.zip`;
 
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode }> = [
   { value: "light", label: "Light", glyph: Sun },
@@ -483,6 +484,23 @@ function accountRow(): TemplateResult {
   `;
 }
 
+function versionRow(): TemplateResult | typeof nothing {
+  const build = appState.me?.build;
+  if (!build) return nothing;
+  const link = (href: string, label: string) =>
+    build.version ? html`<a href=${href} target="_blank" rel="noreferrer noopener">${label}</a>` : label;
+  const release = build.version ? link(`${QM_REPO_URL}/releases/tag/v${build.version}`, `QM v${build.version}`) : "QM";
+  const commit = build.sha ? link(`${QM_REPO_URL}/commit/${build.sha.replace(/-dirty$/, "")}`, build.sha) : nothing;
+  return html`
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <div class="settings-row-title">Version</div>
+        <div class="settings-row-note settings-version">${release}${build.sha ? " · " : ""}${commit}</div>
+      </div>
+    </div>
+  `;
+}
+
 function settingsPane(): TemplateResult {
   return html`
     <div class="list-page-head">
@@ -503,6 +521,7 @@ function settingsPane(): TemplateResult {
           .base=${withBase("")}
         ></qm-onboarding-welcome>
       </div>
+      ${versionRow()}
     </div>
   `;
 }

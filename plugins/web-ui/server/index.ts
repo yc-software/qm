@@ -1,5 +1,6 @@
 import "./instrument.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
+import { buildInfo } from "./build-info.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
@@ -205,6 +206,7 @@ if (
 const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
 
 const browserErrors = browserErrorConfig(process.env);
+const build = buildInfo(process.env);
 const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
 
 const SPA_CSP = [
@@ -1404,6 +1406,7 @@ const apiRoutes: readonly WebRoute[] = [
         companyName: companyBranding.orgName?.trim() || null,
         ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
         ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
+        ...(build ? { build } : {}),
         mode: AUTH_MODE,
         slackWorkspaceUrl: workspaceUrl,
         individualModelAuth: parsed.individualModelAuth === true,
