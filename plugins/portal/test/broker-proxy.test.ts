@@ -200,7 +200,7 @@ test("isPrivateNetworkUrl admits only unroutable hosts", () => {
     "http://[fdaa:0:1::3]:8080",
     "http://[::1]:8080",
   ]) {
-    assert.equal(isPrivateNetworkUrl(url), true, url);
+    assert.equal(isPrivateNetworkUrl(url, new Set()), true, url);
   }
   for (const url of [
     "http://accounts.google.com",
@@ -212,7 +212,7 @@ test("isPrivateNetworkUrl admits only unroutable hosts", () => {
     "not-a-url",
     "file:///etc/passwd",
   ]) {
-    assert.equal(isPrivateNetworkUrl(url), false, url);
+    assert.equal(isPrivateNetworkUrl(url, new Set()), false, url);
   }
 });
 
@@ -251,4 +251,13 @@ test("logout clears the remembered cookie and everywhere requires an authenticat
     headers: { origin: "https://evil.test", cookie: `portal_session=${cookie}` },
   });
   assert.equal(crossOrigin.status, 403);
+});
+
+test("isPrivateNetworkUrl admits bare service names only when listed", () => {
+  assert.equal(isPrivateNetworkUrl("http://auth:8080", new Set()), false);
+  const listed = new Set(["auth"]);
+  assert.equal(isPrivateNetworkUrl("http://auth:8080", listed), true);
+  assert.equal(isPrivateNetworkUrl("http://AUTH:8080/idp", listed), true);
+  assert.equal(isPrivateNetworkUrl("http://broker:8080", listed), false);
+  assert.equal(isPrivateNetworkUrl("http://auth.example.com", listed), false);
 });

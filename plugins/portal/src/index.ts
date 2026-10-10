@@ -191,6 +191,12 @@ export function brokerRouteFor(method: string, pathname: string): string | null 
   return BROKER_PUBLIC_ROUTES.some((route) => route.method === method && route.path === rest) ? rest : null;
 }
 
+const PRIVATE_UPSTREAM_HOSTS: ReadonlySet<string> = new Set(
+  (process.env.PORTAL_PRIVATE_UPSTREAM_HOSTS ?? "")
+    .split(",")
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean),
+);
 const XFF_TRUSTED_HOPS = Math.max(0, Math.trunc(Number(process.env.PORTAL_XFF_TRUSTED_HOPS ?? 0)) || 0);
 const ON_FLY = Boolean(process.env.FLY_APP_NAME?.trim());
 
@@ -426,7 +432,7 @@ function originOf(raw: string): string {
   }
 }
 
-export function isPrivateNetworkUrl(raw: string): boolean {
+export function isPrivateNetworkUrl(raw: string, privateHosts: ReadonlySet<string>): boolean {
   let url: URL;
   try {
     url = new URL(raw);
@@ -442,7 +448,7 @@ export function isPrivateNetworkUrl(raw: string): boolean {
   if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
   if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
   if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
-  return false;
+  return privateHosts.has(host);
 }
 
 export function isLoopbackAddress(address: string | null | undefined): boolean {
@@ -1876,14 +1882,16 @@ export function bootChecks(): void {
       problems.push(`OIDC_AUTH_ENDPOINT must be https, since the browser is sent there: ${OIDC.authEndpoint}`);
     }
     const brokerOrigin =
-      AUTH_BROKER_UPSTREAM && isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM) ? originOf(AUTH_BROKER_UPSTREAM) : "";
+      AUTH_BROKER_UPSTREAM && isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM, PRIVATE_UPSTREAM_HOSTS)
+        ? originOf(AUTH_BROKER_UPSTREAM)
+        : "";
     for (const ep of [OIDC.tokenEndpoint, OIDC.userinfoEndpoint, OIDC.jwksUri]) {
       if (!ep.startsWith("https://") && !(brokerOrigin && originOf(ep) === brokerOrigin)) {
         problems.push(`OIDC endpoint must be https unless it is the built-in broker on the private network: ${ep}`);
       }
     }
     if (AUTH_BROKER_UPSTREAM) {
-      if (!isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM)) {
+      if (!isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM, PRIVATE_UPSTREAM_HOSTS)) {
         problems.push(
           "AUTH_BROKER_UPSTREAM must address a private-network host, since the broker is never exposed directly",
         );
