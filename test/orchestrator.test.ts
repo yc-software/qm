@@ -3540,6 +3540,13 @@ test("approvals collected during an approval re-run are still surfaced (multi-st
   assert.ok(pendingB!.requestId, "it carries a requestId so the chain can continue");
 });
 
+test("two gated calls for the same command in one turn surface a single approval", async () => {
+  const { app } = freshApp();
+  const first = await app.turn(dm("!double-exec git push --force origin main"));
+  const ids = (first.pendingApprovals ?? []).map((p) => p.requestId);
+  assert.equal(ids.length, 1);
+});
+
 test("'allow once' authorizes exactly one execution — a sibling approval for the same command stays pending", async () => {
   const { app } = freshApp();
   const command = "git push --force origin main";

@@ -4321,6 +4321,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ? `${command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
                 : command,
             );
+            if (prepared.some((p) => p.requestId === requestId)) continue;
             const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
             prepared.push({
               requestId,
