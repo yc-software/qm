@@ -1108,17 +1108,22 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (paths?.some((path) => !path.startsWith("/") || /[\r\n]/.test(path)))
         return { error: "each allowed path prefix must be one line starting with /" };
       const desired = Array.isArray(b.grantees) ? [...new Set(b.grantees.map(String))] : undefined;
+      const teamGrantee = desired?.find((g) => parseScopeId(g).kind === "team");
+      if (teamGrantee !== undefined)
+        return {
+          error: `team: grantees aren't supported for service credentials yet (got ${teamGrantee}); use personal:/channel: or share at the org level`,
+        };
       const badGrantee = desired?.find((g) => {
         const parsed = parseScopeId(g);
         return (
-          !["org", "personal", "team", "channel"].includes(parsed.kind ?? "") ||
+          !["org", "personal", "channel"].includes(parsed.kind ?? "") ||
           !parsed.ref ||
           parsed.ref.includes(":") ||
           (parsed.kind === "org" && g !== scope)
         );
       });
       if (badGrantee !== undefined)
-        return { error: `grantee must be this org or a valid personal:/team:/channel: scope (got ${badGrantee})` };
+        return { error: `grantee must be this org or a valid personal:/channel: scope (got ${badGrantee})` };
       if (b.deployments !== undefined && typeof b.deployments !== "boolean")
         return { error: "deployments must be true or false" };
       const injectionError = credentialInjectionError(b.injection);
