@@ -19,6 +19,7 @@ import {
   createHomeSnapshotOps,
   createMemorySnapshotStore,
   snapshotDue,
+  snapshotFailed,
   SnapshotTooLargeError,
   type HomeSnapshotSessionIo,
   type HomeSnapshotStore,
@@ -268,6 +269,17 @@ test("an unreadable directory does not fail the snapshot", async () => {
     chmodSync(locked, 0o755);
   }
   assert.ok(await inner.open("scope"), "the readable files were still saved");
+});
+
+test("a failed snapshot waits out an exponential, capped retry before snapshotDue fires again", () => {
+  const first = snapshotFailed(undefined, 60_000, 1_000);
+  assert.equal(first.snapshotFailures, 1);
+  assert.ok(first.snapshotRetryAtMs! >= 1_000 + 150_000 && first.snapshotRetryAtMs! <= 1_000 + 300_000);
+  assert.equal(snapshotDue({ homeDirty: true, ...first }, undefined, 60_000, first.snapshotRetryAtMs! - 1), false);
+  assert.equal(snapshotDue({ homeDirty: true, ...first }, undefined, 60_000, first.snapshotRetryAtMs!), true);
+  const later = snapshotFailed({ snapshotFailures: 40 }, 60_000, 0);
+  assert.equal(later.snapshotFailures, 41);
+  assert.ok(later.snapshotRetryAtMs! <= 6 * 3600_000, "the wait is capped");
 });
 
 test("snapshotDue skips an unused turn only when the stored home is known clean", () => {

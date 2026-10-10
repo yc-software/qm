@@ -9,7 +9,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
 import { swallowAs } from "../util/errors.ts";
-import { sleep, withTimeout } from "../util/async.ts";
+import { jitteredBackoffMs, sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
 import type { TeardownOptions } from "./sandbox.ts";
@@ -17,6 +17,8 @@ import type { TeardownOptions } from "./sandbox.ts";
 const SNAPSHOT_PART_BYTES = 64 * 1024 * 1024;
 const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const SNAPSHOT_TIMEOUT_MS = 10 * 60_000;
+const SNAPSHOT_RETRY_MIN_MS = 5 * 60_000;
+const SNAPSHOT_RETRY_MAX_MS = 6 * 3600_000;
 export const HOME_SNAPSHOT_PRUNE = [
   "./.cred-state*",
   ...displacedPruneGlobs(),
@@ -33,6 +35,8 @@ export const HOME_SNAPSHOT_PRUNE = [
 export interface SnapshotBookkeeping {
   lastSnapshotMs?: number;
   homeDirty?: boolean;
+  snapshotFailures?: number;
+  snapshotRetryAtMs?: number;
 }
 
 export function snapshotDue(
@@ -42,8 +46,25 @@ export function snapshotDue(
   now = Date.now(),
 ): boolean {
   const throttled = !!stored?.lastSnapshotMs && now - stored.lastSnapshotMs <= intervalMs;
-  if (throttled) return false;
+  if (throttled || (stored?.snapshotRetryAtMs ?? 0) > now) return false;
   return !tdOpts?.homeUnchanged || stored?.homeDirty !== false;
+}
+
+export function snapshotSucceeded(now = Date.now()): SnapshotBookkeeping {
+  return { lastSnapshotMs: now, homeDirty: false, snapshotFailures: undefined, snapshotRetryAtMs: undefined };
+}
+
+export function snapshotFailed(
+  stored: SnapshotBookkeeping | null | undefined,
+  intervalMs: number,
+  now = Date.now(),
+): SnapshotBookkeeping {
+  const snapshotFailures = (stored?.snapshotFailures ?? 0) + 1;
+  const delayMs = jitteredBackoffMs(snapshotFailures, {
+    baseDelayMs: Math.max(intervalMs, SNAPSHOT_RETRY_MIN_MS),
+    maxDelayMs: SNAPSHOT_RETRY_MAX_MS,
+  });
+  return { snapshotFailures, snapshotRetryAtMs: now + delayMs };
 }
 
 export interface SnapshotUpload {

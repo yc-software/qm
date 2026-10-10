@@ -41,6 +41,7 @@ export interface FakeSprites {
   execScripts(): string[];
   stallAfterRun(name: string): void;
   fail502(name: string): void;
+  collideCheckpoints(name: string, collide: boolean): void;
   failNext(status: number, opts?: InjectedFailure): void;
   refuseRestart(name: string): void;
   unhealthy(name: string, reason: string): void;
@@ -171,6 +172,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const execScripts: string[] = [];
   const calls: SpritesCall[] = [];
   const gateway502 = new Set<string>();
+  const collidingCheckpoints = new Set<string>();
   const stallAfterRun = new Set<string>();
   const refusedRestart = new Set<string>();
   const unhealthy = new Map<string, string>();
@@ -363,6 +365,15 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     }
     if (sub === "checkpoint" && method === "POST") {
       const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { comment?: string };
+      if (collidingCheckpoints.has(name)) {
+        const next = `v${checkpointSeq + 1}`;
+        return ndjson([
+          {
+            type: "error",
+            error: `Failed to create checkpoint: JuiceFS rename clone: rename ${next}.in-progress ${next}: file exists`,
+          },
+        ]);
+      }
       const id = `v${++checkpointSeq}`;
       const dir = join(root, ".checkpoints", name, id);
       cpSync(ensureDir(name), dir, { recursive: true });
@@ -455,6 +466,10 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     fail502: (name) => {
       gateway502.add(name);
     },
+    collideCheckpoints: (name, collide) => {
+      if (collide) collidingCheckpoints.add(name);
+      else collidingCheckpoints.delete(name);
+    },
     failNext: (status, opts = {}) => {
       injected.push({ status, ...opts });
     },
@@ -491,6 +506,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       calls.length = 0;
       stallAfterRun.clear();
       gateway502.clear();
+      collidingCheckpoints.clear();
       refusedRestart.clear();
       unhealthy.clear();
       health.clear();

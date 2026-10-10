@@ -40,7 +40,10 @@ import {
   createMemorySnapshotStore,
   HOME_SNAPSHOT_PRUNE,
   snapshotDue,
+  snapshotFailed,
+  snapshotSucceeded,
   type HomeSnapshotStore,
+  type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
@@ -63,7 +66,7 @@ const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 const DEFAULT_KEEP_WARM_SEC = 3600;
 const DEFAULT_NATIVE_SNAPSHOT_INTERVAL_MS = 5 * 60_000;
 
-export interface StoredE2bSandbox {
+export interface StoredE2bSandbox extends SnapshotBookkeeping {
   sandboxId: string;
   nativePause?: boolean;
   preservationState?: "running" | "paused" | "pause_failed";
@@ -71,8 +74,6 @@ export interface StoredE2bSandbox {
   recoverySnapshotId?: string;
   recoveryError?: string;
   createdAtMs: number;
-  lastSnapshotMs?: number;
-  homeDirty?: boolean;
 }
 
 export interface E2bSandboxOptions extends BlobStagingOptions {
@@ -137,7 +138,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   async function snapshotHome(scope: string, session: E2bSession): Promise<void> {
     await homeSnapshots.snapshotHome(scope, session);
-    await store.merge(scope, { lastSnapshotMs: Date.now(), homeDirty: false });
+    await store.merge(scope, snapshotSucceeded());
   }
 
   const hydrateHome = (scope: string, session: E2bSession): Promise<boolean> =>
@@ -184,6 +185,8 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
             sandboxId: session.sandboxId,
             createdAtMs: Date.now(),
             nativePause: info?.onTimeout === "pause",
+            snapshotFailures: undefined,
+            snapshotRetryAtMs: undefined,
           });
           return adopt(session);
         } catch (err) {
@@ -219,6 +222,8 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           preservationState: "running",
           preservationError: undefined,
           recoveryError: undefined,
+          snapshotFailures: undefined,
+          snapshotRetryAtMs: undefined,
         });
         return adopt(session);
       }
@@ -384,18 +389,18 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       ? client.deleteSnapshot(snapshotId).catch(swallowAs("e2b-sandbox: recovery snapshot delete", undefined))
       : Promise.resolve();
 
-  async function captureRecoverySnapshot(scope: string, session: E2bSession, previous?: string): Promise<void> {
+  async function captureRecoverySnapshot(scope: string, session: E2bSession, stored: StoredE2bSandbox): Promise<void> {
+    const previous = stored.recoverySnapshotId;
     try {
       const { snapshotId } = await session.createSnapshot();
       await store.merge(scope, {
         recoverySnapshotId: snapshotId,
         recoveryError: undefined,
-        lastSnapshotMs: Date.now(),
-        homeDirty: false,
+        ...snapshotSucceeded(),
       });
       if (previous !== snapshotId) await forgetSnapshot(previous);
     } catch (e) {
-      await store.merge(scope, { recoveryError: errMessage(e) });
+      await store.merge(scope, { recoveryError: errMessage(e), ...snapshotFailed(stored, nativeSnapshotIntervalMs) });
       reportError("sandbox_snapshot", "recovery_snapshot_failed", errMessage(e), scope);
     }
   }
@@ -622,6 +627,9 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         await snapshotHome(scope, session);
       } catch (e) {
         reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
+        await store
+          .merge(scope, snapshotFailed(stored, snapshotIntervalMs))
+          .catch(swallowAs("e2b-sandbox: record snapshot failure", undefined));
       }
     }
     if (tdOpts?.keepWarm) {
@@ -633,7 +641,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       return;
     }
     if (stored?.nativePause && snapshotDue(stored, tdOpts, nativeSnapshotIntervalMs))
-      await captureRecoverySnapshot(scope, session, stored.recoverySnapshotId);
+      await captureRecoverySnapshot(scope, session, stored);
     try {
       await session.pause();
       await store.merge(scope, { preservationState: "paused", preservationError: undefined });
