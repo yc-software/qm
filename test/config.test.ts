@@ -955,3 +955,18 @@ test("sandbox capability TTL is deployment-configurable with a 48-hour default",
   assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "none" }).sandboxCapabilityTtlMs, 0);
   assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
 });
+
+test("lease TTL and heartbeat interval are validated so leases cannot expire between heartbeats", () => {
+  assert.equal(loadConfig({}).heartbeatIntervalMs < loadConfig({}).leaseTtlMs, true);
+  assert.equal(loadConfig({ LEASE_TTL_MS: "1500" }).heartbeatIntervalMs, 1_000);
+  assert.equal(loadConfig({ LEASE_TTL_MS: "60000", HEARTBEAT_INTERVAL_MS: "5000" }).heartbeatIntervalMs, 5_000);
+  for (const env of [
+    { LEASE_TTL_MS: "0" },
+    { LEASE_TTL_MS: "-1" },
+    { LEASE_TTL_MS: "1000" },
+    { HEARTBEAT_INTERVAL_MS: "0" },
+    { HEARTBEAT_INTERVAL_MS: "250.5" },
+    { LEASE_TTL_MS: "30000", HEARTBEAT_INTERVAL_MS: "30000" },
+  ])
+    assert.throws(() => loadConfig(env), /LEASE_TTL_MS|HEARTBEAT_INTERVAL_MS/, JSON.stringify(env));
+});
