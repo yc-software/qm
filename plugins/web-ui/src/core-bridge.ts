@@ -1517,6 +1517,9 @@ export interface InboxItemEvent {
   op: string;
 }
 
+const DELIVERY_REOPEN_BASE_MS = 1_000;
+const DELIVERY_REOPEN_MAX_MS = 30_000;
+
 export function subscribeDeliveries(
   onThread: (threadRef: string) => void,
   onSessionState?: (event: SessionStateEvent) => void,
@@ -1525,42 +1528,62 @@ export function subscribeDeliveries(
   onInboxResync?: () => void,
 ): () => void {
   if (typeof EventSource === "undefined") return () => {};
-  const es = new EventSource(withBase("/api/deliveries/events"));
+  let es: EventSource;
   let everOpened = false;
-  es.onopen = (): void => {
-    if (everOpened) {
-      onResync?.();
-      onInboxResync?.();
-    }
-    everOpened = true;
+  let closed = false;
+  let retries = 0;
+  let reopenTimer: ReturnType<typeof setTimeout> | null = null;
+  const open = (): void => {
+    es = new EventSource(withBase("/api/deliveries/events"));
+    es.onopen = (): void => {
+      retries = 0;
+      if (everOpened) {
+        onResync?.();
+        onInboxResync?.();
+      }
+      everOpened = true;
+    };
+    es.onerror = (): void => {
+      if (closed || es.readyState !== EventSource.CLOSED || reopenTimer !== null) return;
+      const delay = Math.min(DELIVERY_REOPEN_BASE_MS * 2 ** Math.min(retries++, 5), DELIVERY_REOPEN_MAX_MS);
+      reopenTimer = setTimeout(() => {
+        reopenTimer = null;
+        if (!closed) open();
+      }, delay);
+    };
+    es.addEventListener("session_state_resync", () => onResync?.());
+    es.addEventListener("inbox_resync", () => onInboxResync?.());
+    es.addEventListener("session_state", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data) as SessionStateEvent;
+        if (typeof ev.threadRef === "string" && ev.threadRef && typeof ev.state === "string") onSessionState?.(ev);
+      } catch (err) {
+        swallow("web-ui: handle session-state frame", err);
+      }
+    });
+    es.addEventListener("inbox_item", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data) as InboxItemEvent;
+        if (typeof ev.loopId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
+      } catch (err) {
+        swallow("web-ui: handle inbox-item frame", err);
+      }
+    });
+    es.addEventListener("delivery", (e: MessageEvent) => {
+      try {
+        const d = JSON.parse(e.data) as { threadRef?: string };
+        if (typeof d.threadRef === "string" && d.threadRef) onThread(d.threadRef);
+      } catch (err) {
+        swallow("web-ui: handle delivery nudge", err);
+      }
+    });
   };
-  es.addEventListener("session_state_resync", () => onResync?.());
-  es.addEventListener("inbox_resync", () => onInboxResync?.());
-  es.addEventListener("session_state", (e: MessageEvent) => {
-    try {
-      const ev = JSON.parse(e.data) as SessionStateEvent;
-      if (typeof ev.threadRef === "string" && ev.threadRef && typeof ev.state === "string") onSessionState?.(ev);
-    } catch (err) {
-      swallow("web-ui: handle session-state frame", err);
-    }
-  });
-  es.addEventListener("inbox_item", (e: MessageEvent) => {
-    try {
-      const ev = JSON.parse(e.data) as InboxItemEvent;
-      if (typeof ev.loopId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
-    } catch (err) {
-      swallow("web-ui: handle inbox-item frame", err);
-    }
-  });
-  es.addEventListener("delivery", (e: MessageEvent) => {
-    try {
-      const d = JSON.parse(e.data) as { threadRef?: string };
-      if (typeof d.threadRef === "string" && d.threadRef) onThread(d.threadRef);
-    } catch (err) {
-      swallow("web-ui: handle delivery nudge", err);
-    }
-  });
-  return () => es.close();
+  open();
+  return () => {
+    closed = true;
+    if (reopenTimer !== null) clearTimeout(reopenTimer);
+    es.close();
+  };
 }
 
 async function streamRunViaSse(
