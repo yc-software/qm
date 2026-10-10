@@ -20,6 +20,14 @@ test("workers apply every registered migration before claiming runs", () => {
   assert.ok(migrate > -1 && start > migrate);
 });
 
+test("every entrypoint waits for the database before building the app", () => {
+  const migrateMain = readFileSync(new URL("../src/migrate-main.ts", import.meta.url), "utf8");
+  for (const source of [core, worker, migrateMain]) {
+    const wait = source.indexOf("await waitForPgDatabase(config)");
+    assert.ok(wait > -1 && source.indexOf("buildApp(config)") > wait);
+  }
+});
+
 test("released session migrations still match their pinned source checksums", () => {
   assert.doesNotThrow(() => createPostgresSessionStore("postgres://migration-pin.invalid"));
 });

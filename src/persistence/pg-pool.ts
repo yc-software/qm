@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
-import { createKeyedQueue } from "../util/async.ts";
+import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
@@ -371,6 +371,58 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
       .query("SELECT pg_advisory_unlock(hashtext('qm:schema-maintenance'))")
       .catch(swallowAs("pg-pool: schema-maintenance unlock", undefined));
     client.release();
+  }
+}
+
+const transientConnectFailures = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "53300",
+  "57P01",
+  "57P02",
+  "57P03",
+  "Connection terminated unexpectedly",
+  "Connection terminated due to connection timeout",
+  "timeout exceeded when trying to connect",
+]);
+
+async function probePgDatabase(connectionString: string, caTrust: { ssl?: { ca: string } }): Promise<void> {
+  const pg = (await import("pg")).default;
+  const pool = guardedPool(new pg.Pool({ connectionString, ...caTrust, max: 1, connectionTimeoutMillis: 10_000 }));
+  try {
+    await pool.query("SELECT 1");
+  } finally {
+    await pool.end();
+  }
+}
+
+export async function waitForPgDatabase(
+  target: { databaseUrl?: string; databaseCaCert?: string; databaseCaCertFile?: string },
+  { deadlineMs = 180_000, intervalMs = 250, probe = probePgDatabase } = {},
+): Promise<void> {
+  const { databaseUrl } = target;
+  if (!databaseUrl) return;
+  const caTrust = resolvePgCaTrust({ cert: target.databaseCaCert, certFile: target.databaseCaCertFile });
+  const deadline = Date.now() + deadlineMs;
+  let logged = false;
+  for (;;) {
+    try {
+      return await probe(databaseUrl, caTrust);
+    } catch (error) {
+      const failure = error as { code?: unknown; message?: unknown } | null | undefined;
+      const reason = typeof failure?.code === "string" ? failure.code : failure?.message;
+      if (typeof reason !== "string" || !transientConnectFailures.has(reason) || Date.now() >= deadline) throw error;
+      if (!logged) {
+        console.log(`[pg] waiting up to ${deadlineMs / 1000}s for the database to accept connections (${reason})`);
+        logged = true;
+      }
+    }
+    await sleep(intervalMs);
   }
 }
 
