@@ -229,3 +229,25 @@ test("single-pane toolbar and split menu put Crons and Apps first", () => {
     ["crons", "apps", "files", "skills", "memory", "keychain"],
   );
 });
+
+test("a pane that switches to another conversation in place, like a fork, records the new session", () => {
+  const params: { sessionId?: string; threadRef?: string } = { sessionId: "original", threadRef: "web:t:original" };
+  let syncs = 0;
+  const note = runInNewContext(compile(`${functionSource(split, "notePaneSession")}\nnotePaneSession;`), {
+    dockApi: {
+      getPanel: () => ({ api: { updateParameters: (next: object) => Object.assign(params, next) } }),
+    },
+    panelParams: () => params,
+    persist: () => {},
+    refreshHeaders: () => {},
+    appState: { currentView: "chats" },
+    syncUrlFromState: () => syncs++,
+  }) as (paneId: string, sessionId: string | null, threadRef: string | null) => void;
+  note("pane", "original", "web:t:original");
+  assert.equal(syncs, 0, "an unchanged pane is left alone");
+  note("pane", null, "web:t:draft");
+  assert.equal(params.sessionId, "original", "a pane never loses its saved session to a session-less update");
+  note("pane", "forked", "web:t:forked");
+  assert.deepEqual(params, { sessionId: "forked", threadRef: "web:t:forked" });
+  assert.equal(syncs, 1, "the address bar follows the pane to the fork");
+});
