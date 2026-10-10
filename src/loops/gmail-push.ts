@@ -2,6 +2,8 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { ConnectorTokenSource } from "./sources/adapter.ts";
 import type { IngestEntryInput } from "./item-ledger.ts";
 
+const RESYNC_MAX_MESSAGES = 100;
+
 export interface GmailPushConfig {
   topic: string;
   audience: string;
@@ -148,17 +150,9 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
         } while (pageToken);
       } catch (error) {
         if ((error as { status?: number }).status !== 404) throw error;
-        pageToken = undefined;
-        do {
-          const query = new URLSearchParams({ labelIds: "INBOX", maxResults: "100" });
-          if (pageToken) query.set("pageToken", pageToken);
-          const page = await request<{ nextPageToken?: string; messages?: Array<{ id: string }> }>(
-            owner,
-            `messages?${query}`,
-          );
-          await importMessages((page.messages ?? []).map((message) => message.id));
-          pageToken = page.nextPageToken;
-        } while (pageToken);
+        const query = new URLSearchParams({ labelIds: "INBOX", maxResults: String(RESYNC_MAX_MESSAGES) });
+        const page = await request<{ messages?: Array<{ id: string }> }>(owner, `messages?${query}`);
+        await importMessages((page.messages ?? []).map((message) => message.id));
         latest = profile.historyId;
       }
       if (!/^\d+$/.test(latest)) throw new Error("Gmail returned an invalid history cursor");
