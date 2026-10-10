@@ -50,6 +50,8 @@ async function call(
   liveActor = true,
   isAdmin = true,
   managesScope = false,
+  triageEnabled = false,
+  verifiedSourceActor = false,
 ): Promise<{ status: number; body: unknown }> {
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
@@ -61,6 +63,7 @@ async function call(
     url,
     body,
     params: found.params,
+    ...(verifiedSourceActor ? { actor: { p: actor } } : {}),
     capability:
       mode === "capability"
         ? {
@@ -75,7 +78,11 @@ async function call(
       managesScope: async () => managesScope,
       samePerson: async (a: string, b: string) => a === b,
     },
-    deps: { loops: deps, admin: { adminStatusOf: async () => ({ isAdmin }) } },
+    deps: {
+      loops: deps,
+      admin: { adminStatusOf: async () => ({ isAdmin }) },
+      featureFlags: { enabled: async () => triageEnabled },
+    },
   } as unknown as ApiCtx;
   await found.route.handle(ctx);
   return out;
@@ -401,7 +408,8 @@ test("decisions and grants require verified live-human evidence", async () => {
     sweepStale: async () => {},
     followUp: async () => null,
     itemAction: async () => ({ ok: true }),
-    previewTriage: async () => [],
+    previewTriage: async () => ({ id: "preview", status: "complete", items: [], total: 0, completed: 0, startedAt: 0 }),
+    getTriagePreview: async () => null,
   };
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const id = (created.body as { loop: { id: string } }).loop.id;
@@ -610,7 +618,8 @@ test("deciding an output ships or returns through the fire service", async () =>
     sweepStale: async () => {},
     followUp: async () => null,
     itemAction: async () => ({ ok: true }),
-    previewTriage: async () => [],
+    previewTriage: async () => ({ id: "preview", status: "complete", items: [], total: 0, completed: 0, startedAt: 0 }),
+    getTriagePreview: async () => null,
   };
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const id = (created.body as { loop: { id: string } }).loop.id;
@@ -632,7 +641,8 @@ test("deciding an output reports an active item decision lease", async () => {
     sweepStale: async () => {},
     followUp: async () => null,
     itemAction: async () => ({ ok: true }),
-    previewTriage: async () => [],
+    previewTriage: async () => ({ id: "preview", status: "complete", items: [], total: 0, completed: 0, startedAt: 0 }),
+    getTriagePreview: async () => null,
   };
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const loopId = (created.body as { loop: { id: string } }).loop.id;
@@ -841,4 +851,53 @@ test("loop icons can be set and reset by their owner, reject invalid input and r
     );
   }
   assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { icon: "shield" }, "mallory")).status, 403);
+});
+
+test("preview starts asynchronously and status reads require loop authority and its feature flag", async () => {
+  const deps = services();
+  const created = await call(deps, "POST", "/v1/loops", CREATE);
+  const { id } = (created.body as { loop: Loop }).loop;
+  const preview = { id: "run-1", status: "running" as const, items: [], total: 60, completed: 0, startedAt: 1 };
+  deps.fire = {
+    fire: async () => ({ status: "ok" }),
+    shipOutput: async () => null,
+    returnOutput: async () => null,
+    sweepStale: async () => {},
+    followUp: async () => null,
+    itemAction: async () => ({ ok: true }),
+    previewTriage: async () => preview,
+    getTriagePreview: async (loopId, previewId) => (loopId === id && previewId === preview.id ? preview : null),
+  };
+  const start = await call(
+    deps,
+    "POST",
+    `/v1/loops/${id}/triage/preview`,
+    { triage: { prioritize: { enabled: true } } },
+    "josh",
+    "source",
+    true,
+    false,
+    false,
+    true,
+    true,
+  );
+  assert.equal(start.status, 202);
+  assert.deepEqual(start.body, { preview });
+  const path = `/v1/loops/${id}/triage/preview/${preview.id}`;
+  assert.equal(
+    (await call(deps, "GET", path, undefined, "josh", "source", true, false, false, true, true)).status,
+    200,
+  );
+  assert.equal(
+    (await call(deps, "GET", path, undefined, "outsider", "source", true, false, false, true, true)).status,
+    403,
+  );
+  assert.equal(
+    (await call(deps, "GET", path, undefined, "josh", "source", true, false, false, false, true)).status,
+    404,
+  );
+  assert.equal(
+    (await call(deps, "GET", `${path}-wrong`, undefined, "josh", "source", true, false, false, true, true)).status,
+    404,
+  );
 });

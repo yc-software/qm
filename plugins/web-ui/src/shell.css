@@ -13199,6 +13199,9 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   overflow-y: auto;
   gap: 10px;
 }
+.loop-triage-list li {
+  min-height: 20px;
+}
 .loop-triage-list.running {
   opacity: 0.5;
 }

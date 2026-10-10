@@ -125,7 +125,7 @@ test("members of a representative resolved elsewhere are released for work and f
     triageWork(s.loop, items)
       ?.pending.map((item) => item.sourceKey)
       .sort(),
-    ["b", "c"],
+    ["b", "c", "d"],
   );
   await triage(s, [{ id: c!, groupWith: b! }]);
   assert.equal((await s.ledger.get(c!))!.triage?.groupId, b);
@@ -153,4 +153,50 @@ test("regrouping moves only the item and hands its old group to the oldest remai
     ),
     { a: "a", b: "b", c: "b", d: "a" },
   );
+});
+
+test("triage reuses unchanged inputs but invalidates source edits and instruction changes", async () => {
+  const s = await flood();
+  await triage(
+    s,
+    Object.values(s.ids).map((id) => ({ id, priority: "normal" })),
+  );
+  assert.equal(triageWork(s.loop, await s.ledger.byLoop(LOOP)), null);
+  await s.ledger.annotate(s.ids.a!, { title: "new evidence" });
+  assert.deepEqual(
+    triageWork(s.loop, await s.ledger.byLoop(LOOP))!.pending.map((item) => item.id),
+    [s.ids.a],
+  );
+  s.loop.triage!.prioritize!.instructions = "outages first";
+  assert.equal(triageWork(s.loop, await s.ledger.byLoop(LOOP))!.pending.length, 4);
+});
+
+test("a model omission is not marked triaged and a removed grouping is cleared", async () => {
+  const s = await flood();
+  await triage(s, [{ id: s.ids.a!, groupWith: s.ids.b! }]);
+  assert.ok((await s.ledger.get(s.ids.a!))!.triage?.groupId);
+  const items = await s.ledger.byLoop(LOOP);
+  const a = items.find((item) => item.id === s.ids.a)!;
+  for (const [id, patch] of planTriage(s.loop, items, [a], [{ id: a.id, priority: "high" }]))
+    await s.ledger.setTriage(id, patch, "agent");
+  assert.equal((await s.ledger.get(s.ids.a!))!.triage?.groupId, undefined);
+  assert.ok(triageWork(s.loop, await s.ledger.byLoop(LOOP))!.pending.some((item) => item.id === s.ids.d));
+});
+
+test("cross-batch grouping chains merge instead of detaching earlier members", async () => {
+  const s = await flood();
+  await triage(s, [
+    { id: s.ids.c!, groupWith: s.ids.b! },
+    { id: s.ids.b!, groupWith: s.ids.a! },
+    { id: s.ids.a! },
+    { id: s.ids.d! },
+  ]);
+  for (const id of [s.ids.a!, s.ids.b!, s.ids.c!]) assert.equal((await s.ledger.get(id))!.triage?.groupId, s.ids.a);
+});
+
+test("triage does not silently drop targets after sixty items", async () => {
+  const s = await flood();
+  for (let i = 0; i < 151; i++) await s.ledger.enqueue({ loopId: LOOP, sourceKey: `extra-${i}` });
+  const work = triageWork(s.loop, await s.ledger.byLoop(LOOP))!;
+  assert.equal(work.pending.length, 155);
 });

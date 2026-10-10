@@ -85,6 +85,7 @@ export async function runLoopFire(
 
   const openOutputs = (await stores.outputs.byLoop(loop.id)).filter(unresolvedOutput).length;
   if (loop.caps?.maxOpenOutputs !== undefined && openOutputs >= loop.caps.maxOpenOutputs) {
+    await effects.triage?.(loop);
     summary.throttled = `${openOutputs} outputs waiting for review`;
     await stores.loops.recordFireOutcome(loop.id, false);
     return summary;

@@ -1,3 +1,4 @@
+import { triageSourceHash } from "./triage.ts";
 import type { LedgerEvent, LedgerEventOp } from "./ledger-events.ts";
 import { canonicalJson } from "../util/objects.ts";
 import { wireMentionKeys } from "../slack/mrkdwn.ts";
@@ -56,7 +57,7 @@ interface PruneOptions {
   now?: number;
 }
 
-export type TriagePatch = Partial<Pick<LoopItemTriage, "at" | "priority" | "reason" | "groupId">>;
+export type TriagePatch = Partial<Pick<LoopItemTriage, "at" | "inputHash" | "priority" | "reason" | "groupId">>;
 
 interface RecordActionInput {
   kind: string;
@@ -80,7 +81,12 @@ export interface LoopItemLedger {
     opts?: { summary?: string; expectedSourceAt?: number },
   ): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
-  setTriage(id: string, patch: TriagePatch, by: "agent" | "human"): Promise<LoopItem | null>;
+  setTriage(
+    id: string,
+    patch: TriagePatch,
+    by: "agent" | "human",
+    expectedSourceHash?: string,
+  ): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
   reopen(id: string, opts?: { sentReply?: boolean }): Promise<LoopItem | null>;
   prune(loopId: string, options: PruneOptions): Promise<number>;
@@ -441,10 +447,10 @@ export function createLoopItemLedger(
       if (applied) emit(after, "thread");
       return applied ? after : null;
     },
-    async setTriage(id, patch, by) {
+    async setTriage(id, patch, by, expectedSourceHash) {
       let applied = false;
       const after = await update(id, (item) => {
-        if (isResolved(item)) return item;
+        if (isResolved(item) || (expectedSourceHash && triageSourceHash(item) !== expectedSourceHash)) return item;
         const current = item.triage ?? { at: 0 };
         const pinned = new Set(current.pinned ?? []);
         let { priority, reason, groupId } = current;
@@ -462,6 +468,7 @@ export function createLoopItemLedger(
           ...item,
           triage: {
             at: patch.at ?? (by === "human" ? Math.max(current.at, item.sourceAt ?? item.createdAt) : current.at),
+            inputHash: patch.inputHash ?? current.inputHash,
             ...(priority ? { priority } : {}),
             ...(priority && reason ? { reason } : {}),
             ...(groupId ? { groupId } : {}),

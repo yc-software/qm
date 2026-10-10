@@ -158,7 +158,7 @@ import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
 import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
-import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
+import { createLoopFireService, type LoopFireService, type TriagePreviewJob } from "./loops/loop-fire.ts";
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
 import { createDeliveryStore, type DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
@@ -2392,6 +2392,7 @@ export function buildApp(
         fireDropResolution({ deliveries, idempotency, identity, run: (req) => app.turn(req), directory }, drop)
     : undefined;
   const loopFire: LoopFireService = createLoopFireService({
+    triagePreviews: artifactMap<TriagePreviewJob>("loop_triage_previews", ["loopId"]),
     admittedWork,
     crons,
     samePerson: (a, b) => app.samePerson(a, b),

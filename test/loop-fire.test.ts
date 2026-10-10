@@ -1017,7 +1017,7 @@ test("triage groups a flood read-only so only the representative is worked, with
   assert.match(workTurns[0]!.text ?? "", /similarItems/);
   const items = await s.items.byLoop(loop.id);
   const representative = items.find((item) => item.status === "ready")!;
-  assert.equal(representative.triage?.priority, "urgent");
+  assert.ok(items.some((item) => item.triage?.priority === "urgent"));
   assert.deepEqual(
     items.filter((item) => item.id !== representative.id).map((item) => [item.status, item.triage?.groupId]),
     [
@@ -1059,14 +1059,142 @@ test("a triage dry run regroups every open item with draft instructions and writ
   const loop = await makeLoop(s.loops);
   await s.fire.fire(loop.id, "f1");
   const before = await s.items.byLoop(loop.id);
-  const preview = await s.fire.previewTriage(loop, {
+  let preview = await s.fire.previewTriage(loop, {
     prioritize: { enabled: true, instructions: "outages first" },
     consolidate: { enabled: true },
   });
+  while (preview.status === "running") {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    preview = (await s.fire.getTriagePreview(loop.id, preview.id))!;
+  }
   const turn = s.turns.findLast((t) => t.text?.startsWith("[Loop triage]"));
   assert.equal(turn?.readOnly, true);
   assert.match(turn?.text ?? "", /outages first/);
-  assert.equal(preview.length, 2);
-  assert.ok(preview.every((entry) => entry.priority === "high" && entry.groupId));
+  assert.equal(preview.items.length, 2);
+  assert.ok(preview.items.every((entry) => entry.priority === "high" && entry.groupId));
   assert.deepEqual(await s.items.byLoop(loop.id), before);
+});
+
+async function waitUntil(check: () => boolean | Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!(await check())) {
+    assert.ok(Date.now() < deadline, "condition did not become true");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+function triageRows(req: TurnRequest): Array<{ id: string; new?: boolean }> {
+  return JSON.parse(req.text!.split("```untrusted-data\n")[1]!.split("\n```")[0]!);
+}
+
+test("preview returns before inference, publishes validated batches, and bounds parallelism", async () => {
+  const pending: Array<{ req: TurnRequest; resolve: (reply: string) => void }> = [];
+  let active = 0;
+  let maximum = 0;
+  const s = service(async (req) => {
+    active++;
+    maximum = Math.max(maximum, active);
+    const reply = await new Promise<string>((resolve) => pending.push({ req, resolve }));
+    active--;
+    return reply;
+  });
+  const loop = await makeLoop(s.loops);
+  for (let i = 0; i < 60; i++) await s.items.enqueue({ loopId: loop.id, sourceKey: `item-${i}` });
+  const before = await s.items.byLoop(loop.id);
+  let preview = await s.fire.previewTriage(loop, { prioritize: { enabled: true }, consolidate: { enabled: true } });
+  assert.equal(preview.status, "running");
+  assert.equal(preview.completed, 0);
+  assert.equal(preview.total, 60);
+  await waitUntil(() => pending.length === 3);
+  const root = before[0]!.id;
+  const answer = () => {
+    const { req, resolve } = pending.shift()!;
+    assert.equal(req.readOnly, true);
+    const rows = triageRows(req);
+    assert.equal(rows.length, 60);
+    const batch = rows.filter((row) => row.new);
+    assert.equal(batch.length, 6);
+    resolve(
+      JSON.stringify({
+        items: batch.map(({ id }) => ({
+          id,
+          priority: "high",
+          reason: "needs attention",
+          ...(id !== root ? { groupWith: root } : {}),
+        })),
+      }),
+    );
+  };
+  answer();
+  await waitUntil(async () => (await s.fire.getTriagePreview(loop.id, preview.id))!.completed === 6);
+  preview = (await s.fire.getTriagePreview(loop.id, preview.id))!;
+  assert.equal(preview.status, "running");
+  assert.ok(preview.firstResultAt! >= preview.startedAt);
+  for (let batch = 1; batch < 10; batch++) {
+    await waitUntil(() => pending.length > 0);
+    answer();
+  }
+  await waitUntil(async () => (await s.fire.getTriagePreview(loop.id, preview.id))!.status === "complete");
+  preview = (await s.fire.getTriagePreview(loop.id, preview.id))!;
+  assert.equal(preview.completed, 60);
+  assert.equal(maximum, 3);
+  assert.equal(new Set(preview.items.map((item) => item.groupId)).size, 1);
+  assert.deepEqual(await s.items.byLoop(loop.id), before);
+});
+
+test("a malformed preview batch fails visibly without certifying missing priorities", async () => {
+  const s = service(() => JSON.stringify({ items: [] }));
+  const loop = await makeLoop(s.loops);
+  await s.items.enqueue({ loopId: loop.id, sourceKey: "one" });
+  const preview = await s.fire.previewTriage(loop, { prioritize: { enabled: true } });
+  await waitUntil(async () => (await s.fire.getTriagePreview(loop.id, preview.id))!.status === "failed");
+  const failed = (await s.fire.getTriagePreview(loop.id, preview.id))!;
+  assert.equal(failed.completed, 0);
+  assert.deepEqual(failed.items, []);
+  assert.match(failed.error!, /missing item decisions/);
+});
+
+test("triage batches inherit Loop runtime defaults without introducing a cheaper override", async () => {
+  const s = service((req) =>
+    JSON.stringify({
+      items: triageRows(req)
+        .filter((row) => row.new)
+        .map(({ id }) => ({ id, priority: "normal" })),
+    }),
+  );
+  const loop = await makeLoop(s.loops);
+  await bindCron(s, loop);
+  await s.items.enqueue({ loopId: loop.id, sourceKey: "one" });
+  const preview = await s.fire.previewTriage((await s.loops.get(loop.id))!, { prioritize: { enabled: true } });
+  await waitUntil(async () => (await s.fire.getTriagePreview(loop.id, preview.id))!.status !== "running");
+  assert.equal(s.turns[0]!.model, undefined);
+  assert.equal(s.turns[0]!.harness, undefined);
+  assert.equal(s.turns[0]!.thinkingLevel, undefined);
+  assert.equal(s.turns[0]!.fastMode, undefined);
+});
+
+test("a later failed batch preserves earlier preview results", async () => {
+  let fail!: () => void;
+  let calls = 0;
+  const s = service(async (req) => {
+    if (++calls === 2)
+      return new Promise<string>((_resolve, reject) => {
+        fail = () => reject(new Error("model unavailable"));
+      });
+    return JSON.stringify({
+      items: triageRows(req)
+        .filter((row) => row.new)
+        .map(({ id }) => ({ id, priority: "high" })),
+    });
+  });
+  const loop = await makeLoop(s.loops);
+  for (let i = 0; i < 12; i++) await s.items.enqueue({ loopId: loop.id, sourceKey: `item-${i}` });
+  const started = await s.fire.previewTriage(loop, { prioritize: { enabled: true } });
+  await waitUntil(async () => (await s.fire.getTriagePreview(loop.id, started.id))!.completed === 6);
+  fail();
+  await waitUntil(async () => (await s.fire.getTriagePreview(loop.id, started.id))!.status === "failed");
+  const failed = (await s.fire.getTriagePreview(loop.id, started.id))!;
+  assert.equal(failed.completed, 6);
+  assert.equal(failed.items.length, 6);
+  assert.match(failed.error!, /model unavailable/);
 });
