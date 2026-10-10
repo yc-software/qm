@@ -36,7 +36,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
       const response = new Promise<Response>((resolve) => (finish = resolve));
       let requests = 0;
       globalThis.fetch = (input, init) => {
-        if (String(input).endsWith("/fork")) {
+        if (String(input).endsWith("/api/sessions/source/fork")) {
           requests++;
           return response;
         }
