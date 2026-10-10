@@ -68,6 +68,7 @@ export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
   binaryPath?: string;
   env?: NodeJS.ProcessEnv;
   turnWallClockMs?: number;
+  interruptAckMs?: number;
   /**
    * Custodian of subscription auth (e.g. a keychain-held CLAUDE_CODE_OAUTH_TOKEN).
    * Resolved fresh per session start; merged over static env so the secret
@@ -317,6 +318,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     ].find((id): id is string => modelSupportedByHarness(id, "claude"))!;
   const defaultTurnWallClockMs = opts.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const active = new Set<Query>();
+  const interruptAckMs = opts.interruptAckMs ?? 5_000;
 
   const runPrompt = async (turn: HarnessTurnInput, toolsEnabled = true): Promise<HarnessTurnResult> => {
     if (turn.cancel?.aborted) return { reply: "", stopped: true };
@@ -509,7 +511,14 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       stopped ||= fromUser;
       interrupted = true;
       queue.close();
-      await sdkQuery.interrupt().catch(() => undefined);
+      let ackTimer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        sdkQuery.interrupt().catch(() => undefined),
+        new Promise<void>((resolve) => {
+          ackTimer = setTimeout(resolve, interruptAckMs);
+        }),
+      ]);
+      clearTimeout(ackTimer);
       controller.abort();
     };
     terminateProvider = () => {
