@@ -111,7 +111,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
         { "x-agent-capability": cap },
       );
       assert.equal(res.status, 200);
-      assert.equal(context?.conversationScopeId, source);
+      assert.equal(context?.conversationScopeId, ORG);
       assert.equal(context?.sessionId, "trusted-session");
       assert.equal(context?.sensitivity, undefined);
       assert.equal(context?.inheritedRecords, undefined);
