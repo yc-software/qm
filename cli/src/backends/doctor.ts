@@ -12,7 +12,7 @@ import {
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets, serviceSecretValue } from "../secrets.ts";
-import { emailTransportConfigured } from "../preflight.ts";
+import { emailTransportConfigured, smtpTlsMode } from "../preflight.ts";
 
 export function slackManifestBotScopes(manifest: string): string[] {
   try {
@@ -279,10 +279,11 @@ async function resendCheck(apiKey: string): Promise<void> {
   if (!res.ok) throw new CliError(`the Resend API returned HTTP ${res.status}; retry when it recovers`);
 }
 
-async function smtpReachable(host: string, port: number): Promise<string> {
+async function smtpReachable(host: string, port: number, implicitTls: boolean): Promise<string> {
   const { connect } = await import("node:net");
+  const { connect: connectTls } = await import("node:tls");
   return new Promise<string>((resolve, reject) => {
-    const socket = connect({ host, port });
+    const socket = implicitTls ? connectTls({ host, port, servername: host }) : connect({ host, port });
     const done = (error?: Error, greeting?: string): void => {
       socket.destroy();
       if (error) reject(error);
@@ -327,9 +328,10 @@ async function authBrokerCheck(config: QmConfig, secrets: Map<string, string>, h
     return;
   }
   const port = Number(config.env.auth?.SMTP_PORT ?? 587);
+  const implicitTls = smtpTlsMode(config.env.auth?.SMTP_TLS, port) === "implicit";
   let greeting: string;
   try {
-    greeting = await smtpReachable(host, port);
+    greeting = await smtpReachable(host, port, implicitTls);
   } catch (e) {
     throw new CliError(
       `SMTP relay ${host}:${port} is unreachable: ${errMessage(e)} — the broker cannot send sign-in links`,

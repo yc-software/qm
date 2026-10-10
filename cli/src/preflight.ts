@@ -117,7 +117,7 @@ export interface SmtpVerifyOptions {
 
 export class SmtpRejectedError extends Error {}
 
-function smtpTlsMode(declared: string | undefined, port: number): SmtpTlsMode {
+export function smtpTlsMode(declared: string | undefined, port: number): SmtpTlsMode {
   const mode = declared?.trim().toLowerCase();
   if (mode === "implicit" || mode === "none" || mode === "starttls") return mode;
   return port === 465 ? "implicit" : "starttls";
