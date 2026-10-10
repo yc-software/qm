@@ -8,6 +8,7 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
+import { takeTimeoutMarker, withGroupTimeout } from "./exec-timeout.ts";
 import { createExecProcessSessions, processSessionDir, type ExecProcessIo } from "./exec-process-session.ts";
 import {
   createBackendBlobStaging,
@@ -233,9 +234,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const load = `$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo -1)`;
     const body = `/tmp/.exec-${uid}.sh`;
     const eof = `__QM_EOF_${uid}__`;
+    const guard = withGroupTimeout(`sh ${body}`, timeoutSec);
     const wrapped =
       `cat > ${body} <<'${eof}'\n${script}\n${eof}\n` +
-      `timeout ${timeoutSec} sh ${body} > ${out} 2> ${err}; __rc=$?; printf '%s %s %s %s %s\\n' "$__rc" "$(wc -c < ${out})" "$(wc -c < ${err})" "${psi}" "${load}"; cat ${out} ${err}; rm -f ${out} ${err} ${body}`;
+      `sh -c ${shq(guard.script)} > ${out} 2> ${err}; __rc=$?; printf '%s %s %s %s %s\\n' "$__rc" "$(wc -c < ${out})" "$(wc -c < ${err})" "${psi}" "${load}"; cat ${out} ${err}; rm -f ${out} ${err} ${body}`;
     const r = await spawnExec(
       name,
       ["sh", "-c", SCRIPT_RUNNER],
@@ -261,11 +263,12 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         `sprites exec ${name}: truncated stream (${outBuf.length}/${outLen} out, ${errBuf.length}/${errLen} err)`,
       );
     }
+    const { stderr, timedOut } = takeTimeoutMarker(errBuf.toString("utf8"), guard.nonce);
     return {
       stdout: outBuf.toString("utf8"),
-      stderr: errBuf.toString("utf8"),
+      stderr,
       code,
-      timedOut: code === 124,
+      timedOut,
       ...(pressure ? { pressure } : {}),
     };
   }
