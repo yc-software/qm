@@ -1,7 +1,6 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createDeviceFlowCutoverStore } from "../src/credentials/device-flow-cutover.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -116,6 +115,17 @@ test("blank sandbox identities coexist and default changes never copy files or r
   assert.equal(a.resourceId, first.id);
 });
 
+test("provisioning a running computer does not wait behind a long-running command on it", async () => {
+  const { resources, router, layers } = fixture();
+  const handle = await router.provision(layers);
+  const command = Promise.withResolvers<void>();
+  const running = resources.use(handle.resourceId!, () => command.promise);
+
+  assert.equal((await router.provision(layers)).id, handle.id);
+  command.resolve();
+  await running;
+});
+
 test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
   const { backend, options } = fixture();
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
@@ -215,7 +225,6 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     turnFilesDir: "turn/s/t",
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
     ownerAuthAvailable: false,
-    credentialCutoverServices: [],
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
     emitGapWork: () => {},
@@ -359,131 +368,6 @@ for (const fail of [false, true])
       resources.use(record.id, async () => {}),
       /retired/,
     );
-  });
-
-for (const shared of [false, true])
-  test(`explicit target receives the same credential cleanup and restore as default (${shared ? "isolated shared automation" : "personal"})`, async () => {
-    const scripts: Array<{ id: string; script: string }> = [];
-    const restoredTars: Array<{ id: string; bytes: Uint8Array }> = [];
-    const scope = shared ? "channel:team" : "personal:alice";
-    const owner = shared ? scope : "alice";
-    let failCleanupFor: string | undefined;
-    const { resources, router } = fixture(
-      (backend) => {
-        backend.run = async (handle, script) => {
-          scripts.push({ id: handle.id, script });
-          if (handle.id === failCleanupFor && script.includes("rm -rf --")) {
-            failCleanupFor = undefined;
-            return { stdout: "", stderr: "cleanup failed", code: 1, timedOut: false };
-          }
-          return { stdout: "", stderr: "", code: 0, timedOut: false };
-        };
-        backend.writeFileBytes = async (handle, path, bytes) => {
-          if (path.endsWith(".tar")) restoredTars.push({ id: handle.id, bytes });
-        };
-      },
-      [scope],
-    );
-    const record = await resources.create("admin", scope, "local");
-    const owners: string[] = [];
-    const resetMarks: unknown[][] = [];
-    const cutover = createDeviceFlowCutoverStore(createMemoryMap(), { resets: createMemoryMap() });
-    await cutover.set(scope, "aws", "ephemeral_only", "admin");
-    await cutover.set(scope, "aws", "legacy", "admin");
-    const turn = createTurnSandboxes({
-      deps: {
-        sandbox: router,
-        sandboxResources: resources,
-        keychain: {
-          listByOwner: async (id: string) => {
-            owners.push(id);
-            return [
-              { kind: "file", service: "aws", origin: "device-flow-auto-capture", targets: [".aws/config"] },
-              { kind: "file", service: "gh", origin: "device-flow-auto-capture", targets: [".config/gh/hosts.yml"] },
-            ];
-          },
-          materializeOwnFiles: async (id: string) => {
-            owners.push(id);
-            return [
-              {
-                service: "aws",
-                origin: "device-flow-auto-capture",
-                files: [{ path: ".aws/config", contentBase64: Buffer.from("allowed-token").toString("base64") }],
-              },
-              {
-                service: "gh",
-                origin: "device-flow-auto-capture",
-                files: [
-                  {
-                    path: ".config/gh/hosts.yml",
-                    contentBase64: Buffer.from("quarantined-token").toString("base64"),
-                  },
-                ],
-              },
-            ];
-          },
-        },
-        deviceFlowCutover: {
-          ...cutover,
-          markResidentReset: async (...args: Parameters<typeof cutover.markResidentReset>) => {
-            resetMarks.push(args);
-            await cutover.markResidentReset(...args);
-          },
-        },
-      },
-      input: { origin: shared ? { kind: "automation", useOwnerKeychain: true } : { kind: "user" } },
-      actor: { id: "alice", type: "internal" },
-      session: { id: "s" },
-      resolution: { layers: [{ scopeId: scope, mode: "rw", mountPath: "/" }] },
-      scopeId: scope,
-      memoryScopeId: scope,
-      transferId: "t",
-      turnSessionDir: "turn/s",
-      turnFilesDir: "turn/s/t",
-      connectorEnv: {},
-      isolateOwnerKeychain: shared,
-      ownerAuthAvailable: false,
-      credentialTools: [
-        { service: "aws", roots: [".aws"] },
-        { service: "gh", roots: [".config/gh"] },
-      ],
-      credentialServices: ["aws"],
-      credentialCutoverServices: [],
-      quarantinedServices: ["gh"],
-      cutoverModeOf: () => "legacy",
-      visibleSkills: [],
-      visibleSkillsForTurn: async () => [],
-      emitGapWork: () => {},
-      perf: { credsMs: 0 },
-    } as unknown as TurnSandboxContext);
-    if (shared) {
-      failCleanupFor = scope;
-      await assert.rejects(turn.provision(), /quarantine failed/);
-      turn.invalidateProvision();
-    }
-    const legacyId = (await resources.list("admin", scope)).defaultSandboxId;
-    const defaultHandle = shared ? await turn.provisionResource(legacyId!) : await turn.provision();
-    failCleanupFor = record.backingScopeId;
-    await assert.rejects(turn.provisionResource(record.id), /quarantine failed/);
-    const explicit = await turn.provisionResource(record.id);
-    assert.ok(owners.length >= 6);
-    assert.ok(owners.every((id) => id === owner));
-    assert.equal(resetMarks.length, 2);
-    for (const handle of [defaultHandle, explicit]) {
-      assert.ok(
-        scripts.some(
-          ({ id, script }) =>
-            id === handle.id &&
-            script.includes("rm -rf --") &&
-            script.includes(".config/gh") &&
-            script.includes(".aws"),
-        ),
-      );
-      const tar = restoredTars.find(({ id }) => id === handle.id);
-      assert.ok(tar);
-      assert.ok(Buffer.from(tar.bytes).includes(Buffer.from("allowed-token")));
-      assert.ok(!Buffer.from(tar.bytes).includes(Buffer.from("quarantined-token")));
-    }
   });
 
 test("activation preserves routes, cold identities and explicit nulls without calling a provider", async () => {

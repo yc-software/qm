@@ -110,6 +110,12 @@ Helpful KPIs here are: how many env vars do we have? how large is the database s
 - **[qm#876](https://github.com/yc-software/qm/pull/876)** (2026-09-02): Porter added as yet another SANDBOX_BACKEND and DEPLOY_PROVIDER (plus a Helm chart), shortly after Modal and E2B.
 - **[qm#478](https://github.com/yc-software/qm/pull/478)** (2026-08-13): Added smolmachines as yet another sandbox backend, then SMOLMACHINES_CPUS/MEMORY_MB/DISK_GB env knobs ([qm#507](https://github.com/yc-software/qm/pull/507)).
 
+### Provider drift (1 example)
+
+Every sandbox provider should give the agent the same machine. When one provider's image or behavior quietly differs, the agent hits failures that only reproduce there.
+
+- **AWS CLI v1 on E2B and Modal** (2026-10-09): The E2B and Modal sandbox images came with no AWS CLI at all. When the agent needed `aws`, it ran `pip install awscli`, and pip only has version 1. Version 1 can't do device-code sign-in. The Fly, Porter and Superserve images already included version 2, so only these two were missing it.
+
 ### God files (4 examples)
 
 Letting one file or module absorb unrelated responsibilities until changes require understanding the whole system. Keep responsibilities with clear owners and boundaries; splitting a file by line count alone does not untangle those responsibilities.

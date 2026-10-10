@@ -94,7 +94,7 @@ const BUILT_IN_CREDENTIAL_PATHS: readonly ToolCredentialPath[] = builtInCredenti
 
 const nested = (a: string, b: string): boolean => a.startsWith(`${b}/`);
 
-export function credentialPathError(path: string, kind: "file" | "directory"): string | undefined {
+function credentialPathError(path: string, kind: "file" | "directory"): string | undefined {
   const segments = path.split("/");
   if (
     !path ||

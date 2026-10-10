@@ -27,7 +27,6 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { LivenessCache } from "../src/credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
@@ -69,11 +68,6 @@ function readSandbox(): Sandbox {
     teardown: async () => {},
   };
 }
-
-const livenessCache: LivenessCache = {
-  get: async () => ({ scopeId: "x", checkedAt: Date.now(), connectors: { gh: "active" } }),
-  put: async () => {},
-};
 
 const connectorStatusCache: ConnectorStatusCache = {
   get: async () => ({ principalId: actor.id, checkedAt: Date.now(), providers: { google: { connected: true } } }),
@@ -136,7 +130,6 @@ function buildOrchestrator(
     acl,
     config,
     skills,
-    livenessCache,
     connectorTokens,
     connectorStatusCache,
     resolveConnectorClient: async (provider) => {
@@ -424,7 +417,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
     }),
   );
   assert.match(dmPrompt.reply ?? "", /### channel:C1[\s\S]*ROOM_ONLY_MEMORY/);
-  assert.match(dmPrompt.reply ?? "", /included, authorized memories/);
+  assert.match(dmPrompt.reply ?? "", /use these authorized memories freely/);
   assert.doesNotMatch(dmPrompt.reply ?? "", /apply it only if that tag matches here/);
 
   member = false;
@@ -1141,7 +1134,7 @@ for (const surfaceTools of [false, true]) {
     await orchestrator.handleTurn({ ...input, text: "third" });
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
-    assert.match(seen[2]!.environment!, /withdrawn[\s\S]*BETA_MARKER/);
+    assert.match(seen[2]!.environment!, /personal:U1: 1 earlier fact was consolidated or removed/);
     const entries = await sessions.getEntries(first.sessionId!);
     const users = entries.filter((entry) => entry.type === "user");
     assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);

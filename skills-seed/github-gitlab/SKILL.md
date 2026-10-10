@@ -40,20 +40,10 @@ Use the native login only after an explicit authentication rejection. A TLS time
 connection reset, rate limit, or GitHub server error is not evidence of logout or
 permission expiry. Do not consume another credential grant to repair transport.
 
-For a confirmed missing or expired GitHub login:
-
-```bash
-gh auth login
-```
-
-The platform recognizes this device-flow login and runs it as a **durable process
-session** (ADR 0002): it prints the one-time code + verification URL immediately and keeps
-polling on the agent computer across turns — it does not block your turn or die at
-teardown. Give the user the code and URL, ask them to approve in the browser, then say
-"done". On the next turn, run `gh auth status` (or `gh auth login` again): the platform
-reports you're authenticated once approval completes, and the login self-expires if the
-user takes too long (just run `gh auth login` again to restart). GitLab is the same with
-`glab auth login`.
+For a confirmed missing or expired GitHub or GitLab login, follow the
+`interactive-login` skill: it runs `gh auth login` / `glab auth login` in a temporary
+home as a background job, relays the code and URL, and saves the login to the keychain
+so later commands use it through `execute.credentials`.
 
 ## Read-only work
 

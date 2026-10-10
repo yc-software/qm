@@ -98,7 +98,7 @@ export async function delegatedAuthorizationOrigin(
   }
 }
 
-export const SUBAGENT_TREE_RUN_CAP = 10;
+export const SUBAGENT_TREE_RUN_CAP = 50;
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
@@ -108,7 +108,7 @@ const READ_MAX_CHARS_CEILING = 20_000;
 const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
 
-export interface SessionOpenInput {
+interface SessionOpenInput {
   requestId?: string;
   task: string;
   name?: string;
@@ -122,7 +122,7 @@ export interface SessionOpenInput {
 type SessionOpenResult =
   { ok: true; sessionId: string; title: string; liveRunsRemaining: number } | { ok: false; message: string };
 
-export interface SessionWriteInput {
+interface SessionWriteInput {
   target: string;
   peer?: boolean;
   text?: string;
@@ -140,7 +140,7 @@ type SessionWriteResult =
     }
   | { ok: false; message: string };
 
-export interface SessionReadInput {
+interface SessionReadInput {
   target?: string;
   peer?: boolean;
   limit?: number;
@@ -520,8 +520,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 
       function sidebarRefusal(): string | null {
         if (binding.request.surface !== "web") return WEB_ONLY;
-        if (binding.request.swarm || binding.session.parentSessionId || isSubagentThreadRef(binding.session.threadRef))
-          return "sessions belong to the person's sidebar; a subagent reports to its parent instead.";
+        if (binding.request.swarm) return "swarm workers coordinate through the swarm API.";
         return null;
       }
 
@@ -1200,12 +1199,10 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
-  if (
-    requiresDelegation(
-      { ...prepared, surfaceTools: meta.surfaceTools },
-      (await deps.delegationEnabled?.(prepared.actor.id)) === true,
-    )
-  ) {
+  if (!isSubagentThreadRef(parent.threadRef)) {
+    const surfaceTools =
+      meta.surfaceTools === true ||
+      requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
     const dedupKey = `subagent-return:${run.id}`;
     const existing = await deps.runs.getByDedupKey(dedupKey);
     const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
@@ -1222,7 +1219,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       dedupKey,
       request: {
         ...prepared,
-        surfaceTools: true,
+        ...(surfaceTools ? { surfaceTools } : {}),
         ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
         origin: { ...prepared.origin, kind: "automation", screenData: wake },
         text: wake,

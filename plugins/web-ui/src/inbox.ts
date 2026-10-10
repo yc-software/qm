@@ -35,7 +35,7 @@ import type { ComposerSubmission } from "./composer";
 import { api, ApiError, putUiState } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
 import { createInboxEventCoalescer } from "./inbox-coalesce";
-import { charForName, ensureEmojiIndex } from "./emoji-picker";
+import { charForName } from "./emoji-picker";
 import type { DensityTier } from "./density";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { appState, can } from "./shell-state";
@@ -303,14 +303,6 @@ function showArchiveToast(item: InboxItem): void {
   };
   draw();
   schedule();
-}
-
-let emojiIndexRequested = false;
-
-function ensureEmojiChips(): void {
-  if (emojiIndexRequested) return;
-  emojiIndexRequested = true;
-  void ensureEmojiIndex().then(() => drawAll());
 }
 
 interface InboxSurface {
@@ -1439,7 +1431,6 @@ export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothin
 }
 
 function reactionChipTpl(name: string): TemplateResult {
-  ensureEmojiChips();
   const char = charForName(name);
   return html`<span class="inbox-reaction-chip" title=${`:${name}:`}>${char ?? `:${name}:`}</span>`;
 }

@@ -1,11 +1,27 @@
-import type { EmojiRow } from "./emoji-data";
+import { EMOJI_ROWS, type EmojiRow } from "./emoji-data.ts";
 
 export type { EmojiRow };
 
+function normalizeName(name: string): string {
+  return name.toLowerCase().replaceAll("-", "_");
+}
+
+const names = new Map<string, EmojiRow>();
+for (const row of EMOJI_ROWS) {
+  for (const name of [row.n, ...(row.a ?? [])]) {
+    const normalized = normalizeName(name);
+    if (!names.has(normalized)) names.set(normalized, row);
+  }
+}
+
+export function rowForName(name: string): EmojiRow | null {
+  return names.get(normalizeName(name)) ?? null;
+}
+
 export function matchesQuery(row: EmojiRow, needle: string): boolean {
   if (!needle) return true;
-  if (row.n.includes(needle)) return true;
-  return (row.a ?? []).some((alias) => alias.includes(needle));
+  if (normalizeName(row.n).includes(normalizeName(needle))) return true;
+  return (row.a ?? []).some((alias) => normalizeName(alias).includes(normalizeName(needle)));
 }
 
 export function filterEmoji(rows: readonly EmojiRow[], query: string): EmojiRow[] {
@@ -27,21 +43,6 @@ export function groupEmoji(
   return order.filter((g) => byGroup.has(g)).map((group) => ({ group, rows: byGroup.get(group)! }));
 }
 
-let nameToChar: Map<string, string> | null = null;
-
 export function charForName(name: string): string | null {
-  return nameToChar?.get(name) ?? null;
-}
-
-export function ensureEmojiIndex(): Promise<void> {
-  if (nameToChar) return Promise.resolve();
-  return import("./emoji-data").then(({ EMOJI_ROWS }) => {
-    if (nameToChar) return;
-    const index = new Map<string, string>();
-    for (const row of EMOJI_ROWS) {
-      if (!index.has(row.n)) index.set(row.n, row.c);
-      for (const alias of row.a ?? []) if (!index.has(alias)) index.set(alias, row.c);
-    }
-    nameToChar = index;
-  });
+  return rowForName(name)?.c ?? null;
 }

@@ -129,6 +129,40 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
   }
 });
 
+for (const [name, make] of [
+  ["memory", () => createMemoryProcessRegistry()],
+  ...(PG_URL ? [["postgres", () => createPostgresProcessRegistry(PG_URL)] as const] : []),
+] as const) {
+  test(`[${name}] background credential files survive a new registry until settled`, async () => {
+    const reg = make();
+    const credentialFiles = {
+      plan: { directory: "/tmp/qm-credentials.abc", credentials: [{ paths: [".aws/config"], roots: [] }] },
+      sources: [{ credentialId: "c1", ownerId: "U1", service: "aws", fingerprint: "f1" }],
+    };
+    const processId = id(Date.now() % 1_000_000);
+    try {
+      await reg.register({
+        processId,
+        scopeId: "personal:U1",
+        kind: "background",
+        command: "x",
+        ttlMs: 60_000,
+        credentialFiles,
+      });
+      const reopened = name === "postgres" ? make() : reg;
+      assert.deepEqual(await reopened.credentialFiles(processId), credentialFiles);
+      assert.equal((await reopened.get(processId))?.credentialsPending, true);
+      await reopened.setCredentialFiles(processId, null);
+      assert.equal(await reg.credentialFiles(processId), null);
+      assert.equal((await reg.get(processId))?.credentialsPending, undefined);
+      if (reopened !== reg) reopened.close?.();
+    } finally {
+      await reg.delete(processId);
+      reg.close?.();
+    }
+  });
+}
+
 function id(n: number): string {
   const s = n.toString(16).padStart(12, "0");
   return `00000000-0000-0000-0000-${s}`;
