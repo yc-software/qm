@@ -3323,8 +3323,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               anthCred ?? null,
               oaiCred ?? null,
               account === "personal" || input.surface === "web"
-                ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
-                : (runtime.modelId ?? purposeDefault?.modelId),
+                ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId ?? orgRuntime?.modelId)
+                : (runtime.modelId ?? purposeDefault?.modelId ?? orgRuntime?.modelId),
               account === "personal" || input.surface === "web"
                 ? preferredHarness
                 : (runtime.harnessId ?? purposeDefault?.harnessId),
