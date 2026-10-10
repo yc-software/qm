@@ -302,7 +302,21 @@ test("unresolved outputs in every active state count toward the intake throttle"
       if (state === "unconfirmed") await s.outputs.markUnconfirmed(output.id, claimed!.claimToken!);
     }
   }
-  const summary = await runLoopFire(loop, s, effects(s));
+  let triaged = 0;
+  const summary = await runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => {
+        throw new Error("intake must stay throttled");
+      },
+      triage: async () => {
+        triaged++;
+      },
+    }),
+  );
+  assert.equal(triaged, 1);
+  assert.deepEqual(summary.failures, []);
   assert.match(summary.throttled!, /3 outputs/);
   assert.equal(summary.worked, 0);
 });

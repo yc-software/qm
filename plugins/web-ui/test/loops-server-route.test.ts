@@ -7,6 +7,9 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 let loopRequests = 0;
 let autopilotRequests = 0;
 let autopilotBody: unknown;
+let previewPrincipal: string | null = null;
+let previewRequests = 0;
+let previewBody: unknown;
 const core = createServer((req: IncomingMessage, res) => {
   const path = new URL(req.url ?? "/", "http://core").pathname;
   res.setHeader("content-type", "application/json");
@@ -20,6 +23,31 @@ const core = createServer((req: IncomingMessage, res) => {
   if (req.method === "GET" && path === "/v1/loops") {
     loopRequests++;
     return void res.end(JSON.stringify({ loops: [] }));
+  }
+  if (path === "/v1/loops/loop-1/triage/preview" && req.method === "POST") {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      previewBody = JSON.parse(raw);
+      res.statusCode = 202;
+      res.end(JSON.stringify({ preview: { id: "preview-1", status: "running", items: [], total: 2, completed: 0 } }));
+    });
+    return;
+  }
+  if (path === "/v1/loops/loop-1/triage/preview/preview-1" && req.method === "GET") {
+    previewRequests++;
+    previewPrincipal = new URL(req.url!, "http://core").searchParams.get("principalId");
+    return void res.end(
+      JSON.stringify({
+        preview: {
+          id: "preview-1",
+          status: "running",
+          items: [{ id: "item-1", priority: "high" }],
+          total: 2,
+          completed: 1,
+        },
+      }),
+    );
   }
   if (req.method === "POST" && path.endsWith("/autopilot")) {
     let raw = "";
@@ -104,4 +132,29 @@ test("unset or empty LOOPS_USERS denies everyone", () => {
   process.env.LOOPS_USERS = configured;
   assert.equal(isLoopsUser("Alice@example.com", ""), false);
   assert.equal(isLoopsUser(" alice@example.com ", " ALICE@EXAMPLE.COM "), true);
+});
+
+test("triage preview creation and polling relay status, results, and signed-in principal", async () => {
+  const headers = identity("Alice@example.com");
+  const body = { triage: { prioritize: { enabled: true, instructions: "Outages first" } } };
+  const started = await fetch(`${base}/api/loops/loop-1/triage/preview`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  assert.equal(started.status, 202);
+  assert.equal((await started.json()).preview.status, "running");
+  assert.deepEqual(previewBody, body);
+  const polled = await fetch(`${base}/api/loops/loop-1/triage/preview/preview-1`, { headers });
+  assert.equal(polled.status, 200);
+  const result = (await polled.json()).preview;
+  assert.equal(result.completed, 1);
+  assert.deepEqual(result.items, [{ id: "item-1", priority: "high" }]);
+  assert.equal(previewPrincipal, "Alice@example.com");
+  assert.equal(previewRequests, 1);
+  const denied = await fetch(`${base}/api/loops/loop-1/triage/preview/preview-1`, {
+    headers: identity("bob@example.com"),
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(previewRequests, 1);
 });

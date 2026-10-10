@@ -1,3 +1,5 @@
+import { hashId } from "../util/crypto.ts";
+import { canonicalJson } from "../util/objects.ts";
 import type { Loop, LoopItem, LoopItemPriority } from "../types.ts";
 import type { LoopItemLedger, TriagePatch } from "./item-ledger.ts";
 import { consolidates, isResolved, prioritizes, PRIORITY_RANK } from "./ledger-view.ts";
@@ -10,7 +12,6 @@ export const DEFAULT_PRIORITIZE_INSTRUCTIONS =
 export const DEFAULT_CONSOLIDATE_INSTRUCTIONS =
   "Group items only when one piece of work would resolve all of them: the same error or root cause, the same request asked by several people, or duplicate reports of one problem. Items that merely share a topic stay separate.";
 
-const TRIAGE_BATCH = 60;
 const TRIAGE_CONTEXT = 200;
 const REASON_MAX = 200;
 
@@ -19,6 +20,28 @@ export interface TriageDecision {
   priority?: LoopItemPriority;
   reason?: string;
   groupWith?: string;
+}
+
+export function triageInputHash(loop: Pick<Loop, "triage">, item: LoopItem): string {
+  return hashId([canonicalJson(loop.triage ?? {}), triageSourceHash(item)]);
+}
+
+export function triageSourceHash(item: LoopItem): string {
+  return hashId([
+    canonicalJson({
+      sourceAt: item.sourceAt ?? item.createdAt,
+      sourceKey: item.sourceKey,
+      sourceSummary: item.sourceSummary,
+      sourcePayload: item.sourcePayload,
+      inboxPreview: item.inboxPreview,
+    }),
+  ]);
+}
+
+export interface TriageWork {
+  open: LoopItem[];
+  pending: LoopItem[];
+  context: LoopItem[];
 }
 
 function sourceVersion(item: LoopItem): number {
@@ -48,37 +71,46 @@ export function workOrder(loop: Loop, queued: LoopItem[], items: LoopItem[]): Lo
   return queued.filter((item) => !held.has(item.id)).sort((a, b) => rank(a) - rank(b) || a.createdAt - b.createdAt);
 }
 
-export function triageWork(
-  loop: Loop,
-  items: LoopItem[],
-): { open: LoopItem[]; pending: LoopItem[]; context: LoopItem[] } | null {
+export function triageWork(loop: Loop, items: LoopItem[]): TriageWork | null {
   if (!prioritizes(loop) && !consolidates(loop)) return null;
   const byId = openById(items);
   const open = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
-  const pending = open
-    .filter(
-      (item) =>
-        !item.triage ||
-        item.triage.at < sourceVersion(item) ||
-        (item.triage.groupId !== undefined && liveGroup(item, byId) === undefined),
-    )
-    .slice(0, TRIAGE_BATCH);
+  const pending = open.filter(
+    (item) =>
+      !item.triage ||
+      item.triage.inputHash !== triageInputHash(loop, item) ||
+      item.triage.at < sourceVersion(item) ||
+      (item.triage.groupId !== undefined && liveGroup(item, byId) === undefined),
+  );
   if (pending.length === 0) return null;
-  const pendingIds = new Set(pending.map((item) => item.id));
-  const context = open.filter((item) => !pendingIds.has(item.id)).slice(0, TRIAGE_CONTEXT - pending.length);
-  return { open, pending, context: [...pending, ...context] };
+  return { open, pending, context: open };
 }
 
-export function previewWork(items: LoopItem[]): { open: LoopItem[]; pending: LoopItem[]; context: LoopItem[] } {
+export function previewWork(items: LoopItem[]): TriageWork {
   const open = [...openById(items).values()]
     .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, TRIAGE_BATCH)
     .map((item) => {
-      if (item.triage?.pinned?.length) return item;
-      const { triage: _triage, ...rest } = item;
-      return rest;
+      const { proposal: _proposal, thread: _thread, agentDrafts: _drafts, sourcePayload: _payload, ...rest } = item;
+      return {
+        ...rest,
+        triage: item.triage
+          ? {
+              at: item.triage.at,
+              pinned: item.triage.pinned,
+              ...(pinned(item, "priority") ? { priority: item.triage.priority, reason: item.triage.reason } : {}),
+              ...(pinned(item, "group") ? { groupId: item.triage.groupId } : {}),
+            }
+          : undefined,
+      };
     });
   return { open, pending: open, context: open };
+}
+
+export function triageContext(items: LoopItem[], pending: LoopItem[]): LoopItem[] {
+  const ids = new Set(pending.map((item) => item.id));
+  const others = items.filter((item) => !ids.has(item.id));
+  others.sort((a, b) => Number(b.triage?.groupId === b.id) - Number(a.triage?.groupId === a.id));
+  return [...pending, ...others].slice(0, TRIAGE_CONTEXT);
 }
 
 export function parseTriageDecisions(list: unknown[]): TriageDecision[] {
@@ -116,8 +148,9 @@ export function planTriage(
     patches.set(id, { ...patches.get(id), ...fields });
   };
   for (const item of pending) {
-    patch(item.id, { at: sourceVersion(item) });
     const decision = decided.get(item.id);
+    if (!decision) continue;
+    patch(item.id, { at: sourceVersion(item), inputHash: triageInputHash(loop, item) });
     if (prioritizes(loop) && decision?.priority && !pinned(item, "priority"))
       patch(item.id, { priority: decision.priority, reason: decision.reason });
   }
@@ -130,18 +163,23 @@ export function planTriage(
     groups.set(id, undefined);
   };
   for (const item of pending) {
+    if (decided.has(item.id) && !pinned(item, "group")) leave(item.id);
+  }
+  for (const item of pending) {
     const other = byId.get(decided.get(item.id)?.groupWith ?? "");
     if (!other || other.id === item.id || pinned(item, "group") || pinned(other, "group")) continue;
+    const source = groups.get(item.id);
     const target = groups.get(other.id);
-    if (target !== undefined && target === groups.get(item.id)) continue;
-    leave(item.id);
-    if (target !== undefined) {
-      groups.set(item.id, target);
-      continue;
-    }
-    const [representative, member] = other.createdAt <= item.createdAt ? [other, item] : [item, other];
-    groups.set(representative.id, representative.id);
-    groups.set(member.id, representative.id);
+    if (target !== undefined && target === source) continue;
+    const members = open.filter(
+      (candidate) =>
+        candidate.id === item.id ||
+        candidate.id === other.id ||
+        (source !== undefined && groups.get(candidate.id) === source) ||
+        (target !== undefined && groups.get(candidate.id) === target),
+    );
+    const representative = members.sort((a, b) => a.createdAt - b.createdAt)[0]!;
+    for (const member of members) groups.set(member.id, representative.id);
   }
   const sizes = new Map<string, number>();
   for (const groupId of groups.values()) if (groupId) sizes.set(groupId, (sizes.get(groupId) ?? 0) + 1);

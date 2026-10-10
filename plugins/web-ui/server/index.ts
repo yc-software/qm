@@ -2946,6 +2946,16 @@ const apiRoutes: readonly WebRoute[] = [
       ),
   },
   {
+    method: "GET",
+    path: "/api/loops/:id/triage/preview/:previewId",
+    handle: async ({ res, user, params }) =>
+      relayCore(
+        res,
+        "GET",
+        `/v1/loops/${encodeURIComponent(params.id!)}/triage/preview/${encodeURIComponent(params.previewId!)}?principalId=${encodeURIComponent(user)}`,
+      ),
+  },
+  {
     method: "POST",
     path: "/api/loops/:id/outputs/:outputId/decide",
     handle: async (c) => {
