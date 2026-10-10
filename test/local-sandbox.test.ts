@@ -314,3 +314,38 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   await sb.teardown(h, { destroy: true });
   assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
 });
+
+test("a parked container whose network was pruned is recreated with its home volume", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake);
+  const layers = rw(scopeId("personal", "U41"));
+  const h1 = await sb.provision(layers);
+  await sb.teardown(h1);
+  assert.equal(fake.containers.get(h1.id)!.running, false);
+  const volume = fake.containers.get(h1.id)!.volume!;
+  fake.networks.delete(localNetworkName(h1.id));
+
+  const h2 = await makeSandbox(fake).provision(layers);
+  assert.equal(h2.id, h1.id);
+  assert.equal(fake.runCount, 2, "container recreated after its network vanished");
+  assert.equal(fake.containers.get(h2.id)!.running, true);
+  assert.equal(fake.volumes.has(volume), true, "volume survived the recreate");
+  assert.equal(fake.containers.get(h2.id)!.volume, volume, "recreate remounted the same volume");
+  assert.equal(fake.networks.has(localNetworkName(h1.id)), true, "network recreated");
+  assert.equal(h2.coldStart, false, "existing volume means a warm home");
+});
+
+test("a parked scratch box whose network was pruned is recreated", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake);
+  const layers = rw(scopeId("personal", "U42"));
+  const h1 = await sb.provision(layers, { scratch: { key: "pruned" } });
+  fake.containers.get(h1.id)!.running = false;
+  fake.networks.delete(localNetworkName(h1.id));
+
+  const h2 = await sb.provision(layers, { scratch: { key: "pruned" } });
+  assert.equal(h2.id, h1.id);
+  assert.equal(fake.runCount, 2, "scratch container recreated");
+  assert.equal(fake.containers.get(h2.id)!.running, true);
+  assert.equal(fake.networks.has(localNetworkName(h1.id)), true, "network recreated");
+});
