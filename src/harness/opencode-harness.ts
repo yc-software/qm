@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
+import type { OpencodeClient } from "@opencode-ai/sdk";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { customProviderApi, isCustomModelId } from "../model/custom-providers.ts";
 import type { CustomProviderProtocol, CustomProviderSpec } from "../model/custom-providers.ts";
@@ -815,6 +815,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           OPENCODE_BRIDGE_URL: bridgeUrl,
           OPENCODE_BRIDGE_SECRET: bridgeSecret,
         };
+        const { createOpencodeClient } = await import("@opencode-ai/sdk");
         const sidecarPort = await freePort();
         proc = spawn(binary, ["serve", "--hostname=127.0.0.1", `--port=${sidecarPort}`, "--log-level=ERROR"], {
           cwd: jail,
