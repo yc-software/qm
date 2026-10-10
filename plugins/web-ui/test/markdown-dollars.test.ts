@@ -111,3 +111,7 @@ test("a shallow line after code inside a list item closes the item, so top-level
     "- a &#36;1\n\n      code $2\n\nafter &#36;3\n\n    code $4",
   );
 });
+
+test("an already-escaped dollar is left for markdown to unescape", () => {
+  assert.equal(escapeLoneDollars("costs \\$5 and $6"), "costs \\$5 and &#36;6");
+});
