@@ -62,7 +62,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fa
   thinkingLevel?: string;
   readOnly?: boolean;
   turnWallClockMs?: number;
-  errorNotice?: (noteOrStatus: string) => string;
+  errorNotice?: (noteOrStatus: string, adminUrl?: string) => string;
   onClaimed?: () => Promise<void>;
   deferWhenBusy?: boolean;
 }
@@ -279,6 +279,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
+  let adminUrl: string | undefined;
   const ownerSkipNotice = async () => {
     await deps.deliveries.enqueue({
       destination: principalDestination(spec.owner, spec.owner),
@@ -354,6 +355,14 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       status = res.status;
       reply = res.reply;
       sessionId = res.sessionId;
+      adminUrl = res.adminUrl;
+      if (res.stopped) {
+        note = res.reason ? `stopped: ${res.reason}` : "stopped on request";
+        if (!res.reason) return;
+        status = "failed";
+        userNote = res.reason;
+        return;
+      }
       if (res.status === "silent") return;
       if (res.status === "pending_approval") {
         note = "hit a require_approval command — failed closed (no human at fire/event time)";
@@ -411,7 +420,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   if (spec.errorNotice && spec.destination && consented && deliverable && isTriggerFailure(outcome)) {
     await deps.deliveries.enqueue({
       destination: spec.destination,
-      text: spec.errorNotice(userNote ?? note ?? status!),
+      text: spec.errorNotice(userNote ?? note ?? status!, adminUrl),
       idempotencyKey: `${spec.fireKey}:err`,
       provenance: deliveryProvenance(spec, threadRef),
       ...(spec.shadow ? { shadow: true } : {}),

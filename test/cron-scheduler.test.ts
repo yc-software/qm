@@ -1959,3 +1959,68 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
   assert.equal(calls[2]?.thinkingLevel, undefined);
   assert.equal(calls[2]?.fastMode, undefined);
 });
+
+test("an interrupted cron fire reports its cause with the admin link instead of a bare (stopped) reply", async () => {
+  const { crons, deliveries, scheduler } = harness(async () => ({
+    status: "ok",
+    reply: "(stopped)",
+    stopped: true,
+    reason: "the worker shut down mid-run",
+    sessionId: "s1",
+    adminUrl: "https://qm.example/admin/sessions/s1",
+  }));
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "nightly digest",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+  });
+  await runNowSettled(scheduler, cron.id);
+  const texts = (await deliveries.pending("slack")).map((d) => d.text);
+  assert.deepEqual(texts, [
+    "⚠️ I couldn't finish that turn: the worker shut down mid-run — full error: https://qm.example/admin/sessions/s1",
+  ]);
+  const { runs } = await crons.listFires(cron.id);
+  assert.equal(runs[0]?.status, "failed");
+  assert.equal(runs[0]?.note, "stopped: the worker shut down mid-run");
+});
+
+test("a failed cron fire reports the error with the admin link to its destination", async () => {
+  const { crons, deliveries, scheduler } = harness(async () => ({
+    status: "failed",
+    reason: "TypeError: boom",
+    sessionId: "s2",
+    adminUrl: "https://qm.example/admin/sessions/s2",
+  }));
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "nightly digest",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+  });
+  await runNowSettled(scheduler, cron.id);
+  const texts = (await deliveries.pending("slack")).map((d) => d.text);
+  assert.deepEqual(texts, [
+    "⚠️ I couldn't finish that turn: something went wrong on my end — full error: https://qm.example/admin/sessions/s2",
+  ]);
+});
+
+test("a cron fire stopped on request posts nothing", async () => {
+  const { crons, deliveries, scheduler } = harness(async () => ({ status: "ok", reply: "(stopped)", stopped: true }));
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "nightly digest",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+  });
+  await runNowSettled(scheduler, cron.id);
+  assert.equal((await deliveries.pending("slack")).length, 0);
+  const { runs } = await crons.listFires(cron.id);
+  assert.equal(runs[0]?.note, "stopped on request");
+});

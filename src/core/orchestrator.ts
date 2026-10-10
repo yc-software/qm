@@ -2064,11 +2064,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let contextRecovered = false;
       let turnProgress = 0;
       const turnAbort = new AbortController();
-      if (input.cancel?.aborted) turnAbort.abort();
-      else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
+      if (input.cancel?.aborted) turnAbort.abort(input.cancel.reason);
+      else input.cancel?.addEventListener("abort", () => turnAbort.abort(input.cancel?.reason), { once: true });
       const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
         progress: () => turnProgress,
-        onStalled: () => turnAbort.abort(),
+        onStalled: () => turnAbort.abort(new Error("the turn stopped making progress")),
       });
       let failureUserPayload: Record<string, unknown> | undefined;
       try {
@@ -4156,6 +4156,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         })();
         const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
         const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
+        const stopped = result.stopped
+          ? { stopped: true, ...(turnAbort.signal.aborted ? { reason: errMessage(turnAbort.signal.reason) } : {}) }
+          : {};
 
         await latchCoverage();
 
@@ -4285,7 +4288,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sourceUserSeq = turnUserSeq;
         const sourceAssistantEntrySeq = [...emittedEntries].reverse().find((e) => e.type === "assistant")?.seq;
         if (cancelStopped && !result.pendingApprovals?.length) {
-          finalResult = { status: "silent", sessionId: session.id, stopped: true };
+          finalResult = { status: "silent", sessionId: session.id, ...stopped };
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
@@ -4376,13 +4379,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (isPollFire && !stagedAttachments.length && isSilentPollReply(reply)) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };
+          finalResult = { status: "silent", sessionId: session.id, ...stopped };
         } else {
           finalResult = {
             status: "ok",
             sessionId: session.id,
             reply,
-            ...(result.stopped ? { stopped: true } : {}),
+            ...stopped,
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
             ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),

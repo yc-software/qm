@@ -33,7 +33,7 @@ export async function processRun(
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
   const cancel = new AbortController();
-  const onShutdown = (): void => cancel.abort();
+  const onShutdown = (): void => cancel.abort(new Error("the worker shut down mid-run"));
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let workDeadline: ReturnType<typeof setTimeout> | undefined;
@@ -54,7 +54,7 @@ export async function processRun(
           console.warn(
             `[worker] run ${run.id} lost its lease after ${consecutiveLost} consecutive beats; cancelling the in-process turn`,
           );
-          cancel.abort();
+          cancel.abort(new Error("the run lost its worker lease"));
         }
       })
       .catch((err: unknown) => {
@@ -72,7 +72,7 @@ export async function processRun(
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
     if (run.request.swarm) {
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
-      workDeadline = setTimeout(() => cancel.abort(), turnMs);
+      workDeadline = setTimeout(() => cancel.abort(new Error("the swarm turn hit its time limit")), turnMs);
     }
     if (run.request.swarm && run.attempts > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
