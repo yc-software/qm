@@ -516,7 +516,10 @@ test("teardown of a box the turn never used skips the snapshot only while the st
   assert.equal((await store.get(scope))?.homeDirty, true, "a used turn whose snapshot failed leaves the home dirty");
   counting.failWrites(false);
   await s.teardown(await s.provision(layers), { homeUnchanged: true });
-  assert.equal(counting.puts(), 2, "the next unused turn catches up the missed snapshot");
+  assert.equal(counting.puts(), 1, "the failure backs off instead of retrying on the very next turn");
+  await store.merge(scope, { snapshotRetryAtMs: 1 });
+  await s.teardown(await s.provision(layers), { homeUnchanged: true });
+  assert.equal(counting.puts(), 2, "the next unused turn after the backoff catches up the missed snapshot");
   assert.equal((await store.get(scope))?.homeDirty, false);
 });
 
@@ -964,7 +967,7 @@ test("failed native checkpoints wait for the interval across cleanup and mainten
   assert.equal(attempts, 2);
   assert.equal((await store.get(scope))!.nativeSnapshotId, saved);
   assert.equal((await store.get(scope))!.recoveryError, "Timeout expired");
-  await store.merge(scope, { lastSnapshotAttemptMs: 1 });
+  await store.merge(scope, { lastSnapshotAttemptMs: 1, snapshotRetryAtMs: 1 });
   await s.teardown(h);
   assert.equal(attempts, 3);
 });

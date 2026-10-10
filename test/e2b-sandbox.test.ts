@@ -479,6 +479,7 @@ test("a lost native E2B sandbox is replaced from its persistent recovery snapsho
   const paused = await first.computerStatus!(scope);
   assert.equal(paused.recovery?.checkpointId, captured.recoverySnapshotId);
   assert.equal(paused.recovery?.checkpointExpiresAtMs, null);
+  await store.merge(scope, { snapshotFailures: 3, snapshotRetryAtMs: Date.now() + 3600_000 });
   fake.expirePaused();
   const restarted = make({ client, store });
   const revived = await restarted.provision(layers);
@@ -488,6 +489,8 @@ test("a lost native E2B sandbox is replaced from its persistent recovery snapsho
   assert.equal(await restarted.readFile(revived, "work.txt"), "captured before the pause\n");
   assert.equal((await store.get(scope))?.sandboxId, fake.current(scopeName())?.sandboxId);
   assert.equal((await store.get(scope))?.preservationState, "running");
+  assert.equal((await store.get(scope))?.snapshotRetryAtMs, undefined, "the replacement VM is not held back");
+  assert.equal((await store.get(scope))?.snapshotFailures, undefined);
 });
 
 test("recovery snapshots follow the native interval and supersede the previous capture", async () => {
@@ -604,6 +607,7 @@ test("legacy pause preserves dirty home after failed portable checkpoint and ret
   await first.teardown(resumed);
   assert.equal((await store.get(scope))?.homeDirty, true);
   portable.failWrites(false);
+  await store.merge(scope, { snapshotRetryAtMs: 1 });
   const unused = await first.provision(layers);
   await first.teardown(unused, { homeUnchanged: true });
   assert.equal(portable.puts(), 2);
