@@ -74,7 +74,7 @@ function load(sessionId: string, owner?: Owner): void {
   if (owner) waiting.set(sessionId, (waiting.get(sessionId) ?? new Set()).add(owner));
   const inFlight = loading.get(sessionId);
   if (inFlight) {
-    inFlight.dirty = true;
+    if (!owner) inFlight.dirty = true;
     return;
   }
   const state = { dirty: false };
