@@ -137,7 +137,9 @@ const AWS_AGENTS_APPENDIX = `
    \`npm exec qm -- up --yes\`, and
    \`npm exec qm -- check --live\`, in that order.
 
-To tear down this target, run \`npm exec qm -- down\`, then persist the destructive
+To tear down this target, run \`npm exec qm -- down\`. After separately retaining
+any agent files that must survive, remove \`prevent_destroy = true\` from the
+\`aws_s3_bucket.objects\` lifecycle in \`infra/main.tf\`, then persist the destructive
 lifecycle settings in Terraform state with \`terraform -chdir=infra apply
 -var='ecr_force_delete=true' -var='object_store_force_destroy=true'
 -var='db_skip_final_snapshot=true' -var='secret_recovery_window_days=0'\`.
