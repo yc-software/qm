@@ -80,6 +80,31 @@ test("unconfigured deployment: the admin surface itself is reachable, so onboard
   assert.equal(((await r.json()) as { url: string }).url, "/onboarding");
 });
 
+test("the not-set-up and no-admin-access pages let a person sign out and switch accounts", async () => {
+  const notSetUp = await fetch(`${base}/`, {
+    headers: { accept: "text/html", cookie: sessionCookie("U-member") },
+    redirect: "manual",
+  });
+  const notSetUpHtml = await notSetUp.text();
+  assert.match(notSetUpHtml, /<form method="post" action="\/auth\/logout">/);
+  assert.match(notSetUpHtml, /Signed in as <b>U-member<\/b>/);
+
+  const denied = await fetch(`${base}/admin/`, {
+    headers: { accept: "text/html", cookie: sessionCookie("U-member") },
+    redirect: "manual",
+  });
+  assert.equal(denied.status, 403);
+  assert.match(await denied.text(), /<form method="post" action="\/auth\/logout">/);
+
+  const out = await fetch(`${base}/auth/logout`, {
+    method: "POST",
+    headers: { accept: "text/html", origin: "http://portal.test", cookie: sessionCookie("U-member") },
+    redirect: "manual",
+  });
+  assert.equal(out.status, 303, "the form's same-origin POST signs the person out");
+  assert.match(out.headers.get("set-cookie") ?? "", /portal_session=;/);
+});
+
 test("once a provider is configured, admin HTML navigation proxies to web-ui again", async () => {
   providerConfigured = true;
   await new Promise((r) => setTimeout(r, 5_200));

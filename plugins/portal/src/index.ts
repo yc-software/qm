@@ -581,6 +581,8 @@ export function signInErrorHtml(
   });
 }
 
+const SIGN_OUT_FORM = `<form method="post" action="/auth/logout"><button class="btn ghost" type="submit">Sign out</button></form>`;
+
 export function nonAdminDeniedHtml(o: { sub: string; org: string }): string {
   return cardPage({
     title: "No admin access",
@@ -594,20 +596,24 @@ export function nonAdminDeniedHtml(o: { sub: string; org: string }): string {
       </div>`,
     actions: `<a class="btn primary" href="/">Back to your surfaces</a>
         <a class="btn ghost" href="/admin/">Try again</a>
-        <a class="btn ghost" href="/">Open the assistant instead</a>`,
-    help: "You can keep using every surface available to your account.",
+        ${SIGN_OUT_FORM}`,
+    help: "Signed in with the wrong account? Sign out, then sign in with the account that has admin rights.",
   });
 }
 
-export function notConfiguredHtml(): string {
+export function notConfiguredHtml(o?: { sub: string }): string {
   return cardPage({
     title: "Not set up yet",
     heading: "This deployment isn't set up yet",
     msg: "An admin still needs to finish setup by adding a model API key. Until then the assistant can't answer.",
     icon: ALERT_ICON,
     warn: true,
-    actions: `<a class="btn primary" href="/">Try again</a>`,
-    help: "Ask your admin to complete onboarding in the Admin area.",
+    ...(o
+      ? { extra: `<div class="note"><span class="who">Signed in as <b>${escapeHtml(o.sub)}</b></span></div>` }
+      : {}),
+    actions: `<a class="btn primary" href="/">Try again</a>
+        ${SIGN_OUT_FORM}`,
+    help: "Ask your admin to complete onboarding in the Admin area. If you're the admin, sign out and sign in with your admin account.",
   });
 }
 
@@ -1365,7 +1371,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         res.writeHead(302, { location: "/admin/onboarding", "cache-control": "no-store" });
         return void res.end();
       }
-      return sendHtml(res, 503, notConfiguredHtml());
+      return sendHtml(res, 503, notConfiguredHtml({ sub: session.sub }));
     }
   }
 
