@@ -132,6 +132,19 @@ function stashFencedBlocks(text: string, keep: (s: string) => string): string {
   return out + text.slice(i);
 }
 
+const escapeSlackText = (text: string): string =>
+  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+
+function escapeOutsideQuoteMarkers(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const marker = /^(?:[ \t]*>)+/.exec(line)?.[0] ?? "";
+      return marker + escapeSlackText(line.slice(marker.length));
+    })
+    .join("\n");
+}
+
 export function toSlackMrkdwn(md: string): string {
   if (!md) return md;
   const stash: string[] = [];
@@ -139,14 +152,14 @@ export function toSlackMrkdwn(md: string): string {
 
   let text = md.replace(/\r\n/g, "\n");
 
-  text = stashFencedBlocks(text, keep);
-  text = text.replace(/`[^`\n]+`/g, keep);
+  text = stashFencedBlocks(text, (block) => keep(escapeSlackText(block)));
+  text = text.replace(/`[^`\n]+`/g, (span) => keep(escapeSlackText(span)));
   text = neutralizeMassMentions(text);
 
-  text = reformatTables(text, keep);
+  text = reformatTables(text, (table) => keep(escapeSlackText(table)));
 
-  text = text.replace(/!?\[([^\]]*)\]\(\s*<?([^()\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_m, label, url) =>
-    keep(label ? `<${url}|${label}>` : `<${url}>`),
+  text = text.replace(/!?\[([^\]]*)\]\(\s*<?((?:[^()\s>]|\([^()\s>]*\))+)>?(?:\s+"[^"]*")?\s*\)/g, (_m, label, url) =>
+    keep(label ? `<${url}|${escapeSlackText(label)}>` : `<${url}>`),
   );
 
   text = text.replace(/<(?:https?:\/\/|mailto:|[@#!])[^<>\n\x00]*>/g, keep);
@@ -159,6 +172,7 @@ export function toSlackMrkdwn(md: string): string {
 
   text = text.replace(/^[ \t]*([-*_])\1{2,}[ \t]*$/gm, "──────────");
 
+  text = text.replace(/\*\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*\*/g, `${BOLD_SENTINEL}_$1_${BOLD_SENTINEL}`);
   text = text.replace(/\*\*(?!\s)([^\n]+?)(?<!\s)\*\*/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
   text = text.replace(/__(?!\s)([^\n]+?)(?<!\s)__/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
 
@@ -173,6 +187,7 @@ export function toSlackMrkdwn(md: string): string {
 
   text = text.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![*\w])/g, "$1_$2_");
 
+  text = escapeOutsideQuoteMarkers(text);
   text = text.replaceAll(BOLD_SENTINEL, "*");
   text = text.replace(new RegExp(`${STASH_OPEN}(\\d+)${STASH_OPEN}`, "g"), (_m, i) => stash[Number(i)] ?? "");
 

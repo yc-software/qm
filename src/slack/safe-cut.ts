@@ -9,6 +9,15 @@ function isLowSurrogate(code: number): boolean {
   return code >= 0xdc00 && code <= 0xdfff;
 }
 
+const ENTITY = /^&(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z]{2,8});/i;
+
+function entityStart(text: string, cut: number, floor: number): number {
+  const amp = text.lastIndexOf("&", cut - 1);
+  if (amp < floor || cut - amp > 10) return cut;
+  const entity = ENTITY.exec(text.slice(amp, amp + 12));
+  return entity && amp + entity[0].length > cut ? amp : cut;
+}
+
 /** The largest index <= max that is safe to cut at. */
 export function safeCutIndex(text: string, max: number): number {
   if (text.length <= max) return text.length;
@@ -31,6 +40,7 @@ export function safeCutIndex(text: string, max: number): number {
       if (back >= floor) cut = Math.min(cut, back);
     }
   }
+  cut = entityStart(text, cut, floor);
   if (isLowSurrogate(text.charCodeAt(cut))) cut--;
   return Math.max(cut, 1);
 }
@@ -48,6 +58,7 @@ function fenceCutIndex(text: string, max: number): number {
   while (cut > floor && text[cut] === "`" && text[cut - 1] === "`") cut--;
   const lineStart = text.lastIndexOf("\n", cut - 1) + 1;
   if (lineStart >= floor) cut = lineStart;
+  else cut = entityStart(text, cut, floor);
   return Math.max(cut, 1);
 }
 
