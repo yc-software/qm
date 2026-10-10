@@ -46,6 +46,8 @@ const core = createServer((req: IncomingMessage, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     if (req.url?.startsWith("/v1/session-cap")) {
       res.end(JSON.stringify({ token: "signed-in-user-capability" }));
+    } else if (req.url?.startsWith("/v1/deployments/d1/logs")) {
+      res.end(JSON.stringify({ logs: "<b>boot failed</b>\nexit 7\n" }));
     } else if (req.url?.startsWith("/v1/deployments/d1/share")) {
       res.end(JSON.stringify({ grantees: [] }));
     } else if (req.method === "GET" && req.url?.startsWith("/v1/deployments?")) {
@@ -130,6 +132,17 @@ test("deployment sharing uses the signed-in capability and drops caller identity
   assert.ok(requests.every((call) => call.capability === "signed-in-user-capability"));
   assert.deepEqual(requests[1]?.body, { scope: "personal:bob", access: "view" });
   assert.deepEqual(requests[2]?.body, { public: true });
+});
+
+test("deployment logs relay through the signed-in capability as inert plain text", async () => {
+  const before = calls.length;
+  const logs = await fetch(`${base}/api/deployments/d1/logs`, { headers });
+  assert.equal(logs.status, 200);
+  assert.equal(logs.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(logs.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(await logs.text(), "<b>boot failed</b>\nexit 7\n");
+  const call = calls.slice(before).find((c) => c.url.startsWith("/v1/deployments/d1/logs"));
+  assert.equal(call?.capability, "signed-in-user-capability");
 });
 
 test("embed-ancestors relays the origin list and never invents one", async () => {

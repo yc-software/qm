@@ -21,7 +21,7 @@ import {
   type DeployEndpoint,
   type DeploymentVersion,
 } from "./deploy-store.ts";
-import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
+import type { DeployProfile, DeployProvider, DeployRunState } from "./deploy-provider.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -77,6 +77,7 @@ export interface DeployService {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
   listDeployments(): Promise<Deployment[]>;
+  refreshRunState(d: Deployment): Promise<Deployment>;
   rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean }): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
   restoreDeployment(id: string, actorId?: string): Promise<Deployment>;
@@ -135,6 +136,7 @@ export interface DeployServiceDeps {
   deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>;
 }
 
+const RUN_STATE_TTL_MS = 5_000;
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -221,6 +223,51 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     await deps.deployStore.setEndpoint(id, endpoint);
     await deps.deployStore.setStatus(id, "running");
     await deps.deployStore.setAppliedVersion(id, version);
+  };
+
+  const runStateProbes = new Map<string, { at: number; state: Promise<DeployRunState | null> }>();
+  const probeRunState = (d: Deployment, version: DeploymentVersion): Promise<DeployRunState | null> => {
+    const state = deps.provider.runState!(d, version);
+    const entry = { at: Date.now(), state };
+    runStateProbes.set(d.id, entry);
+    state.catch(() => {
+      if (runStateProbes.get(d.id) === entry) runStateProbes.delete(d.id);
+    });
+    return state;
+  };
+  const recentRunState = (d: Deployment, version: DeploymentVersion): Promise<DeployRunState | null> => {
+    const cached = runStateProbes.get(d.id);
+    if (cached && Date.now() - cached.at < RUN_STATE_TTL_MS) return cached.state;
+    return probeRunState(d, version);
+  };
+  const probedVersion = (d: Deployment): DeploymentVersion | undefined =>
+    d.status === "running" && !deps.provider.profile.managedScaleToZero && deps.provider.runState
+      ? currentVersionOf(d)
+      : undefined;
+
+  const refreshRunState = async (d: Deployment): Promise<Deployment> => {
+    const version = probedVersion(d);
+    if (!version) return d;
+    try {
+      const seen = await recentRunState(d, version);
+      if (!seen || seen.running) return d;
+      return await withDeployLock(d.id, async () => {
+        const cur = await deps.deployStore.get(d.id);
+        const curVersion = cur && probedVersion(cur);
+        if (!cur || !curVersion) return cur ?? d;
+        const state = await probeRunState(cur, curVersion);
+        if (!state || state.running) return cur;
+        await deps.deployStore.setCrashed(cur.id, {
+          ...(state.exitCode !== undefined ? { exitCode: state.exitCode } : {}),
+          ...(state.oomKilled ? { oomKilled: true } : {}),
+          at: Date.now(),
+        });
+        return (await deps.deployStore.get(cur.id)) ?? cur;
+      });
+    } catch (e) {
+      swallow("deploy run-state probe", e);
+      return d;
+    }
   };
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
@@ -369,6 +416,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     listDeployments() {
       return deps.deployStore.list();
     },
+
+    refreshRunState,
 
     async rollbackDeployment(id, version, options) {
       return withDeployLock(id, async () => {
@@ -530,7 +579,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           try {
             const cur = await deps.deployStore.get(d.id);
             if (!cur?.alwaysOn || cur.status !== "running") continue;
-            await liveEndpoint(cur);
+            const live = await refreshRunState(cur);
+            if (live.status !== "running") continue;
+            await liveEndpoint(live);
             warmed++;
           } catch (e) {
             console.error("%s", `[deploy] keep-warm failed for ${d.name ?? d.id}:`, errMessage(e));
@@ -553,7 +604,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async deploymentLogs(idOrName, opts): Promise<string | null> {
       if (!deps.provider.logs) return null;
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      if (!d || d.status !== "running") return null;
+      if (!d || (d.status !== "running" && d.status !== "crashed")) return null;
       return deps.provider.logs(d, opts);
     },
 
