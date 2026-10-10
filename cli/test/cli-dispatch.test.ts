@@ -729,3 +729,38 @@ test("check --json groups a multi-clause failure under each error's own clause, 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("check and secrets push reject a missing explicit env file instead of reading it as empty", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+  writeFileSync(
+    join(dir, CONFIG_FILENAME),
+    JSON.stringify({
+      contract: 1,
+      orgId: "acme",
+      publicUrl: "http://localhost:8080",
+      target: "docker",
+      services: ["core"],
+      sandbox: { app: "acme-sandboxes" },
+    }),
+  );
+  const xdg = mkdtempSync(join(tmpdir(), "qm-xdg-"));
+  const prevXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = xdg;
+  try {
+    const missing = join(dir, "nope.env");
+    for (const [argv, pattern] of [
+      [["check", "--env-file", missing], /--env-file not found/],
+      [["secrets", "push", "--from", missing], /--from not found/],
+      [["secrets", "push", "--env-file", missing], /--env-file not found/],
+    ] as const) {
+      const { out, exitCode } = await run([...argv], dir);
+      assert.notEqual(exitCode, 0, argv.join(" "));
+      assert.match(out, pattern, argv.join(" "));
+    }
+  } finally {
+    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prevXdg;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(xdg, { recursive: true, force: true });
+  }
+});
