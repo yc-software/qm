@@ -55,6 +55,18 @@ for (const b of backends()) {
     assert.equal(await reg.get(id(3)), null);
   });
 
+  test(`[${b.name}] markStatus never rewrites a process that already finished`, async () => {
+    const reg = b.make();
+    await reg.register({ processId: id(5), scopeId: "s", kind: "build", command: "make", ttlMs: 60_000 });
+    assert.equal(await reg.markStatus(id(5), "exited"), true);
+    assert.equal(await reg.markStatus(id(5), "reaped"), false);
+    assert.equal((await reg.get(id(5)))!.status, "exited");
+    await reg.register({ processId: id(6), scopeId: "s", kind: "build", command: "make", ttlMs: 60_000 });
+    assert.equal(await reg.markStatus(id(6), "reaped"), true);
+    assert.equal(await reg.markStatus(id(6), "exited"), false);
+    assert.equal((await reg.get(id(6)))!.status, "reaped");
+  });
+
   test(`[${b.name}] only declared kinds may be registered`, async () => {
     const reg = b.make();
     await assert.rejects(
