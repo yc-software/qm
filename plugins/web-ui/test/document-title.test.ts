@@ -13,6 +13,18 @@ test("page titles retain the static product title", () => {
   assert.equal(documentTitle(), PRODUCT_TITLE);
 });
 
+test("views keep the branded title the server rendered (#2108)", async () => {
+  const saved = globalThis.document;
+  globalThis.document = new JSDOM("<title>Acme · Web</title>").window.document;
+  try {
+    const branded = new URL("../src/document-title.ts?branded", import.meta.url).href;
+    const { documentTitle: brandedTitle } = (await import(branded)) as typeof import("../src/document-title.ts");
+    assert.equal(brandedTitle("chats"), "Chats · Acme · Web");
+  } finally {
+    globalThis.document = saved;
+  }
+});
+
 test("chat and non-chat views have useful fallbacks", () => {
   assert.equal(documentTitle("chats"), `Chats · ${PRODUCT_TITLE}`);
   assert.equal(documentTitle("chats", null, true), `New chat · ${PRODUCT_TITLE}`);
