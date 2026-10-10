@@ -508,6 +508,20 @@ test("the claude harness offers compaction and detection so a utility role canno
     recordModelCall: () => {},
   });
   assert.equal(verdict.respond, true);
+
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    throw new Error("detector unavailable");
+  };
+  const failed = await harness.models.shouldRespond!({
+    session: { id: "session-1" } as HarnessTurnInput["session"],
+    message: "yes, go ahead",
+    recentContext: "",
+    systemPrompt: "be brief",
+    history: [],
+    recordModelCall: () => {},
+  });
+  assert.equal(failed.respond, true);
 });
 
 test("Claude preserves a committed runtime handoff when SDK interruption returns an error", async () => {

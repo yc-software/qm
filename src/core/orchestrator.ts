@@ -2482,21 +2482,34 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .filter((e) => e.type !== "soul"),
           );
           const detectStart = Date.now();
-          const decision = await deps.harness.models.shouldRespond({
-            session,
-            message: input.text,
-            recentContext: memoryHistoryReset ? "" : (input.detectContext ?? ""),
-            ...(!memoryHistoryReset && input.detectOpener ? { threadOpener: input.detectOpener } : {}),
-            systemPrompt: resolution.systemPrompt,
-            ...(input.gatewayContext?.reactionGuidance
-              ? { reactionGuidance: input.gatewayContext.reactionGuidance }
-              : {}),
-            history: detectHistory,
-            recordModelCall: (rec) => {
-              deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-              void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-            },
+          const lastTurnStart = detectHistory.findLastIndex(
+            (e) => e.type === "user" && !(e.payload as { overheard?: unknown }).overheard,
+          );
+          const askedOwnQuestion = detectHistory.slice(lastTurnStart + 1).some((e) => {
+            const p = e.payload as { action?: unknown; text?: unknown };
+            return (
+              (e.type === "assistant" || (e.type === "tool_call" && p.action === "post")) &&
+              typeof p.text === "string" &&
+              /\?(\s|$)/.test(p.text)
+            );
           });
+          const decision = askedOwnQuestion
+            ? { respond: true, reason: "answers the assistant's own question" }
+            : await deps.harness.models.shouldRespond({
+                session,
+                message: input.text,
+                recentContext: memoryHistoryReset ? "" : (input.detectContext ?? ""),
+                ...(!memoryHistoryReset && input.detectOpener ? { threadOpener: input.detectOpener } : {}),
+                systemPrompt: resolution.systemPrompt,
+                ...(input.gatewayContext?.reactionGuidance
+                  ? { reactionGuidance: input.gatewayContext.reactionGuidance }
+                  : {}),
+                history: detectHistory,
+                recordModelCall: (rec) => {
+                  deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
+                  void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
+                },
+              });
           detectMs = Date.now() - detectStart;
           if (!decision.respond) {
             const reactions = decision.reactions?.length ? decision.reactions : undefined;
