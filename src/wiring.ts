@@ -556,6 +556,10 @@ export interface BuiltApp {
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 
+export function durableTaskStore(config: Pick<Config, "databaseUrl" | "sessionStore">): boolean {
+  return Boolean(config.databaseUrl) && config.sessionStore === "postgres";
+}
+
 export function buildApp(
   config: Config,
   overrides: {
@@ -1258,7 +1262,7 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
       : createMemoryRunSignalStore();
-  const tasks = config.databaseUrl ? createPostgresTaskStore(config.databaseUrl) : createMemoryTaskStore();
+  const tasks = durableTaskStore(config) ? createPostgresTaskStore(config.databaseUrl!) : createMemoryTaskStore();
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
       await refreshModels();
