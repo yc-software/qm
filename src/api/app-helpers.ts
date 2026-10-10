@@ -301,6 +301,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return sessions.filter((session) => allowed.get(session.scopeId) !== false);
   }
 
+  async function sessionScopesForViewer(principalId: string): Promise<ScopeId[]> {
+    if (!deps.sessions.participantScopes)
+      return [...new Set((await sessionsForViewer(principalId)).map((session) => session.scopeId))];
+    const scopes = await deps.sessions.participantScopes(principalId);
+    const allowed = await Promise.all(scopes.map((scope) => managedProjectMembership(scope, principalId)));
+    return scopes.filter((_, i) => allowed[i] !== false);
+  }
+
   async function sessionForViewer(sessionId: string, principalId: string): Promise<Session | null> {
     const session = await deps.sessions.getForParticipant(sessionId, principalId);
     if (!session) return null;
@@ -388,13 +396,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       scopeId("org", orgIdOf()),
     ]);
     try {
-      const [sessions, channels, groups, projects] = await Promise.all([
-        deps.sessions ? sessionsForViewer(principalId) : Promise.resolve([]),
+      const [sessionScopes, channels, groups, projects] = await Promise.all([
+        deps.sessions ? sessionScopesForViewer(principalId) : Promise.resolve([]),
         deps.directory ? deps.directory.listChannelsFor(principalId) : Promise.resolve([]),
         deps.directory?.listGroupsFor?.(principalId) ?? Promise.resolve([]),
         projectsForViewer(principalId),
       ]);
-      const historical = new Set(sessions.map((session) => session.scopeId));
+      const historical = new Set(sessionScopes);
       for (const channel of channels) {
         const scope = scopeId("channel", channel.channelId);
         if (channel.isPrivate === true || historical.has(scope)) scopes.add(scope);
