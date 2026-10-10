@@ -340,14 +340,16 @@ test(
       consolidateAfter: 0,
       harness: {
         oneShot: async (_system, input) =>
-          input.startsWith("User said:") ? "SENSITIVITY: sensitive\n- A confidential synthetic project" : "ordinary",
+          input.startsWith("User said:")
+            ? "SENSITIVITY: sensitive\n- A confidential synthetic personal preference [personal]"
+            : "ordinary",
       },
     });
     await strategy.onTurnEnd!({
       scopeId: "group:private",
       actorId: "alice",
       sessionId: "test-session",
-      input: "A synthetic confidential project",
+      input: "My synthetic confidential preference",
       reply: "Noted",
       inheritedRecords: [],
     });
