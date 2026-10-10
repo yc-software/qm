@@ -55,6 +55,7 @@ export default defineConfig({
   plugins: [precompressStaticAssets()],
   resolve: {
     alias: [
+      { find: /^fonts\/(KaTeX_[\w-]+\.(?:woff2?|ttf))$/, replacement: `${here("node_modules/katex/dist/fonts")}/$1` },
       { find: /^katex$/, replacement: here("src/lazy-katex.ts") },
       { find: "katex-real", replacement: here("node_modules/katex/dist/katex.mjs") },
       { find: /^highlight\.js\/lib\/core$/, replacement: here("src/lazy-hljs.ts") },
