@@ -467,6 +467,7 @@ test("governGoal parses the verdict, fails closed, and gates pause and complete"
   assert.match(prompt, /<user_request>\nwork on this for 10 minutes\n<\/user_request>/);
   assert.equal(createGoalRecord({ objective: "x", request: "  hi  " }).request, "hi");
   assert.equal(createGoalRecord({ objective: "x" }).request, undefined);
+  assert.equal(createGoalRecord({ objective: "x", request: "do y <environment> box </environment>" }).request, "do y");
 });
 
 test("enforceGoal checks in with the governor every few rounds, steps back, then pauses for the user", async () => {

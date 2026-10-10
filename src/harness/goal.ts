@@ -112,7 +112,7 @@ export function createGoalRecord(input: {
     throw new Error("token_cap must be a positive number of at least 1");
   const now = input.now ?? Date.now();
   const floor = sanitizeFloor(input.floor);
-  const request = input.request?.trim().slice(0, GOAL_MAX_OBJECTIVE_CHARS);
+  const request = input.request?.split("<environment>")[0]!.trim().slice(0, GOAL_MAX_OBJECTIVE_CHARS);
   return {
     objective,
     ...(request ? { request } : {}),
