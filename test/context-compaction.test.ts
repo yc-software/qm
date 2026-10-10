@@ -1461,7 +1461,7 @@ for (const explicit of [false, true]) {
   });
 }
 
-test("retry recovery supplies an excluded request without rerunning its completed action", async () => {
+test("retry recovery keeps an excluded request in context and continues without rerunning its completed action", async () => {
   const base = createMockHarness();
   let mainCalls = 0;
   const harness: Harness = {
@@ -1476,9 +1476,13 @@ test("retry recovery supplies an excluded request without rerunning its complete
       ...base.turns,
       runTurn: async (input) => {
         mainCalls++;
-        assert.match(input.input, /Current request.*\nfinish the stored request/);
-        assert.match(input.input, /don't start over or repeat completed steps/);
-        assert.ok(!input.history.some((e) => e.type === "user"));
+        assert.doesNotMatch(input.input, /Current request/);
+        assert.equal(input.continueTurn, true);
+        assert.ok(
+          input.history.some(
+            (e) => e.type === "user" && (e.payload as { text?: unknown }).text === "finish the stored request",
+          ),
+        );
         await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
         return { reply: "resumed" };
       },
