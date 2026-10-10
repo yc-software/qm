@@ -147,13 +147,13 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
   assert.equal((await skills.get(mine.id))!.manifest.description, "user authored");
 });
 
-test("installSeedSkills with retireRemoved archives its own skills whose seed was deleted", async () => {
+test("installSeedSkills archives its own skills whose seed was deleted", async () => {
   const skills = createSkillStore({ signingSecret: "seed-test-secret" });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-retire-"));
   writeSeedSkill(dir, "kept", "kept", "# Kept");
   writeSeedSkill(dir, "gone", "gone", "# Gone");
-  await installSeedSkills(skills, { dir, scopeId: org, retireRemoved: true });
+  await installSeedSkills(skills, { dir, scopeId: org });
   await skills.create({
     scopeId: org,
     manifest: { name: "other", description: "user authored", requiredCapabilities: [], body: "# Other" },
@@ -161,7 +161,7 @@ test("installSeedSkills with retireRemoved archives its own skills whose seed wa
   });
   rmSync(join(dir, "gone"), { recursive: true });
 
-  await installSeedSkills(skills, { dir, scopeId: org, retireRemoved: true });
+  await installSeedSkills(skills, { dir, scopeId: org });
   const status = new Map((await skills.list()).map((s) => [s.manifest.name, s.status]));
   assert.deepEqual(Object.fromEntries(status), { kept: "published", gone: "archived", other: "draft" });
 });
