@@ -12,6 +12,27 @@ export interface SkillFrontmatter {
   requiredCapabilities?: string[];
 }
 
+function stripSkillInlineComment(value: string): string {
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    const prev = value[i - 1];
+    const afterSpace = i === 0 || prev === " " || prev === "\t";
+    if ((ch === '"' || ch === "'") && (afterSpace || prev === "[" || prev === ",")) {
+      let close = i + 1;
+      while (close < value.length) {
+        if (ch === '"' && value[close] === "\\") close += 2;
+        else if (value[close] !== ch) close++;
+        else if (ch === "'" && value[close + 1] === "'") close += 2;
+        else break;
+      }
+      if (close < value.length) i = close;
+    } else if (ch === "#" && afterSpace) {
+      return value.slice(0, i).trimEnd();
+    }
+  }
+  return value;
+}
+
 function stripSkillQuotes(value: string): string {
   const trimmed = value.trim();
   if (
@@ -47,7 +68,7 @@ export function parseSkillFrontmatter(md: string, sourcePath: string): SkillFron
     const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
     if (!kv) continue;
     const key = kv[1]!;
-    const rest = kv[2] ?? "";
+    const rest = stripSkillInlineComment(kv[2] ?? "");
     if (rest === ">" || rest === "|" || rest === ">-" || rest === "|-") {
       const literal = rest[0] === "|";
       const baseIndent = skillIndent(line);
@@ -75,10 +96,10 @@ export function parseSkillFrontmatter(md: string, sourcePath: string): SkillFron
       if (!next.trim() || skillIndent(next) <= baseIndent) break;
       const item = /^\s*-\s+(.*)$/.exec(next);
       if (!item) break;
-      items.push(stripSkillQuotes(item[1]!));
+      items.push(stripSkillQuotes(stripSkillInlineComment(item[1]!)));
       i++;
     }
-    fields[key] = items;
+    fields[key] = items.filter(Boolean);
   }
 
   const name = fields["name"];
