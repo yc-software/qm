@@ -26,7 +26,7 @@ async function deliver(
     ...(sourceThreadRef
       ? { provenance: { trigger: "cron", sourceThreadRef, sourceTitle: "Weekly <project> & check-in" } }
       : {}),
-    destination: { type: "slack", target: "C1:100.200", ...destination },
+    destination: { type: "slack", target: destination.type === "principal" ? "U1" : "C1:100.200", ...destination },
     attachments: mixedFiles,
     createdAt: row.createdAt ?? Date.now(),
   };
