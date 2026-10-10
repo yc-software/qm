@@ -207,7 +207,15 @@ for (const storage of ["memory", "postgres"] as const) {
         databaseUrl = url.toString();
         cleanupDatabase = async () => {
           try {
-            await pool.query(`DROP SCHEMA ${schema} CASCADE`);
+            for (let attempt = 1; ; attempt++) {
+              try {
+                await pool.query(`DROP SCHEMA ${schema} CASCADE`);
+                break;
+              } catch (error) {
+                if ((error as { code?: string }).code !== "40P01" || attempt >= 5) throw error;
+                await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+              }
+            }
           } finally {
             await pool.end();
           }
