@@ -745,15 +745,12 @@ export function buildApp(
   if (config.seedSkills) {
     const installCatalogs = async (): Promise<void> => {
       await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope });
-      for (const dir of config.pluginSkillDirs) {
-        if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-        await installSeedSkills(skills, {
-          dir,
-          scopeId: orgScope,
-          createdBy: "system:plugin-skills",
-          reviewer: "system:plugin-skills-reviewer",
-        });
-      }
+      await installSeedSkills(skills, {
+        dir: config.pluginSkillDirs.filter((dir) => !layerSkillsDir || resolve(dir) !== layerSkillsDir),
+        scopeId: orgScope,
+        createdBy: "system:plugin-skills",
+        reviewer: "system:plugin-skills-reviewer",
+      });
     };
     skillsReady = Promise.all([
       installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),

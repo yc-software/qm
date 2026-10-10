@@ -121,21 +121,34 @@ async function upsertSeedSkillUnsafe(
 
 export async function installSeedSkills(
   skills: SkillStore,
-  opts: { dir: string; scopeId: ScopeId; createdBy?: string; reviewer?: string },
+  opts: { dir: string | string[]; scopeId: ScopeId; createdBy?: string; reviewer?: string },
 ): Promise<SeedInstallResult> {
-  if (!existsSync(opts.dir)) return { installed: [], updated: [], skipped: [] };
+  const dirs = [opts.dir].flat();
+  const present = dirs.filter((dir) => existsSync(dir));
   const createdBy = opts.createdBy ?? "system:skills-seed";
   const reviewer = opts.reviewer ?? "system:skills-reviewer";
   const result: SeedInstallResult = { installed: [], updated: [], skipped: [] };
 
-  for (const entry of readdirSync(opts.dir).sort()) {
-    const skillDir = join(opts.dir, entry);
+  for (const skillDir of present.flatMap((dir) =>
+    readdirSync(dir)
+      .sort()
+      .map((entry) => join(dir, entry)),
+  )) {
     const skillPath = join(skillDir, "SKILL.md");
     if (!existsSync(skillPath) || !statSync(skillPath).isFile()) continue;
     const manifest = parseSeedSkill(readFileSync(skillPath, "utf8"));
     manifest.files = readSkillFiles(skillDir);
     const outcome = await upsertSeedSkill(skills, { scopeId: opts.scopeId, manifest, createdBy, reviewer });
     result[outcome === "foreign" ? "skipped" : outcome].push(manifest.name);
+  }
+
+  if (present.length < dirs.length) return result;
+  const seeded = new Set([...result.installed, ...result.updated, ...result.skipped]);
+  for (const s of await skills.list()) {
+    if (s.scopeId !== opts.scopeId || s.createdBy !== createdBy || s.status === "archived") continue;
+    if (seeded.has(s.manifest.name)) continue;
+    console.warn(`skills-seed: archiving ${s.manifest.name} (${s.id}); its seed directory was removed`);
+    await skills.archive(s.id);
   }
 
   return result;
