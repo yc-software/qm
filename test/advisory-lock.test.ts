@@ -392,3 +392,25 @@ test("multi-key locks retain unawaited nested work until it finishes", async () 
   await outer;
   assert.equal(await lock.tryWithLock!("nested", async () => true), true);
 });
+
+test("pg mutex: a failed unlock destroys the session connection instead of pooling it with the lock held", async () => {
+  const released: unknown[] = [];
+  const client = {
+    async query(sql: string) {
+      if (sql.includes("pg_advisory_unlock")) throw new Error("unlock failed");
+      return { rows: [{ locked: true }] };
+    },
+    release(destroy?: unknown) {
+      released.push(destroy);
+    },
+  };
+  const pg = { sessionPool: async () => ({ connect: async () => client }) } as unknown as Parameters<
+    typeof createPostgresAdvisoryLock
+  >[0];
+  const lock = createPostgresAdvisoryLock(pg, { pollMs: 1 });
+  await assert.rejects(
+    lock.withLock("k", async () => 1),
+    /unlock failed/,
+  );
+  assert.deepEqual(released, [true]);
+});
