@@ -95,6 +95,7 @@ test("a gmail item with no recipient anywhere refuses to send", async () => {
 test("gmail send posts base64url raw with the thread id", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const fetchImpl = (async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (init?.method !== "POST") return Response.json({});
     calls.push({ url: String(url), init: init! });
     return new Response(JSON.stringify({ id: "m2" }), { status: 200 });
   }) as typeof fetch;
@@ -395,6 +396,7 @@ test("Gmail sends only through the explicitly bound account, including legacy se
             },
           },
           fetchImpl: async (_url, init) => {
+            if (init?.method !== "POST") return Response.json({});
             sends++;
             assert.equal((init!.headers as Record<string, string>).authorization, "Bearer bound-token");
             return Response.json({});
@@ -450,4 +452,26 @@ test("Slack rejects an explicit invalid draft instead of sending the saved draft
     if (!result.ok) assert.equal(result.reason, "bad_item");
   }
   assert.equal(spy.calls.length, 0);
+});
+
+test("a retried gmail send after a crash finds the first send and does not mail twice", async () => {
+  const sentIds = new Set<string>();
+  let posts = 0;
+  const fetchImpl = (async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const u = new URL(String(url));
+    if (init?.method !== "POST") {
+      const id = /rfc822msgid:(\S+)/.exec(u.searchParams.get("q") ?? "")?.[1] ?? "";
+      return Response.json(sentIds.has(id) ? { messages: [{ id: "m1" }] } : {});
+    }
+    posts++;
+    const raw = Buffer.from((JSON.parse(String(init.body)) as { raw: string }).raw, "base64url").toString("utf8");
+    sentIds.add(/^Message-ID: (.+)$/m.exec(raw)![1]!.trim());
+    return Response.json({ id: "m1" });
+  }) as typeof fetch;
+  const deps = { owner: "josh", tokens: tokens({ "gmail.googleapis.com": "tok" }), fetchImpl };
+  assert.equal((await gmailAdapter.act(deps, gmailItem, "send", { body: "Confirmed." })).ok, true);
+  assert.equal((await gmailAdapter.act(deps, gmailItem, "send", { body: "Confirmed." })).ok, true);
+  assert.equal(posts, 1, "the retry recognised the message already in Sent");
+  assert.equal((await gmailAdapter.act(deps, gmailItem, "send", { body: "A different reply." })).ok, true);
+  assert.equal(posts, 2, "a different draft is a different message");
 });
