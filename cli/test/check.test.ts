@@ -537,3 +537,28 @@ test("only public PostHog ingestion tokens may be configured as plaintext", () =
     }
   }
 });
+
+test("check says a sandbox/Dockerfile is not used by AWS MicroVM sandboxes (#376)", (t) => {
+  const run = (config: Partial<QmConfig>): string => {
+    const d = deployment((dir) => {
+      mkdirSync(join(dir, "sandbox"), { recursive: true });
+      writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM scratch\n");
+    }, config);
+    t.after(() => rmSync(d.dir, { recursive: true, force: true }));
+    const out: string[] = [];
+    const log = console.log;
+    const warnFn = console.warn;
+    const errFn = console.error;
+    console.log = console.warn = console.error = (...a: unknown[]): void => void out.push(a.join(" "));
+    try {
+      runChecks(d.config, d.dir, join(d.dir, "sandbox"));
+    } finally {
+      console.log = log;
+      console.warn = warnFn;
+      console.error = errFn;
+    }
+    return out.join("\n");
+  };
+  assert.match(run({ target: "aws", sandbox: undefined }), /Dockerfile is ignored on AWS MicroVM sandboxes/);
+  assert.doesNotMatch(run({}), /ignored on AWS MicroVM/);
+});
