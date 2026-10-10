@@ -1,7 +1,7 @@
 import { absoluteAppLinks } from "../src/util/text.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { headSlice, tailSlice, hasLoneSurrogate } from "../src/util/text.ts";
+import { headSlice, tailSlice, hasLoneSurrogate, jsonbSafeStringify } from "../src/util/text.ts";
 
 test("headSlice and tailSlice pass short strings through and cut long ones", () => {
   assert.equal(headSlice("abc", 5), "abc");
@@ -37,4 +37,10 @@ test("app links preserve tilde fences and multi-backtick code spans", () => {
   for (const text of ["~~~md\n[x](/d/x/)\n~~~", "``[x](/d/x/)``", "````md\n[x](/d/x/)\n````"]) {
     assert.equal(absoluteAppLinks(text, "https://qm.example.com"), text);
   }
+});
+
+test("jsonbSafeStringify replaces lone surrogates so Postgres jsonb accepts the payload", () => {
+  const out = jsonbSafeStringify({ content: "cut mid-emoji \ud83d", nested: ["\ude00x", "ok 😀"], nul: "a\u0000b" });
+  assert.deepEqual(JSON.parse(out), { content: "cut mid-emoji \ufffd", nested: ["\ufffdx", "ok 😀"], nul: "ab" });
+  assert.doesNotMatch(out, /\\ud[89a-f][0-9a-f]{2}/i);
 });
