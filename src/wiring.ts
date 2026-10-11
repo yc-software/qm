@@ -3056,6 +3056,7 @@ export function serverDeps(
           loopSourceTokens: built.keychain,
           inboxSourceRefresh: createInboxSourceRefresh({
             items: built.loops.items,
+            errors: built.errors,
             tokens: built.keychain,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
           }),

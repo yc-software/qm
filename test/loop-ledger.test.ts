@@ -504,3 +504,33 @@ test("conditional annotations reject changed source payloads even within the sam
     ),
   );
 });
+
+test("agent ledger views omit cosmetic Slack data without changing UI data or task images", async () => {
+  const ledger = createLoopItemLedger();
+  const payload = {
+    source: "slack",
+    slackAvatarsRefreshAt: 12345,
+    participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
+    context: [
+      {
+        author: "Alex",
+        authorId: "U1",
+        avatarUrl: "https://example.com/avatar.png",
+        images: ["https://example.com/task.png"],
+      },
+    ],
+    task: { avatarUrl: "keep this task data" },
+  };
+  await ledger.ingest([entry({ source: "slack", sourcePayload: payload })]);
+  const [item] = await ledger.byLoop(LOOP);
+  const agent = ledgerItemView(item!, {}, true);
+  assert.deepEqual(agent.sourcePayload, {
+    source: "slack",
+    participants: [{ id: "U1", name: "Alex" }],
+    context: [{ author: "Alex", authorId: "U1", images: ["https://example.com/task.png"] }],
+    task: { avatarUrl: "keep this task data" },
+  });
+  assert.deepEqual(ledgerItemView(item!, {}).sourcePayload, payload);
+  assert.deepEqual((await ledger.get(item!.id))!.sourcePayload, payload);
+  assert.deepEqual(ledgerItemView({ ...item!, source: "gmail" }, {}, true).sourcePayload, payload);
+});

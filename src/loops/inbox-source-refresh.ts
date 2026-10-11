@@ -1,5 +1,8 @@
 import { LRUCache } from "lru-cache";
-import type { LoopItem } from "../types.ts";
+import { personalScope, type LoopItem } from "../types.ts";
+import type { ErrorLog } from "../admin/error-log.ts";
+import { redactSecrets } from "../harness/redact-secrets.ts";
+import { errMessage } from "../util/errors.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { isResolved } from "./ledger-view.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
@@ -8,6 +11,7 @@ import { normalizeSlackApiUrl } from "../slack/config.ts";
 interface RefreshDeps {
   items: LoopItemLedger;
   tokens: ConnectorTokenSource;
+  errors?: ErrorLog;
   fetchImpl?: typeof fetch;
   slackApiUrl?: string;
   now?: () => number;
@@ -34,6 +38,15 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
   const positions = new LRUCache<string, number>({ max: 2000 });
   const slackBase = normalizeSlackApiUrl(deps.slackApiUrl ?? "https://slack.com/api");
 
+  function recordFailure(owner: string, subject: string, error: unknown): void {
+    deps.errors?.record({
+      category: "inbox",
+      code: "source_refresh_failed",
+      message: redactSecrets(`${subject}: ${errMessage(error)}`),
+      scopeLabel: personalScope(owner),
+    });
+  }
+
   async function get(
     owner: string,
     source: string,
@@ -53,10 +66,17 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
       const retry = Number(res.headers.get("retry-after"));
       limited.set(key, true, { ttl: Math.max(60, Number.isFinite(retry) ? retry : 60) * 1000 });
     }
-    if (!res.ok) throw new Error("Couldn't refresh the source. Your item has not been dismissed.");
+    if (!res.ok)
+      throw new Error("Couldn't refresh the source. Your item has not been dismissed.", {
+        cause: new Error(`${source} ${method}: HTTP ${res.status}`),
+      });
     const body: unknown = await res.json();
     if (!isObj(body) || body.ok === false)
-      throw new Error("Couldn't refresh the source. Your item has not been dismissed.");
+      throw new Error("Couldn't refresh the source. Your item has not been dismissed.", {
+        cause: new Error(
+          `${source} ${method}: ${isObj(body) && typeof body.error === "string" ? body.error : "Invalid response"}`,
+        ),
+      });
     return body;
   }
 
@@ -132,7 +152,8 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
             name: String(profile.display_name || profile.real_name || user.real_name || user.name || saved.name),
             ...(avatarUrl ? { avatarUrl } : {}),
           };
-        } catch {
+        } catch (error) {
+          recordFailure(owner, `Slack profile ${id}`, error);
           complete = false;
           return saved;
         }
@@ -350,6 +371,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         if (mode === "avatars") await refreshAvatars(owner, item);
         else await refresh(owner, item);
       } catch (e) {
+        recordFailure(owner, `Inbox item ${item.id}`, e);
         if (mode === "avatars") return;
         await deps.items.annotate(
           item.id,

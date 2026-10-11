@@ -76,14 +76,30 @@ export interface LedgerItemView {
   updatedAt: number;
 }
 
-export function ledgerItemView(item: LoopItem, loop: Pick<Loop, "triage">): LedgerItemView {
+export function agentSourcePayload(payload: LoopSourcePayload, source?: string): LoopSourcePayload {
+  if ((source ?? payload.source) !== "slack") return payload;
+  const result = { ...payload };
+  delete result.slackAvatarsRefreshAt;
+  for (const key of ["participants", "context"]) {
+    if (Array.isArray(result[key]))
+      result[key] = result[key].map((entry: unknown) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+        const copy = { ...entry } as Record<string, unknown>;
+        delete copy.avatarUrl;
+        return copy;
+      });
+  }
+  return result;
+}
+
+export function ledgerItemView(item: LoopItem, loop: Pick<Loop, "triage">, forAgent = false): LedgerItemView {
   const triage = visibleTriage(loop, item.triage);
   return {
     id: item.id,
     loopId: item.loopId,
     dedupeKey: item.sourceKey,
     state: ledgerState(item),
-    sourcePayload: item.sourcePayload ?? {},
+    sourcePayload: forAgent ? agentSourcePayload(item.sourcePayload ?? {}, item.source) : (item.sourcePayload ?? {}),
     thread: item.thread ?? [],
     attempts: item.attempts,
     outputIds: item.outputIds,

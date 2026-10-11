@@ -707,3 +707,50 @@ test("unverified waiting senders never inherit another context author's avatar",
     { id: "U_SENDER", name: "Waiting Sender", avatarUrl: "https://avatars.slack-edge.com/sender.png" },
   ]);
 });
+
+test("profile failures retain provider diagnostics and cached avatars without exposing credentials", async () => {
+  const { createErrorLog } = await import("../src/admin/error-log.ts");
+  for (const mode of [undefined, "avatars"] as const) {
+    const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+    const errors = createErrorLog();
+    const sourceFetch = slackFetch([]);
+    await createInboxSourceRefresh({
+      items,
+      tokens,
+      errors,
+      fetchImpl: async (url, init) => {
+        if (String(url).includes("users.info"))
+          return json({ ok: false, error: "missing_scope token=private-credential" });
+        return sourceFetch(url, init);
+      },
+    })("owner", [item], mode);
+    const events = await errors.list();
+    assert.ok(events.length > 0);
+    assert.ok(events.every((event) => event.scopeLabel === "personal:owner"));
+    assert.match(events[0]!.message, /users.info: missing_scope/);
+    assert.doesNotMatch(JSON.stringify(events), /private-credential/);
+    assert.equal((await items.get(item.id))!.status, "ready");
+  }
+});
+
+test("cosmetic refresh records ledger failures without rejecting the inbox request", async () => {
+  const { createErrorLog } = await import("../src/admin/error-log.ts");
+  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+  const errors = createErrorLog();
+  await createInboxSourceRefresh({
+    items: {
+      ...items,
+      annotate: async () => {
+        throw new Error("database unavailable");
+      },
+    },
+    tokens,
+    errors,
+    fetchImpl: async () => json({ ok: true, user: { name: "Alex" } }),
+  })("owner", [item], "avatars");
+  const events = await errors.list();
+  assert.equal(events.length, 1);
+  assert.match(events[0]!.message, new RegExp(item.id));
+  assert.match(events[0]!.message, /database unavailable/);
+  assert.equal(events[0]!.scopeLabel, "personal:owner");
+});
