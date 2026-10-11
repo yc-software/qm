@@ -451,17 +451,3 @@ test("Slack rejects an explicit invalid draft instead of sending the saved draft
   }
   assert.equal(spy.calls.length, 0);
 });
-
-test("Slack ingestion preserves the waiting message's user ID for profile lookup", () => {
-  const parsed = slackAdapter.parse({
-    sourceKey: "D1",
-    title: "DM",
-    from: "Alex",
-    snippet: "Hello",
-    receivedAt: 1000,
-    slack: { channelId: "D1", ts: "1.0", userId: "U1" },
-  });
-  assert.ok(!("error" in parsed));
-  if ("error" in parsed) return;
-  assert.equal((parsed.sourcePayload.slack as { userId: string }).userId, "U1");
-});

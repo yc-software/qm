@@ -214,7 +214,7 @@ test("moving records refuses collisions and a cached worker cannot claim a moved
 });
 
 test("disabled rollout cannot create defaults, migrate legacy Inbox, or update selection", async () => {
-  const w = world(false);
+  const w = world(false, async () => assert.fail("disabled Inbox must not refresh sources"));
   const legacy = await ensureInboxLoop(w.deps.store, "alice");
   for (const method of ["GET", "PUT"]) assert.equal((await w.call(method, { loopIds: [] })).status, 403);
   assert.equal((await w.deps.store.list()).length, 1);
@@ -659,7 +659,7 @@ test("inbox viewers are exactly the active candidates who can administer the loo
   assert.equal((await ask({ loopId: group.id, candidates }, { actorId: "mallory" })).status, 403);
 });
 
-test("the visible Slack feed includes freshly saved avatars without loading message context", async () => {
+test("the visible Slack feed includes fresh and cached avatars without returning message context", async () => {
   const calls: string[][] = [];
   const w = world(true, async (owner, items, mode) => {
     if (mode !== "avatars") return;
@@ -703,7 +703,11 @@ test("the visible Slack feed includes freshly saved avatars without loading mess
     fullReads++;
     return get(id);
   };
-  await w.call();
+  const cachedFeed = await w.call();
+  assert.equal(
+    cachedFeed.data.items[0].sourcePayload.participants[0].avatarUrl,
+    "https://avatars.slack-edge.com/alex.png",
+  );
   assert.equal(fullReads, 0);
   assert.deepEqual(calls.at(-1), []);
 });

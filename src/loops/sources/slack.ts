@@ -29,7 +29,6 @@ const SLACK_HOST = "slack.com";
 interface SlackMeta {
   channelId: string;
   channelLabel?: string;
-  userId?: string;
   ts: string;
   threadTs?: string;
   isDirectMessage?: boolean;
@@ -46,7 +45,6 @@ function parseSlackMeta(v: unknown): SlackMeta | undefined {
     channelId,
     ts,
     ...(channelLabel ? { channelLabel } : {}),
-    ...(clipOpt(v.userId, 60) ? { userId: clipOpt(v.userId, 60) } : {}),
     ...(threadTs ? { threadTs } : {}),
     ...(typeof v.isDirectMessage === "boolean" ? { isDirectMessage: v.isDirectMessage } : {}),
   };

@@ -90,7 +90,7 @@ export interface LoopItemLedger {
   moveSource(from: string, to: string, source: string): Promise<void>;
   summaries(
     loopIds: string[],
-    options?: { includeEmailClassification?: boolean },
+    options?: { includeInboxMetadata?: boolean },
   ): Promise<Array<Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload">>>;
   queued(loopId: string, limit?: number): Promise<LoopItem[]>;
   claim(id: string, claimedAt?: number, expectedLoopId?: string): Promise<LoopItem | null>;
@@ -150,17 +150,9 @@ function withAgentDraft(
 function inboxPreview(payload: LoopSourcePayload | undefined): LoopSourcePayload {
   if (!payload) return {};
   return Object.fromEntries(
-    [
-      "title",
-      "from",
-      "fromDetail",
-      "snippet",
-      "receivedAt",
-      "probablyResolved",
-      "sentChat",
-      "participants",
-      "slackAvatarsRefreshAt",
-    ].flatMap((key) => (payload[key] === undefined ? [] : [[key, payload[key]]])),
+    ["title", "from", "fromDetail", "snippet", "receivedAt", "probablyResolved", "sentChat"].flatMap((key) =>
+      payload[key] === undefined ? [] : [[key, payload[key]]],
+    ),
   );
 }
 
@@ -311,7 +303,7 @@ export function createLoopItemLedger(
       return { item: stored, created: stored.createdAt === candidate.createdAt };
     },
     async summaries(loopIds, options) {
-      if (!options?.includeEmailClassification)
+      if (!options?.includeInboxMetadata)
         return backing.select({
           where: { field: "loopId", anyOfFold: loopIds },
           omit: ["proposal", "agentDrafts", "thread", "sourcePayload"],
@@ -319,13 +311,22 @@ export function createLoopItemLedger(
       const items = await backing.select({
         where: { field: "loopId", anyOfFold: loopIds },
         omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["source", "automated"] },
+        pickNested: { sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"] },
       });
       return items.map(({ sourcePayload, ...item }) => {
         const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
         return {
           ...item,
           ...(source !== undefined ? { source } : {}),
+          ...(source === "slack"
+            ? {
+                inboxPreview: {
+                  ...item.inboxPreview,
+                  participants: sourcePayload?.participants,
+                  slackAvatarsRefreshAt: sourcePayload?.slackAvatarsRefreshAt,
+                },
+              }
+            : {}),
           ...(source === "gmail"
             ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
             : {}),
@@ -430,7 +431,6 @@ export function createLoopItemLedger(
         return {
           ...item,
           sourcePayload: { ...item.sourcePayload, ...patch },
-          inboxPreview: inboxPreview({ ...item.sourcePayload, ...patch }),
           ...(opts?.summary !== undefined ? { sourceSummary: opts.summary } : {}),
           updatedAt: now,
         };

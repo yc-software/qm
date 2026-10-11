@@ -1,5 +1,6 @@
 import { LRUCache } from "lru-cache";
 import { personalScope, type LoopItem } from "../types.ts";
+import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import { redactSecrets } from "../harness/redact-secrets.ts";
 import { errMessage } from "../util/errors.ts";
@@ -11,6 +12,7 @@ import { normalizeSlackApiUrl } from "../slack/config.ts";
 interface RefreshDeps {
   items: LoopItemLedger;
   tokens: ConnectorTokenSource;
+  featureFlags: Pick<FeatureFlagStore, "enabled">;
   errors?: ErrorLog;
   fetchImpl?: typeof fetch;
   slackApiUrl?: string;
@@ -389,6 +391,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     return task;
   }
   return async (owner, items, mode) => {
+    if (!(await deps.featureFlags.enabled("inbox_loops", personalScope(owner)))) return;
     const positionKey = `${owner}:${mode ?? "source"}`;
     const start = positions.get(positionKey) ?? 0;
     const ordered = items.slice(start).concat(items.slice(0, start));

@@ -69,7 +69,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
     await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
   }
-  const summaries = (await deps.items.summaries(selectedIds, { includeEmailClassification: true })).filter(
+  const summaries = (await deps.items.summaries(selectedIds, { includeInboxMetadata: true })).filter(
     (item) => selectedIds.includes(item.loopId) && item.inboxPreview?.sentChat !== true,
   );
   const itemId = ctx.url.searchParams.get("itemId");
@@ -161,7 +161,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     for (const refreshed of await Promise.all(slack.map((item) => deps.items.get(item.id)))) {
       const summary = page.find((entry) => entry.id === refreshed?.id);
       if (summary && refreshed && refreshed.sourceAt === summary.sourceAt)
-        summary.inboxPreview = refreshed.inboxPreview;
+        summary.inboxPreview = { ...summary.inboxPreview, participants: refreshed.sourcePayload?.participants };
     }
   }
   sendJson(ctx.res, 200, {
