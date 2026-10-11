@@ -158,9 +158,8 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       )
     ).filter((item) => item !== null);
     await ctx.deps.inboxSourceRefresh(acting.actorId, slack, "avatars");
-    for (const item of slack) {
-      const refreshed = await deps.items.get(item.id);
-      const summary = page.find((entry) => entry.id === item.id);
+    for (const refreshed of await Promise.all(slack.map((item) => deps.items.get(item.id)))) {
+      const summary = page.find((entry) => entry.id === refreshed?.id);
       if (summary && refreshed && refreshed.sourceAt === summary.sourceAt)
         summary.inboxPreview = refreshed.inboxPreview;
     }

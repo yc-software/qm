@@ -1322,8 +1322,9 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
     ${item.sourceRefreshError ? html`<div class="inbox-source-notice" role="status">${item.sourceRefreshError}</div>` : nothing}
     ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
     ${rows.slice(hidden).map((m) => {
-      const name = participantName(m.author) || m.author;
-      const participant = item.participants?.find((p) => p.key === m.authorId);
+      const participant = item.source === "slack" ? item.participants?.find((p) => p.key === m.authorId) : undefined;
+      const author = participant?.name ?? m.author;
+      const name = participantName(author) || author;
       const avatarUrl = participant ? participant.avatarUrl : m.avatarUrl;
       return html`
         <div class="inbox-context-msg ${m.reply ? "inbox-thread-reply" : ""} ${m.nearby ? "inbox-nearby-context" : ""}">
