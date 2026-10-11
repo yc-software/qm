@@ -35,7 +35,6 @@ export interface ScopeMembershipDeps {
 }
 
 async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {
-  if (deps.identity?.classify(principalId).teamIds?.includes(teamId)) return true;
   return activePrincipal(deps, principalId) && (await deps.teams?.isMember(principalId, teamId)) === true;
 }
 
