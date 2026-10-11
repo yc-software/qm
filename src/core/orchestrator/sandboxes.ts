@@ -6,6 +6,7 @@ import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import type { SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
+import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import {
   materializeSkillTree as laySkillTree,
@@ -170,6 +171,18 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const resourcePendingHandles = new Map<string, SandboxHandle>();
   const resourcePending = new Map<string, Promise<SandboxHandle>>();
   let provisionInFlight: Promise<SandboxHandle> | null = null;
+  const holdResource = async (handle: SandboxHandle): Promise<void> => {
+    if (handle.resourceId && deps.runs && input.runId)
+      await deps.sandboxResources?.hold(handle.resourceId, input.runId);
+  };
+  const releaseHold = async (handle: SandboxHandle): Promise<boolean> => {
+    const runs = deps.runs;
+    if (!handle.resourceId || !runs || !deps.sandboxResources) return false;
+    return deps.sandboxResources.release(handle.resourceId, input.runId, async (runId) => {
+      const run = await runs.get(runId);
+      return run?.status === "running" && !leaseLapsed(run, Date.now());
+    });
+  };
   const provision = (eager = false): Promise<SandboxHandle> => {
     if (!eager) box.used = true;
     provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork, eager).catch((err) => {
@@ -193,6 +206,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
     });
     box.pending = handle;
+    await holdResource(handle);
     emit("provision", provisionStart, Date.now());
     box.provisionMs = Date.now() - provisionStart;
     deps.auditLog?.record({
@@ -383,6 +397,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         ...(egressToken ? { egressToken } : {}),
       });
       resourcePendingHandles.set(id, handle);
+      await holdResource(handle);
       if (!crossScope) {
         await prepareTurnFiles(handle);
       }
@@ -500,6 +515,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       },
     );
     reachBoxes.set(target, handle);
+    await holdResource(handle);
     return handle;
   };
   const clearTurnFiles = async (handle: SandboxHandle): Promise<void> => {
@@ -576,8 +592,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     reachBoxes.clear();
     await Promise.all(
       reachEntries.map(async ([target, h]) => {
-        let keepReachWarm = false;
-        if (deps.processes && supportsProcessSessions(deps.sandbox)) {
+        let keepReachWarm = await releaseHold(h).catch(swallowAs("orchestrator: reach hold release", true));
+        if (!keepReachWarm && deps.processes && supportsProcessSessions(deps.sandbox)) {
           try {
             keepReachWarm = await hasLiveProcesses(h, target);
           } catch (e) {
@@ -662,9 +678,11 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
               await clearTurnFiles(handle);
           } finally {
             await deps.sandbox.teardown(handle, {
-              keepWarm: await hasLiveProcesses(handle, memoryScopeId).catch(
-                swallowAs("orchestrator: live process check", true),
-              ),
+              keepWarm:
+                (await releaseHold(handle).catch(swallowAs("orchestrator: resource hold release", true))) ||
+                (await hasLiveProcesses(handle, memoryScopeId).catch(
+                  swallowAs("orchestrator: live process check", true),
+                )),
             });
           }
         })(),
@@ -686,8 +704,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return;
     }
     await clearTurnFiles(handle);
-    let keepWarm = false;
-    if (deps.processes && supportsProcessSessions(deps.sandbox)) {
+    let keepWarm = await releaseHold(handle).catch(swallowAs("orchestrator: hold release", true));
+    if (!keepWarm && deps.processes && supportsProcessSessions(deps.sandbox)) {
       try {
         keepWarm = await hasLiveProcesses(handle, memoryScopeId);
       } catch (e) {

@@ -190,6 +190,44 @@ export async function resolveSandbox(opts: {
     return { backend: "superserve", env, detail: `Superserve (template ${template})`, publicApiUrl: apiUrl, warnings };
   }
 
+  if (backend === "do-managed-agents") {
+    const managedAgentsToken = opts.baseEnv.DO_AGENTS_API_TOKEN?.trim();
+    if (!managedAgentsToken)
+      throw new Error(
+        "--sandbox do-managed-agents requires DO_AGENTS_API_TOKEN in the environment (a DigitalOcean API token for a team with Managed Agents access)",
+      );
+    let managedAgentsApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
+    if (!managedAgentsApiUrl) {
+      managedAgentsApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      if (!managedAgentsApiUrl)
+        warnings.push(
+          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
+        );
+    }
+    const env: Record<string, string> = {
+      SANDBOX_BACKEND: "do-managed-agents",
+      DO_AGENTS_API_TOKEN: managedAgentsToken,
+      DO_AGENTS_NAME_PREFIX: opts.baseEnv.DO_AGENTS_NAME_PREFIX || "qmdev",
+    };
+    if (opts.baseEnv.DO_AGENTS_API_BASE_URL) env.DO_AGENTS_API_BASE_URL = opts.baseEnv.DO_AGENTS_API_BASE_URL;
+    if (opts.baseEnv.DO_AGENTS_TEMPLATE) env.DO_AGENTS_TEMPLATE = opts.baseEnv.DO_AGENTS_TEMPLATE;
+    if (opts.baseEnv.DO_AGENTS_SIZE_SLUG) env.DO_AGENTS_SIZE_SLUG = opts.baseEnv.DO_AGENTS_SIZE_SLUG;
+    if (opts.baseEnv.DO_AGENTS_EGRESS_PROXY_URL)
+      env.DO_AGENTS_EGRESS_PROXY_URL = opts.baseEnv.DO_AGENTS_EGRESS_PROXY_URL;
+    else
+      warnings.push(
+        "DO_AGENTS_EGRESS_PROXY_URL unset -- do-managed-agents sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
+      );
+    if (managedAgentsApiUrl) env.PUBLIC_API_URL = managedAgentsApiUrl;
+    return {
+      backend: "do-managed-agents",
+      env,
+      detail: `Managed Agents (${opts.baseEnv.DO_AGENTS_API_BASE_URL || "api.digitalocean.com"})`,
+      publicApiUrl: managedAgentsApiUrl,
+      warnings,
+    };
+  }
+
   if (backend === "porter") {
     const porterToken = opts.baseEnv.PORTER_DEPLOY_API_TOKEN;
     const projectId = opts.baseEnv.PORTER_DEPLOY_PROJECT_ID;

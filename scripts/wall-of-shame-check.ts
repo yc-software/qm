@@ -36,10 +36,13 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string)
     const matches = rows.filter((cells) => cells[0] === lens);
     if (matches.length > 1) problems.push(`${lens}: ${matches.length} review rows; keep one.`);
     const [, reviewer, verdict, score, assessment] = matches[0] ?? [];
+    const skipped = verdict?.toLowerCase() === "not relevant";
     if (!verdict) problems.push(`${lens}: no review row.`);
-    else if (verdict.toLowerCase() !== "accept") problems.push(`${lens}: verdict is ${verdict}, not Accept.`);
+    else if (!skipped && verdict.toLowerCase() !== "accept")
+      problems.push(`${lens}: verdict is ${verdict}, not Accept or Not relevant.`);
     if (verdict && !reviewer) problems.push(`${lens}: reviewer missing.`);
-    if (verdict && !/^(100|\d{1,2})\/100$/.test(score ?? "")) problems.push(`${lens}: score missing (expected N/100).`);
+    if (verdict && !skipped && !/^(100|\d{1,2})\/100$/.test(score ?? ""))
+      problems.push(`${lens}: score missing (expected N/100).`);
     if (verdict && !assessment) problems.push(`${lens}: assessment missing.`);
   }
   return problems;
@@ -56,5 +59,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     for (const problem of problems) console.error(`- ${problem}`);
     process.exit(1);
   }
-  console.log("Wall of shame review: every lens accepted the PR head.");
+  console.log("Wall of shame review: every lens accepted the PR head or was triaged as not relevant.");
 }

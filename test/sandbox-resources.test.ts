@@ -15,6 +15,7 @@ import {
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
@@ -836,4 +837,68 @@ test("legacy import does not validate obsolete provider choices after explicit s
   assert.deepEqual(await defaults.get("personal:cleared"), { sandboxId: null });
   assert.deepEqual(await defaults.get("personal:selected"), { sandboxId: "newer-computer" });
   assert.ok(await marker.get("explicit-defaults"));
+});
+
+test("a computer stays held until its last live run releases it, and ended runs stop counting", async () => {
+  const { resources } = fixture();
+  const record = await resources.create("alice", "personal:alice", "local");
+  await resources.hold(record.id, "a");
+  await resources.hold(record.id, "b");
+  await resources.hold(record.id, "b");
+  const live = new Set(["a", "b"]);
+  const isLive = async (runId: string) => live.has(runId);
+  assert.equal(await resources.release(record.id, "a", isLive), true);
+  live.delete("b");
+  assert.equal(await resources.release(record.id, undefined, isLive), false);
+  assert.deepEqual((await resources.get(record.id)).holders, []);
+  const listed = (await resources.list("alice", "personal:alice")).sandboxes.find((s) => s.id === record.id);
+  assert.equal(listed?.holders, undefined);
+});
+
+test("two concurrent turns on one parking computer: only the last turn to finish parks it", async () => {
+  const { options, backend, layers } = fixture();
+  const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
+  const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
+  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
+  const record = await resources.create("alice", "personal:alice", "e2b");
+  await resources.setDefault("alice", "personal:alice", record.id);
+  const teardowns: unknown[] = [];
+  parking.teardown = async (_handle, opts) => {
+    teardowns.push(opts ?? {});
+  };
+  const { runs } = createMemoryRunStore();
+  const start = async (sessionId: string) => {
+    await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
+    return (await runs.claim("worker", 60_000))!;
+  };
+  const turn = (runId: string, sessionId: string) =>
+    createTurnSandboxes({
+      deps: { sandbox: router, sandboxResources: resources, runs },
+      input: { origin: { kind: "user" }, runId },
+      actor: { id: "alice", type: "internal" },
+      session: { id: sessionId },
+      resolution: { layers },
+      scopeId: "personal:alice",
+      memoryScopeId: "personal:alice",
+      transferId: runId,
+      turnSessionDir: `turn/${sessionId}`,
+      turnFilesDir: `turn/${sessionId}/${runId}`,
+      connectorEnv: {},
+      ownerAuthAvailable: false,
+      visibleSkills: [],
+      visibleSkillsForTurn: async () => [],
+      emitGapWork: () => {},
+      perf: { credsMs: 0 },
+    } as unknown as TurnSandboxContext);
+  const a = await start("sa");
+  const b = await start("sb");
+  const first = turn(a.id, "sa");
+  const second = turn(b.id, "sb");
+  await Promise.all([first.provision(), second.provision()]);
+  await first.reclaimBox();
+  await runs.complete(a.id, a.leaseToken!, { status: "ok", reply: "done" });
+  assert.deepEqual(teardowns, [{ keepWarm: true }]);
+  await second.reclaimBox();
+  assert.deepEqual(teardowns, [{ keepWarm: true }, {}]);
+  assert.deepEqual((await resources.get(record.id)).holders, []);
 });

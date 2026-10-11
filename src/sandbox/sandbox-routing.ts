@@ -17,7 +17,16 @@ import {
 } from "./sandbox.ts";
 
 export type SandboxBackendName =
-  "sprites" | "aws" | "local" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "superserve";
+  | "sprites"
+  | "aws"
+  | "local"
+  | "smolmachines"
+  | "e2b"
+  | "modal"
+  | "porter"
+  | "agent37"
+  | "superserve"
+  | "do-managed-agents";
 
 export class NoDefaultSandboxError extends Error {
   constructor() {
@@ -161,7 +170,11 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const action = () => forHandle(handle).teardown(handle, tdOpts);
       return handle.resourceId
-        ? resources.use(handle.resourceId, action, !!tdOpts?.destroy || !!forHandle(handle).profile.parksOnTeardown)
+        ? resources.use(
+            handle.resourceId,
+            action,
+            !!tdOpts?.destroy || (!tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown),
+          )
         : action();
     },
 

@@ -111,7 +111,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   );
 });
 
-test("sharing e2e: delegated live sharing requires the current pilot flag and current sharing permission", async (t) => {
+test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
   await b.workspace.write("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
   await b.turn("inspect my personal notes", true);
@@ -163,26 +163,16 @@ test("sharing e2e: delegated live sharing requires the current pilot flag and cu
     }
   };
   const read = "!read shared/open-personal-U1/notes.txt";
-  assert.match(await childTurn(read), /no file/);
-  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", true, "U1");
   assert.equal(await childTurn(read), "DELEGATED_PERSONAL_FILE");
   assert.equal(await childTurn("!run echo delegated"), "delegated");
   assert.ok(token);
   const delegatedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
   assert.equal(delegatedClaims?.liveAuthor, true);
-  assert.notEqual(delegatedClaims?.liveActor, true);
+  assert.equal(delegatedClaims?.liveActor, true);
   assert.equal(delegatedClaims?.triggered, true);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);
   await b.config.clearSharingPosture("personal:U1");
-  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", false, "U1");
-  assert.match(await childTurn(read), /no file/);
-  assert.equal(await childTurn("!run echo unprivileged"), "unprivileged");
-  assert.ok(token);
-  const unprivilegedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
-  assert.notEqual(unprivilegedClaims?.liveAuthor, true);
-  assert.notEqual(unprivilegedClaims?.liveActor, true);
-  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", true, "U1");
   await b.remove("U1");
   assert.match(await childTurn(read, "refused"), /access is no longer current/);
 });
