@@ -450,6 +450,7 @@ export async function startSlackPlugin(
     },
     continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
     core,
+    approvals,
     flow,
     threads,
     clientForIdentity,

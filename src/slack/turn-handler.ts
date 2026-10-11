@@ -743,6 +743,7 @@ export function createTurnHandler(deps: {
           await approvals.postAgentRequests(
             client,
             {
+              dedupeKey: queuedRunId ?? inc.ts,
               requesterId: inc.userId,
               channel: inc.channel,
               ...(replyThreadTs ? { replyThreadTs } : {}),

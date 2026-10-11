@@ -1,3 +1,4 @@
+import type { Approvals } from "./approvals.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
 import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval-store.ts";
@@ -65,6 +66,7 @@ export function createDeliveryPoller(deps: {
   externalNamespace?: (accountId: string) => string | undefined;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   core: SlackCoreClient;
+  approvals?: Pick<Approvals, "postRunAgentRequests">;
   webUiPublicUrl?: string;
   flow: TurnFlow;
   threads: ReturnType<typeof createThreadTracker>;
@@ -290,7 +292,18 @@ export function createDeliveryPoller(deps: {
                   editRef = placeholder.ts;
                 }
               }
-              let text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
+              const cleaned = cleanAgentReplyForSlack(d.text);
+              const sourceRunId = runId ?? d.provenance?.sourceRunId;
+              if (sourceRunId && cleaned.agentRequests.length && deps.approvals) {
+                await deps.approvals.postRunAgentRequests(
+                  client,
+                  sourceRunId,
+                  channel,
+                  threadTs,
+                  cleaned.agentRequests,
+                );
+              }
+              let text = toSlackMrkdwn(runId ? cleaned.text : stripSlackDirectives(d.text));
               const replayAttachments = async (root?: string): Promise<void> => {
                 if (!d.attachments?.length) return;
                 try {
