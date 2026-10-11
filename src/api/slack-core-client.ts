@@ -38,7 +38,7 @@ import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { MetricsSink } from "../admin/metrics-sink.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
 import type { TaskStore, TaskStatus } from "../tasks/task-store.ts";
@@ -56,26 +56,6 @@ interface SlackRunHooks {
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
   onGoal?(goal: GoalView): void | Promise<void>;
-}
-
-export interface SlackAgentRequestContext {
-  requestId: string;
-  requesterId: string | undefined;
-  targetUserId: string;
-  targetDisplayName?: string;
-  originChannel: string;
-  originThreadTs?: string;
-  originThreadOnly: boolean;
-  originChannelName?: string;
-  originStatusTs?: string;
-  dmChannel: string;
-  dmMessageTs?: string;
-  task: string;
-  originAgentLabel: string;
-  targetAgentLabel: string;
-  createdAt: number;
-  approvalRequestIds?: string[];
-  settled?: boolean;
 }
 
 interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
@@ -130,13 +110,6 @@ export interface SlackCoreClient {
   reportTurnMetrics(runId: string, patch: { deliverMs?: number; slackInflightMs?: number }): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
-  putAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<void>;
-  reserveAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<boolean>;
-  dropAgentRequest(requestId: string): Promise<void>;
-  getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null>;
-  getAgentRequestRun(runId: string): Promise<Pick<Run, "request"> | null>;
-  takeAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null>;
-  agentRequestForApproval(approvalRequestId: string): Promise<SlackAgentRequestContext | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
@@ -193,7 +166,6 @@ export interface SlackCoreClientDeps {
   runs: RunStore;
   turnStream: TurnStream;
   tasks: TaskStore;
-  agentRequests: DurableMap<SlackAgentRequestContext>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
@@ -207,64 +179,6 @@ export interface SlackCoreClientDeps {
 
 const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
-const AGENT_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
-
-function agentRequestExpired(record: SlackAgentRequestContext): boolean {
-  return Date.now() - record.createdAt > AGENT_REQUEST_TTL_MS;
-}
-
-export type AgentRequestStore = Pick<
-  SlackCoreClient,
-  | "reserveAgentRequest"
-  | "dropAgentRequest"
-  | "putAgentRequest"
-  | "getAgentRequest"
-  | "takeAgentRequest"
-  | "agentRequestForApproval"
->;
-
-export function createAgentRequestStore(map: DurableMap<SlackAgentRequestContext>): AgentRequestStore {
-  const live = (record: SlackAgentRequestContext | null) =>
-    record && !record.settled && !agentRequestExpired(record) ? record : null;
-  return {
-    async reserveAgentRequest(requestId, record) {
-      if (!map.insertIfAbsent) throw new Error("agent request store requires atomic insert");
-      return map.insertIfAbsent(requestId, record);
-    },
-    dropAgentRequest: async (requestId) => void (await map.delete(requestId)),
-    async putAgentRequest(requestId, record) {
-      if (!map.update) throw new Error("agent request store requires atomic update");
-      await map.putIfAbsent(requestId, record);
-      await map.update(requestId, (existing) => (existing.settled ? existing : record));
-      await (async () => {
-        for (const [id, existing] of await map.entries()) {
-          if (agentRequestExpired(existing)) await map.delete(id);
-        }
-      })().catch(swallowAs("agent-requests: expired sweep", undefined));
-    },
-
-    async getAgentRequest(requestId) {
-      return live(await map.get(requestId));
-    },
-
-    async takeAgentRequest(requestId) {
-      if (!map.update) throw new Error("agent request store requires atomic update");
-      let taken: SlackAgentRequestContext | null = null;
-      await map.update(requestId, (record) => {
-        taken = live(record);
-        return { ...record, settled: true };
-      });
-      return taken;
-    },
-
-    async agentRequestForApproval(approvalRequestId) {
-      for (const [, record] of await map.entries()) {
-        if (record.approvalRequestIds?.includes(approvalRequestId) && live(record)) return record;
-      }
-      return null;
-    },
-  };
-}
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease ?? createNoopLeaderLease();
@@ -527,12 +441,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         ...(record.kind !== undefined ? { kind: record.kind } : {}),
         ...(record.request !== undefined ? { request: record.request as unknown as Record<string, unknown> } : {}),
       };
-    },
-
-    ...createAgentRequestStore(deps.agentRequests),
-    async getAgentRequestRun(runId) {
-      const run = await deps.runs.get(runId);
-      return run && !isTerminal(run.status) ? { request: run.request } : null;
     },
 
     async pushDirectory(body) {

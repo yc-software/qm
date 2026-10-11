@@ -538,7 +538,6 @@ export interface SurfaceContextQuery {
   viewerToken?: string;
   file?: { ts: string; threadTs?: string; name?: string };
   openGroup?: { participants: string[] };
-  askAgent?: { runId: string; targetUserId: string; task: string };
   syncDirectory?: boolean;
 }
 
@@ -549,7 +548,6 @@ export interface SurfaceContextResult {
   note?: string;
   file?: { blobId: string; name: string; mimetype?: string; sizeBytes: number; author?: string };
   group?: { groupId: string };
-  handoff?: { requestId: string; target: string };
 }
 
 export interface SurfaceContextRequest {

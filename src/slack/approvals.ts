@@ -1,6 +1,6 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import { slackFailureClause, slackFailureText } from "./turn-flow.ts";
+import { slackFailureText } from "./turn-flow.ts";
 import {
   APPROVAL_ACTION_IDS,
   type ApprovalActionId,
@@ -20,12 +20,11 @@ import {
   uploadFailureNote,
 } from "./lib.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
-import type { SlackAgentRequestContext, SlackCoreClient } from "../api/slack-core-client.ts";
-import { type AgentHandoffs, createAgentHandoffs } from "./agent-requests.ts";
+import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
-import type { BotIdentity, Directory } from "./directory.ts";
+import type { Directory } from "./directory.ts";
 import { applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
 
 interface ActionArgs {
@@ -51,7 +50,6 @@ interface SlackApprovalContext {
   turn: Omit<CoreTurnBody, "approval">;
   allowedTs?: Set<string>;
   slackIdsByPrincipal?: ReadonlyMap<string, string>;
-  agentRequest?: SlackAgentRequestContext;
   ackedFirstBlock?: string;
   recovered?: boolean;
 }
@@ -70,7 +68,6 @@ export interface Approvals {
     approvals: NonNullable<TurnResult["pendingApprovals"]>,
     ctx: Omit<SlackApprovalContext, "command" | "reason">,
   ): void;
-  handoffs: AgentHandoffs;
   registerActions(app: { action(pattern: RegExp, handler: (args: any) => Promise<void>): void }): void;
 }
 
@@ -80,9 +77,8 @@ export function createApprovals(deps: {
   flow: TurnFlow;
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;
-  ids: BotIdentity;
 }): Approvals {
-  const { core, flow, directory, threads, ids } = deps;
+  const { core, flow, directory, threads } = deps;
 
   interface TurnOutcome {
     result: TurnResult;
@@ -127,16 +123,6 @@ export function createApprovals(deps: {
       });
     }
   }
-
-  const handoffs = createAgentHandoffs({
-    core,
-    directory,
-    ids,
-    ...(deps.externalAccess ? { externalAccess: true } : {}),
-    runTurn,
-    ackConveyedQuarantine,
-    rememberSlackApprovals,
-  });
 
   type StoredApprovalFetch = { state: "found"; stored: StoredApproval } | { state: "gone" } | { state: "unavailable" };
 
@@ -220,15 +206,7 @@ export function createApprovals(deps: {
           })
         : null;
     if (rebuilt && !ctx) {
-      const handoffId = (rebuilt.turn.gatewayContext as CoreTurnBody["gatewayContext"])?.details?.agent_request_id;
-      const handoff = await (
-        typeof handoffId === "string" ? core.getAgentRequest(handoffId) : core.agentRequestForApproval(requestId)
-      ).catch(swallowAs("slack: agent-request recovery", null));
-      pendingSlackApprovals.remember(requestId, {
-        ...rebuilt,
-        ...(handoff ? { agentRequest: handoff } : {}),
-        recovered: true,
-      } as SlackApprovalContext);
+      pendingSlackApprovals.remember(requestId, { ...rebuilt, recovered: true } as SlackApprovalContext);
       ctx = pendingSlackApprovals.get(requestId);
       console.log(`[slack-plugin] recovered approval ${requestId} from core (in-memory context was lost)`);
     } else if (rebuilt && ctx) {
@@ -347,14 +325,6 @@ export function createApprovals(deps: {
         settle();
         if (await sealedOut(outcome.result)) return;
         await updateSlackMessage(client, cardChannel, messageTs, `Denied ${inlineCode(ctx.command)}.`);
-        if (ctx.agentRequest) {
-          await handoffs.fail(
-            client,
-            ctx.agentRequest,
-            `${inlineCode(ctx.command)} was denied.`,
-            ctx.agentRequest.dmMessageTs,
-          );
-        }
         ackConveyedQuarantine(outcome);
         return;
       }
@@ -378,15 +348,6 @@ export function createApprovals(deps: {
             ? `Approved; the delegated task could not continue: ${result.reason ?? "execution failed"}`
             : `Approved ${inlineCode(ctx.command)}. Results will return to the original conversation.`,
         );
-        return;
-      }
-
-      if (ctx.agentRequest) {
-        await handoffs.handleResult(client, ctx.agentRequest, ctx.turn, result, {
-          approvalMessageTs: messageTs,
-          handoffMessageTs: ctx.agentRequest.dmMessageTs,
-        });
-        ackConveyedQuarantine(outcome);
         return;
       }
 
@@ -456,9 +417,6 @@ export function createApprovals(deps: {
         await updateSlackMessage(client, cardChannel, messageTs, `⚠️ ${msg}`).catch(
           swallowAs("slack: update approval message", undefined),
         );
-        if (ctx.agentRequest) {
-          await handoffs.fail(client, ctx.agentRequest, slackFailureClause(err), ctx.agentRequest.dmMessageTs);
-        }
         return;
       }
       pendingSlackApprovals.release(requestId);
@@ -491,8 +449,7 @@ export function createApprovals(deps: {
 
   function registerActions(app: { action(pattern: RegExp, handler: (args: any) => Promise<void>): void }): void {
     app.action(/^hilo_/, handleApprovalAction);
-    app.action(/^agent_request_/, handoffs.handleAction);
   }
 
-  return { rememberSlackApprovals, handoffs, registerActions };
+  return { rememberSlackApprovals, registerActions };
 }

@@ -181,15 +181,10 @@ the tokens, core simply runs without Slack.
   approval (`pending_approval`) or _finished with a reply but skipped_ the gated command
   (collect-mode `ok` + `pendingApprovals`, what the real Pi harness does) — in the latter case
   the buttons are posted alongside the reply. Clicking re-runs the turn with the command approved.
-- **Channel agents can ask personal agents.** If a task in an Isolated internal channel needs a
-  member's personal setup (their env, browser login, resident CLI, connected app, or private files),
-  the channel agent calls `POST /v1/reach` with `task`, which returns only once the request was sent. In Open
-  conversations the agent uses the requester's own access directly instead. The
-  request appears in the original thread as `#channel agent → Name's personal agent`, and the target
-  person gets a DM with **Run with my setup** / **Decline** buttons. If they approve, the plugin runs
-  a normal DM-scoped turn as that user and posts the result back to the thread as
-  `Name's personal agent → #channel agent`. The target must already be an internal participant in
-  the channel conversation.
+- **Hand-offs are plain DMs.** When channel work needs another member's own logins, files or
+  memory, the agent follows the `hand-off` skill: in Open conversations it uses the requester's own
+  access; otherwise it sends that person a DM through `POST /v1/reach` with the full request, and
+  says so only after reach confirms who it matched.
 - In an **externally-shared (Slack Connect) channel**, or any channel/mpim whose audience
   includes a **guest or external member**, it stays silent in-channel and replies privately
   (ephemeral) — and uploads no file there — internal-only (spec §9). Group DMs (mpim) aren't

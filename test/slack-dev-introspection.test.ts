@@ -176,7 +176,7 @@ test("lastActivityAt tracks dispatched turns and interactions but never canary t
     dev.markEvent();
     const afterReaction = dev.state.lastActivityAt;
     assert.ok(afterReaction);
-    emitFrame(app, { type: "interactive", payload: { actions: [{ action_id: "agent_request_approve" }] } });
+    emitFrame(app, { type: "interactive", payload: { actions: [{ action_id: "hilo_allow_once" }] } });
     assert.ok((dev.state.lastActivityAt ?? 0) >= (afterReaction ?? 0));
     const before = dev.state.lastActivityAt;
     await new Promise((r) => setTimeout(r, 5));

@@ -80,7 +80,7 @@ export type ReachResolution =
   | {
       ok: true;
       destination: Destination;
-      recipient?: { principalId: string; displayName: string; slackId?: string };
+      recipient?: { principalId: string; displayName: string };
       channel?: { channelId: string; name: string };
       group?: { groupId: string };
     }
@@ -136,11 +136,7 @@ export async function resolveReachTarget(
     return {
       ok: true,
       destination: principalDestination(rid, authorityId),
-      recipient: {
-        principalId: rid,
-        displayName: r.member.displayName,
-        ...(r.member.slackId ? { slackId: r.member.slackId } : {}),
-      },
+      recipient: { principalId: rid, displayName: r.member.displayName },
     };
   }
   if (wantsChannel) {

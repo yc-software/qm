@@ -79,6 +79,7 @@ import type { AckEmojiPicker } from "./ack-emoji.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
+  HANDOFF_INSTRUCTION,
   cleanAgentReplyForSlack,
   conversationPlaceLabel,
 } from "./messaging.ts";
@@ -334,7 +335,7 @@ export function createTurnHandler(deps: {
                 : {}),
               ...(replyThreadTs ? { thread_ts: replyThreadTs } : {}),
             },
-            instructions: REACTION_INSTRUCTION,
+            instructions: `${REACTION_INSTRUCTION}\n\n${HANDOFF_INSTRUCTION}`,
             reactionGuidance: REACTION_DETECT_GUIDANCE,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           };

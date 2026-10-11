@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  askAgentAvailable,
-  composeSharingPosture,
-  parseSharingPosture,
-  type SharingPosture,
-} from "../src/resolution/sharing-posture.ts";
+import { composeSharingPosture, parseSharingPosture, type SharingPosture } from "../src/resolution/sharing-posture.ts";
 import {
   carriedFileHandles,
   isOpenScopeMember,
@@ -309,22 +304,4 @@ test("Open excludes memory notebook aliases with Windows separators", async () =
     files,
   );
   assert.deepEqual(handles, []);
-});
-
-test("personal-agent handoffs are available only in Isolated internal Slack channels", () => {
-  const channel = {
-    surface: "slack",
-    scopeId: scopeId("channel", "C1"),
-    external: false,
-    posture: "isolated" as const,
-  };
-  assert.equal(askAgentAvailable(channel), true);
-  for (const other of [
-    { posture: "open" as const },
-    { scopeId: scopeId("group", "G1") },
-    { scopeId: scopeId("personal", "U1") },
-    { external: true },
-    { surface: "web" },
-  ])
-    assert.equal(askAgentAvailable({ ...channel, ...other }), false);
 });
