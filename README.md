@@ -242,6 +242,7 @@ upstream source history to merge.
 - [`docs/principal-links.md`](./docs/principal-links.md) — one person, several sign-ins: linking principals
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
 - [`docs/superserve.md`](./docs/superserve.md) — using Superserve for agent sandboxes
+- [`docs/do-managed-agents.md`](./docs/do-managed-agents.md) — using DigitalOcean Managed Agents for agent sandboxes
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
 - [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
