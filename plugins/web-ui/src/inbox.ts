@@ -1293,11 +1293,7 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
         ...context.filter((m) => !item.slack || m.nearby === true),
         {
           author: item.from,
-          authorId: item.slack?.userId,
-          avatarUrl: (item.slack?.userId
-            ? item.participants?.find((p) => p.key === item.slack?.userId)
-            : item.participants?.[0]
-          )?.avatarUrl,
+          authorId: item.slack?.userId ?? (item.source === "slack" ? item.participants?.[0]?.key : undefined),
           at: item.receivedAt,
           text: item.snippet,
           images: item.images,
