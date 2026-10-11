@@ -161,7 +161,8 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
     readSurfaceMessages: cache.readMessages,
   } as SlackCoreClient;
   const mentionDirectory = {
-    classifyUserCached: async () => ({ actor: { displayName: "Old name" } }),
+    channelIdentityResolved: async () => true,
+    classifyUserCached: async () => ({ ok: true, actor: { displayName: "Old name" } }),
   } as unknown as Directory;
   const mirror = createMirror({
     core,

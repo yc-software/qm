@@ -8,11 +8,14 @@ import type { TurnResult } from "../src/types.ts";
 
 type ActionHandler = (args: any) => Promise<void>;
 
-function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
+function fixture(results: { submit: TurnResult; wait: TurnResult | null }, unresolved = false) {
   const pinnedDuringWait: boolean[] = [];
   const events: string[] = [];
   const core = {
-    submitTurn: async () => results.submit,
+    submitTurn: async () => {
+      events.push("submit");
+      return results.submit;
+    },
     waitRun: async (runId: string) => {
       pinnedDuringWait.push(flow.inFlightRuns.has(runId));
       return results.wait;
@@ -22,7 +25,11 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
   } as unknown as SlackCoreClient;
   const flow = createTurnFlow(core);
   const directory = {
-    classifyActor: async () => ({ externalId: "U1", displayName: "Alice" }),
+    classifyActor: async () => ({
+      externalId: "U1",
+      displayName: "Alice",
+      ...(unresolved ? { identityFailure: "unresolved_principal" as const } : {}),
+    }),
     classifyUserCached: async () => ({ actor: { externalId: "U1", displayName: "Alice" } }),
   } as never;
   const approvals = createApprovals({ core, flow, directory, threads: createThreadTracker(), ids: {} as never });
@@ -88,4 +95,10 @@ test("an approved resume that succeeds leaves no pin behind either", async () =>
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.flow.inFlightRuns.has("R2"), false);
   assert.match(String(f.updates.at(-1)?.text ?? ""), /done/);
+});
+
+test("an unresolved approver cannot resume a command", async () => {
+  const f = fixture({ submit: { status: "ok", reply: "wrong" }, wait: null }, true);
+  await f.clickApprove();
+  assert.equal(f.events.includes("submit"), false);
 });

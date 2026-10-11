@@ -162,6 +162,12 @@ test("transcript filters hide diagnostics without hiding folded delivery evidenc
 });
 
 test("governance posture saves refresh only the saved card", () => {
+  assert.match(html, /"memory-policy": "st-memory-policy"/);
+  assert.match(html, /"\/memory-policy", \{\s*inherit: true/);
+  assert.match(
+    html,
+    /\["memory-policy", "security-posture", "sharing-posture", "ambient-policy", "auto-flagger"\]\.includes\(key\)/,
+  );
   assert.match(html, /governanceUI.commit\(key, body\)/);
   assert.match(html, /governanceUI.load\(fresh.data, requestedScope, key\)/);
   load({ securityPosture: "auto", sharingPosture: "isolated" }, "org:test");

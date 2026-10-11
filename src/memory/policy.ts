@@ -10,6 +10,21 @@ export interface MemoryPolicy {
 
 export const DEFAULT_MEMORY_POLICY: MemoryPolicy = { recall: "visible", capture: "writable" };
 
+const RECALL_RANK: Record<MemoryRecallMode, number> = { off: 0, writable: 1, visible: 2 };
+
+export function composeMemoryPolicy(...policies: Array<MemoryPolicy | undefined>): MemoryPolicy {
+  return policies.reduce<MemoryPolicy>(
+    (effective, policy) =>
+      policy
+        ? {
+            recall: RECALL_RANK[policy.recall] < RECALL_RANK[effective.recall] ? policy.recall : effective.recall,
+            capture: policy.capture === "off" ? "off" : effective.capture,
+          }
+        : effective,
+    DEFAULT_MEMORY_POLICY,
+  );
+}
+
 export function parseMemoryRecallMode(value: string | undefined): MemoryRecallMode {
   return value === "off" || value === "writable" || value === "visible" ? value : DEFAULT_MEMORY_POLICY.recall;
 }

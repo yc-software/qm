@@ -218,7 +218,7 @@ test("the `memory` tool params expose NO scope field — the model cannot redire
   assert.equal("scope" in props, false);
 });
 
-test("capture-off policy: search still works, but read/remember/rewrite are unavailable (mirrors the self-API claim)", async () => {
+test("capture-off policy permits recall but blocks remember and rewrite", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-policy-")));
   const memory = createMemoryService(workspace);
   const personal = scopeId("personal", "U1");
@@ -242,10 +242,38 @@ test("capture-off policy: search still works, but read/remember/rewrite are unav
     memoryAccess: { read: [personal] },
   });
   assert.deepEqual(await ctx.memorySearch("billing"), ["(2026-05-31) Owns the billing service"]);
-  assert.equal(await ctx.memoryRead(), null);
+  assert.match((await ctx.memoryRead()) ?? "", /billing service/);
   assert.equal(await ctx.memoryRemember(["a fact"]), null);
   assert.equal(await ctx.memoryRewrite("# Memory\n"), null);
   assert.doesNotMatch(await memory.read(personal), /a fact/);
+});
+
+test("recall-off policy permits capture but blocks read and search", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-recall-off-")));
+  const memory = createMemoryService(workspace);
+  const personal = scopeId("personal", "U1");
+  await memory.capture(personal, ["Private existing fact"], at);
+  const ctx = createToolContext({
+    sandbox: noSandbox,
+    provision: async () => {
+      throw new Error("memory ops must not provision the sandbox");
+    },
+    layers: [{ scopeId: personal, mountPath: "", mode: "rw" }],
+    commandPolicy: () => ({}) as never,
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    workspace,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: "U1",
+    memory,
+    memoryScopeId: personal,
+    memoryAccess: { write: personal, read: [] },
+  });
+  assert.equal(await ctx.memoryRead(), null);
+  assert.equal(await ctx.memorySearch("Private"), null);
+  assert.equal(await ctx.memoryRemember(["New permitted fact"]), 1);
+  assert.match(await memory.read(personal), /New permitted fact/);
 });
 
 test("memorySearch spans every readable notebook, tagging hits when more than one is in reach", async () => {
