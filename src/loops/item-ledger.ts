@@ -14,6 +14,7 @@ import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts"
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 interface EnqueueItemInput {
   loopId: string;
@@ -77,7 +78,7 @@ export interface LoopItemLedger {
   annotate(
     id: string,
     patch: LoopSourcePayload,
-    opts?: { summary?: string; expectedSourceAt?: number },
+    opts?: { summary?: string; expectedSourceAt?: number; expectedSourcePayload?: LoopSourcePayload },
   ): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
   setTriage(id: string, patch: TriagePatch, by: "agent" | "human"): Promise<LoopItem | null>;
@@ -149,9 +150,17 @@ function withAgentDraft(
 function inboxPreview(payload: LoopSourcePayload | undefined): LoopSourcePayload {
   if (!payload) return {};
   return Object.fromEntries(
-    ["title", "from", "fromDetail", "snippet", "receivedAt", "probablyResolved", "sentChat"].flatMap((key) =>
-      payload[key] === undefined ? [] : [[key, payload[key]]],
-    ),
+    [
+      "title",
+      "from",
+      "fromDetail",
+      "snippet",
+      "receivedAt",
+      "probablyResolved",
+      "sentChat",
+      "participants",
+      "slackAvatarsRefreshAt",
+    ].flatMap((key) => (payload[key] === undefined ? [] : [[key, payload[key]]])),
   );
 }
 
@@ -410,13 +419,18 @@ export function createLoopItemLedger(
       const after = await update(id, (item) => {
         applied = true;
         const now = Date.now();
-        if (opts?.expectedSourceAt !== undefined && item.sourceAt !== opts?.expectedSourceAt) {
+        if (
+          (opts?.expectedSourceAt !== undefined && item.sourceAt !== opts.expectedSourceAt) ||
+          (opts?.expectedSourcePayload !== undefined &&
+            !isDeepStrictEqual(item.sourcePayload, opts.expectedSourcePayload))
+        ) {
           applied = false;
           return item;
         }
         return {
           ...item,
           sourcePayload: { ...item.sourcePayload, ...patch },
+          inboxPreview: inboxPreview({ ...item.sourcePayload, ...patch }),
           ...(opts?.summary !== undefined ? { sourceSummary: opts.summary } : {}),
           updatedAt: now,
         };

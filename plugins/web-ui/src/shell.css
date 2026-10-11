@@ -9785,6 +9785,8 @@ h3.ambient-field-label {
   gap: 3px;
 }
 .inbox-avatar {
+  position: relative;
+  overflow: hidden;
   width: 20px;
   height: 20px;
   flex: none;
@@ -9797,6 +9799,13 @@ h3.ambient-field-label {
   letter-spacing: 0.01em;
   background: oklch(0.92 0.05 var(--avatar-hue, 250));
   color: oklch(0.38 0.09 var(--avatar-hue, 250));
+}
+.inbox-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .inbox-avatar.more {
   background: var(--secondary);

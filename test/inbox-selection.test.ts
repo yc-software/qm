@@ -658,3 +658,52 @@ test("inbox viewers are exactly the active candidates who can administer the loo
   assert.equal((await ask({ loopId: "missing", candidates })).status, 404);
   assert.equal((await ask({ loopId: group.id, candidates }, { actorId: "mallory" })).status, 403);
 });
+
+test("the visible Slack feed includes freshly saved avatars without loading message context", async () => {
+  const calls: string[][] = [];
+  const w = world(true, async (owner, items, mode) => {
+    if (mode !== "avatars") return;
+    assert.equal(owner, "alice");
+    calls.push(items.map((item) => item.id));
+    for (const item of items)
+      await w.deps.items.annotate(item.id, {
+        participants: [{ id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" }],
+        slackAvatarsRefreshAt: Date.now() + 86_400_000,
+      });
+  });
+  const [, slack] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  await w.deps.items.ingest(
+    Array.from({ length: 45 }, (_, n) => ({
+      loopId: slack!.id,
+      dedupeKey: `slack-${n}`,
+      source: "slack",
+      sourceAt: 1000 + n,
+      sourcePayload: {
+        from: "Alex",
+        slack: { channelId: "D1", ts: `${n}.0`, userId: "U1" },
+        context: [{ author: "Alex", text: "private context" }],
+      },
+      proposal: { by: "agent" as const, data: { body: "draft" } },
+    })),
+  );
+  const feed = await w.call();
+  assert.equal(feed.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.length, 40);
+  assert.equal(feed.data.items.length, 40);
+  assert.deepEqual(new Set(calls[0]), new Set(feed.data.items.map((item: any) => item.id)));
+  assert.equal(feed.data.items[0].sourcePayload.participants[0].avatarUrl, "https://avatars.slack-edge.com/alex.png");
+  assert.equal(feed.data.items[0].sourcePayload.context, undefined);
+  assert.equal(feed.data.items[0].sourcePayload.slack, undefined);
+  await w.call("GET", null, `itemId=${feed.data.items[0].id}`);
+  assert.equal(calls.length, 1);
+  const get = w.deps.items.get.bind(w.deps.items);
+  let fullReads = 0;
+  w.deps.items.get = async (id) => {
+    fullReads++;
+    return get(id);
+  };
+  await w.call();
+  assert.equal(fullReads, 0);
+  assert.deepEqual(calls.at(-1), []);
+});

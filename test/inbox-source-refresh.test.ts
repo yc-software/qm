@@ -209,3 +209,501 @@ test("slow Gmail reads have a total batch budget and later cards are visited on 
   await refresh("owner", cards);
   assert.equal(reads, 12);
 });
+
+test("Slack avatars are durable, shared across concurrent cards, and refresh without reading conversations", async () => {
+  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+  await items.ingest([
+    {
+      loopId: "inbox",
+      dedupeKey: "second",
+      source: "slack",
+      sourceAt: 2000,
+      sourcePayload: { slack: { channelId: "D2", ts: "2.0", userId: "U1" } },
+    },
+  ]);
+  let reads = 0;
+  const fetchImpl: typeof fetch = async (url) => {
+    reads++;
+    assert.match(String(url), /users.info\?user=U1$/);
+    return json({
+      ok: true,
+      user: { profile: { display_name: "Alex", image_48: "https://avatars.slack-edge.com/alex.png" } },
+    });
+  };
+  const refresh = createInboxSourceRefresh({ items, tokens, fetchImpl });
+  await refresh("owner", await items.byLoop("inbox"), "avatars");
+  assert.equal(reads, 1);
+  const after = (await items.get(item.id))!;
+  const people = [{ id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" }];
+  assert.deepEqual(after.sourcePayload?.participants, people);
+  assert.deepEqual(after.inboxPreview?.participants, people);
+  assert.equal(after.status, item.status);
+  assert.deepEqual(after.proposal, item.proposal);
+  assert.deepEqual(after.sourcePayload?.context, item.sourcePayload?.context);
+  await createInboxSourceRefresh({ items, tokens, fetchImpl })("owner", await items.byLoop("inbox"), "avatars");
+  assert.equal(reads, 1);
+  await refresh("another-owner", [item], "avatars");
+  assert.equal(reads, 2);
+});
+
+test("legacy Slack avatar lookup uses only the exact waiting message, including threaded replies", async () => {
+  for (const threadTs of [undefined, "0.5"]) {
+    const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", ...(threadTs ? { threadTs } : {}) });
+    const calls: string[] = [];
+    await createInboxSourceRefresh({
+      items,
+      tokens,
+      fetchImpl: async (url) => {
+        const u = new URL(String(url));
+        calls.push(u.pathname);
+        if (u.pathname.endsWith("users.info")) {
+          assert.equal(u.searchParams.get("user"), "U1");
+          return json({
+            ok: true,
+            user: { profile: { display_name: "Alex", image_72: "https://avatars.slack-edge.com/alex.png" } },
+          });
+        }
+        assert.equal(u.searchParams.get("oldest"), "1.0");
+        assert.equal(u.searchParams.get("latest"), "1.0");
+        assert.equal(u.searchParams.get("inclusive"), "true");
+        assert.equal(u.searchParams.get("limit"), "1");
+        assert.equal(u.searchParams.get("ts"), threadTs ?? null);
+        return json({
+          ok: true,
+          messages: [
+            { ts: "0.5", user: "U_ROOT" },
+            { ts: "1.0", user: "U1" },
+          ],
+        });
+      },
+    })("owner", [item], "avatars");
+    assert.match(calls[0]!, threadTs ? /conversations.replies$/ : /conversations.history$/);
+    assert.equal(calls.length, 2);
+    assert.deepEqual((await items.get(item.id))!.sourcePayload!.slack, item.sourcePayload!.slack);
+    assert.equal(
+      ((await items.get(item.id))!.sourcePayload!.participants as Array<{ avatarUrl: string }>)[0]!.avatarUrl,
+      "https://avatars.slack-edge.com/alex.png",
+    );
+  }
+});
+
+test("avatar lookup failure and unavailable messages preserve Inbox content and retry limits", async () => {
+  for (const response of [
+    json({ ok: true, messages: [{ ts: "9.0", user: "WRONG" }] }),
+    new Response("limited", { status: 429 }),
+  ]) {
+    const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
+    let reads = 0;
+    const refresh = createInboxSourceRefresh({
+      items,
+      tokens,
+      fetchImpl: async () => {
+        reads++;
+        return response.clone();
+      },
+    });
+    await refresh("owner", [item], "avatars");
+    await refresh("owner", [item], "avatars");
+    assert.equal(reads, 1);
+    assert.deepEqual(await items.get(item.id), item);
+  }
+});
+
+test("missing or unsafe profile photos retain initials without repeating provider reads", async () => {
+  for (const image_48 of [undefined, "http://example.com/photo.png", "javascript:alert(1)"]) {
+    const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+    await createInboxSourceRefresh({
+      items,
+      tokens,
+      fetchImpl: async () => json({ ok: true, user: { profile: { display_name: "Alex", image_48 } } }),
+    })("owner", [item], "avatars");
+    assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [{ id: "U1", name: "Alex" }]);
+  }
+});
+
+test("avatar-only refresh does not suppress full Slack context refresh or reuse profiles across owners", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
+  const calls: string[] = [];
+  const sourceFetch = slackFetch(calls);
+  const refresh = createInboxSourceRefresh({
+    items,
+    tokens,
+    fetchImpl: async (url, init) => {
+      const response = await sourceFetch(url, init);
+      if (!String(url).includes("users.info")) return response;
+      const body = (await response.json()) as { user: { profile: { image_48?: string } } };
+      body.user.profile.image_48 = "https://avatars.slack-edge.com/alex.png";
+      return json(body);
+    },
+  });
+  await refresh("owner", [item], "avatars");
+  await refresh("owner", [(await items.get(item.id))!]);
+  const after = (await items.get(item.id))!;
+  assert.equal(after.sourcePayload?.sourceContextFetched, true);
+  assert.equal((after.sourcePayload!.context as Array<{ authorId: string }>)[0]!.authorId, "U1");
+  assert.equal(
+    (after.sourcePayload!.context as Array<{ avatarUrl: string }>)[0]!.avatarUrl,
+    "https://avatars.slack-edge.com/alex.png",
+  );
+  assert.equal(calls.filter((p) => p.includes("users.info")).length, 1);
+  assert.deepEqual(after.inboxPreview?.participants, after.sourcePayload?.participants);
+});
+
+test("a newer message during an avatar lookup cannot acquire the previous sender's photo", async () => {
+  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+  await createInboxSourceRefresh({
+    items,
+    tokens,
+    fetchImpl: async () => {
+      await items.ingest([
+        {
+          loopId: "inbox",
+          dedupeKey: "ask",
+          source: "slack",
+          sourceAt: 2000,
+          sourcePayload: { slack: { channelId: "D1", ts: "2.0", userId: "U2" } },
+        },
+      ]);
+      return json({ ok: true, user: { profile: { image_48: "https://avatars.slack-edge.com/old.png" } } });
+    },
+  })("owner", [item], "avatars");
+  assert.equal((await items.get(item.id))!.sourcePayload?.participants, undefined);
+});
+
+test("concurrent list and detail refreshes preserve the authoritative Slack thread metadata", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C_GROUP_DM", ts: "1.0", userId: "U1" });
+  const refresh = createInboxSourceRefresh({ items, tokens, fetchImpl: slackFetch([], { direct: true }) });
+  await Promise.all([refresh("owner", [item]), refresh("owner", [item], "avatars")]);
+  const after = (await items.get(item.id))!;
+  assert.equal((after.sourcePayload!.slack as { isDirectMessage: boolean }).isDirectMessage, true);
+  assert.equal(after.sourcePayload!.sourceContextFetched, true);
+});
+
+test("partial profile failures keep saved photos and names while saving successful lookups", async () => {
+  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+  const saved = { id: "U2", name: "Taylor", avatarUrl: "https://avatars.slack-edge.com/taylor.png" };
+  await items.annotate(item.id, { participants: [{ id: "U1", name: "Alex" }, saved] });
+  let clock = 1000;
+  const fetchImpl: typeof fetch = async (url) =>
+    String(url).includes("user=U2")
+      ? new Response("unavailable", { status: 503 })
+      : json({
+          ok: true,
+          user: { profile: { display_name: "Alex", image_512: "https://avatars.slack-edge.com/alex.png" } },
+        });
+  await createInboxSourceRefresh({ items, tokens, fetchImpl, now: () => clock })(
+    "owner",
+    [(await items.get(item.id))!],
+    "avatars",
+  );
+  const after = (await items.get(item.id))!;
+  assert.deepEqual(after.sourcePayload!.participants, [
+    { id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" },
+    saved,
+  ]);
+  assert.equal(after.sourcePayload!.slackAvatarsRefreshAt, 61_000);
+  assert.deepEqual(after.proposal, item.proposal);
+  clock = 62_000;
+  let reads = 0;
+  await createInboxSourceRefresh({
+    items,
+    tokens,
+    now: () => clock,
+    fetchImpl: async (url) => {
+      reads++;
+      return fetchImpl(url);
+    },
+  })("owner", [after], "avatars");
+  assert.equal(reads, 2);
+});
+
+test("opening a thread retains cached photos and author names when profile reads fail", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
+  const saved = { id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" };
+  await items.annotate(item.id, { participants: [saved], slackAvatarsRefreshAt: 99_000_000 });
+  const sourceFetch = slackFetch([]);
+  await createInboxSourceRefresh({
+    items,
+    tokens,
+    now: () => 1000,
+    fetchImpl: async (url, init) =>
+      String(url).includes("users.info") ? new Response("unavailable", { status: 503 }) : sourceFetch(url, init),
+  })("owner", [(await items.get(item.id))!]);
+  const after = (await items.get(item.id))!;
+  assert.deepEqual(after.sourcePayload!.participants, [saved]);
+  assert.equal(after.sourcePayload!.slackAvatarsRefreshAt, 61_000);
+  for (const message of after.sourcePayload!.context as Array<Record<string, unknown>>) {
+    assert.equal(message.author, "Alex");
+    assert.equal(message.authorId, "U1");
+    assert.equal(message.avatarUrl, saved.avatarUrl);
+  }
+});
+
+test("thread profile limits prioritize the waiting sender and latest visible authors", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
+  const lookedUp: string[] = [];
+  await createInboxSourceRefresh({
+    items,
+    tokens,
+    fetchImpl: async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("conversations.info")) return json({ ok: true, channel: {} });
+      if (u.pathname.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
+      if (u.pathname.endsWith("users.info")) {
+        const user = u.searchParams.get("user")!;
+        lookedUp.push(user);
+        return json({
+          ok: true,
+          user: { name: user, profile: { image_24: `https://avatars.slack-edge.com/${user}.png` } },
+        });
+      }
+      return json({
+        ok: true,
+        messages: Array.from({ length: 12 }, (_, i) => ({
+          ts: `${i + 1}.0`,
+          thread_ts: "1.0",
+          user: `U${i + 1}`,
+          text: "Message",
+        })),
+      });
+    },
+  })("owner", [item]);
+  assert.deepEqual(lookedUp, ["U1", "U12", "U11", "U10", "U9", "U8", "U7", "U6"]);
+  const after = (await items.get(item.id))!;
+  assert.equal((after.sourcePayload!.participants as Array<{ id: string }>)[0]!.id, "U1");
+  const latest = (after.sourcePayload!.context as Array<{ avatarUrl?: string }>).slice(-6);
+  assert.ok(latest.every((message) => message.avatarUrl));
+});
+
+test("legacy sender caching does not overwrite Slack metadata or reread its message", async () => {
+  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", isDirectMessage: true });
+  const calls: string[] = [];
+  let clock = 1000;
+  const fetchImpl: typeof fetch = async (url) => {
+    const path = new URL(String(url)).pathname;
+    calls.push(path);
+    if (path.endsWith("users.info"))
+      return json({
+        ok: true,
+        user: { name: "Alex", profile: { image_original: "https://avatars.slack-edge.com/alex.png" } },
+      });
+    return json({ ok: true, messages: [{ ts: "1.0", user: "U1" }] });
+  };
+  await createInboxSourceRefresh({ items, tokens, fetchImpl, now: () => clock })("owner", [item], "avatars");
+  let after = (await items.get(item.id))!;
+  assert.deepEqual(after.sourcePayload!.slack, { channelId: "D1", ts: "1.0", isDirectMessage: true });
+  clock += 86_400_001;
+  await createInboxSourceRefresh({ items, tokens, fetchImpl, now: () => clock })("owner", [after], "avatars");
+  after = (await items.get(item.id))!;
+  assert.equal(calls.filter((path) => path.endsWith("conversations.history")).length, 1);
+  assert.equal(calls.filter((path) => path.endsWith("users.info")).length, 2);
+  assert.equal((after.sourcePayload!.participants as Array<{ id: string }>)[0]!.id, "U1");
+});
+
+test("bot messages use profile icons already returned by Slack without extra profile APIs", async () => {
+  for (const mode of [undefined, "avatars"] as const) {
+    const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
+    await createInboxSourceRefresh({
+      items,
+      tokens,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        assert.ok(!path.endsWith("users.info") && !path.endsWith("bots.info"));
+        if (path.endsWith("conversations.info")) return json({ ok: true, channel: {} });
+        if (path.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
+        return json({
+          ok: true,
+          messages: [
+            {
+              ts: "1.0",
+              bot_id: "B1",
+              bot_profile: { name: "Build bot", icons: { image_48: "https://avatars.slack-edge.com/build.png" } },
+              text: "Build finished",
+            },
+          ],
+        });
+      },
+    })("owner", [item], mode);
+    const after = (await items.get(item.id))!;
+    assert.deepEqual(after.sourcePayload!.participants, [
+      { id: "bot:B1", name: "Build bot", avatarUrl: "https://avatars.slack-edge.com/build.png" },
+    ]);
+    if (mode === undefined) {
+      const message = (after.sourcePayload!.context as Array<Record<string, unknown>>)[0]!;
+      assert.equal(message.author, "Build bot");
+      assert.equal(message.authorId, "bot:B1");
+      assert.equal(message.avatarUrl, "https://avatars.slack-edge.com/build.png");
+    }
+  }
+});
+
+test("a partial source page cannot replace the waiting sender with an unrelated author", async () => {
+  for (const userId of [undefined, "U1"]) {
+    const { items, item } = await fixture("slack", { channelId: "D1", ts: "0.5", ...(userId ? { userId } : {}) });
+    await items.annotate(item.id, {
+      participants: [{ id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" }],
+    });
+    const sourceFetch = slackFetch([], { direct: true });
+    const fetchImpl: typeof fetch = async (url, init) => {
+      const response = await sourceFetch(url, init);
+      if (!String(url).includes("conversations.history")) return response;
+      return json({ ok: true, messages: [{ ts: "2.0", user: "U_OTHER", text: "Newer message" }] });
+    };
+    await createInboxSourceRefresh({ items, tokens, fetchImpl })("owner", [(await items.get(item.id))!]);
+    assert.equal(((await items.get(item.id))!.sourcePayload!.participants as Array<{ id: string }>)[0]!.id, "U1");
+  }
+});
+
+test("legacy sender and profile reads share one request deadline", { timeout: 1000 }, async () => {
+  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0" });
+  let clock = 0;
+  let aborted = false;
+  await createInboxSourceRefresh({
+    items,
+    tokens,
+    now: () => clock,
+    fetchImpl: async (url, init) => {
+      if (String(url).includes("conversations.history")) {
+        clock = 2990;
+        return json({ ok: true, messages: [{ ts: "1.0", user: "U1" }] });
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener("abort", () => {
+          aborted = true;
+          reject(init!.signal!.reason);
+        });
+      });
+    },
+  })("owner", [item], "avatars");
+  assert.equal(aborted, true);
+  assert.equal((await items.get(item.id))!.status, item.status);
+});
+
+test("cosmetic avatar refresh never waits for an in-flight full conversation refresh", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
+  let begin!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    begin = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const sourceFetch = slackFetch([]);
+  const refresh = createInboxSourceRefresh({
+    items,
+    tokens,
+    fetchImpl: async (url, init) => {
+      if (String(url).includes("conversations.info")) {
+        begin();
+        await blocked;
+      }
+      return sourceFetch(url, init);
+    },
+  });
+  const source = refresh("owner", [item]);
+  await started;
+  try {
+    const finished = await Promise.race([
+      refresh("owner", [item], "avatars").then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+    ]);
+    assert.equal(finished, true);
+  } finally {
+    release();
+    await source;
+  }
+  assert.equal((await items.get(item.id))!.sourcePayload!.sourceContextFetched, true);
+});
+
+test("a second core's full refresh wins over a stale cosmetic profile refresh", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
+  let begin!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    begin = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const avatars = createInboxSourceRefresh({
+    items,
+    tokens,
+    fetchImpl: async () => {
+      begin();
+      await blocked;
+      return json({
+        ok: true,
+        user: { name: "Alex", profile: { image_48: "https://avatars.slack-edge.com/stale.png" } },
+      });
+    },
+  })("owner", [item], "avatars");
+  await started;
+  const sourceFetch = slackFetch([], { own: true });
+  try {
+    await createInboxSourceRefresh({
+      items,
+      tokens,
+      fetchImpl: async (url, init) => {
+        if (String(url).includes("auth.test")) return json({ ok: true, user_id: "OWNER" });
+        return sourceFetch(url, init);
+      },
+    })("owner", [item]);
+  } finally {
+    release();
+    await avatars;
+  }
+  const after = (await items.get(item.id))!;
+  assert.deepEqual(after.sourcePayload!.participants, [
+    { id: "U1", name: "Alex" },
+    { id: "U2", name: "Taylor" },
+  ]);
+  assert.equal(after.sourcePayload!.sourceContextFetched, true);
+  assert.equal((after.sourcePayload!.context as unknown[]).length, 2);
+});
+
+test("unverified waiting senders never inherit another context author's avatar", async () => {
+  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0" });
+  const source = createInboxSourceRefresh({
+    items,
+    tokens,
+    fetchImpl: async (url) => {
+      if (String(url).includes("conversations.info")) return json({ ok: true, channel: { is_im: true } });
+      if (String(url).includes("users.info"))
+        return json({
+          ok: true,
+          user: { name: "Someone Else", profile: { image_48: "https://avatars.slack-edge.com/other.png" } },
+        });
+      if (String(url).includes("auth.test")) return json({ ok: true, user_id: "OWNER" });
+      return json({ ok: true, messages: [{ ts: "2.0", user: "U_OTHER", text: "Another message" }] });
+    },
+  });
+  await source("owner", [item]);
+  const after = (await items.get(item.id))!;
+  assert.deepEqual(after.sourcePayload!.participants, []);
+  assert.equal(after.sourcePayload!.slackAvatarsRefreshAt, 0);
+  assert.equal(
+    (after.sourcePayload!.context as Array<{ avatarUrl: string }>)[0]!.avatarUrl,
+    "https://avatars.slack-edge.com/other.png",
+  );
+  let messageReads = 0;
+  await createInboxSourceRefresh({
+    items,
+    tokens,
+    fetchImpl: async (url) => {
+      if (String(url).includes("conversations.history")) {
+        messageReads++;
+        return json({ ok: true, messages: [{ ts: "1.0", user: "U_SENDER" }] });
+      }
+      assert.match(String(url), /users.info\?user=U_SENDER$/);
+      return json({
+        ok: true,
+        user: { name: "Waiting Sender", profile: { image_48: "https://avatars.slack-edge.com/sender.png" } },
+      });
+    },
+  })("owner", [after], "avatars");
+  assert.equal(messageReads, 1);
+  assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [
+    { id: "U_SENDER", name: "Waiting Sender", avatarUrl: "https://avatars.slack-edge.com/sender.png" },
+  ]);
+});

@@ -141,6 +141,30 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   }
   const page = feed.slice(0, 40);
   const last = page.at(-1);
+  if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh) {
+    const slack = (
+      await Promise.all(
+        page
+          .filter(
+            (item) =>
+              item.source === "slack" &&
+              loopsById.get(item.loopId)?.owner === acting.actorId &&
+              !(
+                typeof item.inboxPreview?.slackAvatarsRefreshAt === "number" &&
+                Date.now() < item.inboxPreview.slackAvatarsRefreshAt
+              ),
+          )
+          .map((item) => deps.items.get(item.id)),
+      )
+    ).filter((item) => item !== null);
+    await ctx.deps.inboxSourceRefresh(acting.actorId, slack, "avatars");
+    for (const item of slack) {
+      const refreshed = await deps.items.get(item.id);
+      const summary = page.find((entry) => entry.id === item.id);
+      if (summary && refreshed && refreshed.sourceAt === summary.sourceAt)
+        summary.inboxPreview = refreshed.inboxPreview;
+    }
+  }
   sendJson(ctx.res, 200, {
     selected: await Promise.all(
       selected.map(async (loop) => ({

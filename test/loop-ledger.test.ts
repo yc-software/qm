@@ -478,3 +478,29 @@ test("ingest batches per-loop locks and writes while resolving legacy IDs and du
   assert.ok(await backing.get("legacy"));
   assert.equal(await backing.get(original.id), null);
 });
+
+test("conditional annotations reject changed source payloads even within the same clock tick", async (t) => {
+  t.mock.method(Date, "now", () => 1000);
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byLoop(LOOP);
+  const snapshot = structuredClone(item!.sourcePayload!);
+  const first = await ledger.annotate(
+    item!.id,
+    { participants: [{ id: "U1", name: "Alex" }] },
+    { expectedSourcePayload: snapshot },
+  );
+  assert.ok(first);
+  assert.equal(first.updatedAt, item!.updatedAt);
+  const stale = await ledger.annotate(item!.id, { participants: [] }, { expectedSourcePayload: snapshot });
+  assert.equal(stale, null);
+  assert.deepEqual((await ledger.get(item!.id))!.sourcePayload!.participants, [{ id: "U1", name: "Alex" }]);
+  const current = structuredClone(first.sourcePayload!);
+  assert.ok(
+    await ledger.annotate(
+      item!.id,
+      { participants: [{ id: "U2", name: "Taylor" }] },
+      { expectedSourcePayload: current },
+    ),
+  );
+});
