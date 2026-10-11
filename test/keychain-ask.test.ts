@@ -35,6 +35,7 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { materializeGrant } from "./support/materialize-grant.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -222,13 +223,13 @@ test("approveAsk: same createGrant owner gate, audience from the record, single 
     "re-approve is a replay",
   );
 
-  await assert.rejects(k.materialize(grant.id, "channel:OTHER", "U_BOB"), (e: KeychainError) => e.status === 403);
-  const m = await k.materialize(grant.id, "channel:C1", "U_BOB");
+  await assert.rejects(materializeGrant(k, grant.id, "channel:OTHER", "U_BOB"), (e: KeychainError) => e.status === 403);
+  const m = await materializeGrant(k, grant.id, "channel:C1", "U_BOB");
   assert.ok(m.kind === "env" && m.env[0]!.value === "ghp_alice");
   const used = (await k.getGrant(grant.id))!;
   assert.equal(used.status, "used");
   assert.equal(used.usedAt, 1_000_000);
-  await assert.rejects(k.materialize(grant.id, "channel:C1", "U_BOB"), (e: KeychainError) => e.status === 410);
+  await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U_BOB"), (e: KeychainError) => e.status === 410);
 });
 
 test("declineAsk is owner-gated and single-resolution", async () => {
@@ -872,15 +873,17 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await built.fireAskResolution!({ ...view.ask } as KeychainAsk, grant);
     assert.equal((await resumeTurns(session!.id, /The credential owner approved access/)).length, 1);
 
-    assert.equal(
-      (await post("/v1/keychain/use", { grant: grant.id }, await capFor("U_EVE", "channel:OTHER"))).status,
-      403,
+    await assert.rejects(
+      built.keychain!.prepareMaterialize(grant.id, "channel:OTHER", "U_EVE"),
+      (e: KeychainError) => e.status === 403,
     );
-    const used = await post("/v1/keychain/use", { grant: grant.id }, await bobInInfra());
-    assert.equal(used.status, 200);
-    assert.equal(await used.text(), "export GITHUB_TOKEN='ghp_alice'\n");
-    const rerun = await post("/v1/keychain/use", { grant: grant.id }, await bobInInfra());
-    assert.equal(rerun.status, 410, "a child or retry needs a new approval after consumption");
+    const prepared = await built.keychain!.prepareMaterialize(grant.id, "channel:C_INFRA", "U_BOB");
+    await prepared.commit();
+    await assert.rejects(
+      built.keychain!.prepareMaterialize(grant.id, "channel:C_INFRA", "U_BOB"),
+      (e: KeychainError) => e.status === 410,
+      "a child or retry needs a new approval after consumption",
+    );
   });
 
   it("deny on the card flips the ask and fires exactly one resolution turn into the asking channel", async () => {
@@ -898,7 +901,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     const resolution = await waitFor(() => resumeTurns(session!.id, /declined the access request/));
     assert.equal(resolution.length, 1);
     assert.equal((await decide(made.ask.id, "U_ALICE", "once")).ask.status, "declined", "a decided card stays decided");
-    assert.equal((await post("/v1/keychain/use", { credential: npm.id }, await bobInInfra())).status, 403);
   });
 
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {
@@ -981,7 +983,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         assert.equal(seed.status, "ok");
         const session = await built.sessions.getByThread(threadRef);
         assert.ok(session);
-        assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 403);
         const made = await post(
           "/v1/keychain/asks",
           { credential: credential.id, purpose: "run the synthetic shared check" },
@@ -1007,9 +1008,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         assert.equal(grant.audienceScopeId, scope);
         const resumed = await waitFor(() => resumeTurns(session.id, /The credential owner approved access/));
         assert.equal(resumed.length, 1);
-        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, await capFor(requesterId))).status, 403);
-        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 200);
-        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 410);
       });
     }
   }
@@ -1091,9 +1089,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       assert.equal(seed.status, "ok");
       const session = await built.sessions.getByThread(threadRef);
       assert.ok(session);
-      const denied = await post("/v1/keychain/use", { credential: credential.id }, token);
-      assert.equal(denied.status, 403);
-      assert.match(((await denied.json()) as any).message, /keychain\/asks/);
       const requested = await post(
         "/v1/keychain/asks",
         { credential: credential.id, purpose: "read-only dummy scheduled check", requestedMode: mode },
@@ -1127,19 +1122,19 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       assert.equal(approved.grant.audienceScopeId, personal);
       const resumed = await waitFor(() => resumeTurns(session.id, /The credential owner approved access/));
       assert.equal(resumed.length, 1);
-      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, await capFor("U_BOB"))).status, 403);
-      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 200);
-      assert.equal(
-        (await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status,
-        mode === "once" ? 410 : 200,
-      );
+      const prepared = await built.keychain!.prepareMaterialize(approved.grant.id, personal, "U_ALICE");
+      await prepared.commit();
+      if (mode === "once")
+        await assert.rejects(
+          built.keychain!.prepareMaterialize(approved.grant.id, personal, "U_ALICE"),
+          (e: KeychainError) => e.status === 410,
+        );
       const after = (await built.keychain!.getGrant(approved.grant.id))!;
       assert.equal(after.status, mode === "once" ? "used" : "active");
       if (mode === "once") assert.ok(after.usedAt !== undefined);
       assert.equal(after.expiresAt, approved.grant.expiresAt);
       if (mode === "standing") {
         assert.equal((await post(`/v1/keychain/grants/${approved.grant.id}/revoke`, {}, live)).status, 200);
-        assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 410);
       }
     });
   }
@@ -1160,7 +1155,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await assert.rejects(decide(ask.id, "U_BOB", "deny"), (e: KeychainError) => e.status === 403);
     assert.equal((await decide(ask.id, "U_ALICE", "deny")).ask.status, "declined");
     assert.equal((await built.keychain!.getAsk(ask.id))?.status, "declined");
-    assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 403);
     assert.equal(
       (
         await post(

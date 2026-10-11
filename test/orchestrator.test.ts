@@ -334,7 +334,7 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   const reqs = await built.sessions.listLlmRequests(recipient!.id);
   const latest = reqs.at(-1) as any;
   const footer = latest.promptEnvelope.messages.at(-1).content;
-  assert.match(footer, /Recent agent-initiated deliveries to this conversation/);
+  assert.match(footer, /Delivered here since the user's last message/);
   assert.match(footer, /\[cron\] from U-carol: /);
   assert.match(footer, /…$/m);
   assert.doesNotMatch(footer, /deploy digest ready/);
@@ -4303,24 +4303,6 @@ test("default screening does not invoke a model for inbound data or tool results
   const claims = await verifyCapabilityToken(captured!.egressToken!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.egress?.denyPrivateNetworks, true);
   assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
-});
-
-test("ordinary turns neither probe native logins nor advertise cached login state", async () => {
-  const built = freshApp();
-  const checkedAt = 1;
-  await built.livenessCache.put({ scopeId: scopeId("personal", "U1"), checkedAt, connectors: { gh: "active" } });
-  const commands: string[] = [];
-  const run = built.sandbox.run.bind(built.sandbox);
-  built.sandbox.run = async (handle, command, opts) => {
-    commands.push(command);
-    return run(handle, command, opts);
-  };
-  const prompt = await built.app.turn(dm("!sysprompt"));
-  assert.doesNotMatch(prompt.reply ?? "", /## Your logins|GitHub — ✓ signed in/);
-  await built.app.turn(dm("!run printf ready"));
-  assert.ok(commands.some((c) => c.includes("printf ready")));
-  assert.ok(commands.every((c) => !c.includes("gh auth status") && !c.includes("gcloud auth print-access-token")));
-  assert.equal((await built.livenessCache.get(scopeId("personal", "U1")))?.checkedAt, checkedAt);
 });
 
 for (const combined of [true, false]) {

@@ -109,6 +109,7 @@ export interface HarnessTurnInput {
   triggerTs?: string;
   entryTs?: string;
   environment?: string;
+  timezone?: string;
   priorTurns?: ConversationTurn[];
   overheard?: OverheardEntryPayload[];
   attachments?: AttachmentMeta[];
@@ -155,7 +156,7 @@ export interface HarnessTurnInput {
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
-  verifyGoal?: import("./goal.ts").GoalVerifier;
+  governGoal?: import("./goal.ts").GoalGovernor;
 }
 
 export interface HarnessTurnResult {

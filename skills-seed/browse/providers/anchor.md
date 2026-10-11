@@ -114,8 +114,8 @@ curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" -H "x-agent-capability: $AG
 Hand over the returned `url` with the consent stated plainly: _filling it stores this login
 with Anchor (our managed-browser provider) so it can sign in and re-sign-in for you_ — that
 storage is the point, and it needs their explicit OK. Redemption fires a wake back into
-this conversation with `EMAIL`/`PASSWORD` in your env (sign-ins are DM-only, so no grant
-dance). Then create the identity with Python building the body from env
+this conversation; name the new credential's handle in `credentials` to get
+`EMAIL`/`PASSWORD` for that command (sign-ins are DM-only, so no grant dance). Then create the identity with Python building the body from env
 (`POST /v1/identities` with `{"source":"https://<domain>","name":...,"credentials":
 [{"type":"username_password","username":...,"password":...}]}`), and register the returned
 identity id in their keychain (service `anchor-identity`, envKey

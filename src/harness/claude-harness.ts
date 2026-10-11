@@ -443,10 +443,15 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       options: {
         abortController: controller,
         cwd: jail,
-        env: perUserClaudeEnv(
-          claudeChildEnv(authEnv ? { ...opts.env, ...authEnv } : (opts.env ?? {}), jail),
-          turn.claudeOauthToken,
-        ),
+        env: {
+          ...perUserClaudeEnv(
+            claudeChildEnv(authEnv ? { ...opts.env, ...authEnv } : (opts.env ?? {}), jail),
+            turn.claudeOauthToken,
+          ),
+          ...(turn.timezone
+            ? { TZ: new Intl.DateTimeFormat("en-US", { timeZone: turn.timezone }).resolvedOptions().timeZone }
+            : {}),
+        },
         tools: allowSubagents ? ["Agent"] : [],
         skills: [],
         settingSources: [],

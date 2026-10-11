@@ -3,7 +3,7 @@ import { createSweeper } from "../util/sweeper.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
-import type { ProcessSandbox } from "../sandbox/sandbox.ts";
+import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { errMessage } from "../util/errors.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
@@ -11,6 +11,7 @@ const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 export interface ReaperKillHookOptions {
   termGraceMs?: number;
   killGraceMs?: number;
+  onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
 }
 
 export function createReaperKillHook(
@@ -25,15 +26,26 @@ export function createReaperKillHook(
       rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
     );
     try {
-      await sandbox.signalProcess(handle, rec.processId, "TERM");
-      let status = await awaitProcessExit(sandbox, handle, rec.processId, termGraceMs);
-      if (status.state !== "exited") {
-        await sandbox.signalProcess(handle, rec.processId, "KILL");
-        status = await awaitProcessExit(sandbox, handle, rec.processId, killGraceMs);
+      try {
+        await sandbox.signalProcess(handle, rec.processId, "TERM");
+        let status = await awaitProcessExit(sandbox, handle, rec.processId, termGraceMs);
+        if (status.state !== "exited") {
+          await sandbox.signalProcess(handle, rec.processId, "KILL");
+          status = await awaitProcessExit(sandbox, handle, rec.processId, killGraceMs);
+        }
+        if (status.state !== "exited") throw new Error(`process survived TERM+KILL: ${rec.processId}`);
+      } catch (e) {
+        if (!processIsGone(e)) throw e;
       }
-      if (status.state !== "exited") throw new Error(`process survived TERM+KILL: ${rec.processId}`);
-    } catch (e) {
-      if (!processIsGone(e)) throw e;
+      await opts
+        ?.onExit?.(handle, rec.processId)
+        .catch((e) =>
+          console.error(
+            "[process-reaper] credential writeback failed:",
+            errMessage(e),
+            ...(e instanceof AggregateError ? e.errors.map(errMessage) : []),
+          ),
+        );
     } finally {
       await sandbox.teardown(handle, { keepWarm: true });
     }

@@ -3698,7 +3698,7 @@ test("a files read approval cannot authorize writes or sharing", async () => {
   }
 });
 
-test("apps publish forwards a legacy audience so it is refused, not silently dropped", async () => {
+test("apps publish schema no longer advertises audience and rejects it as an unknown argument", async () => {
   const inputs: unknown[] = [];
   const tc = {
     ...fakeToolContext(),
@@ -3708,8 +3708,11 @@ test("apps publish forwards a legacy audience so it is refused, not silently dro
     },
   };
   const apps = createAgentTools({ current: tc }).find((tool) => tool.name === "apps")!;
-  await call(apps, { action: "publish", name: "private", audience: [] });
-  assert.deepEqual((inputs[0] as { share: unknown }).share, []);
+  assert.equal("audience" in (apps.parameters as { properties: Record<string, unknown> }).properties, false);
+  assert.match(textOut(await call(apps, { action: "publish", name: "private", audience: [] })), /Invalid arguments/);
+  assert.equal(inputs.length, 0);
+  await call(apps, { action: "publish", name: "private" });
+  assert.equal((inputs[0] as { share?: unknown }).share, undefined);
 });
 
 test("files share preserves artifact IDs, recipient resolution and authorization failures", async () => {

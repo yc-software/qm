@@ -389,7 +389,6 @@ test("reach preserves a durable workspace even without a login-probe cache", asy
 
 test("reach teardown keeps (does not destroy) a room with its own computer", async () => {
   const built = await roomApp();
-  await built.livenessCache.put({ scopeId: scopeId("channel", "C-ph"), checkedAt: 1, connectors: {} });
   await built.app.turn(dm("!reach #project-alpha echo hi"));
   assert.ok(
     fakeSprites.names().some((n) => n.startsWith("qm-sandbox-room-ph-")),

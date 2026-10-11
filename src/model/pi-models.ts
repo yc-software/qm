@@ -183,7 +183,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       thinkingLevelMap: { off: null },
       input: 2,
       output: 10,
-      cacheRead: 0.2,
+      cacheRead: 0.1,
       cacheWrite: 2.5,
       contextWindow: 1_000_000,
       maxTokens: 128_000,

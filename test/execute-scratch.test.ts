@@ -1,5 +1,4 @@
 import { SandboxProvisionCleanupError, cleanupFailedProvision } from "../src/sandbox/sandbox.ts";
-import { execFileSync } from "node:child_process";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
@@ -453,34 +452,6 @@ test("owner execute masks selected credentials and inherited proxy credentials",
   );
 });
 
-test("scoped command wrappers preserve selected AWS credentials and clear unselected ambient keys", async () => {
-  const boxes = createTurnSandboxes({
-    deps: {},
-    input: {},
-    connectorEnv: {},
-    credentialCutoverServices: ["role-service"],
-    resolution: { layers: [] },
-  } as unknown as TurnSandboxContext);
-  const { ctx } = routingCtx({
-    scopedCommand: boxes.scopedCommand,
-    commandCredentials: [{ handle: "selected-aws", env: [{ key: "AWS_ACCESS_KEY_ID", value: "selected-key" }] }],
-    sandbox: {
-      async run(handle: SandboxHandle, command: string) {
-        const stdout = execFileSync("/bin/sh", ["-c", command], {
-          env: { AWS_SECRET_ACCESS_KEY: "stale", ...handle.env },
-          encoding: "utf8",
-        });
-        return { stdout, stderr: "", code: 0, timedOut: false };
-      },
-    } as unknown as Sandbox,
-  });
-  const result = await ctx.execute(
-    'test "$AWS_ACCESS_KEY_ID" = selected-key && test "${AWS_SECRET_ACCESS_KEY-unset}" = unset && printf passed',
-    { credentials: ["selected-aws"] },
-  );
-  assert.equal(result.stdout, "passed");
-});
-
 test("scratch credentials are selected per command and masked before returning", async () => {
   const environments: Array<Record<string, string> | undefined> = [];
   const { ctx } = routingCtx({
@@ -522,7 +493,6 @@ function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
     scopeId: scopeId("channel", "C1"),
     memoryScopeId: scopeId("channel", "C1"),
     connectorEnv: { AGENT_API_TOKEN: "scope-capability" },
-    credentialCutoverServices: [],
     resolution: {
       layers: [
         { scopeId: scopeId("channel", "C1"), mode: "rw", mountPath: "" },

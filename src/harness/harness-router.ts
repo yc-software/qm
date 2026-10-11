@@ -22,8 +22,11 @@ import {
   goalSnapshotPayload,
   latestGoalRecord,
   rehydrateOpenGoal,
-  verifyGoalCompletion,
+  governGoal,
+  goalWorkFromEntries,
+  type GoalGovernorInput,
   type GoalRecord,
+  type GovernorVerdict,
 } from "./goal.ts";
 
 const GOAL_ROUND_MIN_WALL_MS = 30_000;
@@ -79,6 +82,17 @@ async function runTurnEnforcingGoal(
     outcome: blocked() ? "halted" : "ok",
     ok: "ok",
     blocked,
+    ...(input.governGoal
+      ? {
+          govern: (previous: GovernorVerdict | undefined) =>
+            input.governGoal!({
+              objective: goal.objective,
+              trigger: "checkpoint",
+              recentWork: goalWorkFromEntries([...input.history.slice(-40), ...emitted]),
+              ...(previous ? { previous } : {}),
+            }),
+        }
+      : {}),
     beforePrompt: () => {
       console.error(`[goal] continuation session=${input.session.id} harness=${harnessId} turns=${meter.turns}`);
     },
@@ -289,8 +303,7 @@ export function createHarnessRouter(
             : input.tools,
           ...(judge
             ? {
-                verifyGoal: (objective: string, evidence: string) =>
-                  verifyGoalCompletion(judge, objective, evidence, input.cancel),
+                governGoal: (goalInput: GoalGovernorInput) => governGoal(judge, goalInput, input.cancel),
               }
             : {}),
         };

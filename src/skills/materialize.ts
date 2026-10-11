@@ -6,6 +6,7 @@ import { assertSafeSkillName } from "./skill-name.ts";
 import type { ScopeId } from "../types.ts";
 
 export const SKILLS_DIR = "skills";
+export const SKILLS_ROOT = ".agent-skills";
 
 export function safeSkillDirName(name: string): string {
   return assertSafeSkillName(name);
@@ -110,7 +111,7 @@ export function skillsIndex(resolved: SkillResolution[], provenanceScopes: reado
   });
   return [
     "## Skills",
-    'Load a skill with the skills tool before relying on it: skills({ action: "read", name }) returns its instructions without starting a sandbox. When a skill ships scripts or supporting files, the same call syncs them into a directory that lives for this turn and names it; run and read them there.',
+    'Load a skill with the skills tool before relying on it: skills({ action: "read", name }) returns its instructions without starting a sandbox. When a skill ships scripts or supporting files, the same call syncs them into a stable directory on the computer and names it; run and read them there. Reading the skill again refreshes that copy.',
     ...lines,
   ].join("\n");
 }

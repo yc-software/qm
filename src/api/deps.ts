@@ -50,7 +50,6 @@ import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { PrincipalLinkService } from "../identity/principal-links.ts";
-import type { DeviceFlowCutoverStore } from "../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type {
   ConnectorTokenStore,
@@ -122,7 +121,6 @@ export interface ServerDeps {
   config?: ScopedConfigStore;
   acl?: AclStore;
   credentialUsage?: CredentialUsageSink;
-  deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
   teams?: TeamStore;
   egressAudit?: EgressAuditSink;
@@ -187,8 +185,6 @@ export interface ServerDeps {
   deploymentLayer?: DeploymentLayerStore;
   backgroundOwnership?: BackgroundOwnershipControl;
   deploymentControlSecret?: string;
-  credentialServices?: () => readonly string[];
-  brokeredServices?: () => readonly string[];
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
   deployGateSecret?: string;

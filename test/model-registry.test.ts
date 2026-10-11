@@ -124,7 +124,7 @@ test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, an
   assert.ok(model);
   assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
   assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
-  assert.deepEqual(model.cost, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, tiers: undefined });
+  assert.deepEqual(model.cost, { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, tiers: undefined });
   assert.equal(safeModelMetadata(id)?.label, "Sonnet 5.5");
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));

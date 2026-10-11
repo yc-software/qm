@@ -160,7 +160,6 @@ const SYSTEM: Rule[] = [
   pat("DELETE", "/v1/keychain/credentials/:id"),
   pat("POST", "/v1/keychain/drops"),
   pat("POST", "/v1/keychain/grants/:id/revoke"),
-  pat("POST", "/v1/keychain/use"),
   pat("POST", "/v1/surface-context"),
   pat("POST", "/v1/surface-file"),
   pat("POST", "/v1/triggers/:id/consent"),

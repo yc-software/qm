@@ -179,7 +179,7 @@ test("resource tools register with the actual Claude SDK and preserve flat argum
 
 test("native children retain publication and file work without gaining artifact transfers", async () => {
   const { nativeChildToolAllowed } = await import("../src/harness/harness-shared.ts");
-  assert.equal(nativeChildToolAllowed("apps", { action: "publish", audience: [] }), true);
+  assert.equal(nativeChildToolAllowed("apps", { action: "publish" }), true);
   assert.equal(nativeChildToolAllowed("files", { action: "share", path: "notes", scope: "org" }), true);
   for (const [name, args] of [
     ["apps", { action: "move" }],

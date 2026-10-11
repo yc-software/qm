@@ -1,3 +1,4 @@
+import { emojiCompletion } from "./emoji-completion";
 import { appEditSlug } from "./app-edit";
 import {
   runtimeConfigKey,
@@ -659,6 +660,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                 <textarea
                   class="composer-input"
                   dir="auto"
+                  ${emojiCompletion(composerState.draft)}
                   rows="1"
                   placeholder=${placeholder}
                   ?disabled=${inputBlocked}
@@ -842,6 +844,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             ? html` <div class="queued-chip queued-editing" role="listitem">
                 <textarea
                   class="queued-edit-input"
+                  ${emojiCompletion(queuedEdit.text)}
                   aria-label="Edit queued message"
                   rows="3"
                   .value=${live(queuedEdit.text)}

@@ -104,6 +104,24 @@ test(
       assert.equal(windows[0].url, "https://old.example/");
       assert.deepEqual(windows[0].popup({ url: "file:///tmp/private" }), { action: "deny" });
       assert.equal(opened.length, 0);
+      const sent = [];
+      windows[0].webContents.send = (...args) => sent.push(args);
+      let reserved = false;
+      const input = (key, control) =>
+        windows[0].webContents.emit(
+          "before-input-event",
+          {
+            preventDefault() {
+              reserved = true;
+            },
+          },
+          { type: "keyDown", key, control },
+        );
+      input("Tab", false);
+      assert.equal(reserved, false);
+      input("Tab", true);
+      assert.equal(reserved, true);
+      assert.deepEqual(sent, [["qm:cycle-tab", 1]]);
       const frame = { url: "https://old.example/" };
       windows[0].webContents.mainFrame = frame;
       const browserEvent = { sender: windows[0].webContents, senderFrame: frame };
