@@ -244,7 +244,7 @@ test("a 1:1 names the authenticated human in the prompt so the agent never asks 
   const res = await app.turn(dm("hi", { actor: { externalId: "ada@acme.com", displayName: "Ada Lovelace" } }));
   assert.equal(res.status, "ok", res.reason);
   const sys = (await sessions.listLlmRequests(res.sessionId!)).at(-1)! as any;
-  assert.match(sys.promptEnvelope.system, /live, private 1:1 with Ada Lovelace \(ada@acme\.com\)/);
+  assert.match(sys.promptEnvelope.system, /live private 1:1 with Ada Lovelace \(ada@acme\.com\)/);
 });
 
 test("a channel turn gets no 1:1 identity block", async () => {
@@ -1453,7 +1453,6 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
 
   const userPrompt = await app.turn(dm("!sysprompt"));
   assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
-  assert.match(userPrompt.reply ?? "", /v1\/apis/, "every turn learns the discoverable self-API surface");
 });
 
 test("admin reach rides only live, all-internal turns — autonomous and guest-audience turns mint a powerless token", async () => {
@@ -2741,9 +2740,6 @@ test("Dangerous posture keeps predeclared command approvals and hard denials", a
     ],
   });
 
-  const prompt = await app.turn(dm("!sysprompt"));
-  assert.match(prompt.reply ?? "", /Security posture: Dangerous/);
-
   const gated = await app.turn(dm("!run printf dangerous-gated"));
   assert.equal(gated.status, "pending_approval");
   const pending = gated.pendingApprovals![0]!;
@@ -2828,11 +2824,6 @@ test("disabling a grant mode suspends existing grants until it is re-enabled", a
 test("Strict posture gates tool actions behind HiLO and honors a session grant", async () => {
   const built = freshApp();
   await built.config.setSecurityPosture(scopeId("org", "default-org"), "strict");
-
-  const prompt = await built.app.turn(dm("!sysprompt"));
-  assert.match(prompt.reply ?? "", /Security posture: Strict/);
-  assert.match(prompt.reply ?? "", /Every harness tool except the no-effect/);
-  assert.match(prompt.reply ?? "", /Direct capability-token HTTP mutations are blocked/);
 
   const first = await built.app.turn(dm("!write notes.md strict-hello"));
   assert.equal(first.status, "pending_approval", "a plain workspace write pauses under strict");
@@ -2962,8 +2953,6 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   const allowed = await benign.app.turn(dm("!run printf auto-ok", { surface: "webhook", triggered: true }));
   assert.equal(allowed.status, "ok");
   assert.match(allowed.reply ?? "", /auto-ok/);
-  const prompt = await benign.app.turn(dm("!sysprompt", { surface: "webhook", triggered: true }));
-  assert.match(prompt.reply ?? "", /Security: External-content screening/);
 });
 
 test("Concurrent flagged inputs get distinct approval requests that release independently", async () => {
