@@ -434,6 +434,7 @@ for (const surface of ["web", "slack"]) {
         assert.match(prompt, /Use Markdown text; Slack-style links are also supported/);
         assert.match(prompt, /<https:\/\/example.com\|label>/);
       }
+      assert.equal(countOccurrences(prompt, "Use Markdown"), 1);
       const stablePrompt = prompt.split("\n\n<environment>")[0]!.trim();
       assert.equal(countOccurrences(stablePrompt, "## Rules for talking to users"), 1);
       assert.ok(stablePrompt.endsWith("4. Describe work in human terms and not system machinery."));

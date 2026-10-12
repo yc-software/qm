@@ -1149,7 +1149,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (modeName === "mode-conversation" && input.proactiveOpener) {
         modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
       }
-      const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, botHandle, orgName });
+      const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, botHandle, orgName, web: isWeb, slack: isSlack });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=
