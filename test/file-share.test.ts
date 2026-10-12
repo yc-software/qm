@@ -66,6 +66,7 @@ function toolCtx(opts: {
     grantedHandles: opts.grantedHandles ?? [],
     ...(opts.sharedMaterializeDir ? { sharedMaterializeDir: opts.sharedMaterializeDir } : {}),
     workspace: opts.workspace,
+    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
     deploy: {} as never,
     acl: opts.acl,
     ...(opts.auditLog ? { auditLog: opts.auditLog } : {}),
