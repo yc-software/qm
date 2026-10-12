@@ -318,6 +318,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(env ? { env } : {}),
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
       });
+      if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
+        await deps.acl.grant({
+          ownerScopeId: d.ownerScopeId,
+          ref: deploymentRef(d.id),
+          granteeScopeId: input.createdInScope,
+          permission: "read",
+          grantedBy: input.createdBy,
+        });
+      }
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
       void deps.appPublished?.(input.createdBy, d.id, d.versions[0]!.version).catch(() => {});
