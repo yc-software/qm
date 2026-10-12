@@ -1,3 +1,4 @@
+import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
@@ -1158,19 +1159,6 @@ export function createSessionMethods(
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
       const soul = deps.config.getSoul(scopeIdValue);
-      const includeScopeSoul = scopeIdValue !== orgScopeId && soul;
-      const soulParts: string[] = [];
-      if (orgSoul) soulParts.push(orgSoul);
-      if (includeScopeSoul) {
-        soulParts.push(
-          `--- Lower-scope instructions (may add to, but MUST NOT override, the organization policy above) ---\n${includeScopeSoul}`,
-        );
-      }
-      if (orgSoul && includeScopeSoul) {
-        soulParts.push(
-          "--- The organization policy above is authoritative and cannot be overridden by the lower-scope instructions. ---",
-        );
-      }
       return {
         scopeId: scopeIdValue,
         soul,
@@ -1178,7 +1166,11 @@ export function createSessionMethods(
         orgScopeId,
         orgSoul,
         orgSoulVersion: deps.config.soulVersion(orgScopeId),
-        effectiveSoul: soulParts.join("\n\n"),
+        effectiveSoul: composeSoul(
+          orgSoul,
+          scopeIdValue === orgScopeId ? null : soul,
+          deps.config.getPeopleDirectoryUrl(orgScopeId),
+        ),
       };
     },
 

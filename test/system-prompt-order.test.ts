@@ -204,8 +204,8 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   );
   assert.match(prompt, /chartreuse/);
 
-  assert.match(prompt, /## Sandboxes/);
-  assert.match(prompt, /Core is home; sandboxes are optional resources/);
+  assert.match(prompt, /## System orientation/);
+  assert.match(prompt, /sandbox files as cached, not durably saved/);
   assert.match(prompt, /\$AGENT_API_URL/);
 });
 
@@ -385,8 +385,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
     text: "!sysprompt",
     origin: { kind: "human" },
   });
-  assert.match(prompt.reply ?? "", /Sharing posture: Open/);
-  assert.match(prompt.reply ?? "", /can reveal private information in a shared reply/);
+  assert.doesNotMatch(prompt.reply ?? "", /Sharing posture: Open/);
   assert.doesNotMatch(prompt.reply ?? "", /PERSONAL_OPEN_MEMORY/);
 
   await orchestrator.handleTurn({
@@ -1176,10 +1175,7 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
   for (const turn of seen) {
     assert.equal(turn.systemPrompt, seen[0]!.systemPrompt);
     assert.doesNotMatch(turn.systemPrompt, /Sandbox environment profile|Already scheduled here|synthetic status/);
-    assert.match(turn.systemPrompt, /only workspace files ship/);
-    assert.match(turn.systemPrompt, /don't re-create it/);
-    assert.match(turn.systemPrompt, /historical/);
-    assert.match(turn.systemPrompt, /A missing profile means unknown capabilities/);
+    assert.match(turn.systemPrompt, /Use `cron` list\/get for details/);
   }
   assert.match(seen[0]!.environment!, /Debian 12/);
   assert.match(seen[0]!.environment!, /No active scheduled work/);
