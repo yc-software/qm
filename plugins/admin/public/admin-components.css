@@ -2104,10 +2104,14 @@ dialog.credential-dialog {
 
 #app-view #main .spend-custom {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 0 0 16px;
 }
 #app-view #main .spend-custom input[type="date"] {
   width: auto;
+}
+#app-view #main .spend-custom .hint {
+  margin: 0;
 }

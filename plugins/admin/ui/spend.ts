@@ -146,11 +146,11 @@ export class SpendView {
       if (dayMs(first) !== null && end !== null) this.services.setCustomRange(first, isoDay(end + DAY));
     };
     return html`<form class="spend-custom" @submit=${apply}>
-      <input type="date" aria-label="First day" max=${today} .value=${current.from} />
+      <input type="date" aria-label="First day" required max=${today} .value=${current.from} />
       <span>to</span>
-      <input type="date" aria-label="Last day" max=${today} .value=${isoDay(Date.parse(current.to) - DAY)} />
+      <input type="date" aria-label="Last day" required max=${today} .value=${isoDay(Date.parse(current.to) - DAY)} />
       <button class="primary">Apply</button>
-      <span class="hint">UTC, up to a year</span>
+      <span class="hint">UTC, up to ${MAX_CUSTOM_DAYS} days</span>
     </form>`;
   }
   sortBy(key: string) {
