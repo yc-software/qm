@@ -3611,6 +3611,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 remainingDocumentBytes,
                 turnAbort.signal,
                 remainingDocumentCount,
+                documentInputs.documents,
               );
               let steeredUnscreened = false;
               if (enforceScreen) steeredUnscreened = await screenDocuments(steeredDocuments, text);

@@ -982,11 +982,11 @@ test("steered documents use the inbound security screen before writing their con
   );
 });
 
-for (const budget of ["count", "bytes"] as const) {
-  test(`steered documents share the initial turn ${budget} budget`, async () => {
+for (const budget of ["count", "bytes", "reupload"] as const) {
+  test(`steered documents respect the initial turn budget (${budget})`, async () => {
     const blobTransfer = createMemoryBlobTransferStore();
     const blob = await blobTransfer.put(Buffer.from(budget === "bytes" ? "x".repeat(7_999_995) : "initial"));
-    const steerBlob = await blobTransfer.put(Buffer.from("steered document"));
+    const steerBlob = budget === "reupload" ? blob : await blobTransfer.put(Buffer.from("steered document"));
     const sandbox: Sandbox = {
       ...readSandbox(),
       removeDir: async () => {},
@@ -1003,8 +1003,12 @@ for (const budget of ["count", "bytes"] as const) {
         actor: { externalId: actor.id },
         conversation: { kind: "dm", threadRef: `steer-budget-${budget}` },
         text: "read this",
-        attachments: [{ name: "steered.txt", mimetype: "text/plain", ...steerBlob }],
+        attachments: [
+          { name: budget === "reupload" ? "initial-0.txt" : "steered.txt", mimetype: "text/plain", ...steerBlob },
+        ],
       });
+      if (budget === "reupload")
+        assert.notEqual(prepared.attachments?.[0]?.artifactId, turn.documents?.[0]?.artifactId);
       return { reply: "done" };
     };
     const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
@@ -1019,7 +1023,8 @@ for (const budget of ["count", "bytes"] as const) {
     });
     assert.equal(result.status, "ok", result.reason);
     assert.deepEqual(prepared?.documents, []);
-    assert.match(prepared?.text ?? "", /steered.txt.*count or byte budget/);
+    if (budget === "reupload") assert.doesNotMatch(prepared?.text ?? "", /count or byte budget/);
+    else assert.match(prepared?.text ?? "", /steered.txt.*count or byte budget/);
   });
 }
 

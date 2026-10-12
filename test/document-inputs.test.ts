@@ -240,6 +240,28 @@ test("reuploaded identical documents consume the input budget once and retain th
   assert.ok(checked.includes("new-upload"));
 });
 
+test("steered reuploads already in the turn do not consume another document slot or emit budget notices", async () => {
+  const { store, meta, artifact, opens } = storeFor();
+  const initial = await loadDocumentInputs(store, [meta], () => true);
+  store.get = async (id) => ({ ...artifact, id });
+  const checked: string[] = [];
+  const steered = await loadDocumentInputs(
+    store,
+    [{ ...meta, artifactId: "steered-upload" }],
+    (file) => {
+      checked.push(file.id);
+      return true;
+    },
+    0,
+    undefined,
+    0,
+    initial.documents,
+  );
+  assert.deepEqual(steered, { documents: [], notices: [] });
+  assert.deepEqual(checked, ["steered-upload"]);
+  assert.equal(opens(), 1);
+});
+
 test("document replay follows compaction boundaries and excludes security-tainted uploads", () => {
   const { meta } = storeFor();
   const recent = { ...meta, artifactId: "recent" };

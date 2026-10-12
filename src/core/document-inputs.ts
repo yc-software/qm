@@ -1,4 +1,5 @@
 import { addAbortSignal } from "node:stream";
+import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import type { AttachmentMeta, SessionEntry } from "../types.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
@@ -81,11 +82,20 @@ export async function loadDocumentInputs(
   maxBytes = MAX_DOCUMENT_BYTES,
   signal?: AbortSignal,
   maxDocuments = 10,
+  existingDocuments: readonly DocumentInput[] = [],
 ): Promise<{ documents: DocumentInput[]; notices: string[] }> {
   const documents: DocumentInput[] = [];
   const notices: string[] = [];
   const seen = new Set<string>();
-  const loadedContent = new Set<string>();
+  const loadedContent = new Set(
+    existingDocuments.map((document) =>
+      JSON.stringify([
+        createHash("sha256").update(document.dataBase64, "base64").digest("hex"),
+        document.name,
+        document.mimeType,
+      ]),
+    ),
+  );
   let remaining = maxBytes;
   for (const meta of [...metas].reverse()) {
     signal?.throwIfAborted();
