@@ -147,13 +147,14 @@ test(
 
       const killed = await standbyPool.q(
         `WITH k AS (SELECT hashtextextended('leader-lease:failover:key', 0) AS v)
-       SELECT pg_terminate_backend(l.pid) AS ok
+       SELECT pg_terminate_backend(l.pid, 5000) AS ok
          FROM pg_locks l, k
         WHERE l.locktype = 'advisory' AND l.granted
           AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
           AND l.classid::bigint = ((k.v >> 32) & 4294967295) AND l.objid::bigint = (k.v & 4294967295)`,
       );
-      assert.equal(killed.length, 1, "found and terminated the holder's lock connection");
+      assert.equal(killed.length, 1, "found the holder's lock connection");
+      assert.equal(killed[0]?.ok, true, "the holder backend terminated within the timeout");
 
       assert.equal(
         await standby.hold("failover:key", async () => "second"),
