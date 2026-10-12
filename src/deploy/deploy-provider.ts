@@ -15,6 +15,12 @@ export interface DeployReconcileInput {
   allPaths: string[];
 }
 
+export interface DeployRunState {
+  running: boolean;
+  exitCode?: number;
+  oomKilled?: boolean;
+}
+
 export interface DeployProvider {
   readonly profile: DeployProfile;
   apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint>;
@@ -24,4 +30,5 @@ export interface DeployProvider {
   resolveEndpoint?(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint | null>;
   /** Recent output from the running app (entrypoint stdout+stderr), newest last. */
   logs?(d: Deployment, opts: { tailLines: number }): Promise<string | null>;
+  runState?(d: Deployment, version: DeploymentVersion): Promise<DeployRunState | null>;
 }

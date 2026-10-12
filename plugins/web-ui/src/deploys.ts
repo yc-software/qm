@@ -92,7 +92,15 @@ function statusClass(d: DeploymentView): string {
     return "deploying";
   if (d.status === "running") return "running";
   if (d.status === "archived") return "archived";
+  if (d.status === "crashed") return "crashed";
   return "stopped";
+}
+
+function crashSummary(d: DeploymentView): string {
+  const code = d.crash?.exitCode;
+  const reason = d.crash?.oomKilled ? " (out of memory)" : "";
+  const when = d.crash?.at ? ` ${relTime(d.crash.at)}` : "";
+  return `Exited${code === undefined ? "" : ` with code ${code}`}${reason}${when}`;
 }
 
 function permissionBadge(d: DeploymentView): TemplateResult {
@@ -298,6 +306,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           <span>Live v${d.appliedVersion ?? d.currentVersion ?? "—"}</span>
           ${d.currentVersion !== undefined && d.appliedVersion !== undefined && d.currentVersion !== d.appliedVersion ? html`<span>Latest v${d.currentVersion}</span>` : nothing}
           ${deploymentLatestAt(d) ? html`<span ${tip(new Date(deploymentLatestAt(d)).toLocaleString())}>Updated ${relTime(deploymentLatestAt(d))}</span>` : nothing}
+          ${d.status === "crashed" ? html`<span class="deploy-crash">${crashSummary(d)} · <a href=${withBase(`/api/deployments/${encodeURIComponent(d.id)}/logs`)} target="_blank" rel="noreferrer">Recent logs</a></span>` : nothing}
         </div>
         <div class="deploy-access-line">
           <div>

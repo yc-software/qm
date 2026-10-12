@@ -188,3 +188,37 @@ test("the daemon probe reports a hung daemon as a timeout", async () => {
 
   assert.equal(await dockerDaemonFailure({ dockerExec }), "no response within 10s");
 });
+
+test("runState distinguishes running, exited, OOM-killed, absent, and unreachable containers", async () => {
+  const cases: Array<[{ code: number; stdout: string; stderr: string }, unknown]> = [
+    [{ code: 0, stdout: JSON.stringify({ Running: true }), stderr: "" }, { running: true }],
+    [
+      {
+        code: 0,
+        stdout: JSON.stringify({ Running: false, ExitCode: 7, OOMKilled: false, Error: "mount /x" }),
+        stderr: "",
+      },
+      { running: false, exitCode: 7 },
+    ],
+    [
+      { code: 0, stdout: JSON.stringify({ Running: false, ExitCode: 137, OOMKilled: true }), stderr: "" },
+      { running: false, exitCode: 137, oomKilled: true },
+    ],
+    [{ code: 1, stdout: "", stderr: "Error: No such container: agent-deploy-x" }, null],
+  ];
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/one",
+  });
+  for (const [result, expected] of cases) {
+    const provider = createDockerDeployProvider({ dockerExec: async () => result });
+    assert.deepEqual(await provider.runState!(deployment, deployment.versions[0]!), expected);
+  }
+  const unreachable = createDockerDeployProvider({
+    dockerExec: async () => ({ code: 1, stdout: "", stderr: "daemon unavailable" }),
+  });
+  await assert.rejects(unreachable.runState!(deployment, deployment.versions[0]!), /daemon unavailable/);
+});
