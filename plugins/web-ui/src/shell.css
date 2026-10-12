@@ -9725,7 +9725,8 @@ h3.ambient-field-label {
 }
 .inbox-item-glyph.inbox-sender-avatar {
   position: relative;
-  width: 32px;
+  width: auto;
+  min-width: 32px;
   height: 32px;
   align-self: center;
   margin-top: 0;
@@ -9735,6 +9736,20 @@ h3.ambient-field-label {
   height: 32px;
   border-radius: 8px;
   font-size: 12px;
+}
+.inbox-sender-avatar > .inbox-avatars {
+  gap: 0;
+}
+.inbox-sender-avatar .inbox-avatars > .inbox-avatar {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--background);
+  border-radius: 8px;
+  box-sizing: border-box;
+  font-size: 10px;
+}
+.inbox-sender-avatar .inbox-avatar + .inbox-avatar {
+  margin-left: -8px;
 }
 .inbox-sender-badge {
   position: absolute;
