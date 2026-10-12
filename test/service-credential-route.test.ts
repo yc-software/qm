@@ -1346,7 +1346,7 @@ test("usage summaries authorize before reads and include only the requested scop
   assert.doesNotMatch(JSON.stringify(body), /private|unlisted|U2/);
 });
 
-test("credential prompt blocks are byte-identical across inventory and policy ordering", async () => {
+test("credential inventory and policy reordering do not resend unchanged credentials", async () => {
   const { built } = buildWithCapture();
   for (const slug of ["z-service", "a-service"]) {
     await built.serviceCreds.setServiceCredential("org:default-org", {
@@ -1379,7 +1379,8 @@ test("credential prompt blocks are byte-identical across inventory and policy or
     }));
   const second = await built.app.turn(dm("!sysprompt"));
   assert.equal(second.status, "ok");
-  assert.equal(second.reply, first.reply);
+  assert.match(second.reply ?? "", /<environment>/);
+  assert.doesNotMatch(second.reply ?? "", /## Credentials|No longer included: Credentials|service_[az]-service/);
 });
 
 test("broker accepts no-expiry sandbox tokens but still enforces credential disablement", async () => {
