@@ -141,3 +141,35 @@ test("admin error diagnostics retain request evidence and redact secrets", async
   assert.match(text, /req-synthetic/);
   assert.doesNotMatch(text, /synthetic-private-key/);
 });
+
+test("strict approval of an admin read cannot authorize an admin mutation", async () => {
+  const calls: string[] = [];
+  const approvals: Array<{ approvalKey?: string }> = [];
+  const tool = createAgentTools(
+    {
+      current: {
+        admin: {
+          operationsAvailable: true,
+          call: async (input: Record<string, unknown>) => {
+            calls.push(String(input.action));
+            return { status: 200, body: {} };
+          },
+        },
+      } as unknown as ToolContext,
+      pendingApprovals: approvals as never,
+      toolApprovalGate: (identity) => identity === "admin:whoami",
+    },
+    { controlTools: true },
+  ).find((t) => t.name === "admin")!;
+  await tool.execute("read", { action: "whoami" }, undefined, undefined, {} as never);
+  const blocked = await tool.execute(
+    "write",
+    { action: "replace_memory", scope: "org:test", value: { content: "synthetic replacement" } },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  assert.deepEqual(calls, ["whoami"]);
+  assert.equal(approvals[0]?.approvalKey, "tool:admin:replace_memory");
+  assert.match((blocked.content[0] as { text: string }).text, /needs human approval/);
+});
