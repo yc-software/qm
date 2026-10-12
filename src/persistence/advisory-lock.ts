@@ -4,7 +4,6 @@ import { sleep } from "../util/async.ts";
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
-  withSharedLock?<T>(key: string, fn: () => Promise<T>): Promise<T>;
   tryWithLocks?<T>(keys: string[], fn: () => Promise<T>): Promise<T | null>;
   tryWithLock?<T>(key: string, fn: () => Promise<T>): Promise<T | null>;
 }
@@ -55,9 +54,6 @@ export function createNoopAdvisoryLock(): AdvisoryLock {
     async withLock<T>(_key: string, fn: () => Promise<T>): Promise<T> {
       return fn();
     },
-    async withSharedLock<T>(_key: string, fn: () => Promise<T>): Promise<T> {
-      return fn();
-    },
     async tryWithLock<T>(_key: string, fn: () => Promise<T>): Promise<T | null> {
       return fn();
     },
@@ -65,34 +61,31 @@ export function createNoopAdvisoryLock(): AdvisoryLock {
 }
 
 export function createMemoryAdvisoryLock(): AdvisoryLock {
-  const states = new Map<string, { tail: Promise<void>; readers: Set<Promise<void>>; pending: number }>();
-  const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean): Promise<T> => {
+  const states = new Map<string, { tail: Promise<void>; pending: number }>();
+  const run = async <T>(key: string, fn: () => Promise<T>): Promise<T> => {
     let state = states.get(key);
     if (!state) {
-      state = { tail: Promise.resolve(), readers: new Set(), pending: 0 };
+      state = { tail: Promise.resolve(), pending: 0 };
       states.set(key, state);
     }
     const done = Promise.withResolvers<void>();
-    const before = shared ? state.tail : Promise.all([state.tail, ...state.readers]);
+    const before = state.tail;
     state.pending++;
-    if (shared) state.readers.add(done.promise);
-    else state.tail = done.promise;
+    state.tail = done.promise;
     try {
       await before;
       return await fn();
     } finally {
-      state.readers.delete(done.promise);
       state.pending--;
       done.resolve();
       if (!state.pending) states.delete(key);
     }
   };
   return withMultiLocks({
-    withLock: (key, fn) => run(key, fn, false),
-    withSharedLock: (key, fn) => run(key, fn, true),
+    withLock: run,
     async tryWithLock(key, fn) {
       if (states.has(key)) return null;
-      return run(key, fn, false);
+      return run(key, fn);
     },
   });
 }
@@ -107,14 +100,14 @@ export function createPostgresAdvisoryLock(
   type Context = {
     client: PoolClient;
     references: number;
-    keys: Map<string, { shared: boolean; count: number }>;
+    keys: Set<string>;
   };
   const sessions = new AsyncLocalStorage<{ context: Context; active: boolean }>();
   const withClient = async <T>(action: (context: Context) => Promise<T>): Promise<T> => {
     const parent = sessions.getStore();
     const context = parent?.active
       ? parent.context
-      : { client: await (await pg.sessionPool()).connect(), references: 0, keys: new Map() };
+      : { client: await (await pg.sessionPool()).connect(), references: 0, keys: new Set<string>() };
     context.references++;
     const lease = { context, active: true };
     try {
@@ -124,29 +117,26 @@ export function createPostgresAdvisoryLock(
       if (--context.references === 0) context.client.release();
     }
   };
-  const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean, wait: boolean): Promise<T | null> => {
+  const run = async <T>(key: string, fn: () => Promise<T>, wait: boolean): Promise<T | null> => {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const attempt = await withClient(async (context): Promise<{ acquired: false } | { acquired: true; value: T }> => {
         const { client, keys } = context;
-        const held = keys.get(key);
-        if (held && !(shared && held.shared)) return { acquired: false };
-        const reservation = held ?? { shared, count: 0 };
-        reservation.count++;
-        keys.set(key, reservation);
+        if (keys.has(key)) return { acquired: false };
+        keys.add(key);
         try {
           const res = await client.query<{ locked: boolean }>(
-            `SELECT pg_try_advisory_lock${shared ? "_shared" : ""}(hashtextextended($1, 0)) AS locked`,
+            `SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked`,
             [key],
           );
           if (res.rows[0]?.locked !== true) return { acquired: false };
           try {
             return { acquired: true, value: await fn() };
           } finally {
-            await client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [key]);
+            await client.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [key]);
           }
         } finally {
-          if (--reservation.count === 0) keys.delete(key);
+          keys.delete(key);
         }
       });
       if (attempt.acquired) return attempt.value;
@@ -156,8 +146,7 @@ export function createPostgresAdvisoryLock(
     }
   };
   return withMultiLocks({
-    withLock: <T>(key: string, fn: () => Promise<T>) => run(key, fn, false, true) as Promise<T>,
-    withSharedLock: <T>(key: string, fn: () => Promise<T>) => run(key, fn, true, true) as Promise<T>,
-    tryWithLock: <T>(key: string, fn: () => Promise<T>) => run(key, fn, false, false),
+    withLock: <T>(key: string, fn: () => Promise<T>) => run(key, fn, true) as Promise<T>,
+    tryWithLock: <T>(key: string, fn: () => Promise<T>) => run(key, fn, false),
   });
 }

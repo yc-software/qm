@@ -83,7 +83,7 @@ export function selectValues<T, K extends Extract<keyof T, string>>(
   return out;
 }
 
-function applyPatch<T>(value: T, patch: Partial<T>): T {
+export function applyPatch<T>(value: T, patch: Partial<T>): T {
   const next = { ...value } as Record<string, unknown>;
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) delete next[k];

@@ -187,55 +187,6 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
     await pgB.close();
   }
 });
-test(
-  "pg shared sandbox use overlaps across cores and excludes lifecycle mutations",
-  { skip, timeout: 10000 },
-  async () => {
-    const pgA = createPgPool(URL!);
-    const pgB = createPgPool(URL!);
-    const pgWriter = createPgPool(URL!);
-    const release = Promise.withResolvers<void>();
-    const entered = Promise.withResolvers<void>();
-    const key = `sandbox-shared:${crypto.randomUUID()}`;
-    const a = createPostgresAdvisoryLock(pgA, { pollMs: 10 });
-    const b = createPostgresAdvisoryLock(pgB, { pollMs: 10, timeoutMs: 200 });
-    const writer = createPostgresAdvisoryLock(pgWriter, { pollMs: 10, timeoutMs: 100 });
-    const running = a.withSharedLock!(key, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    try {
-      await entered.promise;
-      assert.equal(await b.withSharedLock!(key, async () => "concurrent"), "concurrent");
-      await assert.rejects(
-        writer.withLock(key, async () => assert.fail("mutated active sandbox")),
-        /timeout acquiring/,
-      );
-      assert.equal(await writer.tryWithLock!(key, async () => "exclusive"), null);
-      release.resolve();
-      await running;
-      assert.equal(await writer.withLock(key, async () => "exclusive"), "exclusive");
-      await assert.rejects(
-        b.withSharedLock!(key, async () => {
-          throw new Error("failed operation");
-        }),
-        /failed operation/,
-      );
-      assert.equal(await writer.tryWithLock!(key, async () => "released"), "released");
-      await writer.withLock(key, async () => {
-        await assert.rejects(
-          b.withSharedLock!(key, async () => assert.fail("entered during mutation")),
-          /timeout acquiring/,
-        );
-      });
-    } finally {
-      release.resolve();
-      await running;
-      await Promise.all([pgA.close(), pgB.close(), pgWriter.close()]);
-    }
-  },
-);
-
 test("pg nested locks reuse one connection without bypassing sibling exclusion", { skip, timeout: 10000 }, async () => {
   const { Pool } = await import("pg");
   const pool = new Pool({ connectionString: URL, max: 1, connectionTimeoutMillis: 200 });
@@ -243,9 +194,7 @@ test("pg nested locks reuse one connection without bypassing sibling exclusion",
   const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5, timeoutMs: 100 });
   try {
     assert.equal(
-      await lock.withSharedLock!("resource", () =>
-        lock.withSharedLock!("use", () => lock.withLock("recover", async () => 42)),
-      ),
+      await lock.withLock("resource", () => lock.withLock("use", () => lock.withLock("recover", async () => 42))),
       42,
     );
     await lock.withLock("parent", async () => {
@@ -262,7 +211,7 @@ test("pg nested locks reuse one connection without bypassing sibling exclusion",
       const entered = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       let writing = false;
-      const reader = lock.withSharedLock!("mixed", async () => {
+      const reader = lock.withLock("mixed", async () => {
         entered.resolve();
         await release.promise;
       });

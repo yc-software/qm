@@ -168,14 +168,17 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       });
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      const action = () => forHandle(handle).teardown(handle, tdOpts);
-      return handle.resourceId
-        ? resources.use(
-            handle.resourceId,
-            action,
-            !!tdOpts?.destroy || (!tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown),
-          )
-        : action();
+      const resourceId = handle.resourceId;
+      if (!resourceId) return forHandle(handle).teardown(handle, tdOpts);
+      const parks = !tdOpts?.destroy && !tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown;
+      return resources.use(
+        resourceId,
+        async () => {
+          const held = parks && !!(await resources.get(resourceId)).holders?.length;
+          return forHandle(handle).teardown(handle, held ? { ...tdOpts, keepWarm: true } : tdOpts);
+        },
+        !!tdOpts?.destroy || parks,
+      );
     },
 
     ...(some(supportsProcessSessions)

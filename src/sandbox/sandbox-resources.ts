@@ -110,13 +110,12 @@ export function createSandboxResources(opts: {
     return record;
   };
   const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
-    await get(id);
-    const lock = exclusive || !opts.lock.withSharedLock ? opts.lock.withLock : opts.lock.withSharedLock;
-    return lock(`sandbox-resource:${id}`, async () => {
+    const guarded = async (): Promise<T> => {
       const current = await get(id);
       if (current.state === "retired") throw new Error("sandbox has been retired");
       return action();
-    });
+    };
+    return exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, guarded) : guarded();
   };
   return {
     forTurn: (turn) =>

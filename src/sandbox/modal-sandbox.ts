@@ -2,11 +2,10 @@ import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
+import { applyPatch, createMemoryMap } from "../persistence/durable-map.ts";
 import { orgId as configOrgId } from "../config.ts";
-import { createKeyedQueue } from "../util/async.ts";
+import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
@@ -35,6 +34,7 @@ import {
   createHomeSnapshotOps,
   createMemorySnapshotStore,
   HOME_SNAPSHOT_PRUNE,
+  SNAPSHOT_TIMEOUT_MS,
   snapshotDue,
   type HomeSnapshotStore,
 } from "./home-snapshot.ts";
@@ -55,7 +55,9 @@ const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const HYDRATED_MARKER = `${HOME_DIR}/.qm-hydrated`;
-const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
+export const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
+export const ACTIVITY_GRACE_MS = 2 * ACTIVITY_TOUCH_INTERVAL_MS;
+export const HYDRATION_WAIT_MS = SNAPSHOT_TIMEOUT_MS + 5 * 60_000;
 const swallowGone = (error: unknown): void => {
   if (!(error instanceof ModalSandboxGoneError)) throw error;
 };
@@ -79,7 +81,6 @@ export interface StoredModalSandbox {
 
 export interface ModalSandboxOptions extends BlobStagingOptions {
   client: ModalClient;
-  advisoryLock?: AdvisoryLock;
   namePrefix?: string;
   defaultTimeoutSec?: number;
   snapshotIntervalMs?: number;
@@ -128,11 +129,19 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   });
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const store = opts.store ?? createMemoryMap<StoredModalSandbox>();
+  if (!store.update || !store.deleteIf) throw new Error("Modal sandboxes require an atomic durable store");
+  const updateRow = store.update.bind(store);
+  const deleteRowIf = store.deleteIf.bind(store);
+  const patchIfCurrent = (
+    scope: string,
+    sandboxId: string,
+    patch: Partial<StoredModalSandbox>,
+  ): Promise<StoredModalSandbox | null> =>
+    updateRow(scope, (current) => (current.sandboxId === sandboxId ? applyPatch(current, patch) : current));
+  const forgetIfCurrent = (scope: string, sandboxId: string): Promise<boolean> =>
+    deleteRowIf(scope, (current) => current.sandboxId === sandboxId && !current.nativeSnapshotId);
   const snapshots = opts.snapshots ?? createMemorySnapshotStore();
   const localQueue = createKeyedQueue<string>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
-  const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
-    localQueue(scope, () => advisoryLock.withLock(`modal-provision:${scope}`, action));
 
   const sessionByName = new Map<string, ModalSession>();
   const scopeByName = new Map<string, string>();
@@ -157,9 +166,13 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     partBytes: fileChunkBytes,
   });
 
-  async function assertHydrated(session: ModalSession): Promise<void> {
+  async function isHydrated(session: ModalSession): Promise<boolean> {
     const marked = await session.runCommand(`test -f ${shq(HYDRATED_MARKER)}`, { timeoutMs: 30_000 });
-    if (marked.exitCode !== 0)
+    return marked.exitCode === 0;
+  }
+
+  async function assertHydrated(session: ModalSession): Promise<void> {
+    if (!(await isHydrated(session)))
       throw new Error(
         "modal snapshot refused: this sandbox never finished hydrating, its home is not a trustworthy source",
       );
@@ -169,8 +182,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     await assertHydrated(session);
     if (usesNativeSnapshots(await store.get(scope))) {
       if (!session.snapshotHome) throw new Error("native Modal home checkpoint is not supported by this client");
-      if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
-      const requested = await store.update(scope, (current) => {
+      const requested = await updateRow(scope, (current) => {
         if (current.sandboxId !== session.sandboxId) throw new Error("Modal checkpoint source has been replaced");
         return {
           ...current,
@@ -182,7 +194,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const capturedAtMs = Date.now();
       try {
         const snapshot = await session.snapshotHome();
-        const committed = await store.update(scope, (current) =>
+        const committed = await updateRow(scope, (current) =>
           current.sandboxId === session.sandboxId && current.snapshotGeneration === requested.snapshotGeneration
             ? {
                 ...current,
@@ -198,7 +210,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         if (committed?.nativeSnapshotId !== snapshot.imageId)
           throw new Error("Modal checkpoint was superseded; keeping the source running");
       } catch (error) {
-        await store.update(scope, (current) =>
+        await updateRow(scope, (current) =>
           current.sandboxId === session.sandboxId && current.snapshotGeneration === requested.snapshotGeneration
             ? { ...current, recoveryError: errMessage(error) }
             : current,
@@ -207,11 +219,52 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       }
     } else {
       await homeSnapshots.snapshotHome(scope, session);
-      await store.merge(scope, { lastSnapshotMs: Date.now(), homeDirty: false });
+      await patchIfCurrent(scope, session.sandboxId, { lastSnapshotMs: Date.now(), homeDirty: false });
     }
   }
 
-  async function createHydrated(scope: string, name: string): Promise<{ session: ModalSession; coldStart: boolean }> {
+  const hydrationIncomplete = (): Error =>
+    new Error(
+      "Modal home hydration is still running on another core or was interrupted; retry shortly, and if it persists use computer restart to discard the incomplete replacement and retry the retained checkpoint",
+    );
+
+  async function settledRow(scope: string): Promise<StoredModalSandbox | null> {
+    for (;;) {
+      const row = await store.get(scope);
+      if (!row?.hydrationPending) return row;
+      if (Date.now() >= row.createdAtMs + HYDRATION_WAIT_MS) throw hydrationIncomplete();
+      await sleep(1_000);
+    }
+  }
+
+  async function adopt(
+    scope: string,
+    name: string,
+    session: ModalSession,
+  ): Promise<{ session: ModalSession; coldStart: boolean }> {
+    if (!(await isHydrated(session))) {
+      await settledRow(scope);
+      await assertHydrated(session);
+    }
+    const now = Date.now();
+    const stamp = { sandboxId: session.sandboxId, lastActivityMs: now };
+    const row = await updateRow(scope, (current) => (current.hydrationPending ? current : { ...current, ...stamp }));
+    if (row?.hydrationPending) {
+      const settled = await settledRow(scope);
+      const holder = settled?.sandboxId ?? session.sandboxId;
+      return adopt(scope, name, holder === session.sandboxId ? session : await client.fromId(holder));
+    }
+    if (!row) await store.putIfAbsent(scope, { ...stamp, createdAtMs: now, orgId: configOrgId() });
+    sessionByName.set(name, session);
+    return { session, coldStart: false };
+  }
+
+  async function createHydrated(
+    scope: string,
+    name: string,
+    expected: string | undefined,
+    activityMs = Date.now(),
+  ): Promise<{ session: ModalSession; coldStart: boolean }> {
     const previous = await store.get(scope);
     if (previous?.nativeSnapshotExpiresAtMs && previous.nativeSnapshotExpiresAtMs <= Date.now()) {
       const recoveryError =
@@ -224,66 +277,62 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       session = await client.create({ name, tags: tags("scope") });
     } catch (err) {
       if (!(err instanceof ModalNameConflictError)) throw err;
-      const adopted = await client.fromName(name);
-      if (!adopted) throw err;
-      if ((await store.get(scope))?.hydrationPending)
-        throw new Error("Modal home hydration is incomplete; refusing to adopt the replacement", { cause: err });
-      await assertHydrated(adopted);
-      sessionByName.set(name, adopted);
-      const merged = await store.merge(scope, { sandboxId: adopted.sandboxId, lastActivityMs: Date.now() });
-      if (!merged) {
-        await store.put(scope, {
-          sandboxId: adopted.sandboxId,
-          createdAtMs: Date.now(),
-          lastActivityMs: Date.now(),
-          orgId: configOrgId(),
-        });
-      }
-      return { session: adopted, coldStart: false };
+      const holder = await client.fromName(name);
+      if (!holder) throw err;
+      return adopt(scope, name, holder);
     }
-    await store.put(scope, {
-      ...previous,
+    const fresh: StoredModalSandbox = {
       hydrationPending: true,
-      lastSnapshotAttemptMs: undefined,
       ...(client.lifetimeMs ? { expiresAtMs: Date.now() + client.lifetimeMs } : {}),
       sandboxId: session.sandboxId,
       createdAtMs: Date.now(),
-      lastActivityMs: Date.now(),
+      lastActivityMs: activityMs,
       orgId: configOrgId(),
-    });
+    };
+    const claimed =
+      (expected !== undefined &&
+        (await updateRow(scope, (current) =>
+          current.sandboxId === expected ? { ...current, ...fresh, lastSnapshotAttemptMs: undefined } : current,
+        ))) ||
+      (await store.putIfAbsent(scope, fresh));
+    if (claimed.sandboxId !== session.sandboxId) {
+      await session.terminate().catch(swallowGone);
+      return adopt(scope, name, await client.fromId(claimed.sandboxId));
+    }
+    const abandon = async (): Promise<void> => {
+      sessionByName.delete(name);
+      await session.terminate().then(
+        () => patchIfCurrent(scope, session.sandboxId, { hydrationPending: false }),
+        () => undefined,
+      );
+    };
     let hydrated: boolean;
     try {
-      if (previous?.nativeSnapshotId) {
+      if (claimed.nativeSnapshotId) {
         if (!session.restoreHome) throw new Error("native Modal home restore is not supported by this client");
-        await session.restoreHome(previous.nativeSnapshotId);
+        await session.restoreHome(claimed.nativeSnapshotId);
         hydrated = true;
       } else {
         hydrated = await homeSnapshots.hydrateHome(scope, session);
       }
     } catch (e) {
-      await store.merge(scope, { recoveryError: errMessage(e) });
+      await patchIfCurrent(scope, session.sandboxId, { recoveryError: errMessage(e) });
       reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
-      sessionByName.delete(name);
-      await session.terminate().then(
-        () => store.merge(scope, { hydrationPending: false }),
-        () => undefined,
-      );
+      await abandon();
       throw new Error(`modal provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
         cause: e,
       });
     }
     const marked = await session.runCommand(`touch ${shq(HYDRATED_MARKER)}`, { timeoutMs: 30_000 });
     if (marked.exitCode !== 0) {
-      sessionByName.delete(name);
-      await session.terminate().then(
-        () => store.merge(scope, { hydrationPending: false }),
-        () => undefined,
-      );
+      await abandon();
       throw new Error(`modal provision: could not mark the sandbox hydrated: ${marked.stderr.slice(0, 200)}`);
     }
-    await store.merge(scope, { hydrationPending: false });
+    await patchIfCurrent(scope, session.sandboxId, {
+      hydrationPending: false,
+      ...(hydrated && !claimed.nativeSnapshotId ? { lastSnapshotMs: Date.now() } : {}),
+    });
     sessionByName.set(name, session);
-    if (hydrated && !previous?.nativeSnapshotId) await store.merge(scope, { lastSnapshotMs: Date.now() });
     return { session, coldStart: !hydrated };
   }
 
@@ -293,19 +342,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     onStatus?: (text: string) => void,
     allowRotation = true,
   ): Promise<{ session: ModalSession; coldStart: boolean }> {
-    return provisionQueue(scope, async () => {
-      const adopt = async (session: ModalSession): Promise<{ session: ModalSession; coldStart: boolean }> => {
-        await assertHydrated(session);
-        sessionByName.set(name, session);
-        await store.merge(scope, { lastActivityMs: Date.now() });
-        return { session, coldStart: false };
-      };
-
-      const stored = await store.get(scope);
-      if (stored?.hydrationPending)
-        throw new Error(
-          "Modal home hydration was interrupted; use computer restart to discard the incomplete replacement and retry the retained checkpoint",
-        );
+    return localQueue(scope, async () => {
+      const stored = await settledRow(scope);
       const stale =
         allowRotation &&
         !!stored &&
@@ -313,39 +351,38 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         Date.now() >= (rotationHoldUntil.get(scope) ?? 0);
 
       const cached = sessionByName.get(name);
-      if (cached && !stale) return { session: cached, coldStart: false };
+      const current = cached && cached.sandboxId === stored?.sandboxId ? cached : undefined;
+      if (current && !stale) return { session: current, coldStart: false };
 
       if (stored && !stale) {
         try {
-          return await adopt(await client.fromId(stored.sandboxId));
+          return await adopt(scope, name, await client.fromId(stored.sandboxId));
         } catch (err) {
           if (!(err instanceof ModalSandboxGoneError)) throw err;
         }
         const found = await client.fromName(name);
-        if (found) {
-          await store.merge(scope, { sandboxId: found.sandboxId });
-          return adopt(found);
-        }
+        if (found) return adopt(scope, name, found);
       }
 
       if (stored && stale) {
         let session: ModalSession | null = null;
         try {
-          session = cached ?? (await client.fromId(stored.sandboxId));
+          session = current ?? (await client.fromId(stored.sandboxId));
         } catch (err) {
           if (!(err instanceof ModalSandboxGoneError)) throw err;
         }
         if (session) {
+          const keep = async (): Promise<{ session: ModalSession; coldStart: boolean }> => {
+            rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
+            return adopt(scope, name, session!);
+          };
           await assertHydrated(session);
           try {
             await snapshotHome(scope, session);
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope);
-              rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
-              sessionByName.set(name, session);
-              await store.merge(scope, { lastActivityMs: Date.now() });
-              return { session, coldStart: false };
+              return keep();
             }
           }
           try {
@@ -353,30 +390,17 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_teardown", "rotate_terminate_failed", errMessage(e), scope);
-              rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
-              sessionByName.set(name, session);
-              await store.merge(scope, { lastActivityMs: Date.now() });
-              return { session, coldStart: false };
+              return keep();
             }
           }
         }
         sessionByName.delete(name);
-        if (!(await store.get(scope))?.nativeSnapshotId) await store.delete(scope).catch(() => undefined);
+        await forgetIfCurrent(scope, stored.sandboxId);
       }
 
       if (!stored) {
         const found = await client.fromName(name);
-        if (found) {
-          await assertHydrated(found);
-          await store.put(scope, {
-            sandboxId: found.sandboxId,
-            createdAtMs: Date.now(),
-            lastActivityMs: Date.now(),
-            orgId: configOrgId(),
-          });
-          sessionByName.set(name, found);
-          return { session: found, coldStart: false };
-        }
+        if (found) return adopt(scope, name, found);
       }
 
       try {
@@ -384,13 +408,13 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       } catch (error) {
         void error;
       }
-      return createHydrated(scope, name);
+      return createHydrated(scope, name, stored?.sandboxId);
     });
   }
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
     const name = sandboxScopeName(`${prefix}-scratch`, key);
-    return provisionQueue(`scratch:${key}`, async () => {
+    return localQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
       if (active === 0 && !sessionByName.has(name)) {
@@ -402,49 +426,40 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     });
   }
 
-  async function withSessionUnlocked<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
+  const lastTouchMs = new Map<string, number>();
+  async function touchActivity(scope: string): Promise<void> {
+    const now = Date.now();
+    if (now - (lastTouchMs.get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
+    const touched = await store.merge(scope, { lastActivityMs: now }).catch(() => null);
+    if (touched) lastTouchMs.set(scope, now);
+  }
+
+  async function withSession<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
     const scratchKey = scratchKeyByName.get(name);
-    if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
-    const reviveScratch = async (): Promise<ModalSession> => {
+    const scope = scratchKey === undefined ? scopeByName.get(name) : undefined;
+    if (scratchKey === undefined && scope === undefined) throw new Error("sandbox handle has been released");
+    if (scope !== undefined) await touchActivity(scope);
+    const revive = async (): Promise<ModalSession> => {
+      if (scope !== undefined) return (await ensureSession(scope, name, undefined, false)).session;
       const session = await client.create({ tags: tags("scratch") });
       sessionByName.set(name, session);
       return session;
     };
-    const first =
-      scratchKey !== undefined
-        ? { session: sessionByName.get(name) ?? (await reviveScratch()) }
-        : {
-            session:
-              sessionByName.get(name) ??
-              (await ensureSession(scopeByName.get(name) ?? "default", name, undefined, false)).session,
-          };
+    const first = sessionByName.get(name) ?? (await revive());
+    const heartbeat =
+      scope === undefined
+        ? undefined
+        : setInterval(() => void touchActivity(scope), ACTIVITY_TOUCH_INTERVAL_MS / 2).unref();
     try {
-      return await action(first.session);
+      return await action(first);
     } catch (err) {
       if (!(err instanceof ModalSandboxGoneError)) throw err;
       sessionByName.delete(name);
-      const second =
-        scratchKey !== undefined
-          ? { session: await reviveScratch() }
-          : await ensureSession(scopeByName.get(name) ?? "default", name, undefined, false);
-      return action(second.session);
+      if (scope !== undefined && !(await store.get(scope))) throw err;
+      return action(await revive());
+    } finally {
+      clearInterval(heartbeat);
     }
-  }
-
-  function withSession<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
-    if (scratchKeyByName.has(name)) return withSessionUnlocked(name, action);
-    const shared = advisoryLock.withSharedLock ?? advisoryLock.withLock;
-    return shared(`modal-use:${scopeByName.get(name) ?? "default"}`, () => withSessionUnlocked(name, action));
-  }
-
-  const lastTouchMs = new Map<string, number>();
-  async function touchActivity(name: string): Promise<void> {
-    const scope = scopeByName.get(name);
-    if (!scope || scratchKeyByName.has(name)) return;
-    const now = Date.now();
-    if (now - (lastTouchMs.get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
-    lastTouchMs.set(scope, now);
-    await store.merge(scope, { lastActivityMs: now }).catch(() => undefined);
   }
 
   async function runTimed(
@@ -466,7 +481,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     timeoutSec: number,
     env?: Record<string, string>,
   ): Promise<ExecResult> {
-    await touchActivity(name);
     return withSession(name, (session) => runTimed(session, script, timeoutSec, env));
   }
 
@@ -536,14 +550,19 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     const stored = await store.get(scope);
     const cached = sessionByName.get(name);
     const ids = new Set([stored?.sandboxId, cached?.sandboxId].filter((id): id is string => !!id));
+    if (stored) await deleteRowIf(scope, (current) => current.sandboxId === stored.sandboxId);
     for (const id of ids) {
       try {
         await client.terminate(id);
       } catch (error) {
-        if (!(error instanceof ModalSandboxGoneError)) throw error;
+        if (error instanceof ModalSandboxGoneError) continue;
+        if (stored)
+          await store
+            .putIfAbsent(scope, stored)
+            .catch((e: unknown) => reportError("sandbox_teardown", "destroy_restore_failed", errMessage(e), scope));
+        throw error;
       }
     }
-    await store.delete(scope);
     sessionByName.delete(name);
     scopeByName.delete(name);
     rotationHoldUntil.delete(scope);
@@ -558,35 +577,40 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   }
 
   function renewCheckpoint(scope: string, name: string, rec: StoredModalSandbox): Promise<void> {
-    return advisoryLock.withLock(`modal-use:${scope}`, () =>
-      provisionQueue(scope, async () => {
-        const current = await store.get(scope);
-        if (
-          !current ||
-          current.hydrationPending ||
-          current.nativeSnapshotId !== rec.nativeSnapshotId ||
-          !checkpointRenewalDue(current, Date.now())
-        )
-          return;
+    return localQueue(scope, async () => {
+      const current = await store.get(scope);
+      if (
+        !current ||
+        current.hydrationPending ||
+        current.nativeSnapshotId !== rec.nativeSnapshotId ||
+        !checkpointRenewalDue(current, Date.now())
+      )
+        return;
+      const parkedAt = current.lastActivityMs ?? 0;
+      const stillParked = async (sandboxId: string): Promise<boolean> => {
+        const row = await store.get(scope);
+        return row?.sandboxId === sandboxId && (row.lastActivityMs ?? 0) === parkedAt;
+      };
+      try {
+        const { session } = await createHydrated(scope, name, current.sandboxId, parkedAt);
+        if (!(await stillParked(session.sandboxId))) return;
         try {
-          const { session } = await createHydrated(scope, name);
-          try {
-            await snapshotHome(scope, session);
-          } finally {
+          await snapshotHome(scope, session);
+        } finally {
+          if (await stillParked(session.sandboxId)) {
             sessionByName.delete(name);
             await session.terminate().catch(swallowGone);
           }
-          await store.merge(scope, { lastActivityMs: current.lastActivityMs });
-        } catch (e) {
-          if (!(e instanceof ModalSandboxGoneError))
-            reportError("sandbox_snapshot", "checkpoint_renewal_failed", errMessage(e), scope);
         }
-      }),
-    );
+      } catch (e) {
+        if (!(e instanceof ModalSandboxGoneError))
+          reportError("sandbox_snapshot", "checkpoint_renewal_failed", errMessage(e), scope);
+      }
+    });
   }
 
   function refreshCheckpoint(scope: string, rec: StoredModalSandbox, session: ModalSession): Promise<void> {
-    return provisionQueue(scope, async () => {
+    return localQueue(scope, async () => {
       try {
         const current = await store.get(scope);
         if (
@@ -610,28 +634,30 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     session: ModalSession,
     idleCutoffMs?: number,
   ): Promise<number> {
-    return advisoryLock.withLock(`modal-use:${scope}`, () =>
-      provisionQueue(scope, async (): Promise<number> => {
-        const current = await store.get(scope);
-        if (!current || current.sandboxId !== rec.sandboxId) return 0;
-        if (idleCutoffMs !== undefined && (!current.lastActivityMs || current.lastActivityMs > idleCutoffMs)) return 0;
-        try {
-          await snapshotHome(scope, session);
-          await session.terminate();
-          sessionByName.delete(name);
-          if (!(await store.get(scope))?.nativeSnapshotId) await store.delete(scope);
-          return 1;
-        } catch (e) {
-          if (e instanceof ModalSandboxGoneError) {
-            sessionByName.delete(name);
-            if (!(await store.get(scope))?.nativeSnapshotId) await store.delete(scope).catch(() => undefined);
-          } else {
-            reportError("sandbox_reap", "deep_idle_reap_failed", errMessage(e), scope);
-          }
-          return 0;
+    return localQueue(scope, async (): Promise<number> => {
+      const current = await store.get(scope);
+      if (!current || current.sandboxId !== rec.sandboxId) return 0;
+      if (idleCutoffMs !== undefined && (!current.lastActivityMs || current.lastActivityMs > idleCutoffMs)) return 0;
+      try {
+        await snapshotHome(scope, session);
+        if (idleCutoffMs !== undefined) {
+          const latest = await store.get(scope);
+          if (latest?.sandboxId !== rec.sandboxId || (latest.lastActivityMs ?? 0) > idleCutoffMs) return 0;
         }
-      }),
-    );
+        await session.terminate();
+        sessionByName.delete(name);
+        await forgetIfCurrent(scope, rec.sandboxId);
+        return 1;
+      } catch (e) {
+        if (e instanceof ModalSandboxGoneError) {
+          sessionByName.delete(name);
+          await forgetIfCurrent(scope, rec.sandboxId).catch(() => undefined);
+        } else {
+          reportError("sandbox_reap", "deep_idle_reap_failed", errMessage(e), scope);
+        }
+        return 0;
+      }
+    });
   }
 
   async function sweepOrphans(now: number): Promise<number> {
@@ -677,7 +703,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   const sandbox: Sandbox = {
     destroyScope(scopeId: string): Promise<void> {
-      return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
+      return localQueue(scopeId, () => destroyStoredScope(scopeId));
     },
 
     profile,
@@ -788,14 +814,14 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const name = sandboxScopeName(prefix, scopeId);
       scopeByName.set(name, scopeId);
       const { session } = await ensureSession(scopeId, name);
-      await provisionQueue(scopeId, async () => {
+      await localQueue(scopeId, async () => {
         await assertHydrated(session);
         await homeSnapshots.snapshotHome(scopeId, session);
       });
     },
 
     async restartComputer(scopeId: string): Promise<void> {
-      await provisionQueue(scopeId, async () => {
+      await localQueue(scopeId, async () => {
         const stored = await store.get(scopeId);
         if (!stored) return;
         const name = sandboxScopeName(prefix, scopeId);
@@ -810,7 +836,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           await session.terminate();
         }
         sessionByName.delete(name);
-        await store.merge(scopeId, { hydrationPending: false, recoveryError: undefined });
+        await patchIfCurrent(scopeId, stored.sandboxId, { hydrationPending: false, recoveryError: undefined });
       });
     },
 
@@ -832,19 +858,21 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           machine,
           provisioned: true,
           guestResponsive: false,
-          recovery: {
-            ...recovery,
-            state: "failed",
-            error:
-              "Home hydration is incomplete. After confirming no core is still hydrating, use computer restart to discard the incomplete replacement and retry the retained checkpoint.",
-          },
+          recovery:
+            Date.now() < stored.createdAtMs + HYDRATION_WAIT_MS
+              ? { ...recovery, state: "hydrating" }
+              : {
+                  ...recovery,
+                  state: "failed",
+                  error:
+                    "Home hydration did not finish. Use computer restart to discard the incomplete replacement and retry the retained checkpoint.",
+                },
         };
       try {
         scopeByName.set(name, scopeId);
-        let session = sessionByName.get(name);
-        if (!session) {
-          session = await client.fromId(stored.sandboxId);
-        }
+        const cached = sessionByName.get(name);
+        const session =
+          cached && cached.sandboxId === stored.sandboxId ? cached : await client.fromId(stored.sandboxId);
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         return {
           machine,
@@ -867,7 +895,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       if (handle.scratch) {
         const key = scratchKeyByName.get(handle.id);
-        return provisionQueue(key ? `scratch:${key}` : handle.id, async () => {
+        return localQueue(key ? `scratch:${key}` : handle.id, async () => {
           const remaining = (activeScratch.get(handle.id) ?? 1) - 1;
           if (remaining > 0) {
             activeScratch.set(handle.id, remaining);
@@ -885,7 +913,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
       const scope = scopeByName.get(handle.id) ?? "default";
-      return provisionQueue(scope, async () => {
+      return localQueue(scope, async () => {
         const session = sessionByName.get(handle.id);
         if (tdOpts?.destroy) return destroyStoredScope(scope);
         if (!session) return;
@@ -910,7 +938,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     async reapDeepIdle(idleMs): Promise<{ reaped: number }> {
       if (!(idleMs > 0)) return { reaped: 0 };
       const now = Date.now();
-      const cutoff = now - Math.min(idleMs, reapIdleMs);
+      const cutoff = now - Math.max(Math.min(idleMs, reapIdleMs), ACTIVITY_GRACE_MS);
       let reaped = 0;
       for (const [scope, rec] of await store.entries()) {
         if (rec.orgId && rec.orgId !== configOrgId()) continue;
@@ -919,7 +947,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         scopeByName.set(name, scope);
         let session: ModalSession | undefined;
         try {
-          session = sessionByName.get(name) ?? (await client.fromId(rec.sandboxId));
+          const cached = sessionByName.get(name);
+          session = cached && cached.sandboxId === rec.sandboxId ? cached : await client.fromId(rec.sandboxId);
         } catch (e) {
           if (!(e instanceof ModalSandboxGoneError)) {
             reportError("sandbox_reap", "deep_idle_probe_failed", errMessage(e), scope);
@@ -928,12 +957,13 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         }
         if (!session) {
           sessionByName.delete(name);
-          if (!rec.nativeSnapshotId) await store.delete(scope).catch(() => undefined);
+          if (!rec.nativeSnapshotId) await forgetIfCurrent(scope, rec.sandboxId).catch(() => undefined);
           else if (checkpointRenewalDue(rec, now)) await renewCheckpoint(scope, name, rec);
           continue;
         }
         if (rec.expiresAtMs && rec.expiresAtMs - now <= lifetimeMarginMs) {
-          reaped += await retire(scope, name, rec, session);
+          const forced = rec.expiresAtMs - now <= lifetimeMarginMs / 2;
+          reaped += await retire(scope, name, rec, session, forced ? undefined : now - ACTIVITY_GRACE_MS);
           continue;
         }
         if (rec.lastActivityMs && rec.lastActivityMs <= cutoff) {
@@ -945,7 +975,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           } catch (e) {
             if (e instanceof ModalSandboxGoneError) {
               sessionByName.delete(name);
-              if (!rec.nativeSnapshotId) await store.delete(scope).catch(() => undefined);
+              if (!rec.nativeSnapshotId) await forgetIfCurrent(scope, rec.sandboxId).catch(() => undefined);
             } else {
               reportError("sandbox_reap", "deep_idle_probe_failed", errMessage(e), scope);
             }
