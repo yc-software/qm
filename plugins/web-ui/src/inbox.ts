@@ -49,7 +49,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, menuSelect, icon, initials, relTime, sheenLabel, workingWave } from "./ui";
+import { brandName, fieldSelect, menuSelect, icon, initials, relTime, sheenLabel, slackMark, workingWave } from "./ui";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 
@@ -1669,6 +1669,12 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
   const expandedAttr = inlineDetail ? String(open) : nothing;
   const handled = item.status !== "open";
   const gmail = item.source === "gmail";
+  const slack = item.source === "slack";
+  const senderId = item.slack?.userId ?? item.participants?.[0]?.key;
+  const sender = item.participants?.find((person) => person.key === senderId) ?? {
+    key: senderId ?? participantKey(item.from),
+    name: participantName(item.from) || "Slack",
+  };
   const heading = gmail ? item.from || item.title : (item.slack?.channelLabel ?? item.title);
   const sub = gmail ? item.title : item.from || inboxViewName(item.loopId);
   return html`
@@ -1690,7 +1696,13 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
             drawAll();
           }}
         >
-          <span class="inbox-item-glyph">${sourceGlyph(item)}</span>
+          <span class="inbox-item-glyph ${slack ? "inbox-sender-avatar" : ""}">
+            ${
+              slack
+                ? html`${avatarTpl(sender)}<span class="inbox-sender-badge" aria-hidden="true">${slackMark(12)}</span>`
+                : sourceGlyph(item)
+            }
+          </span>
           <span class="inbox-item-main">
             <span class="inbox-item-top">
               ${groupSize > 1 ? html`<span class="inbox-group-count">${groupSize} similar ·</span>` : nothing}
@@ -1700,7 +1712,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
             <span class="inbox-item-snippet">${slackTextTpl(item, item.snippet, { links: false })}</span>
           </span>
           <span class="inbox-item-side">
-            ${participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
+            ${slack ? nothing : participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
             <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
             ${icon(expanded ? ChevronDown : ChevronRight, 13)}
           </span>

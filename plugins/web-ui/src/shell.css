@@ -9723,6 +9723,32 @@ h3.ambient-field-label {
   justify-content: center;
   color: var(--muted-foreground);
 }
+.inbox-item-glyph.inbox-sender-avatar {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  align-self: center;
+  margin-top: 0;
+}
+.inbox-sender-avatar > .inbox-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.inbox-sender-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--background);
+  border-radius: 5px;
+  box-sizing: border-box;
+  background: var(--background);
+}
 .src-gmail .inbox-item-glyph {
   color: var(--cta);
 }
