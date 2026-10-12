@@ -36,7 +36,7 @@ python3 skills/google-workspace/scripts/gmail.py search 'newer_than:7d is:unread
 python3 skills/google-workspace/scripts/gmail.py read MESSAGE_ID [--full]
 python3 skills/google-workspace/scripts/gmail.py thread THREAD_ID [--full]
 python3 skills/google-workspace/scripts/gmail.py draft --to a@b.com --subject '...' --body-file body.txt
-python3 skills/google-workspace/scripts/gmail.py reply MESSAGE_ID --body-file body.txt [--all]
+python3 skills/google-workspace/scripts/gmail.py reply MESSAGE_ID --body-file body.txt [--all] [--bcc EMAILS]
 python3 skills/google-workspace/scripts/gmail.py update-draft DRAFT_ID --body-file body.txt
 python3 skills/google-workspace/scripts/gmail.py send-draft DRAFT_ID
 ```
@@ -63,7 +63,9 @@ bulk`) below personal mail, but never suppress transactional notices (DocuSign,
   generated HTML mirror (Gmail shows plain-text-only mail to recipients at an altered,
   narrower width). Body files stay plain text — never write HTML into them.
 - `reply` threads onto the original message; `--all` keeps every recipient. Don't
-  rebuild To/CC by hand. To change a draft, write a fresh body file and `update-draft`
+  rebuild To/CC by hand. For an intro handoff ("moving X to bcc"), use `--bcc X`: it drops X
+  from To/Cc and adds them as Bcc. Before sending, check the draft's To/Cc/Bcc match
+  anything the body says about who is on the thread. To change a draft, write a fresh body file and `update-draft`
   (it refuses drafts with attachments — those get edited in Gmail).
 - Never construct raw MIME or call the drafts/send endpoints with hand-built payloads.
 - Never write styled HTML email — no font-family/size/color declarations, no CSS-styled

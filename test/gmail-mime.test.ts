@@ -124,3 +124,56 @@ test("non-2xx responses exit with the status and body excerpt", { skip: !havePyt
   assert.ok(res.stderr.includes("gmail api 403"));
   assert.ok(res.stderr.includes("nope"));
 });
+
+const REPLY_DRIVER = `
+import base64, importlib.util, json, sys
+from email import message_from_bytes
+from email.policy import default as default_policy
+spec = importlib.util.spec_from_file_location("gmail", sys.argv[1])
+gmail = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gmail)
+hdrs = [{"name": "From", "value": "Ryan <ryan@yc.test>"},
+        {"name": "To", "value": "Miles <miles@ex.test>, me@yc.test"},
+        {"name": "Subject", "value": "Intro"}, {"name": "Message-ID", "value": "<m1@x>"}]
+msg = {"id": "m1", "threadId": "t1", "labelIds": [], "payload": {"headers": hdrs}}
+posted = []
+def call(method, path, body=None, query=None):
+    if path == "profile": return {"emailAddress": "me@yc.test"}
+    if path.startswith("threads/"): return {"messages": [msg]}
+    if path.startswith("messages/"): return msg
+    posted.append(body); return {"id": "d1"}
+gmail.call = call
+gmail.read_body = lambda p: "hi"
+sys.argv = ["gmail.py", "reply", "m1", "--body-file", "x", *json.loads(sys.argv[2])]
+try:
+    gmail.main()
+except SystemExit as e:
+    print(json.dumps({"exit": str(e)})); sys.exit(0)
+m = message_from_bytes(base64.urlsafe_b64decode(posted[0]["message"]["raw"]), policy=default_policy)
+print(json.dumps({k: m.get(k, "") for k in ("To", "Cc", "Bcc")}))
+`;
+
+function replyHeaders(args: string[]): Record<string, string> {
+  const out = execFileSync("python3", ["-c", REPLY_DRIVER, SCRIPT, JSON.stringify(args)], {
+    input: "",
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter(Boolean)
+    .pop()!;
+  return JSON.parse(out);
+}
+
+test("reply --bcc moves the introducer off the visible recipients", { skip: !havePython }, () => {
+  const h = replyHeaders(["--all", "--bcc", "ryan@yc.test"]);
+  assert.equal(h.To, "Miles <miles@ex.test>");
+  assert.equal(h.Cc, "");
+  assert.equal(h.Bcc, "ryan@yc.test");
+  const plain = replyHeaders(["--all"]);
+  assert.equal(plain.To, "Ryan <ryan@yc.test>");
+  assert.equal(plain.Cc, "Miles <miles@ex.test>");
+});
+
+test("reply --bcc refuses to leave no visible recipient", { skip: !havePython }, () => {
+  assert.match(replyHeaders(["--bcc", "ryan@yc.test"]).exit ?? "", /no visible recipient/);
+});
