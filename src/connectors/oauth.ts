@@ -90,6 +90,9 @@ function toToken(
   };
 }
 
+const resourceBody = (p: OAuthProviderConfig): Record<string, string> =>
+  p.authParams?.resource ? { resource: p.authParams.resource } : {};
+
 function makeTokenAdapters(opts: {
   acceptJson?: boolean;
   rejectErrorBody?: boolean;
@@ -125,6 +128,7 @@ function makeTokenAdapters(opts: {
           redirect_uri: redirectUri,
           ...clientBody(client),
           ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
+          ...resourceBody(provider),
         }).toString(),
       });
       if (!res.ok) throw new Error(`${prefix}token exchange failed (${res.status})`);
@@ -140,6 +144,7 @@ function makeTokenAdapters(opts: {
           grant_type: "refresh_token",
           refresh_token: token.refreshToken ?? "",
           ...clientBody(client),
+          ...resourceBody(provider),
         }).toString(),
       });
       if (!res.ok) throw new Error(`${prefix}token refresh failed (${res.status})`);
@@ -453,12 +458,17 @@ export interface PublicOAuthClient {
 }
 
 const publicClients = new Map<string, PublicOAuthClient>();
+const builtInProviders = new Set(Object.keys(PROVIDERS));
+
+export function isBuiltInOAuthProvider(name: string): boolean {
+  return builtInProviders.has(name);
+}
 
 export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
   for (const name of publicClients.keys()) delete PROVIDERS[name];
   publicClients.clear();
   for (const c of clients) {
-    if (PROVIDERS[c.name]) continue;
+    if (builtInProviders.has(c.name)) continue;
     publicClients.set(c.name, c);
     PROVIDERS[c.name] = {
       hosts: [c.host],

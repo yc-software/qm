@@ -23,6 +23,7 @@ export interface McpServer {
   oauthAuthorizeUrl?: string;
   oauthTokenUrl?: string;
   oauthScopes?: string[];
+  tools?: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
   readOnly: boolean;
   enabled: boolean;
   updatedAt: number;

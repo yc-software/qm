@@ -145,7 +145,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   assert.equal(calls, 1);
 });
 
-test("MCP admin accepts per-user OAuth servers, discovers endpoints, and never shadows built-in connectors", async (t) => {
+test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadata, and never shadows built-in connectors", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-oauth-"));
   const built = buildApp(testConfig({ dataDir: dir }));
   const store = createMcpServerStore(createMemoryMap<McpServer>());
@@ -157,13 +157,13 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints, and never s
   const issuer = createServer((req, res) => {
     const base = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
     const metadata: Record<string, object> = {
-      "/.well-known/oauth-authorization-server": {
-        authorization_endpoint: `${base}/authorize`,
-        token_endpoint: `${base}/token`,
+      "/.well-known/oauth-authorization-server/id": {
+        authorization_endpoint: `${base}/id/authorize`,
+        token_endpoint: `${base}/id/token`,
       },
       "/.well-known/oauth-protected-resource/mcp": {
         resource: `${base}/mcp`,
-        authorization_servers: [base],
+        authorization_servers: [`${base}/id`],
         scopes_supported: ["mcp:write"],
       },
     };
@@ -180,41 +180,44 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints, and never s
     await new Promise<void>((resolve) => issuer.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   });
+  const issuerUrl = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/mcp-servers`;
   const put = (id: string, body: object) =>
     fetch(`${base}/${id}`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ url: "https://tools.example.com/mcp", auth: "oauth-user", ...body }),
+      body: JSON.stringify({ url: `${issuerUrl}/mcp`, auth: "oauth-user", ...body }),
     });
-  const unreachable = await put("orders", { clientId: "c", oauthIssuer: "http://127.0.0.1:1" });
-  assert.equal(unreachable.status, 400);
-  assert.match(((await unreachable.json()) as { message: string }).message, /discovery: http:\/\/127\.0\.0\.1:1\//);
-  assert.equal((await put("github", { clientId: "c", oauthIssuer: `http://127.0.0.1:1` })).status, 400);
-  assert.equal(
-    (await put("orders", { clientId: "c", oauthIssuer: "x", credentialHost: "api.github.com" })).status,
-    400,
-  );
-  const issuerUrl = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
-  const saved = await put("orders", { clientId: " c ", oauthIssuer: issuerUrl, oauthScopes: "a b" });
-  assert.equal(saved.status, 200);
+
+  const undiscoverable = await put("orders", { clientId: "c", url: `${issuerUrl}/elsewhere` });
+  assert.equal(undiscoverable.status, 400);
+  assert.match(((await undiscoverable.json()) as { message: string }).message, /discovery: .*HTTP 404/);
+  assert.equal((await put("github", { clientId: "c" })).status, 400, "built-in connector ids are reserved");
+  assert.equal((await put("orders", { clientId: "c", credentialHost: "api.github.com" })).status, 400);
+  assert.equal((await put("orders", { clientId: "c", credentialHost: "github.com" })).status, 400);
+
+  assert.equal((await put("orders", { clientId: " c " })).status, 200);
   const record = (await store.get("orders"))!;
   assert.equal(record.credentialScope, "per-user");
-  assert.equal(record.credentialHost, "tools.example.com");
+  assert.equal(record.credentialHost, "127.0.0.1");
   assert.equal(record.clientId, "c");
-  assert.equal(record.oauthAuthorizeUrl, `${issuerUrl}/authorize`);
-  assert.equal(record.oauthTokenUrl, `${issuerUrl}/token`);
-  assert.deepEqual(record.oauthScopes, ["a", "b"]);
+  assert.equal(record.oauthAuthorizeUrl, `${issuerUrl}/id/authorize`);
+  assert.equal(record.oauthTokenUrl, `${issuerUrl}/id/token`);
+  assert.deepEqual(record.oauthScopes, ["mcp:write"]);
   assert.equal(record.clientSecret, undefined);
 
-  const discovered = await fetch(`${base}/orders-mcp`, {
-    method: "PUT",
-    headers: ADMIN,
-    body: JSON.stringify({ url: `${issuerUrl}/mcp`, auth: "oauth-user", clientId: "public" }),
-  });
-  assert.equal(discovered.status, 200, "endpoints and scopes come from the server's protected-resource metadata");
-  const viaResource = (await store.get("orders-mcp"))!;
-  assert.equal(viaResource.oauthAuthorizeUrl, `${issuerUrl}/authorize`);
-  assert.equal(viaResource.oauthTokenUrl, `${issuerUrl}/token`);
-  assert.deepEqual(viaResource.oauthScopes, ["mcp:write"]);
+  assert.equal(
+    (
+      await put("manual", {
+        clientId: "c",
+        url: "https://tools.example.com/mcp",
+        oauthAuthorizeUrl: "https://id.example.com/authorize",
+        oauthTokenUrl: "https://id.example.com/token",
+        oauthScopes: "a b",
+      })
+    ).status,
+    200,
+    "explicit endpoints skip discovery",
+  );
+  assert.deepEqual((await store.get("manual"))!.oauthScopes, ["a", "b"]);
 });

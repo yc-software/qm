@@ -16,7 +16,6 @@ import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const MAX_TOOLS_PER_SERVER = 64;
 const MAX_RESULT_CHARS = 60_000;
-const SIGN_IN = "";
 
 export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[] {
   return servers.flatMap((s) =>
@@ -44,6 +43,7 @@ export interface McpToolDescriptor {
   description: string;
   inputSchema: Record<string, unknown>;
   readOnly: boolean;
+  signIn?: true;
 }
 
 export interface McpToolService {
@@ -79,7 +79,6 @@ export function createMcpToolService(opts: {
   const now = opts.now ?? (() => Date.now());
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
-  const learned = new Map<string, Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>>();
 
   function signInMessage(server: McpServer): string {
     const url = opts.signInUrl?.(server.id);
@@ -145,12 +144,13 @@ export function createMcpToolService(opts: {
       try {
         let tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
         if (server.auth === "oauth-user") {
-          tools = learned.get(server.id) ?? [];
+          tools = server.tools ?? [];
           if (!tools.length) {
             next.push({
               name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
               serverId: server.id,
-              remoteName: SIGN_IN,
+              remoteName: "sign_in",
+              signIn: true,
               description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
               inputSchema: { type: "object", properties: {} },
               readOnly: true,
@@ -195,9 +195,9 @@ export function createMcpToolService(opts: {
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
         const client = await callerClient(server, principalId);
-        if (def.remoteName === SIGN_IN) {
+        if (def.signIn) {
           const tools = (await client.listTools()).slice(0, MAX_TOOLS_PER_SERVER);
-          learned.set(server.id, tools);
+          await opts.servers.put({ ...server, tools });
           await refresh();
           record("call", `${def.serverId}/sign_in`, `ok tools=${tools.length}`, principalId);
           return `Signed in to ${server.name}. Tools now available: ${tools.map((t) => `${server.id}_${t.name}`).join(", ")}`;
@@ -208,7 +208,7 @@ export function createMcpToolService(opts: {
         return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}\n[truncated]` : text;
       } catch (e) {
         if (e instanceof SignInRequired) {
-          record("call", `${def.serverId}/${def.remoteName || "sign_in"}`, "sign-in required", principalId);
+          record("call", `${def.serverId}/${def.remoteName}`, "sign-in required", principalId);
           return e.message;
         }
         record("call", `${def.serverId}/${def.remoteName}`, `error: ${errMessage(e)}`, principalId);

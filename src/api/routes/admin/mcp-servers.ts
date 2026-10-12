@@ -5,7 +5,7 @@
 // model-provider credential, not like a personal connector.
 
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
-import { PROVIDERS } from "../../../connectors/oauth.ts";
+import { isBuiltInOAuthProvider, PROVIDERS } from "../../../connectors/oauth.ts";
 import { sendJson } from "../../http.ts";
 import { errMessage } from "../../../util/errors.ts";
 import type { ApiCtx } from "../route.ts";
@@ -40,44 +40,54 @@ interface DiscoveredOAuth {
 }
 
 async function fetchMeta(url: string, errors: string[]): Promise<Record<string, unknown> | undefined> {
+  let r: Response;
   try {
-    const r = await fetch(url, { redirect: "error" });
-    if (r.ok) return (await r.json()) as Record<string, unknown>;
-    errors.push(`${url}: HTTP ${r.status}`);
+    r = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(5_000) });
   } catch (e) {
     errors.push(`${url}: ${errMessage(e)}`);
+    return undefined;
   }
+  if (!r.ok) {
+    errors.push(`${url}: HTTP ${r.status}`);
+    return undefined;
+  }
+  const meta: unknown = await r.json().catch(() => undefined);
+  if (meta && typeof meta === "object") return meta as Record<string, unknown>;
+  errors.push(`${url}: response is not a JSON object`);
   return undefined;
 }
 
-async function discoverOAuth(issuer: string | undefined, resource: URL): Promise<DiscoveredOAuth> {
+function wellKnown(base: URL, suffix: string): string[] {
+  const path = base.pathname.replace(/\/+$/, "");
+  return [...new Set([`${base.origin}/.well-known/${suffix}${path}`, `${base.origin}/.well-known/${suffix}`])];
+}
+
+async function discoverOAuth(resource: URL): Promise<DiscoveredOAuth> {
   const errors: string[] = [];
-  let scopes: string[] | undefined;
-  if (!issuer) {
-    const path = resource.pathname === "/" ? "" : resource.pathname;
-    for (const url of [
-      ...new Set([
-        `${resource.origin}/.well-known/oauth-protected-resource${path}`,
-        `${resource.origin}/.well-known/oauth-protected-resource`,
-      ]),
+  for (const url of wellKnown(resource, "oauth-protected-resource")) {
+    const meta = await fetchMeta(url, errors);
+    const issuer = Array.isArray(meta?.authorization_servers) ? httpsUrl(meta.authorization_servers[0]) : undefined;
+    if (!issuer) continue;
+    const scopes = parseScopes(meta?.scopes_supported);
+    const base = new URL(issuer);
+    const path = base.pathname.replace(/\/+$/, "");
+    for (const candidate of [
+      `${base.origin}/.well-known/oauth-authorization-server${path}`,
+      `${base.origin}/.well-known/openid-configuration${path}`,
+      ...(path ? [`${base.origin}${path}/.well-known/openid-configuration`] : []),
     ]) {
-      const meta = await fetchMeta(url, errors);
-      const servers = meta?.authorization_servers;
-      if (Array.isArray(servers) && typeof servers[0] === "string") {
-        issuer = httpsUrl(servers[0]);
-        scopes = parseScopes(meta?.scopes_supported);
-        break;
-      }
+      const server = await fetchMeta(candidate, errors);
+      if (server)
+        return {
+          authorize: httpsUrl(server.authorization_endpoint),
+          token: httpsUrl(server.token_endpoint),
+          scopes,
+          errors,
+        };
     }
-    if (!issuer) return { errors };
+    return { scopes, errors };
   }
-  const base = issuer.replace(/\/+$/, "");
-  for (const path of ["/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"]) {
-    const meta = await fetchMeta(`${base}${path}`, errors);
-    if (meta)
-      return { authorize: httpsUrl(meta.authorization_endpoint), token: httpsUrl(meta.token_endpoint), scopes, errors };
-  }
-  return { scopes, errors };
+  return { errors };
 }
 
 async function actor(ctx: ApiCtx) {
@@ -149,7 +159,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   const existing = await ctx.deps.mcpServers.get(id);
   const oauthUser = auth === "oauth-user";
-  if (oauthUser && PROVIDERS[id] && existing?.auth !== "oauth-user") {
+  if (oauthUser && isBuiltInOAuthProvider(id)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
   }
   const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
@@ -161,7 +171,11 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     oauthUser &&
     typeof credentialHost === "string" &&
     Object.entries(PROVIDERS).some(
-      ([name, p]) => name !== id && p.hosts.some((h) => credentialHost === h || credentialHost.endsWith(`.${h}`)),
+      ([name, p]) =>
+        isBuiltInOAuthProvider(name) &&
+        p.hosts.some(
+          (h) => credentialHost === h || credentialHost.endsWith(`.${h}`) || h.endsWith(`.${credentialHost}`),
+        ),
     )
   ) {
     return sendJson(ctx.res, 400, {
@@ -171,12 +185,6 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
   let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);
-  let discovered: DiscoveredOAuth | undefined;
-  if (oauthUser && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
-    discovered = await discoverOAuth(httpsUrl((b as { oauthIssuer?: unknown }).oauthIssuer), parsed);
-    oauthAuthorizeUrl ??= discovered.authorize;
-    oauthTokenUrl ??= discovered.token;
-  }
   const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
   if (!["default", "personal", "company"].includes(credentialAccountType)) {
     return sendJson(ctx.res, 400, {
@@ -203,6 +211,12 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "per-user credentials require HTTPS (except loopback)",
     });
+  }
+  let discovered: DiscoveredOAuth | undefined;
+  if (oauthUser && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
+    discovered = await discoverOAuth(parsed);
+    oauthAuthorizeUrl ??= discovered.authorize;
+    oauthTokenUrl ??= discovered.token;
   }
   const server: McpServer = {
     id,

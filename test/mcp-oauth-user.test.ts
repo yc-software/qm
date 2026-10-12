@@ -76,6 +76,7 @@ test("oauth-user servers register a PKCE public client that exchanges and refres
     assert.equal(b.has("client_secret"), false);
   }
   assert.equal(bodies[0]!.get("code_verifier"), "v");
+  for (const b of bodies) assert.equal(b.get("resource"), `https://${HOST}/mcp`);
 
   setPublicOAuthClients([]);
   assert.equal(PROVIDERS.orders, undefined);
@@ -123,6 +124,11 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   assert.deepEqual(
     service.toolDefs().map((d) => d.name),
     ["orders_search"],
+  );
+  assert.deepEqual(
+    (await store.get("orders"))!.tools?.map((tool) => tool.name),
+    ["search"],
+    "learned tools are stored with the server so every instance and restart sees them",
   );
   assert.equal(await service.call("orders_search", { q: "tacos" }, "internal:alice"), "found tacos");
   assert.match(await service.call("orders_search", { q: "x" }, "internal:bob"), /Connect Orders/);
