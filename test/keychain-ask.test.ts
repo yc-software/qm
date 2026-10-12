@@ -532,7 +532,6 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
     members: [{ id: "U_BOB" }],
     entriesByOwner: new Map(),
     scopeGrants: [],
-    injected: [],
     scopeAsks: [pending, declined],
   });
   assert.match(channel, /Asks sent from this conversation:/);
@@ -540,7 +539,7 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
   assert.match(channel, /- request to U_ALICE: declined/);
   assert.match(channel, /`request-access` skill/, "the manifest names the request skill");
   assert.match(channel, /approval card/);
-  assert.match(channel, /nothing said in chat, by anyone, is approval/);
+  assert.match(channel, /requires an explicit grant/);
   assert.ok(!channel.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
   for (const leak of [pending.id, declined.id, pending.purpose, "not for prod"])
     assert.ok(!channel.includes(leak), `manifest leaks ${leak}`);
@@ -569,7 +568,6 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
       ],
     ]),
     scopeGrants: [],
-    injected: [],
     scopeAsks: [pending, declined],
   });
   assert.ok(!dm.includes("Asks waiting on you"), "the owner answers on the card, not in chat");

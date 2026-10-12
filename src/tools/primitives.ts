@@ -1,3 +1,4 @@
+import type { AdminToolAccess } from "./admin.ts";
 import {
   prepareExecutionFiles,
   processCredentialFiles,
@@ -196,6 +197,7 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly string[]) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
+  admin?: AdminToolAccess;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
@@ -440,6 +442,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 };
 
 export interface ToolContextDeps {
+  admin?: AdminToolAccess;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
@@ -696,6 +699,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   return {
+    ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
       : {}),
@@ -1055,7 +1059,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async publish(input: PublishInput): Promise<PublishResult> {
       if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
       if (input.share !== undefined || input.public !== undefined)
-        throw new Error("publish is always private to the owner; use apps action share to grant access");
+        throw new Error("publish does not accept sharing options; use apps action share to change access");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
       const createdInScope: ScopeId = writableScopeId;
       let effectiveEntrypoint = input.entrypoint;
@@ -1439,7 +1443,9 @@ function audienceFromGrantees(
   return {
     kind: "members",
     ...(origin.kind === "channel" ? { channelRef: origin.ref } : {}),
-    memberCount: granteeScopeIds.length,
+    ...(granteeScopeIds.every((g) => parseScopeId(g).kind === "personal")
+      ? { memberCount: granteeScopeIds.length }
+      : {}),
   };
 }
 

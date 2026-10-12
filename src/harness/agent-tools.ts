@@ -1,3 +1,4 @@
+import { adminOperations } from "../tools/admin.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -48,7 +49,9 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
   const note = a.note ? ` (note: ${a.note})` : "";
   if (a.kind === "org") return `Owned by you; reachable by anyone at ${a.orgId ?? "your org"}.${note}`;
   if (a.kind === "members") {
-    const n = a.memberCount ?? 0;
+    if (a.memberCount === undefined)
+      return `Owned by you; access follows the visibility and membership of its shared scopes.${note}`;
+    const n = a.memberCount;
     const who = a.channelRef
       ? `the ${n} ${n === 1 ? "person" : "people"} currently in #${a.channelRef}`
       : `${n} ${n === 1 ? "person" : "people"} you've shared it with`;
@@ -1160,12 +1163,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "publish",
     label: "publish",
     description:
-      "Publish a directory from the workspace as a durable, private-by-default web app " +
+      "Publish a directory from the workspace as a durable web app " +
       "(it keeps running after the turn ends and gets a stable link). Before publishing, verify the " +
       "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
-      "deployment name, not its ID. Publishing is always private to the owner and never changes who can reach an app; " +
+      "deployment name, not its ID. New apps are shared for read/use with their creation channel; DMs stay private. Republishing never changes access; " +
       "grant access separately with apps action share. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
@@ -3155,7 +3158,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordResult(
           callId,
           { tool: "guidance", scope, soulVersion: r.soulVersion },
-          text(r.effectiveSoul ? r.effectiveSoul : "(no standing instructions set)"),
+          text(r.soul ? r.soul : "(no standing instructions set)"),
         );
       }
       let content = params.content;
@@ -3415,6 +3418,53 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       },
     });
   }
+
+  const admin = resourceTool(
+    "admin",
+    Object.fromEntries(
+      Object.entries(
+        ref.current === null || ref.current.admin?.operationsAvailable
+          ? adminOperations
+          : { whoami: adminOperations.whoami },
+      ).map(([action, operation]) => [
+        action,
+        defineTool({
+          name: action,
+          label: action,
+          description: operation.description,
+          parameters: operation.parameters,
+          async execute(callId, params) {
+            await recordCall(callId, { tool: "admin", action });
+            try {
+              const result = await ref.current?.admin?.call({ ...params, action }, ref.abortSignal);
+              if (!result) throw new Error("Admin API is not available on this turn");
+              return recordResult(
+                callId,
+                { tool: "admin", action, status: result.status },
+                {
+                  ...text(result.status >= 400 ? redactSecrets(JSON.stringify(result)) : JSON.stringify(result)),
+                  isError: result.status >= 400,
+                },
+                result.status >= 400,
+              );
+            } catch (error) {
+              return recordResult(
+                callId,
+                { tool: "admin", action, error: redactSecrets(errMessage(error)) },
+                { ...text(redactSecrets(errMessage(error))), isError: true },
+                true,
+              );
+            }
+          },
+        }),
+      ]),
+    ),
+  );
+
+  if (ref.current === null || ref.current.admin?.operationsAvailable)
+    admin.description =
+      "Uses existing admin handlers and audit. Authority is rechecked on every call. Private content requires a live admin in a DM or Open conversation; unattended reads require explicit grants. Admin-role changes, impersonation, identity links, and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Binary/full captured-prompt downloads and raw-secret setters remain on the self-API; do not put secrets in native arguments.\n\n" +
+      admin.description;
 
   const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
@@ -4367,6 +4417,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             share: sharingTool("cron"),
           }),
           webhook,
+          admin,
         ]
       : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
@@ -4463,12 +4514,12 @@ function withToolApprovalGate(
     async execute(callId: string, params: unknown) {
       const gate = ref.toolApprovalGate;
       const resourceAction =
-        ["sandbox", "files", "apps", "skills", "goal", "cron"].includes(tool.name) &&
+        ["sandbox", "files", "apps", "skills", "goal", "cron", "admin"].includes(tool.name) &&
         isObj(params) &&
         typeof params.action === "string"
           ? params.action
           : undefined;
-      const approvalIdentity = ["sandbox", "files", "apps", "skills", "goal", "cron"].includes(tool.name)
+      const approvalIdentity = ["sandbox", "files", "apps", "skills", "goal", "cron", "admin"].includes(tool.name)
         ? `${tool.name}:${resourceAction ?? "invalid"}`
         : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;

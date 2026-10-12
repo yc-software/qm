@@ -112,7 +112,7 @@ test("D1: a channel publish is owned by personal:<initiator>, channel recorded a
   const d = (await deployStore.getByName("site"))!;
   assert.equal(d.ownerScopeId, scopeId("personal", "U1"), "owned by the initiator, not the channel");
   assert.equal(d.createdInScope, scopeId("channel", "C1"), "channel recorded as origin metadata");
-  assert.equal(r.audience?.kind, "owner", "a new app is private to its owner");
+  assert.deepEqual(r.audience, { kind: "members", channelRef: "C1" });
 });
 
 test("D1: owner always reaches their own app; canManage recognizes the owner acting from the channel", async () => {
@@ -174,7 +174,7 @@ test("Defect-2: acting in a different channel than the one the app was created i
   );
 });
 
-test("first publish is owner-only in every conversation kind", async () => {
+test("first publish grants channel read access but keeps group DMs private", async () => {
   const { deploy, acl } = svc();
   const config = createMemoryConfigStore(ORG);
   const cases = [
@@ -189,8 +189,11 @@ test("first publish is owner-only in every conversation kind", async () => {
   ];
   for (const [i, ctx] of cases.entries()) {
     const r = await ctx.publish({ entrypoint: "node server.js", name: `app-${i}` });
-    assert.equal(r.audience?.kind, "owner");
-    assert.deepEqual(await deploy.deploymentGrantees(`app-${i}`), []);
+    assert.equal(r.audience?.kind, i < 2 ? "members" : "owner");
+    assert.deepEqual(
+      await deploy.deploymentGrantees(`app-${i}`),
+      i < 2 ? [{ scope: scopeId("channel", `C${i + 1}`), permission: "read" }] : [],
+    );
     assert.equal((await deploy.getDeployment(`app-${i}`))?.public, undefined);
     assert.notEqual((await deploy.reachDeployment(`app-${i}`, "U2")).status, "ok");
   }
@@ -228,5 +231,8 @@ test("sharing after publish grants access separately", async () => {
     name: "site",
   });
   assert.equal(again.version, 2);
-  assert.deepEqual(await deploy.deploymentGrantees("site"), [{ scope: scopeId("personal", "U2"), permission: "read" }]);
+  assert.deepEqual(await deploy.deploymentGrantees("site"), [
+    { scope: scopeId("channel", "C1"), permission: "read" },
+    { scope: scopeId("personal", "U2"), permission: "read" },
+  ]);
 });
