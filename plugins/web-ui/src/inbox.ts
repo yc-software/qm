@@ -1702,7 +1702,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
                 ? html`${participantsOf(item).length > 1 ? participantsTpl(item) : avatarTpl(sender)}<span
                       class="inbox-sender-badge"
                       aria-hidden="true"
-                      >${slackMark(12)}</span
+                      >${slackMark(10)}</span
                     >`
                 : sourceGlyph(item)
             }

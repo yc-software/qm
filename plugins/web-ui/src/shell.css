@@ -9725,42 +9725,63 @@ h3.ambient-field-label {
 }
 .inbox-item-glyph.inbox-sender-avatar {
   position: relative;
-  width: auto;
-  min-width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   align-self: center;
   margin-top: 0;
 }
 .inbox-sender-avatar > .inbox-avatar {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 14px;
 }
 .inbox-sender-avatar > .inbox-avatars {
-  gap: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 19px);
+  align-content: center;
+  gap: 2px;
+  width: 40px;
+  height: 40px;
 }
 .inbox-sender-avatar .inbox-avatars > .inbox-avatar {
-  width: 28px;
-  height: 28px;
-  border: 2px solid var(--background);
-  border-radius: 8px;
-  box-sizing: border-box;
-  font-size: 10px;
+  width: 19px;
+  height: 19px;
+  border-radius: 5px;
+  font-size: 8px;
 }
-.inbox-sender-avatar .inbox-avatar + .inbox-avatar {
-  margin-left: -8px;
+.inbox-sender-avatar > .inbox-avatars:has(> :nth-child(2):last-child) {
+  position: relative;
+}
+.inbox-sender-avatar .inbox-avatars > .inbox-avatar:first-child:has(+ :last-child),
+.inbox-sender-avatar .inbox-avatars > .inbox-avatar:nth-child(2):last-child {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+}
+.inbox-sender-avatar .inbox-avatars > .inbox-avatar:first-child:has(+ :last-child) {
+  top: 0;
+  left: 0;
+}
+.inbox-sender-avatar .inbox-avatars > .inbox-avatar:nth-child(2):last-child {
+  right: 0;
+  bottom: 0;
+  outline: 2px solid var(--background);
+}
+.inbox-sender-avatar .inbox-avatars > .inbox-avatar:nth-child(3):last-child {
+  grid-column: span 2;
+  justify-self: center;
 }
 .inbox-sender-badge {
   position: absolute;
-  right: -3px;
-  bottom: -3px;
+  right: -6px;
+  bottom: -6px;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   border: 2px solid var(--background);
-  border-radius: 5px;
+  border-radius: 4px;
   box-sizing: border-box;
   background: var(--background);
 }
