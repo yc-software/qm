@@ -76,7 +76,7 @@ becoming the default):
 so that key is already set in every shell — skip straight to the profile check below. A
 person's own provider key and their profile name never arrive in your env by default: find
 their handles in your keychain manifest and name them in `credentials` on every `execute`
-and background start that needs them. Never echo the values.
+(including `background:true`) that needs them. Never echo the values.
 
 **If the browser provider key is in neither your env nor your handles, don't dead-end on
 "no grant"** — the keychain has a path for every case, and a person-typed turn can use all
@@ -198,9 +198,9 @@ PY
 (The `tee` matters: the outcome JSON lands in `/tmp/browse-out.txt`, which is how a wall URL
 gets into later commands as data instead of being pasted into shell source.)
 
-For a task likely to run past a couple of minutes, launch it with the `background` tool and
+For a task likely to run past a couple of minutes, launch it with `execute(background:true)` and
 poll its output instead of blocking `execute`. Pass the same `credentials` handles to the
-background start: org-configured keys are already in every shell's env, but a run without
+execute call: org-configured keys are already in every shell's env, but a run without
 its keychain keys fails every step with "Could not resolve authentication method", which
 looks exactly like the flaky-auth race but isn't.
 

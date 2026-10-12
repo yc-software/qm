@@ -12,8 +12,7 @@ ends; publishing ships your files to a separate, long-lived runtime that keeps r
 and gets a stable link.
 
 Publish with the `apps` tool, action `publish`. Build the app in the workspace with
-`files` actions `write` / `read`; install dependencies and test with `sandbox` action
-`exec` (`execute` before sandbox-resource activation). Then publish the directory.
+`files` actions `write` / `read`; install dependencies and test with `execute`. Then publish the directory.
 The app must listen on the `PORT` env var (the runtime sets it).
 
 ## Match the house style (the default)
@@ -96,8 +95,7 @@ the same as the app _working_. So for anything browsable, sanity-check it locall
 publish:
 
 1. Run it locally. Start the server in the background on a port — e.g.
-   `PORT=8080 node server.js` via `sandbox` action `start_process` with `purpose: "App preview server"` (`background` action `start`
-   before sandbox-resource activation), so it keeps serving while you check.
+   `PORT=8080 node server.js` via `execute` with `background:true` and `purpose: "App preview server"`, so it keeps serving while you check.
 2. Probe it with `curl` — confirm it answers, returns the status you expect, and the main
    page/endpoint is actually there (real content, not a stack trace or a blank 500):
 

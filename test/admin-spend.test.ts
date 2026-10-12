@@ -10,8 +10,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { cacheHitRatio } from "../src/admin/metrics-sink.ts";
 import { buildApp } from "../src/wiring.ts";
-import { scopeId, type SessionType, type TurnRequest } from "../src/types.ts";
-import type { LlmCallUsage, SessionStore } from "../src/sessions/session-store.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
+import type { SessionStore } from "../src/sessions/session-store.ts";
+import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const DAY = 86_400_000;
@@ -43,34 +44,6 @@ const dm = (principal: string, text: string): TurnRequest => ({
   conversation: { kind: "dm", threadRef: `dm:${principal}:t1` },
   text,
 });
-
-const usage = (over: Partial<LlmCallUsage>): LlmCallUsage => ({
-  input: 100,
-  output: 20,
-  cacheRead: 400,
-  cacheWrite: 40,
-  totalTokens: 560,
-  costUsd: 0,
-  ...over,
-});
-
-async function bill(
-  sessions: SessionStore,
-  threadRef: string,
-  type: SessionType,
-  scope: string,
-  over: Partial<LlmCallUsage>,
-  model = "mock",
-): Promise<void> {
-  const session = await sessions.getOrCreateByThread(threadRef, type, scope);
-  await sessions.recordLlmRequest(session.id, {
-    turnSeq: null,
-    step: 0,
-    model,
-    scopeLabel: scope,
-    usage: usage(over),
-  });
-}
 
 async function seedPricedFixture(sessions: SessionStore): Promise<void> {
   await bill(sessions, "dm:alice:priced", "dm", scopeId("personal", "alice"), { costUsd: 2 });

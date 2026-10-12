@@ -185,6 +185,7 @@ export interface ServerDeps {
   deploymentLayer?: DeploymentLayerStore;
   backgroundOwnership?: BackgroundOwnershipControl;
   deploymentControlSecret?: string;
+  spendExportToken?: string;
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
   deployGateSecret?: string;

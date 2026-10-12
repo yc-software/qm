@@ -71,11 +71,12 @@ const EMPTY = {
   scopes: [],
 };
 
-function render(data: any) {
+function render(data: any, services: Record<string, unknown> = {}) {
   const f = litFixture();
-  const calls: any = { shell: null, ranges: [], opened: [], downloads: 0, modelDownloads: 0, api: 0 };
+  const calls: any = { shell: null, ranges: [], customs: [], opened: [], downloads: 0, modelDownloads: 0, api: 0 };
   const view = f.ui.spend.spend(f.root, data, {
     range: "30d",
+    window: { from: "2026-09-01", to: "2026-10-01", custom: false, bucket: "day" },
     defaultShell: (opts: any) => {
       calls.shell = opts;
     },
@@ -89,10 +90,12 @@ function render(data: any) {
     plural: (n: number, one: string) => `${n} ${one}`,
     openUser: (principal: string) => calls.opened.push(principal),
     setRange: (range: string) => calls.ranges.push(range),
+    setCustomRange: (from: string, to: string) => calls.customs.push([from, to]),
     downloadCsv: (breakdown?: string) => {
       if (breakdown === "model") calls.modelDownloads += 1;
       else calls.downloads += 1;
     },
+    ...services,
   });
   const peopleRows = () =>
     [...f.root.querySelectorAll(".tablewrap")[0]!.querySelectorAll("tbody tr")].map((r) =>
@@ -119,6 +122,7 @@ test("spend view: KPI stats, stacked chart and range tabs describe the whole org
     ["7d", false],
     ["30d", true],
     ["90d", false],
+    ["Custom", false],
   ]);
   assert.equal(f.root.querySelectorAll(".spend-column").length, 30, "zero-spend dates retain their space");
   assert.ok(f.root.textContent!.includes("$0.53"), "daily average includes zero-spend days");
@@ -377,5 +381,33 @@ test("spend chart: person toggle is disabled for reports without person buckets"
     )!.disabled,
     true,
   );
+  f.window.close();
+});
+
+test("spend view: Custom turns the current window into two editable UTC days, applied as a sorted half-open window", () => {
+  const preset = render(DATA);
+  assert.equal(preset.f.root.querySelector(".spend-custom"), null);
+  preset.calls.shell.tabs.at(-1).onClick();
+  assert.deepEqual(preset.calls.customs, [["2026-09-01", "2026-10-01"]]);
+  preset.f.window.close();
+
+  const { f, calls } = render(DATA, { window: { from: "2026-08-28", to: "2026-09-03", custom: true, bucket: "day" } });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.shell.tabs.map((t: any) => [t.label, t.active]))), [
+    ["7d", false],
+    ["30d", false],
+    ["90d", false],
+    ["Custom", true],
+  ]);
+  const [first, last] = [...f.root.querySelectorAll<HTMLInputElement>(".spend-custom input")];
+  assert.deepEqual([first!.value, last!.value], ["2026-08-28", "2026-09-02"]);
+  last!.value = "2026-08-01";
+  last!.dispatchEvent(new f.window.Event("change"));
+  assert.deepEqual(calls.customs, [["2026-08-01", "2026-08-29"]]);
+  first!.value = "";
+  first!.dispatchEvent(new f.window.Event("change"));
+  assert.equal(calls.customs.length, 1, "a cleared day applies nothing");
+  calls.shell.tabs[0].onClick();
+  assert.deepEqual(calls.ranges, ["7d"]);
+  assert.equal(calls.api, 0);
   f.window.close();
 });
