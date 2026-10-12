@@ -11,9 +11,16 @@ const section = (lines: string[], heading: string) => {
 
 const lines = (text: string) => text.replaceAll("\r\n", "\n").split("\n");
 
+const lensHeadings = (spec: string) =>
+  (section(lines(spec), "## Wall of shame") ?? []).filter((line) => line.startsWith("### "));
+
 export function wallOfShameLenses(spec: string) {
-  return (section(lines(spec), "## Wall of shame") ?? [])
-    .filter((line) => line.startsWith("### "))
+  return lensHeadings(spec).map((line) => line.slice(4).split(" (")[0]!.trim());
+}
+
+export function alwaysReviewedLenses(spec: string) {
+  return lensHeadings(spec)
+    .filter((line) => line.includes("(always reviewed"))
     .map((line) => line.slice(4).split(" (")[0]!.trim());
 }
 
@@ -32,12 +39,15 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string)
         .slice(1, -1)
         .map((cell) => cell.replaceAll("*", "").trim()),
     );
+  const always = alwaysReviewedLenses(spec);
   for (const lens of wallOfShameLenses(spec)) {
     const matches = rows.filter((cells) => cells[0] === lens);
     if (matches.length > 1) problems.push(`${lens}: ${matches.length} review rows; keep one.`);
     const [, reviewer, verdict, score, assessment] = matches[0] ?? [];
     const skipped = verdict?.toLowerCase() === "not relevant";
     if (!verdict) problems.push(`${lens}: no review row.`);
+    else if (skipped && always.includes(lens))
+      problems.push(`${lens}: always reviewed; triage cannot mark it Not relevant.`);
     else if (!skipped && verdict.toLowerCase() !== "accept")
       problems.push(`${lens}: verdict is ${verdict}, not Accept or Not relevant.`);
     if (verdict && !reviewer) problems.push(`${lens}: reviewer missing.`);
