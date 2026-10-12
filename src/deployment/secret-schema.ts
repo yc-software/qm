@@ -1,4 +1,4 @@
-import { isStrongSigningSecret } from "../auth/source-auth.ts";
+import { isBearerSecret, isStrongSigningSecret } from "../auth/source-auth.ts";
 
 type SecretGate =
   | "production"
@@ -104,6 +104,7 @@ export function validateCoreSecretEnv(env: NodeJS.ProcessEnv): string[] {
 function isInvalidSecret(name: string, value: string | undefined): boolean {
   const candidate = value?.trim();
   if (!candidate || /^(replace-me|placeholder|changeme|todo)$/i.test(candidate)) return true;
+  if (name === "DEPLOYMENT_CONTROL_SECRET" && !isBearerSecret(value)) return true;
   return (
     (name === "CONNECTOR_SECRET_KEY" ||
       name === "CORE_SIGNING_SECRET" ||

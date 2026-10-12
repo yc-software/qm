@@ -1,5 +1,5 @@
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
-import { isStrongSigningSecret } from "./auth/source-auth.ts";
+import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { parseScopeId } from "./types.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox/sandbox-resource-upgrade.ts";
@@ -1184,7 +1184,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const token = env.SPEND_EXPORT_TOKEN;
   if (token) {
     const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
-    if (!isStrongSigningSecret(token) || token !== token.trim() || reused)
+    if (!isStrongSigningSecret(token) || !isBearerSecret(token) || reused)
       throw new Error(
         "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
       );
@@ -1196,11 +1196,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (
       !isStrongSigningSecret(env.CORE_SIGNING_SECRET) ||
       !isStrongSigningSecret(env.DEPLOYMENT_CONTROL_SECRET) ||
-      env.DEPLOYMENT_CONTROL_SECRET !== env.DEPLOYMENT_CONTROL_SECRET?.trim() ||
       env.DEPLOYMENT_CONTROL_SECRET === env.CORE_SIGNING_SECRET
     )
       throw new Error(
-        "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters without surrounding whitespace, and CORE_SIGNING_SECRET",
+        "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters and CORE_SIGNING_SECRET",
       );
   }
   const swarmDefaults = resolveSwarmSettings(

@@ -18,7 +18,7 @@ test("the standalone CLI and core agree on runtime-enforced core secret names", 
 
 test("background ownership requires strong control credentials only for configured deployments", () => {
   assert.deepEqual(validateCoreSecretEnv({}), []);
-  for (const secret of [undefined, "", " ".repeat(32), "short"]) {
+  for (const secret of [undefined, "", " ".repeat(32), "short", "separate-control-secret-value-0000000000\n"]) {
     assert.deepEqual(
       validateCoreSecretEnv({
         BACKGROUND_DEPLOYMENT_ID: "core:release",

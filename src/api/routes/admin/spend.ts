@@ -209,15 +209,16 @@ function entityOf(acc: EntityAccumulator, label: (scopeId: ScopeId) => string): 
   };
 }
 
-function byCodePoint(a: string, b: string): number {
+function byCodePoint(a: string | null, b: string | null): number {
   if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
   return a < b ? -1 : 1;
 }
 
 function byCostThenId(a: SpendEntity, b: SpendEntity): number {
   if (a.costUsd !== b.costUsd) return b.costUsd - a.costUsd;
-  if (a.scopeId === b.scopeId) return 0;
-  return a.scopeId < b.scopeId ? -1 : 1;
+  return byCodePoint(a.scopeId, b.scopeId);
 }
 
 function byCostThenModel(
@@ -225,10 +226,7 @@ function byCostThenModel(
   b: { model: string | null; costUsd: number },
 ): number {
   if (a.costUsd !== b.costUsd) return b.costUsd - a.costUsd;
-  if (a.model === b.model) return 0;
-  if (a.model === null) return 1;
-  if (b.model === null) return -1;
-  return a.model < b.model ? -1 : 1;
+  return byCodePoint(a.model, b.model);
 }
 
 export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOptions): SpendReport {
@@ -287,12 +285,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
         calls: total.calls,
         models: [...models].map(([model, costUsd]) => ({ model, costUsd })).sort(byCostThenModel),
         people: [...people]
-          .sort(([a], [b]) => {
-            if (a === b) return 0;
-            if (a === null) return 1;
-            if (b === null) return -1;
-            return a < b ? -1 : 1;
-          })
+          .sort(([a], [b]) => byCodePoint(a, b))
           .map(([principalId, costUsd]) => ({ principalId, costUsd })),
         live: { costUsd: byOrigin.live.costUsd },
         cron: { costUsd: byOrigin.cron.costUsd },

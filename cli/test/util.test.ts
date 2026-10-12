@@ -23,6 +23,12 @@ test("managed credential encryption keys require strong material", () => {
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "x".repeat(32)), false);
 });
 
+test("the deployment control secret is a bearer, so surrounding whitespace makes it unusable", () => {
+  assert.equal(isInvalidSecret("DEPLOYMENT_CONTROL_SECRET", `${"x".repeat(32)}\n`), true);
+  assert.equal(isInvalidSecret("DEPLOYMENT_CONTROL_SECRET", "x".repeat(32)), false);
+  assert.equal(isInvalidSecret("CORE_SIGNING_SECRET", `${"x".repeat(32)}\n`), false);
+});
+
 test("flyBin honors $FLY_BIN verbatim", () => {
   const saved = process.env.FLY_BIN;
   try {
