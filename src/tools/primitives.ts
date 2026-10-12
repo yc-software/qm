@@ -1,3 +1,4 @@
+import type { AdminToolAccess } from "./admin.ts";
 import {
   prepareExecutionFiles,
   processCredentialFiles,
@@ -196,6 +197,7 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly string[]) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
+  admin?: AdminToolAccess;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
@@ -440,6 +442,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 };
 
 export interface ToolContextDeps {
+  admin?: AdminToolAccess;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
@@ -696,6 +699,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   return {
+    ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
       : {}),

@@ -1,3 +1,4 @@
+import { createAdminCall } from "../tools/admin.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
@@ -2790,6 +2791,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           ...(deps.config ? { config: deps.config } : {}),
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
+          ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
+            ? {
+                admin: {
+                  call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
+                  operationsAvailable:
+                    actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
+                },
+              }
+            : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanTurn && !external ? { humanTurn: true } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
