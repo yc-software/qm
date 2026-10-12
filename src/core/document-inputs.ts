@@ -85,6 +85,7 @@ export async function loadDocumentInputs(
   const documents: DocumentInput[] = [];
   const notices: string[] = [];
   const seen = new Set<string>();
+  const loadedContent = new Set<string>();
   let remaining = maxBytes;
   for (const meta of [...metas].reverse()) {
     signal?.throwIfAborted();
@@ -93,6 +94,8 @@ export async function loadDocumentInputs(
       seen.add(meta.artifactId);
       const artifact = await files.get(meta.artifactId);
       if (!artifact || !(await authorize(artifact)) || !artifact.sha256 || !isDocumentAttachment(artifact)) continue;
+      const contentKey = JSON.stringify([artifact.sha256, artifact.name, artifact.mimetype]);
+      if (loadedContent.has(contentKey)) continue;
       if (artifact.sizeBytes > remaining || documents.length >= maxDocuments) {
         notices.push(
           `${artifact.name}: document omitted from model input because it exceeds the attachment count or byte budget.`,
@@ -124,6 +127,7 @@ export async function loadDocumentInputs(
         continue;
       }
       remaining -= bytes.sizeBytes;
+      loadedContent.add(contentKey);
       documents.unshift({
         name: artifact.name,
         mimeType: artifact.mimetype,

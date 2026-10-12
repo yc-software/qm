@@ -214,6 +214,32 @@ test("restores stopped/restarted turns from durable document metadata and dedupl
   assert.match(await documentFallbackText(inputs.documents[0]!), /QUARTZ-731/);
 });
 
+test("reuploaded identical documents consume the input budget once and retain the newest artifact", async () => {
+  const { store, meta, artifact, opens } = storeFor();
+  store.get = async (id) => ({ ...artifact, id });
+  const open = store.open.bind(store);
+  store.open = async (id) => {
+    const loaded = await open(id);
+    return loaded && { ...loaded, artifact: { ...loaded.artifact, id } };
+  };
+  const checked: string[] = [];
+  const inputs = await loadDocumentInputs(
+    store,
+    [meta, { ...meta, artifactId: "new-upload" }],
+    (file) => {
+      checked.push(file.id);
+      return true;
+    },
+    artifact.sizeBytes,
+  );
+  assert.equal(inputs.documents.length, 1);
+  assert.equal(inputs.documents[0]!.artifactId, "new-upload");
+  assert.deepEqual(inputs.notices, []);
+  assert.equal(opens(), 1);
+  assert.ok(checked.includes(artifact.id));
+  assert.ok(checked.includes("new-upload"));
+});
+
 test("document replay follows compaction boundaries and excludes security-tainted uploads", () => {
   const { meta } = storeFor();
   const recent = { ...meta, artifactId: "recent" };

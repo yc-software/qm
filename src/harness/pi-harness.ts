@@ -1771,7 +1771,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             );
           }
           try {
-            finalPayload = trimPayloadToByteBudget(finalPayload);
+            const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+            finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
           } catch (e) {
             swallow("pi: request byte budget", e);
           }
