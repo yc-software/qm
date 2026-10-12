@@ -2390,7 +2390,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           })().catch(swallowAs("orchestrator: conversation roster", null));
           if (rosterBlock) systemPrompt += `\n\n${rosterBlock}`;
         }
-        if (!strictReadOnly) {
+        if (!strictReadOnly && (deps.keychain || credentialDescriptions.length)) {
           const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
           const members = [
             ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
