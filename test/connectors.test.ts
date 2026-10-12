@@ -207,34 +207,34 @@ test("connector token refresh failures are logged and never poison the stored to
   });
 
   const creds = createMemoryMap<KeychainCredential>();
-  const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0, refresh: async () => ({ accessToken: "" }) });
+  const keychain = makeKeychain({ creds, now: () => 10_000, refresh: async () => ({ accessToken: "" }) });
   await keychain.setConnectorToken("api.github.com", "U1", {
     accessToken: "stale",
     refreshToken: "rt",
-    expiresAt: 5_000,
+    expiresAt: 310_000,
   });
 
-  assert.equal(await keychain.connectorAccessToken("api.github.com", "U1"), null);
+  assert.equal(await keychain.connectorAccessToken("api.github.com", "U1"), "stale");
   assert.deepEqual(
     await keychain.connectorTokenStatus("api.github.com", "U1"),
     {
       connected: true,
-      expiresAt: 5_000,
+      expiresAt: 310_000,
       hasRefreshToken: true,
-      needsReconnect: true,
       refreshFailedAt: 10_000,
       refreshError: "refresh returned an empty access token",
     },
-    "the empty result was not stored, but the failed refresh is visible",
+    "the empty result was not stored, the failed refresh is visible, and the valid token remains usable",
   );
   assert.equal(errors.length, 1);
   assert.match(errors[0]!, /token refresh failed for api\.github\.com/);
 
+  let nowAt = 200_000;
   const throwing = makeKeychain({
     creds,
-    now: () => 10_000,
-    skewMs: 0,
+    now: () => nowAt,
     refresh: async () => {
+      nowAt = 250_000;
       throw new Error("revoked by provider");
     },
   });
@@ -242,17 +242,16 @@ test("connector token refresh failures are logged and never poison the stored to
   assert.match(errors[1]!, /revoked by provider/);
   assert.deepEqual(await throwing.connectorTokenStatus("api.github.com", "U1"), {
     connected: true,
-    expiresAt: 5_000,
+    expiresAt: 310_000,
     hasRefreshToken: true,
     needsReconnect: true,
-    refreshFailedAt: 10_000,
+    refreshFailedAt: 250_000,
     refreshError: "revoked by provider",
   });
 
   const recovered = makeKeychain({
     creds,
-    now: () => 20_000,
-    skewMs: 0,
+    now: () => 250_000,
     refresh: async (_host, t) => ({ accessToken: "fresh", refreshToken: t.refreshToken, expiresAt: 1_000_000 }),
   });
   assert.equal(await recovered.connectorAccessToken("api.github.com", "U1"), "fresh");
@@ -260,6 +259,83 @@ test("connector token refresh failures are logged and never poison the stored to
     await recovered.connectorTokenStatus("api.github.com", "U1"),
     { connected: true, expiresAt: 1_000_000, hasRefreshToken: true },
     "a successful refresh clears prior failure metadata",
+  );
+});
+
+test("refresh cannot return or restore a token disconnected in flight", async (t) => {
+  t.mock.method(console, "error", () => {});
+  for (const succeeds of [false, true]) {
+    let started = () => {};
+    const refreshing = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const keychain = makeKeychain({
+      now: () => 10_000,
+      refresh: async () => {
+        started();
+        await gate;
+        if (!succeeds) throw new Error("fetch failed");
+        return { accessToken: "fresh", expiresAt: 1_000_000 };
+      },
+    });
+    await keychain.setConnectorToken("api.github.com", "U1", {
+      accessToken: "still-valid",
+      refreshToken: "rt",
+      expiresAt: 310_000,
+    });
+    const pending = keychain.connectorAccessToken("api.github.com", "U1");
+    await refreshing;
+    await keychain.deleteConnectorToken("api.github.com", "U1");
+    release();
+    assert.equal(await pending, null);
+    assert.deepEqual(await keychain.connectorTokenStatus("api.github.com", "U1"), { connected: false });
+  }
+});
+
+test("refresh revalidates a concurrent replacement before returning it", async () => {
+  let started = () => {};
+  const refreshing = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const keychain = makeKeychain({
+    now: () => 10_000,
+    refresh: async () => {
+      started();
+      await gate;
+      return { accessToken: "fresh", expiresAt: 1_000_000 };
+    },
+  });
+  await keychain.setConnectorToken("api.github.com", "U1", {
+    accessToken: "aging",
+    refreshToken: "rt",
+    expiresAt: 310_000,
+  });
+  const pending = keychain.connectorAccessToken("api.github.com", "U1");
+  await refreshing;
+  await keychain.setConnectorToken("api.github.com", "U1", { accessToken: "expired", expiresAt: 10_000 });
+  release();
+  assert.equal(await pending, null);
+  assert.deepEqual(await keychain.connectorTokenStatus("api.github.com", "U1"), {
+    connected: true,
+    expiresAt: 10_000,
+    needsReconnect: true,
+  });
+});
+
+test("connector refresh fails fast without atomic credential updates", () => {
+  const backing = createMemoryMap<KeychainCredential>();
+  const creds = { ...backing, update: undefined };
+  assert.throws(
+    () => makeKeychain({ creds, refresh: async () => ({ accessToken: "fresh" }) }),
+    /connector refresh requires atomic credential updates/,
   );
 });
 
