@@ -22,8 +22,8 @@ curl -fsS -X POST "$AGENT_API_URL/v1/reach" \
 ```
 
 - They haven't seen this conversation. Write out the whole request: what's needed and why.
-- Include the source channel name and a permalink to the originating thread, and ask them to reply
-  there (or DM the requester if they can't post there).
+- Start the DM with the source channel name and a permalink to the originating thread, and ask
+  them to reply there (or DM the requester if they can't post there).
 - One DM to that person. Never post the request in a channel.
 
 ## Then
