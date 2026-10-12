@@ -21,8 +21,9 @@ curl -fsS -X POST "$AGENT_API_URL/v1/reach" \
   -d '{"recipient":"<their name or Slack id>","text":"<the full request>"}'
 ```
 
-- They haven't seen this conversation. Write out the whole request: what's needed, why, and
-  where the result should go (name the channel or thread).
+- They haven't seen this conversation. Write out the whole request: what's needed and why.
+- Include the source channel name and a permalink to the originating thread, and ask them to reply
+  there (or DM the requester if they can't post there).
 - One DM to that person. Never post the request in a channel.
 
 ## Then
