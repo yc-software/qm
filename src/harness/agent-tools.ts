@@ -695,12 +695,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       command: params.command,
       purpose: params.purpose,
       ...scopeNote,
-      ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
+      ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
     });
     try {
       if (params.sandbox_id === null) throw new Error("a command requires a sandbox ID; null only clears the default");
       const execOpts = {
-        ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
+        ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
         ...(route?.ownerAuth ? { ownerAuth: true } : {}),
@@ -778,8 +778,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       description: "Sandbox for workspace paths; omit for the default. Ignored for stored file IDs.",
     }),
   );
+  const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
   const FILE_SEND_GUIDANCE =
-    "The files and apps tools use the default sandbox. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
+    "execute, files, skills, and apps take an optional sandbox_id; omit it for the default. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
     "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn; owner is invocation-only. Publish durable code to git and artifacts to Files.";
 
@@ -1116,7 +1117,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
         ...(p.path ? { path: p.path } : {}),
         ...(p.source ? { source: p.source } : {}),
-        ...(p.sandbox_id ? { sandboxId: p.sandbox_id } : {}),
+        ...(p.sandbox_id !== undefined ? { sandboxId: p.sandbox_id } : {}),
         ...(signal ? { signal } : {}),
       });
       signal?.throwIfAborted();
@@ -1150,14 +1151,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description: "Read a file from the workspace (scope, then global). Returns its contents.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
+      sandbox_id: sandboxSelector("Sandbox to read from; omit for the default. Shared files ignore it."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "files", action: "read", path: params.path });
+      await recordCall(callId, {
+        tool: "files",
+        action: "read",
+        path: params.path,
+        ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
+      });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
-      const { content, sourceScopeId, shared } = await tc.read(params.path, signal);
+      const { content, sourceScopeId, shared } = await tc.read(params.path, signal, params.sandbox_id);
       signal?.throwIfAborted();
       return recordResult(
         callId,
@@ -1186,16 +1193,24 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
       data: Type.String({ description: "File contents, including an empty string to empty the file." }),
+      sandbox_id: sandboxSelector("Sandbox to write on; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "files", action: "write", path: params.path, bytes: params.data.length });
+      const sandboxNote = params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {};
+      await recordCall(callId, {
+        tool: "files",
+        action: "write",
+        path: params.path,
+        bytes: params.data.length,
+        ...sandboxNote,
+      });
       try {
-        await tc.write(params.path, params.data);
+        await tc.write(params.path, params.data, undefined, params.sandbox_id);
         return recordResult(
           callId,
-          { tool: "files", action: "write", path: params.path, bytes: params.data.length },
+          { tool: "files", action: "write", path: params.path, bytes: params.data.length, ...sandboxNote },
           text(`wrote ${params.path} (${params.data.length} bytes)`),
         );
       } catch (e) {
@@ -1276,6 +1291,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "Sites allowed to embed the app in an iframe, as https origins (https://tools.example.com, or https://*.example.com for any subdomain). Every frame between the app and the browser tab must be listed, so a panel inside another site needs both. [] forbids embedding again. Omitted = leave the current setting alone.",
         }),
       ),
+      sandbox_id: sandboxSelector("Sandbox holding `dir`; omit for the default. The app's owner is unchanged."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1286,9 +1302,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         dir: params.dir,
         entrypoint: params.entrypoint,
         name: params.name,
+        ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
       });
       try {
-        const r = await tc.publish(params as PublishInput);
+        const { sandbox_id: sandboxId, ...input } = params;
+        const r = await tc.publish({ ...(input as PublishInput), ...(sandboxId !== undefined ? { sandboxId } : {}) });
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
@@ -3110,6 +3128,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       {
         path: Type.Optional(Type.String({ description: "Workspace file path; pair with scope." })),
         id: Type.Optional(Type.String({ description: "Existing file artifact ID; pair with toScope." })),
+        sandbox_id: sandboxSelector("Sandbox holding `path`; omit for the default."),
         toScope: Type.Optional(Type.String({ description: "Destination scope or teammate name for an artifact ID." })),
         scope: Type.Optional(
           Type.String({ description: 'Destination: "org", personal:<userId>, channel:<id>, or team:<id>.' }),
@@ -3123,7 +3142,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       {
         anyOf: [
           { required: ["path", "scope"], properties: { id: false, toScope: false } },
-          { required: ["id", "toScope"], properties: { path: false, scope: false } },
+          { required: ["id", "toScope"], properties: { path: false, scope: false, sandbox_id: false } },
         ],
       },
     ),
@@ -3142,14 +3161,24 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
       await recordCall(callId, { tool: "files", action: "share", ...params });
       try {
-        const result = await tc.write(params.path!, undefined, [
-          { scope: params.scope!, permission: params.permission },
-        ]);
+        const result = await tc.write(
+          params.path!,
+          undefined,
+          [{ scope: params.scope!, permission: params.permission }],
+          params.sandbox_id,
+        );
         return recordResult(
           callId,
-          { tool: "files", action: "share", path: params.path, shared: result.shared },
+          {
+            tool: "files",
+            action: "share",
+            path: params.path,
+            shared: result.shared,
+            ...(result.artifactId ? { file_id: result.artifactId } : {}),
+          },
           text(
-            result.shared.map((grant) => `shared ${params.path} with ${grant.scope} (${grant.permission})`).join("; "),
+            result.shared.map((grant) => `shared ${params.path} with ${grant.scope} (${grant.permission})`).join("; ") +
+              (result.artifactId ? `; stored as file_id ${result.artifactId}` : ""),
           ),
         );
       } catch (e) {
@@ -3895,11 +3924,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     tc: typeof ref.current,
     paths: readonly string[] | undefined,
     signal?: AbortSignal,
+    sandboxId?: string,
   ): Promise<string[]> {
     const out: string[] = [];
     for (const path of (paths ?? []).slice(0, GOAL_EVIDENCE_FILES)) {
       const content = tc
-        ? await tc.read(path, signal).then(
+        ? await tc.read(path, signal, sandboxId).then(
             (r) => r.content,
             () => null,
           )
@@ -4025,9 +4055,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description: "Workspace paths of the deliverables; the governor reads them directly.",
         }),
       ),
+      sandbox_id: sandboxSelector("Sandbox holding `files`; omit for the default."),
     }),
     async execute(callId, params) {
-      const p = params as { status?: "complete" | "resume"; note: string; files?: string[] };
+      const p = params as { status?: "complete" | "resume"; note: string; files?: string[]; sandbox_id?: string };
       const status = p.status === "resume" ? "resume" : "complete";
       await recordCall(callId, {
         tool: "goal",
@@ -4091,7 +4122,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
       }
-      const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal))].join("\n");
+      const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id))].join("\n");
       const verdict = ref.governGoal
         ? await ref
             .governGoal({

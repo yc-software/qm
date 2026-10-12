@@ -56,9 +56,9 @@ import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { mimeFromName, type OutboundFile } from "../core/attachments.ts";
+import { mimeFromName, TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
 import { swallow, errMessage, withCleanup } from "../util/errors.ts";
-import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
+import { artifactPath, fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
 import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -92,6 +92,7 @@ export interface PublishInput {
   embedAncestors?: string[];
   public?: boolean;
   share?: Array<{ scope: ScopeId; permission: Permission }>;
+  sandboxId?: string;
 }
 
 export interface PublishAudienceDescriptor {
@@ -168,6 +169,7 @@ interface ShareDirective {
 
 interface WriteResult {
   shared: Array<{ scope: ScopeId; permission: Permission }>;
+  artifactId?: string;
 }
 
 interface ReachedProvenance {
@@ -224,7 +226,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<unknown>;
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
   restartComputer(sandboxId?: string): Promise<void>;
-  read(path: string, signal?: AbortSignal): Promise<ReadResult>;
+  read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult>;
   listSkills(
     query?: string,
     offset?: number,
@@ -239,7 +241,7 @@ export interface ToolContext extends SurfaceToolDeps {
     name: string,
     opts?: { path?: string; sandboxId?: string; source?: string; signal?: AbortSignal },
   ): Promise<SkillResult>;
-  write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
+  write(path: string, data?: string, share?: ShareDirective[], sandboxId?: string): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
   setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
@@ -561,11 +563,22 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       : undefined);
   const fallbackMounts = deps.layers.filter((l) => l.mode === "ro" && l.mountPath);
   const persistExclude = deps.persistWritesToStore?.excludeDirs;
+  const selectedExclude = persistExclude ?? [...fallbackMounts.map((mount) => mount.mountPath!), TURN_FILES_DIR];
   const orgScopeId = deps.layers.find((l) => l.mountPath === "global")?.scopeId ?? null;
 
   const accessSandbox = async (id: string): Promise<SandboxAccessPlan> => {
     if (!deps.sandboxResources || !deps.accessSandboxResource) throw new Error("sandbox inventory unavailable");
+    if (!id.trim()) throw new Error("sandbox_id must name a sandbox; omit it to use the default");
     return deps.accessSandboxResource(id);
+  };
+
+  const selectSandbox = async (id: string): Promise<{ handle: SandboxHandle; access: SandboxAccessPlan }> => {
+    let access = await accessSandbox(id);
+    if (!deps.provisionResource) throw new Error("sandbox inventory unavailable");
+    const handle = await deps.provisionResource(access, (current) => {
+      access = current;
+    });
+    return { handle, access };
   };
 
   const authorizeExecution = (command: string, access?: SandboxAccessPlan, policy = deps.commandPolicy()): void => {
@@ -786,7 +799,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           return { ...status, guestResponsive: false, probeError: errMessage(e) };
         }
       };
-      if (sandboxId) {
+      if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
         const access = await accessSandbox(sandboxId);
@@ -799,7 +812,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
     },
     async restartComputer(sandboxId?: string): Promise<void> {
-      if (sandboxId) {
+      if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
         await accessSandbox(sandboxId);
@@ -856,7 +869,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
         const executionPolicy = deps.commandPolicy;
         let handle;
-        if (execOpts?.sandboxId) {
+        if (execOpts?.sandboxId !== undefined) {
           if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
           const access = await accessSandbox(execOpts.sandboxId);
           handle = await deps.provisionResource(access, (current) => {
@@ -927,7 +940,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       });
     },
 
-    async read(path: string, signal?: AbortSignal): Promise<ReadResult> {
+    async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {
       signal?.throwIfAborted();
       if (path === MEMORY_FILE && memory && deps.memoryScopeId) {
         if (!deps.memoryAccess?.read.includes(deps.memoryScopeId)) {
@@ -952,7 +965,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             sourceScopeId: granted.ownerScopeId,
           };
         }
-        const handle = await deps.provision();
+        const target = sandboxId === undefined ? undefined : await selectSandbox(sandboxId);
+        if (target?.access.crossScope)
+          return {
+            content: "Shared binary files can't be copied onto another conversation's computer.",
+            sourceScopeId: granted.ownerScopeId,
+          };
+        const handle = target?.handle ?? (await deps.provision());
         const name = granted.handlePath.split(/[\\/]/).pop() ?? granted.handlePath;
         const materializedPath = deps.sharedMaterializeDir
           ? `${deps.sharedMaterializeDir}/${name}`
@@ -970,11 +989,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
       signal?.throwIfAborted();
-      const handle = await deps.provision();
+      const target = sandboxId === undefined ? undefined : await selectSandbox(sandboxId);
+      const handle = target?.handle ?? (await deps.provision());
+      const mounts = target?.access.crossScope
+        ? fallbackMounts.filter((mount) => mount.mountPath === "global")
+        : fallbackMounts;
       return timed("file_op", async () => {
         const direct = await withAbort(() => deps.sandbox.readFile(handle, path), signal);
-        if (direct !== null) return { content: direct, sourceScopeId: writableScopeId };
-        for (const mount of fallbackMounts) {
+        if (direct !== null)
+          return { content: direct, sourceScopeId: target ? target.access.resource.ownerScopeId : writableScopeId };
+        for (const mount of mounts) {
           const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, path)), signal);
           if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
         }
@@ -1025,7 +1049,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
-    async write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
+    async write(path: string, data?: string, share?: ShareDirective[], sandboxId?: string): Promise<WriteResult> {
       const wantShare = share !== undefined && share.length > 0;
       if (data === undefined && !wantShare) {
         throw new Error("write needs `data` to save content, `share` to grant access, or both");
@@ -1035,44 +1059,74 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           `your durable memory isn't a file — use the \`memory\` tool instead (action "remember" to add facts, "rewrite" to curate the whole notebook)`,
         );
       }
-      const handle = await deps.provision();
+      const target = sandboxId === undefined ? undefined : await selectSandbox(sandboxId);
+      if (target?.access.crossScope)
+        throw new Error("files write and share need a computer owned by this conversation");
+      const handle = target?.handle ?? (await deps.provision());
+      const resource = target?.access.resource;
+      const ownerScopeId = resource ? resource.ownerScopeId : writableScopeId;
       return once(() =>
         timed("file_op", async () => {
           if (data !== undefined) {
             await deps.sandbox.writeFile(handle, path, data);
-            if (writableScopeId && persistExclude && !isUnderAnyDir(path, persistExclude)) {
+            if (resource) {
+              if (!isUnderAnyDir(path, selectedExclude))
+                await deps.workspace.write(resource.backingScopeId, path, data);
+            } else if (writableScopeId && persistExclude && !isUnderAnyDir(path, persistExclude)) {
               await deps.workspace.write(writableScopeId, path, data);
             }
           }
           const shared: WriteResult["shared"] = [];
+          let artifactId: string | undefined;
           if (wantShare) {
-            if (!writableScopeId) throw new Error("share needs a writable scope that owns the file");
+            if (!ownerScopeId) throw new Error("share needs a writable scope that owns the file");
             const bytes = await deps.sandbox.readFileBytes(handle, path);
             if (bytes === null) throw new Error(`no such file to share: ${path}`);
-            await deps.workspace.write(writableScopeId, path, bytes);
-            const priorRows = deps.files
-              ? await deps.files.resolveByOwnerPaths([{ ownerScopeId: writableScopeId, path }])
-              : [];
-            const priorArtifact = priorRows.find((r) => r.direction === "out") ?? priorRows[0];
-            const priorAuthor = priorArtifact?.createdBy;
-            const author = data === undefined ? (priorAuthor ?? deps.createdBy) : deps.createdBy;
-            if (deps.files) {
-              try {
-                const name = path.split(/[\\/]/).pop() || path;
-                await deps.files.put({
-                  id: priorArtifact?.id ?? fileArtifactId(randomUUID(), "out", 0),
-                  reuseExistingPath: true,
-                  ownerScopeId: writableScopeId,
-                  createdBy: author,
-                  name,
-                  path,
-                  mimetype: mimeFromName(name),
-                  data: bytes,
-                  direction: "out",
-                  createdInScope: writableScopeId,
-                });
-              } catch (e) {
-                swallow("tools: persist of outbound file artifact failed", e);
+            const name = path.split(/[\\/]/).pop() || path;
+            let ref = path;
+            let author = deps.createdBy;
+            if (resource) {
+              if (!deps.files) throw new Error("sharing from a selected sandbox needs the file store");
+              const id = fileArtifactId(randomUUID(), "out", 0);
+              const { artifact } = await deps.files.put({
+                id,
+                ownerScopeId,
+                createdBy: deps.createdBy,
+                name,
+                path: artifactPath(id, name),
+                mimetype: mimeFromName(name),
+                data: bytes,
+                direction: "out",
+                createdInScope: writableScopeId ?? ownerScopeId,
+              });
+              ref = artifact.path;
+              author = artifact.createdBy;
+              artifactId = artifact.id;
+            } else {
+              await deps.workspace.write(ownerScopeId, path, bytes);
+              const priorRows = deps.files
+                ? await deps.files.resolveByOwnerPaths([{ ownerScopeId, path }])
+                : [];
+              const priorArtifact = priorRows.find((r) => r.direction === "out") ?? priorRows[0];
+              const priorAuthor = priorArtifact?.createdBy;
+              author = data === undefined ? (priorAuthor ?? deps.createdBy) : deps.createdBy;
+              if (deps.files) {
+                try {
+                  await deps.files.put({
+                    id: priorArtifact?.id ?? fileArtifactId(randomUUID(), "out", 0),
+                    reuseExistingPath: true,
+                    ownerScopeId,
+                    createdBy: author,
+                    name,
+                    path,
+                    mimetype: mimeFromName(name),
+                    data: bytes,
+                    direction: "out",
+                    createdInScope: ownerScopeId,
+                  });
+                } catch (e) {
+                  swallow("tools: persist of outbound file artifact failed", e);
+                }
               }
             }
             for (const s of share!) {
@@ -1085,20 +1139,20 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               }
               const permission: Permission = s.permission ?? "read";
               await deps.acl.grant(
-                { ownerScopeId: writableScopeId, ref: path, granteeScopeId, permission, grantedBy: deps.createdBy },
+                { ownerScopeId, ref, granteeScopeId, permission, grantedBy: deps.createdBy },
                 author,
               );
               deps.auditLog?.record({
                 at: Date.now(),
                 principalId: deps.createdBy,
                 action: "file_share",
-                resource: path,
+                resource: resource ? `${path} (sandbox ${resource.id})` : path,
                 scopeLabel: granteeScopeId,
               });
               shared.push({ scope: granteeScopeId, permission });
             }
           }
-          return { shared };
+          return { shared, ...(artifactId ? { artifactId } : {}) };
         }),
       );
     },
@@ -1123,9 +1177,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (effectiveEntrypoint && input.dir && hasParentPathSegment(input.dir)) {
         throw new Error("publish directory must stay inside the workspace — no .. path segments");
       }
-      const handle = await deps.provision();
+      const source = async () =>
+        input.sandboxId === undefined ? deps.provision() : (await selectSandbox(input.sandboxId)).handle;
+      if (!effectiveEntrypoint && input.sandboxId !== undefined) await accessSandbox(input.sandboxId);
       const files: DeployFile[] = effectiveEntrypoint
-        ? filesUnder(await collectTree(deps.sandbox, handle, input.dir), input.dir)
+        ? filesUnder(await collectTree(deps.sandbox, await source(), input.dir), input.dir)
         : [];
       if (effectiveEntrypoint && files.length === 0) {
         throw new Error(`publish: no files found under ${input.dir ?? "."} - nothing to deploy`);
@@ -1267,7 +1323,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const requested = await selectCredentials(requestedCredentials, false);
       const policy = deps.commandPolicy;
       let handle: SandboxHandle;
-      if (opts?.sandboxId) {
+      if (opts?.sandboxId !== undefined) {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
         const access = await accessSandbox(opts.sandboxId);
         handle = await deps.provisionResource(access, (current) => {

@@ -84,6 +84,7 @@ export async function accessConversationSandbox(
   id: string,
   canUseScope: (scope: ScopeId) => boolean | Promise<boolean>,
 ): Promise<SandboxResource> {
+  if (!id.trim()) throw new SandboxAccessError("sandbox_id must be a non-empty sandbox ID");
   const resource = await resources?.access(actorId, id);
   if (!resource || resource.state === "retired" || !(await canUseScope(resource.ownerScopeId)))
     throw new SandboxAccessError("sandbox access is no longer authorized in this conversation");

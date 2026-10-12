@@ -216,7 +216,7 @@ export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, u
       (m) =>
         `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}${
           unstaged?.has(m.name)
-            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); if you need it on disk, select or create a sandbox with set_default, then download GET $AGENT_API_URL/v1/files/${m.artifactId}/content (header x-agent-capability: $AGENT_API_TOKEN) to a path you choose`
+            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); send it directly with {file_id: "${m.artifactId}"}; if you need it on disk, choose a sandbox_id for execute and download GET $AGENT_API_URL/v1/files/${m.artifactId}/content (header x-agent-capability: $AGENT_API_TOKEN) to a path you choose`
             : ""
         }`,
     )

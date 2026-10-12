@@ -114,6 +114,7 @@ test("published source follows scope shadowing and preserves sandbox-authored wo
 
 test("a body read avoids sandbox work and a file request materializes that skill under the skills root", async () => {
   const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
+  const { SandboxAccessError } = await import("../src/sandbox/sandbox-resources.ts");
   type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
   type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
   const files = new Map<string, string>();
@@ -141,7 +142,12 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const turn = createTurnSandboxes({
     deps: {
       skills: { recordUse: async () => {} },
-      sandboxResources: { access: async () => ({ id: "resource-1", ownerScopeId: "personal:U1" }) },
+      sandboxResources: {
+        access: async (_actor: string, id: string) => {
+          if (id !== "resource-1") throw new SandboxAccessError("sandbox not found");
+          return { id, ownerScopeId: "personal:U1" };
+        },
+      },
       sandbox: {
         provision: async (_layers: unknown, options?: { sandboxId?: string }) => {
           sandboxIds.push(options?.sandboxId);
@@ -176,6 +182,9 @@ test("a body read avoids sandbox work and a file request materializes that skill
   delete bodyOnly.skill!.pack;
   visible.push(bodyOnly);
   assert.deepEqual(await turn.useSkill("body-only", "SKILL.md"), { content: "BODY", sourceScopeId: "personal:U1" });
+  await assert.rejects(turn.useSkill("source-helper", "SKILL.md", ""), /non-empty/);
+  await assert.rejects(turn.useSkill("source-helper", "SKILL.md", "missing"), /sandbox not found/);
+  assert.equal(provisions, 0);
   await turn.provision();
   assert.equal(provisions, 1);
   assert.equal(files.size, 0);
