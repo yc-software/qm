@@ -306,7 +306,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
+      const id = randomUUID();
+      if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
+        await deps.acl.grant({
+          ownerScopeId: input.ownerScopeId,
+          ref: deploymentRef(id),
+          granteeScopeId: input.createdInScope,
+          permission: "read",
+          grantedBy: input.createdBy,
+        });
+      }
       const d = await deps.deployStore.create({
+        id,
         ownerScopeId: input.ownerScopeId,
         createdBy: input.createdBy,
         entrypoint: input.entrypoint,
@@ -318,15 +329,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(env ? { env } : {}),
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
       });
-      if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
-        await deps.acl.grant({
-          ownerScopeId: d.ownerScopeId,
-          ref: deploymentRef(d.id),
-          granteeScopeId: input.createdInScope,
-          permission: "read",
-          grantedBy: input.createdBy,
-        });
-      }
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
       void deps.appPublished?.(input.createdBy, d.id, d.versions[0]!.version).catch(() => {});

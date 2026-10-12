@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -190,4 +190,26 @@ test("public-channel defaults follow existing channel visibility without anonymo
   assert.equal((await deploy.reachDeployment(d.id, "U3")).status, "ok");
   assert.equal((await deploy.reachDeployment(d.id, "")).status, "denied");
   assert.notEqual((await deploy.getDeployment(d.id))?.public, true);
+});
+
+test("failed default grant leaves the app name free for a complete retry", async () => {
+  const { deploy, acl } = await setup();
+  const input = {
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    name: "retry-app",
+    entrypoint: "x",
+    files: [],
+    createdInScope: scopeId("channel", CH),
+  };
+  const failure = new Error("grant storage unavailable");
+  const grant = mock.method(acl, "grant", async () => {
+    throw failure;
+  });
+  await assert.rejects(deploy.deployOrUpdate(input), (error) => error === failure);
+  assert.equal(await deploy.getDeployment(input.name), null);
+  grant.mock.restore();
+  const d = await deploy.deployOrUpdate(input);
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), [{ scope: scopeId("channel", CH), permission: "read" }]);
+  assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "ok");
 });

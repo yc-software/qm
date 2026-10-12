@@ -48,7 +48,9 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
   const note = a.note ? ` (note: ${a.note})` : "";
   if (a.kind === "org") return `Owned by you; reachable by anyone at ${a.orgId ?? "your org"}.${note}`;
   if (a.kind === "members") {
-    const n = a.memberCount ?? 0;
+    if (a.memberCount === undefined)
+      return `Owned by you; access follows the visibility and membership of its shared scopes.${note}`;
+    const n = a.memberCount;
     const who = a.channelRef
       ? `the ${n} ${n === 1 ? "person" : "people"} currently in #${a.channelRef}`
       : `${n} ${n === 1 ? "person" : "people"} you've shared it with`;

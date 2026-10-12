@@ -1895,6 +1895,17 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
   );
   assert.match(members, /reachable by the 3 people currently in #C1/);
 
+  const channel = textOf(
+    await call(
+      createAgentTools({ current: withAudience({ kind: "members", channelRef: "C1" }) }).find(
+        (tool) => tool.name === "apps",
+      ),
+      { action: "publish", entrypoint: "x", name: "site" },
+    ),
+  );
+  assert.match(channel, /access follows the visibility and membership of its shared scopes/);
+  assert.doesNotMatch(channel, /0 people/);
+
   const owner = textOf(
     await call(
       createAgentTools({ current: withAudience({ kind: "owner" }) }).find((tool) => tool.name === "apps"),
