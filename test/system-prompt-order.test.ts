@@ -315,7 +315,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
   });
 });
 
-test("Open labels and audits a carried personal skill without granting it to the room", async () => {
+test("Open advertises the source and audits a carried skill read without granting it to the room", async () => {
   const personal = scopeId("personal", actor.id);
   const skills = createSkillStore();
   const skill = await skills.create({
@@ -348,7 +348,23 @@ test("Open labels and audits a carried personal skill without granting it to the
     text: "!sysprompt",
     origin: { kind: "human" },
   });
-  assert.match(result.reply ?? "", /\*\*private-method\*\* \[from personal:U1\]/);
+  assert.match(result.reply ?? "", /Additional skill sources: personal:U1/);
+  assert.doesNotMatch(result.reply ?? "", /private-method|Use a private working method/);
+  const read = await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    conversation: {
+      kind: "channel",
+      threadRef: "C1:skill",
+      channelRef: "C1",
+      audience: [actor],
+      publishMembers: [actor],
+    },
+    text: "!skill private-method",
+    origin: { kind: "human" },
+  });
+  assert.equal(read.status, "ok", read.reason);
+  assert.equal(read.reply, "Keep the method private.");
   const event = (await auditLog.events()).find(
     (candidate) => candidate.action === "sharing.cross_context_read" && candidate.resource === `skill:${skill.id}`,
   );
@@ -472,7 +488,7 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
       !environmentOf(second.reply ?? "").includes(`\n## ${title}\n`),
       `unchanged "## ${title}" must not repeat`,
     );
-    assert.ok(!systemOf(first.reply ?? "").includes(`\n## ${title}\n`));
+    if (title !== "Skills") assert.ok(!systemOf(first.reply ?? "").includes(`\n## ${title}\n`));
   }
   for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
     assert.ok(
@@ -877,11 +893,11 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
       audience: [actor],
       publishMembers: [actor],
     },
-    text: "!sysprompt",
+    text: "!skill snapshot-method",
   });
   assert.equal(result.status, "ok", result.reason);
   assert.equal(updated, true);
-  assert.match(result.reply ?? "", /SAFE_DESCRIPTION/);
+  assert.match(result.reply ?? "", /SAFE_BODY/);
   assert.doesNotMatch(result.reply ?? "", /UNSCREENED_UPDATE|UNSCREENED_BODY/);
 });
 
