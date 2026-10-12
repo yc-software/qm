@@ -150,6 +150,10 @@ for every process, rollout overlap, other database clients, and PostgreSQL's tot
 connection budget before increasing it. This control uses the same live admin
 authorization and mutation confirmation as other org settings.
 
+For sandbox provider, resource, execution, lifecycle, or storage settings, read
+[Sandbox configuration](references/sandbox-configuration.md). It uses the deployment's
+existing configuration and authorized infrastructure tools.
+
 ## Read & fix any scope's memory
 
 ```bash
