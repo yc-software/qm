@@ -289,3 +289,30 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     await srv.close();
   }
 });
+
+test("enabling, disabling and consenting on triggers leaves an audit record naming who did it", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-audit-")) }));
+  const webhook = await built.app.createWebhook({
+    ownerScopeId: "personal:U1" as never,
+    owner: "U1",
+    createdBy: "U1",
+    action: "triage",
+    verification: { scheme: "github", secret: HOOK_SECRET },
+  });
+  await built.app.setWebhookEnabled(webhook.id, false, "U2");
+  await built.app.setWebhookEnabled(webhook.id, false, "U2");
+  await built.app.setWebhookEnabled(webhook.id, true);
+  await built.app.setWebhookRecipientConsent(webhook.id, { recipientId: "U3", status: "accepted" }, "U3");
+  const events = (await built.auditLog.tail({ limit: 50, resourceContains: webhook.id })).filter(
+    (e) => e.action !== "webhook_create",
+  );
+  assert.deepEqual(
+    events.map((e) => [e.action, e.principalId, e.status ?? null]).sort(),
+    [
+      ["webhook_disable", "U2", null],
+      ["webhook_enable", "U1", null],
+      ["webhook_recipient_consent", "U3", "accepted"],
+    ].sort(),
+    "one record per real state change, attributed to the caller (owner when no caller is known)",
+  );
+});

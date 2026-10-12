@@ -471,8 +471,8 @@ async function triggerConsent(ctx: ApiCtx): Promise<void> {
       ? sendJson(res, 400, { error: "bad_request", message: "this trigger has no recipient consent to decide on" })
       : sendJson(res, 403, { error: "forbidden", message: "only the delivery recipient can accept or decline this" });
   }
-  if (cron) await app.setCronRecipientConsent(id, decided.consent);
-  else await app.setWebhookRecipientConsent(id, decided.consent);
+  if (cron) await app.setCronRecipientConsent(id, decided.consent, capability.actorId);
+  else await app.setWebhookRecipientConsent(id, decided.consent, capability.actorId);
   return sendJson(res, 200, { ok: true, consent: decided.consent });
 }
 
