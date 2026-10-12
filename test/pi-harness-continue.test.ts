@@ -136,6 +136,17 @@ test("a genuine resume whose context ends at a recorded tool result continues th
   );
 });
 
+test("a compacted resume cut mid-generation after a recorded tool result continues the assistant turn", async () => {
+  const summary = entry("system", { kind: "context_summary", throughSeq: 1, text: "## Goal\nList the files." }, 4);
+  const thinking = entry("thinking", { thinking: "the process died here", thinkingSignature: "sig" }, 5);
+  const { sink, requests } = await runResume([summary, ASK, CALL, RESULT, thinking], { continueTurn: true });
+  assert.equal(promptedNote(requests), false, "no resume note reaches the model");
+  assert.deepEqual(
+    sink.entries.map((e) => e.type),
+    ["assistant"],
+  );
+});
+
 test("a resume that re-runs a retry-safe call continues the assistant turn right after the re-run result", async () => {
   const queries: string[] = [];
   const { result, sink, requests } = await runResume([ASK, SAFE_CALL], {

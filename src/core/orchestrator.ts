@@ -48,6 +48,7 @@ import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.t
 import { CONFIG_DEFAULTS } from "../config.ts";
 import {
   acquireLeaseWithin,
+  contextSummaryPayload,
   entrySecurityTainted,
   isOverheardEntry,
   TAPE_IMPORT_MAX_ENTRIES,
@@ -3083,8 +3084,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return undefined;
           }
         })();
+        const withTurnRequest = async (entries: SessionEntry[], seq: number | undefined): Promise<SessionEntry[]> => {
+          if (seq === undefined || entries.some((entry) => entry.seq === seq)) return entries;
+          const stored = await deps.sessions.getEntry(session.id, seq);
+          const [request] = stored ? filterHistory(forModelContext([stored], { includeSecurityTainted: false })) : [];
+          if (!request) return entries;
+          const at = entries.findIndex((entry) => contextSummaryPayload(entry)) + 1;
+          return [...entries.slice(0, at), request, ...entries.slice(at)];
+        };
         const compactStart = Date.now();
-        const history = await withManagedRosterVersion(() =>
+        const compacted = await withManagedRosterVersion(() =>
           compactContextIfNeeded({
             cancel: turnAbort.signal,
             session,
@@ -3096,9 +3105,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.model ? { model: input.model } : {}),
           }),
         );
+        const history = await withTurnRequest(compacted, partial?.userSeq);
         contextRecovered =
-          history !== visibleHistory &&
-          history.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
+          compacted !== visibleHistory &&
+          compacted.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
         compactMs = Date.now() - compactStart;
         const documentInputs = strictReadOnly
           ? { documents: [], notices: [] }
@@ -3959,6 +3969,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   cancel: turnAbort.signal,
                 }),
               );
+            resumedHistory = await withTurnRequest(resumedHistory, spine.turnUserEntrySeq);
             contextRecovered ||= recovery;
             turnAbort.signal.throwIfAborted();
             const resumedTape = tapeRows
