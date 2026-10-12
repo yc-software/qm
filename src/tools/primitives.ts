@@ -56,7 +56,7 @@ import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { mimeFromName } from "../core/attachments.ts";
+import { mimeFromName, type OutboundFile } from "../core/attachments.ts";
 import { swallow, errMessage, withCleanup } from "../util/errors.ts";
 import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
@@ -196,7 +196,7 @@ interface AttachedFileMeta {
 
 export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number } | { ok: false; message: string };
 
-export type AttachFiles = (files: readonly string[]) => Promise<AttachResult>;
+export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
   admin?: AdminToolAccess;
@@ -426,8 +426,18 @@ type SurfaceStandingOrderResult =
   | { ok: false; message: string };
 
 export interface SurfaceToolDeps {
-  post(text: string, opts?: SurfacePostOpts, files?: readonly string[]): Promise<SurfacePostResult>;
-  reach(text: string, target: SurfaceReachTarget, files?: readonly string[]): Promise<SurfacePostResult>;
+  post(
+    text: string,
+    opts?: SurfacePostOpts,
+    files?: readonly OutboundFile[],
+    sandboxId?: string,
+  ): Promise<SurfacePostResult>;
+  reach(
+    text: string,
+    target: SurfaceReachTarget,
+    files?: readonly OutboundFile[],
+    sandboxId?: string,
+  ): Promise<SurfacePostResult>;
   react(input: SurfaceReactInput): Promise<SurfacePostResult>;
   edit(input: SurfaceEditInput): Promise<SurfacePostResult>;
   delete(input: SurfaceDeleteInput): Promise<SurfacePostResult>;
@@ -1420,14 +1430,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         (r) => r.ok,
       ),
 
-    post: (text, opts, files) =>
+    post: (text, opts, files, sandboxId) =>
       surfaceOp(
-        (s) => s.post(text, opts, files),
+        (s) => s.post(text, opts, files, sandboxId),
         (r) => r.ok,
       ),
-    reach: (text, target, files) =>
+    reach: (text, target, files, sandboxId) =>
       surfaceOp(
-        (s) => s.reach(text, target, files),
+        (s) => s.reach(text, target, files, sandboxId),
         (r) => r.ok,
       ),
     react: (input) =>
@@ -1453,8 +1463,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),
-    attach: (files) =>
-      deps.attach ? deps.attach(files) : Promise.resolve({ ok: false as const, message: ATTACH_UNAVAILABLE_MESSAGE }),
+    attach: (files, sandboxId) =>
+      deps.attach
+        ? deps.attach(files, sandboxId)
+        : Promise.resolve({ ok: false as const, message: ATTACH_UNAVAILABLE_MESSAGE }),
   };
 }
 

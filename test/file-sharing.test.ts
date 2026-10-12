@@ -515,7 +515,7 @@ test("attaching a missing, empty, or traversing path stages nothing and says whi
   assert.match(empty.message, /blank\.txt \(empty\)/);
   const traversal = await staging.attach(["../../etc/passwd"]);
   assert.ok(!traversal.ok);
-  assert.match(traversal.message, /not found/);
+  assert.match(traversal.message, /no \.\. path segments/);
   assert.equal(staging.staged().length, 0, "a failed call stages nothing at all");
 });
 

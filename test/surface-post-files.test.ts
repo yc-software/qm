@@ -1,6 +1,13 @@
+import { Readable } from "node:stream";
+import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collectNamedOutbound, type ArtifactRegistration } from "../src/core/attachments.ts";
+import {
+  collectNamedOutbound,
+  parseOutboundFiles,
+  MAX_ATTACHMENT_BYTES,
+  type ArtifactRegistration,
+} from "../src/core/attachments.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
@@ -44,9 +51,7 @@ test("collectNamedOutbound: rejects parent traversal before reading outside the 
       return bytes("secret");
     },
   } as unknown as Sandbox;
-  const r = await collectNamedOutbound(sandbox, handle, paths, transfer);
-  assert.deepEqual(r.missing, invalid);
-  assert.deepEqual(r.attachments, []);
+  await assert.rejects(collectNamedOutbound(sandbox, handle, paths, transfer), /no \.\. path segments/);
   assert.deepEqual(reads, []);
   assert.equal(await transfer.sweep(0), 0);
 });
@@ -219,4 +224,156 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
   assert.ok(a.sizeBytes > 0);
   assert.ok(a.artifactId, "artifact id present so the web surface can serve the bytes");
   assert.ok(!("blobId" in a), "internal blob handle is not leaked to surfaces");
+});
+
+test("stored files retain metadata and need no sandbox, including replacement and failed batches", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const transfer = createMemoryBlobTransferStore();
+  await store.put({
+    id: "saved",
+    ownerScopeId: "personal:U1",
+    createdBy: "U1",
+    name: "report.custom",
+    path: "report.custom",
+    mimetype: "text/custom",
+    data: bytes("saved data"),
+    direction: "out",
+  });
+  const staging = createAttachStaging({
+    sandbox: undefined as unknown as Sandbox,
+    provision: async () => {
+      throw new Error("no default sandbox");
+    },
+    blobTransfer: transfer,
+    fileRegistration: { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "new" },
+    openStored: async (id) => {
+      const opened = await store.open(id);
+      return opened ? { ...opened.artifact, stream: opened.stream } : null;
+    },
+  });
+  assert.equal((await staging.attach([{ file_id: "saved" }])).ok, true);
+  const first = staging.staged()[0]!;
+  assert.equal(first.artifactId, "saved");
+  assert.equal(first.mimetype, "text/custom");
+  assert.equal(first.name, "report.custom");
+  assert.equal((await staging.attach([{ file_id: "saved" }])).ok, true);
+  assert.equal(await transfer.open(first.blobId), null);
+  assert.equal(staging.staged().length, 1);
+  assert.equal((await staging.attach([{ file_id: "saved" }, { file_id: "denied" }])).ok, false);
+  assert.equal(staging.staged().length, 1);
+  assert.ok(await store.get("saved"), "rollback never deletes the source artifact");
+});
+
+test("workspace staging selects the requested sandbox and never falls back on rejected IDs", async () => {
+  const selected: Array<string | undefined> = [];
+  const transfer = createMemoryBlobTransferStore();
+  const staging = createAttachStaging({
+    sandbox: {
+      async readFileBytes(box: SandboxHandle) {
+        return bytes(box.id);
+      },
+    } as unknown as Sandbox,
+    provision: async (id) => {
+      selected.push(id);
+      if (id === "denied") throw new Error("unauthorized");
+      return { ...handle, id: id ?? "default" };
+    },
+    blobTransfer: transfer,
+    fileRegistration: {
+      store: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+      ownerScopeId: "personal:U1",
+      createdBy: "U1",
+      seed: "selector",
+    },
+  });
+  await staging.attach(["report.txt"], "one");
+  await staging.attach(["report.txt"], "two");
+  assert.equal(staging.staged().length, 2, "the same path on different computers is not a replacement");
+  await assert.rejects(staging.attach(["report.txt"], "denied"), /unauthorized/);
+  assert.deepEqual(selected, ["one", "two", "denied"]);
+});
+
+test("stored file validation rejects malformed inputs, excessive counts and oversized streams", async () => {
+  for (const input of [
+    [{}],
+    [{ file_id: "" }],
+    [{ file_id: "id", path: "ambiguous" }],
+    [12],
+    Array(21).fill({ file_id: "id" }),
+  ])
+    assert.equal(parseOutboundFiles(input).ok, false);
+  let opened = 0;
+  const transfer = createMemoryBlobTransferStore();
+  const result = await collectNamedOutbound(
+    undefined,
+    async () => {
+      throw new Error("sandbox not needed");
+    },
+    [{ file_id: "large" }],
+    transfer,
+    undefined,
+    [],
+    async () => {
+      opened++;
+      return {
+        name: "large.zip",
+        mimetype: "application/zip",
+        sizeBytes: MAX_ATTACHMENT_BYTES + 1,
+        stream: Readable.from(["not read"]),
+      };
+    },
+  );
+  assert.equal(opened, 1);
+  assert.deepEqual(result.oversized, ["large"]);
+  assert.deepEqual(result.attachments, []);
+  assert.equal(await transfer.sweep(0), 0);
+});
+
+test("a stored stream failure rolls back earlier workspace staging", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const transfer = createMemoryBlobTransferStore();
+  await assert.rejects(
+    collectNamedOutbound(
+      fakeSandbox({ "report.txt": bytes("hello") }),
+      handle,
+      ["report.txt", { file_id: "broken" }],
+      transfer,
+      { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "rollback" },
+      [],
+      async () => ({
+        name: "broken.txt",
+        mimetype: "text/plain",
+        sizeBytes: 1,
+        stream: Readable.from(
+          (async function* () {
+            yield "partial";
+            throw new Error("read failed");
+          })(),
+        ),
+      }),
+    ),
+    /read failed/,
+  );
+  assert.equal(await transfer.sweep(0), 0);
+  assert.equal((await store.listOwnedByScopes(["personal:U1"])).files.length, 0);
+});
+
+test("replacing a path preserves its artifact when staged again by ID", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const staging = createAttachStaging({
+    sandbox: fakeSandbox({ "report.txt": bytes("report") }),
+    provision: async () => handle,
+    blobTransfer: createMemoryBlobTransferStore(),
+    fileRegistration: { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "reference" },
+    openStored: async (id) => {
+      const opened = await store.open(id);
+      return opened ? { ...opened.artifact, stream: opened.stream } : null;
+    },
+  });
+  await staging.attach(["report.txt"]);
+  const id = staging.staged()[0]!.artifactId!;
+  await staging.attach([{ file_id: id }]);
+  await staging.attach(["report.txt"]);
+  assert.equal(staging.staged().length, 2);
+  assert.ok(await store.open(id), "the staged file ID remains readable");
 });

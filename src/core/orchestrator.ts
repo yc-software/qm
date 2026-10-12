@@ -2701,6 +2701,34 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .then(() => deps.turnStream?.markSurfacePosted(runId))
             .catch(swallowAs("orchestrator: first-block ack", undefined));
         };
+        let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
+        const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
+          if (
+            conversation.audience.every((principal) =>
+              principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
+            )
+          )
+            return true;
+          let handles = fresh ? undefined : readableHandles;
+          handles ??= await deps.acl.handlesForAudience(
+            conversation.audience,
+            scopeId,
+            resolution.orgScopeId,
+            principalEntitledToScope,
+          );
+          if (!fresh) readableHandles = handles;
+          return handles.some(
+            (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.ownerPath === artifact.path,
+          );
+        };
+        const provisionOutbound = (sandboxId?: string) =>
+          sandboxId !== undefined ? provisionResource(sandboxId) : provision();
+        const openStoredOutbound = async (id: string) => {
+          const artifact = await deps.files.get(id);
+          if (!artifact || !(await mayReadArtifact(artifact, true))) return null;
+          const opened = await deps.files.open(id);
+          return opened ? { ...artifact, sizeBytes: opened.sizeBytes, stream: opened.stream } : null;
+        };
         const surfaceToolDeps = createSurfaceToolDeps({
           deps,
           input,
@@ -2712,14 +2740,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           defaultDestination,
           blobTransfer,
           fileRegistration,
-          provision,
+          provision: provisionOutbound,
+          openStored: openStoredOutbound,
           postProvenance,
           postKeys,
           spine,
         });
         const attachStaging = createAttachStaging({
           sandbox: deps.sandbox,
-          provision,
+          provision: provisionOutbound,
+          openStored: openStoredOutbound,
           blobTransfer,
           fileRegistration,
         });
@@ -2981,24 +3011,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.harness.turns.resetSession?.(session.id);
         }
         const visibleHistory = filterHistory(forModelContext(rawEntries, { includeSecurityTainted: false }));
-        let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
-        const mayReadArtifact = async (artifact: FileArtifact): Promise<boolean> => {
-          if (
-            conversation.audience.every((principal) =>
-              principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
-            )
-          )
-            return true;
-          readableHandles ??= await deps.acl.handlesForAudience(
-            conversation.audience,
-            scopeId,
-            resolution.orgScopeId,
-            principalEntitledToScope,
-          );
-          return readableHandles.some(
-            (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.ownerPath === artifact.path,
-          );
-        };
         const rehydrateTape = (messages: readonly unknown[]) => {
           return rehydrateFoldImages(
             messages,

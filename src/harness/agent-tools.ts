@@ -1,4 +1,5 @@
 import { adminOperations } from "../tools/admin.ts";
+import { MAX_OUTBOUND_FILES, type OutboundFile } from "../core/attachments.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -764,8 +765,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     '[error] a scratch box cannot be made durable yet — use scope:"scoped" for work that must survive future turns, or drop `durable`.';
   const SCOPED_EPHEMERAL_ERROR =
     '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for disposable local working files.';
+  const outboundFilesSchema = Type.Array(
+    Type.Union([
+      Type.String({ minLength: 1 }),
+      Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+    ]),
+    { maxItems: MAX_OUTBOUND_FILES, description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+  );
+  const outboundSandboxSchema = Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Sandbox for workspace paths; omit for the default. Ignored for stored file IDs.",
+    }),
+  );
   const FILE_SEND_GUIDANCE =
-    "The files and apps tools use the default sandbox; execute can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
+    "The files and apps tools use the default sandbox. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
     "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn; owner is invocation-only. Publish durable code to git and artifacts to Files.";
 
@@ -3431,12 +3445,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
         }),
       ),
-      files: Type.Optional(
-        Type.Array(Type.String(), {
-          description:
-            'post/reach: workspace-relative file paths to upload WITH your message — images, PDFs, code snippets, whatever. Write the file to an ordinary workspace path (e.g. "work/cover.png") and list that path here; it\'s attached to the message at its destination, like a person attaching a file. Short code can just go in `text` as a ``` block; use a file for anything downloadable.',
-        }),
-      ),
+      sandbox_id: outboundSandboxSchema,
+      files: Type.Optional(outboundFilesSchema),
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
       ref: Type.Optional(
         Type.String({
@@ -3509,7 +3519,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             text: capText(params.text),
             ...(params.files?.length ? { files: params.files } : {}),
           });
-          const r = await tc.post(params.text, opts, params.files);
+          const r = await tc.post(params.text, opts, params.files, params.sandbox_id);
           return recordResult(
             callId,
             {
@@ -3552,7 +3562,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             bytes: params.text.length,
             ...(params.files?.length ? { files: params.files.length } : {}),
           });
-          const r = await tc.reach(params.text, target, params.files);
+          const r = await tc.reach(params.text, target, params.files, params.sandbox_id);
           return recordResult(
             callId,
             {
@@ -3813,22 +3823,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "attach",
     label: "Attach",
     description:
-      "Send file(s) along with this turn's reply. Name workspace-relative paths of files you have " +
-      "already written; they ride out with the reply as real uploads. Call it again to add more — " +
-      "re-naming the same path replaces it. The result lists exactly what will be delivered; if a " +
-      "path is wrong nothing is staged and the result says so, so never claim you sent a file you " +
-      "have not seen confirmed here.",
+      "Send files with this turn's reply, using workspace paths or stored Files IDs. " +
+      "Repeated sources replace their staged copy. Any invalid file stages nothing; the result lists what will be delivered.",
     parameters: Type.Object({
-      files: Type.Array(Type.String(), {
-        description: 'Workspace-relative paths of files to deliver with this reply, e.g. ["report.md"].',
-      }),
+      files: outboundFilesSchema,
+      sandbox_id: outboundSandboxSchema,
     }),
-    async execute(callId, params: { files?: string[] }) {
+    async execute(callId, params: { files?: OutboundFile[]; sandbox_id?: string }) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      const files = (params.files ?? []).map((f) => String(f ?? "").trim()).filter(Boolean);
-      await recordCall(callId, { tool: "attach", files });
-      const r = await tc.attach(files);
+      const files = params.files ?? [];
+      await recordCall(callId, { tool: "attach", files, sandbox_id: params.sandbox_id });
+      const r = await tc.attach(files, params.sandbox_id);
       if (!r.ok) return recordResult(callId, { tool: "attach", ok: false }, text(`[not attached] ${r.message}`), true);
       const list = r.files.map((f) => `${f.name} (${f.sizeBytes} bytes, ${f.mimetype})`).join("; ");
       const total = r.staged > r.files.length ? ` ${r.staged} file(s) are now staged for this reply.` : "";

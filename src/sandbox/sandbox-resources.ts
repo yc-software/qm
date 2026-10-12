@@ -76,6 +76,20 @@ export interface SandboxResources {
   defaultBackend(): SandboxBackendName;
 }
 
+export class SandboxAccessError extends Error {}
+
+export async function accessConversationSandbox(
+  resources: SandboxResources | undefined,
+  actorId: string,
+  id: string,
+  canUseScope: (scope: ScopeId) => boolean | Promise<boolean>,
+): Promise<SandboxResource> {
+  const resource = await resources?.access(actorId, id);
+  if (!resource || resource.state === "retired" || !(await canUseScope(resource.ownerScopeId)))
+    throw new SandboxAccessError("sandbox access is no longer authorized in this conversation");
+  return resource;
+}
+
 export function createSandboxResources(opts: {
   upgrade?: () => Promise<void>;
   records: DurableMap<SandboxResource>;
@@ -108,12 +122,12 @@ export function createSandboxResources(opts: {
   };
   const authorize = async (actorId: string, scopeId: ScopeId): Promise<void> => {
     if (!parseScopeId(scopeId).kind || !(await opts.canUseScope(actorId, scopeId)))
-      throw new Error("sandbox access requires permission to use its owning scope");
+      throw new SandboxAccessError("sandbox access requires permission to use its owning scope");
   };
   const get = async (id: string): Promise<SandboxResource> => {
     await initialize();
     const record = await opts.records.get(id);
-    if (!record) throw new Error(`sandbox not found: ${id}`);
+    if (!record) throw new SandboxAccessError(`sandbox not found: ${id}`);
     return record;
   };
   const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {

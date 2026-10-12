@@ -20,7 +20,11 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async attach(files) {
       return {
         ok: true,
-        files: files.map((name) => ({ name, mimetype: "text/plain", sizeBytes: 1 })),
+        files: files.map((name) => ({
+          name: typeof name === "string" ? name : name.file_id,
+          mimetype: "text/plain",
+          sizeBytes: 1,
+        })),
         staged: files.length,
       };
     },
@@ -1376,7 +1380,7 @@ test("each action dispatches to exactly its matching tool-context method", async
   } as unknown as ToolContext;
   const slack = surfaceTool({ current: tc, scopeLabel: "channel:C1" });
 
-  await call(slack, { action: "post", text: "hi" });
+  await call(slack, { action: "post", text: "hi", files: [{ file_id: "saved" }], sandbox_id: "box" });
   await call(slack, { action: "react", ts: "1.1", emoji: "eyes" });
   await call(slack, { action: "edit", ref: "1.1", text: "y" });
   await call(slack, { action: "delete", ref: "1.1" });
@@ -1385,14 +1389,14 @@ test("each action dispatches to exactly its matching tool-context method", async
   await call(slack, { action: "search", query: "q", source: "slack" });
   await call(slack, { action: "read_members" });
   await call(slack, { action: "read_file", ref: "aaaa" });
-  await call(slack, { action: "reach", text: "hi", channel: "eng" });
+  await call(slack, { action: "reach", text: "hi", channel: "eng", files: ["report.md"], sandbox_id: "box" });
 
   assert.deepEqual(
     calls.map((c) => c[0]),
     ["post", "react", "edit", "delete", "readThread", "whatsNew", "search", "readMembers", "readFile", "reach"],
   );
-  assert.deepEqual(calls[0]![1], ["hi", {}, undefined]);
-  assert.deepEqual(calls[9]![1], ["hi", { channel: "eng" }, undefined]);
+  assert.deepEqual(calls[0]![1], ["hi", {}, [{ file_id: "saved" }], "box"]);
+  assert.deepEqual(calls[9]![1], ["hi", { channel: "eng" }, ["report.md"], "box"]);
   assert.deepEqual(calls[1]![1], [{ ts: "1.1", emoji: "eyes" }]);
   assert.deepEqual(calls[2]![1], [{ ref: "1.1", text: "y" }]);
   assert.deepEqual(calls[3]![1], [{ ref: "1.1" }]);

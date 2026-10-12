@@ -5,7 +5,7 @@ import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
-import type { SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
+import { accessConversationSandbox, type SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
@@ -351,9 +351,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return true;
   };
   const accessResource = async (id: string): Promise<SandboxAccessPlan> => {
-    const resource = await deps.sandboxResources?.access(actor.id, id);
-    if (!resource || !(await canUseSandboxScope(resource.ownerScopeId)))
-      throw new Error("sandbox access is no longer authorized in this conversation");
+    const resource = await accessConversationSandbox(deps.sandboxResources, actor.id, id, canUseSandboxScope);
     const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
     if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
     await deps.config!.refreshSecurity([resource.ownerScopeId]);
