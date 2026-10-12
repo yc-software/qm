@@ -1029,13 +1029,52 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
+  const discoverSkills = (search: boolean) =>
+    defineTool({
+      name: search ? "search_skills" : "list_skills",
+      label: search ? "Search skills" : "List skills",
+      description: search
+        ? "Search current-scope and organization skills by name or description, including omitted skills. To search a carried source listed in the sharing context, set source. Read a skill before using it."
+        : "Browse current-scope and organization skills, including omitted or new skills. Set source to browse a carried source listed in the sharing context. Follow nextOffset within the same source; does not start a sandbox.",
+      parameters: Type.Object({
+        ...(search
+          ? { query: Type.String({ minLength: 1, description: "Words to find in skill names or descriptions." }) }
+          : {}),
+        source: Type.Optional(
+          Type.String({
+            description:
+              "Exact authorized source scope from the sharing context; omitted means current scope and organization.",
+          }),
+        ),
+        offset: Type.Optional(Type.Integer({ minimum: 0 })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      }),
+      async execute(callId, params) {
+        if (!ref.current) return text("[error] no active tool context");
+        const p = params as { query?: string; offset?: number; limit?: number; source?: string };
+        const action = search ? "search" : "list";
+        await recordCall(callId, { tool: "skills", action, ...p });
+        const { sourceScopeId, ...result } = await ref.current.listSkills(p.query, p.offset, p.limit, p.source);
+        return recordResult(
+          callId,
+          { tool: "skills", action, count: result.skills.length },
+          text(JSON.stringify(result)),
+          false,
+          sourceScopeId,
+        );
+      },
+    });
+
   const skill = defineTool({
     name: "skill",
     label: "skill",
     description:
-      "Load a skill from the Skills index before relying on it. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
+      "Load a skill by name before relying on it; use list or search to discover names outside the shortlist. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
     parameters: Type.Object({
-      name: Type.String({ description: "Skill name exactly as listed in the Skills index." }),
+      name: Type.String({ description: "Skill name from the shortlist, list, or search." }),
+      source: Type.Optional(
+        Type.String({ description: "Use the same source as the discovery call to read that exact skill." }),
+      ),
       path: Type.Optional(
         Type.String({ description: "Relative file within the skill to return instead of SKILL.md." }),
       ),
@@ -1050,12 +1089,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      const p = params as { name: string; path?: string; sandbox_id?: string };
-      await recordCall(callId, { tool: "skills", action: "read", name: p.name, ...(p.path ? { path: p.path } : {}) });
+      const p = params as { name: string; path?: string; sandbox_id?: string; source?: string };
+      await recordCall(callId, {
+        tool: "skills",
+        action: "read",
+        name: p.name,
+        ...(p.path ? { path: p.path } : {}),
+        ...(p.source ? { source: p.source } : {}),
+      });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
       const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
         ...(p.path ? { path: p.path } : {}),
+        ...(p.source ? { source: p.source } : {}),
         ...(p.sandbox_id ? { sandboxId: p.sandbox_id } : {}),
         ...(signal ? { signal } : {}),
       });
@@ -4244,6 +4290,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const tools = [
     ...(!delegateWork ? [execute] : []),
     resourceTool("skills", {
+      list: discoverSkills(false),
+      search: discoverSkills(true),
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),

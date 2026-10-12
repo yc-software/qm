@@ -1169,7 +1169,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (input.privateSessionMessage)
         systemPrompt +=
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
-      const sharingPrompt = renderSharingPosturePrompt(actor, sharingSources);
+      const sharingPrompt = renderSharingPosturePrompt(actor, [...sharingSources].sort());
       if (sharingPrompt) systemPrompt += `\n\n${sharingPrompt}`;
       const scopeProfile = supportsScopeProfile(deps.sandbox)
         ? await deps.sandbox
@@ -1213,12 +1213,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             )
           : [];
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
-      const visibleSkillsForTurn = async (): Promise<SkillResolution[]> => {
-        const resolved = filterConnectorSkills(await context.listSkills(), configuredProviders);
+      const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
+        const current = await context.listSkills(sources);
+        const resolved = filterConnectorSkills(current.skills, configuredProviders);
         const allowed: SkillResolution[] = [];
         for (const entry of resolved) {
           const skill = entry.skill;
-          if (!skill || !sharingSources.includes(skill.scopeId) || securityPolicy.screening === "off") {
+          if (!skill || !current.sharingSources.includes(skill.scopeId) || securityPolicy.screening === "off") {
             allowed.push(entry);
             continue;
           }
@@ -1268,20 +1269,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               detail: JSON.stringify({ actor: actor.id, source: skill.scopeId, target: scopeId }),
             });
         }
+        for (const entry of allowed) {
+          if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId: actor.id,
+            action: "sharing.cross_context_read",
+            resource: `skill:${entry.skill.id}`,
+            scopeLabel: scopeId,
+            detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
+          });
+        }
         return allowed;
       };
-      const visibleSkills = await visibleSkillsForTurn();
-      for (const entry of visibleSkills) {
-        if (!entry.skill || !sharingSources.includes(entry.skill.scopeId)) continue;
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "sharing.cross_context_read",
-          resource: `skill:${entry.skill.id}`,
-          scopeLabel: scopeId,
-          detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
-        });
-      }
+      const skillSourceContext = await context.listSkills([scopeId, resolution.orgScopeId]);
+      const otherSkillSources = skillSourceContext.skillSources
+        .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
+        .sort();
+      if (otherSkillSources.length)
+        systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
+      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders);
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
@@ -1295,7 +1302,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
       }
-      if (visibleSkills.length) turnContextBlocks["Skills"] = skillsIndex(visibleSkills, sharingSources);
+      systemPrompt +=
+        "\n\n## Skills\nThe per-turn shortlist is not exhaustive. Use skills action list to browse all or search with query to find omitted or new skills. Read a skill before relying on it.";
       const gatewayBlock = renderGatewayContext(input.surface, input.gatewayContext);
       if (gatewayBlock) turnContextBlocks["Where you are"] = gatewayBlock;
       const homeChannel =
@@ -2066,6 +2074,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return true;
         });
         const memoryWindow = await deps.sessions.getContextWindow(session.id);
+
         memoryView = await context.memorySnapshot();
         recalled = memoryView.recalled;
         const latestMemoryContext = memoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
@@ -2719,6 +2728,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           useSkill,
+          listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
           ...(reachAvailable
             ? {
                 reach: {
@@ -3170,6 +3180,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentsUnscreened
             ? unscreenedNotice("inbound content")
             : "";
+        const usedSkills = history.flatMap((entry) => {
+          const p = entry.payload;
+          return entry.type === "tool_call" &&
+            isObj(p) &&
+            p.tool === "skills" &&
+            p.action === "read" &&
+            typeof p.name === "string"
+            ? [p.name]
+            : [];
+        });
+        turnContextBlocks["Skills"] = skillsIndex(
+          nativeSkills,
+          [scopeId, resolution.orgScopeId],
+          input.text,
+          usedSkills,
+        );
         const turnEnvironmentContents = [
           manifest,
           principalDelivered,

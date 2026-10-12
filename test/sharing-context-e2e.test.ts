@@ -198,7 +198,7 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
 test("sharing e2e: skill lazy assets execute, update, and disappear from the same computer after opt-out", async (t) => {
   const b = await fixture(t);
   const s = await b.skill("personal:U1", "carried-helper", "VERSION_ONE");
-  assert.match(await b.turn("!sysprompt", true), /carried-helper/);
+  assert.doesNotMatch(await b.turn("!sysprompt", true), /carried-helper/);
   assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_ONE");
   await b.skills.update(s.id, {
     ...s.manifest,

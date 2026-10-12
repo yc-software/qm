@@ -902,3 +902,46 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   assert.deepEqual(teardowns, [{ keepWarm: true }, {}]);
   assert.deepEqual((await resources.get(record.id)).holders, []);
 });
+
+test("same-name skills from distinct sources keep their materialized assets separate", async () => {
+  const { resources, router, layers } = fixture();
+  const record = await resources.create("alice", "personal:alice", "local");
+  await resources.setDefault("alice", "personal:alice", record.id);
+  const turn = createTurnSandboxes({
+    deps: { sandbox: router, sandboxResources: resources },
+    input: { origin: { kind: "user" } },
+    actor: { id: "alice", type: "internal" },
+    session: { id: "s" },
+    resolution: { layers },
+    scopeId: "personal:alice",
+    memoryScopeId: "personal:alice",
+    transferId: "t",
+    turnSessionDir: "turn/s",
+    turnFilesDir: "turn/s/t",
+    connectorEnv: {},
+    ownerAuthAvailable: false,
+    emitGapWork: () => {},
+    visibleSkillsForTurn: async (sources: readonly string[] = ["org:example", "personal:alice"]) =>
+      sources.map((source) => ({
+        skill: {
+          id: source,
+          scopeId: source,
+          version: 1,
+          manifest: {
+            name: "helper",
+            body: "Run skills/helper/value.py",
+            files: [{ path: "value.py", content: source }],
+          },
+        },
+        shadowed: [],
+      })),
+  } as unknown as TurnSandboxContext);
+  const a = await turn.useSkill("helper", "SKILL.md", undefined, "org:example");
+  const b = await turn.useSkill("helper", "SKILL.md", undefined, "personal:alice");
+  const again = await turn.useSkill("helper", "SKILL.md", undefined, "org:example");
+  assert.notEqual(a.dir, b.dir);
+  assert.equal(a.dir, again.dir);
+  const handle = await turn.provision();
+  assert.equal(await router.readFile(handle, `${a.dir!.replace("/workspace/", "")}/value.py`), "org:example");
+  assert.equal(await router.readFile(handle, `${b.dir!.replace("/workspace/", "")}/value.py`), "personal:alice");
+});

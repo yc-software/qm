@@ -28,6 +28,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async computerStatus() {
       return { machine: "healthy", guestResponsive: true };
     },
+    async listSkills() {
+      return { sourceScopeId: null, skills: [] };
+    },
     async skill() {
       return { content: null, sourceScopeId: null };
     },
@@ -4449,4 +4452,48 @@ test("split sandbox tools reject missing, mistyped, blank and unrelated fields w
         /\[error\]/,
       );
   assert.equal(dispatched, 0);
+});
+
+test("native skills discovery exposes list and search with validated pagination", async () => {
+  const ctx = fakeToolContext();
+  const seen: unknown[] = [];
+  ctx.listSkills = async (...args) => {
+    seen.push(args);
+    return { sourceScopeId: null, skills: [{ name: "rare-helper", description: "Rare task" }] };
+  };
+  const tool = createAgentTools({ current: ctx }).find((t) => t.name === "skills")!;
+  assert.match(textOut(await call(tool, { action: "search", query: "rare", limit: 10 })), /rare-helper/);
+  await call(tool, { action: "list", offset: 4, limit: 2 });
+  assert.deepEqual(seen, [
+    ["rare", undefined, 10, undefined],
+    [undefined, 4, 2, undefined],
+  ]);
+  for (const input of [{ action: "search" }, { action: "list", limit: 101 }, { action: "list", offset: -1 }]) {
+    assert.match(textOut(await call(tool, input)), /Invalid arguments/);
+  }
+});
+
+test("skill discovery records the page's source scope for history and tape filtering", async () => {
+  const emitted: Emitted[] = [];
+  const ctx = fakeToolContext();
+  ctx.listSkills = async () => ({
+    sourceScopeId: "personal:U1",
+    skills: [{ name: "private-helper", description: "Private description" }],
+    nextOffset: 1,
+  });
+  const ref: ToolContextRef = {
+    current: ctx,
+    scopeLabel: "channel:C1",
+    orgScopeId: "org:default-org",
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+  };
+  const tool = createAgentTools(ref).find((t) => t.name === "skills")!;
+  await callWith(tool, "discovery", { action: "list" });
+  assert.equal(ref.tapeResultScopes?.get("discovery"), "personal:U1");
+  const history = emitted.map((e, seq) => ({ ...e, seq, createdAt: seq, sessionId: "s" })) as SessionEntry[];
+  const visible = filterHistoryForAudience(history, [{ id: "U2", type: "internal" }], "channel:C1", "org:default-org");
+  assert.doesNotMatch(JSON.stringify(visible), /Private description|private-helper/);
+  assert.match(JSON.stringify(history), /Private description/);
 });
