@@ -59,7 +59,12 @@ import { createBackgroundBroker } from "../connectors/background-exec-broker.ts"
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
-import { credentialHandle, renderKeychainManifest, type PublicServiceCredential } from "../credentials/keychain.ts";
+import {
+  credentialHandle,
+  renderKeychainManifest,
+  type PublicServiceCredential,
+  type KeychainManifestInput,
+} from "../credentials/keychain.ts";
 import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import {
   configuredConnectorProviders,
@@ -1471,7 +1476,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const connectorEnv: Record<string, string> = {};
       const credsStart = Date.now();
       const commandCredentials: CommandCredential[] = [];
-      const credentialDescriptions: string[] = [];
+      const credentialDescriptions: NonNullable<KeychainManifestInput["execution"]> = [];
       const credentialIdentities = new Map<string, string>();
 
       const authorizeOwnerCredentials = async (): Promise<void> => {
@@ -1504,6 +1509,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         credential: CommandCredential,
         description: string,
         identity = credential.handle,
+        ownerId = actor.id,
+        credentialId?: string,
       ): void => {
         const existing = credentialIdentities.get(credential.handle);
         if (existing !== undefined) {
@@ -1512,9 +1519,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         credentialIdentities.set(credential.handle, identity);
         commandCredentials.push(credential);
-        credentialDescriptions.push(
-          `- \`${credential.handle}\` — ${description}; execute scope \`${credential.scope ?? "scoped"}\`.`,
-        );
+        credentialDescriptions.push({
+          handle: credential.handle,
+          ownerId,
+          description,
+          credentialId,
+          scope: credential.scope ?? "scoped",
+        });
       };
       const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (external || strictReadOnly || !deps.keychain) return;
@@ -1523,7 +1534,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (credential.kind === "broker" || isBackendCredential(credential)) continue;
           addCredential(
             {
-              handle: credentialHandle(credential.id),
+              handle: credentialHandle(credential),
               resolve: async () => {
                 const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id);
                 return {
@@ -1534,6 +1545,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               },
             },
             `${credential.service}, owner ${credential.ownerId}, grant ${grant.id}`,
+            credential.id,
+            credential.ownerId,
             credential.id,
           );
         }
@@ -1546,7 +1559,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (credential.kind === "broker" || isBackendCredential(credential)) continue;
             addCredential(
               {
-                handle: credentialHandle(credential.id),
+                handle: credentialHandle(credential),
                 scope: isolateOwnerKeychain ? "owner" : "scoped",
                 resolve: async () => {
                   await authorizeOwnerCredentials();
@@ -1556,6 +1569,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
               },
               `${credential.service}, owner ${credential.ownerId}`,
+              credential.id,
+              credential.ownerId,
               credential.id,
             );
           }
@@ -1588,7 +1603,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (!healthy && !operatorFallback) continue;
               addCredential(
                 {
-                  handle: `connector_${host.replace(/[^a-zA-Z0-9]/g, "_")}_${accountType ?? "default"}`,
+                  handle: `connector:${host}:${accountType ?? "default"}`,
                   scope: isolateOwnerKeychain ? "owner" : "scoped",
                   resolve: async () => {
                     await authorizeOwnerCredentials();
@@ -1599,7 +1614,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
                 !healthy && operatorFallback
                   ? `${host}, configured operator fallback; availability checked on use`
-                  : `${host} connector, owner ${actor.id}, account ${accountType ?? "default"}`,
+                  : `${host} connector, account ${accountType ?? "default"}`,
+                healthy && status && "credentialId" in status ? status.credentialId : undefined,
+                actor.id,
+                healthy && status && "credentialId" in status ? status.credentialId : undefined,
               );
             }
           }
@@ -1607,7 +1625,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       await registerConnectorCredentials(addCredentialToCatalog);
       perf.credsMs += Date.now() - credsStart;
-      let sharedCredsBlock = "";
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       let serviceCredRecords: PublicServiceCredential[] = [];
@@ -1763,52 +1780,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
         );
-        if (deps.serviceCreds) {
-          const records = serviceCredRecords;
-          const enabled = new Set(
-            records
-              .filter((r) => !isBackendCredential(r) && r.enabled && r.hasSecret && r.delivery !== "env")
-              .map((r) => r.slug),
-          );
-          if (enabled.size > 0) {
-            const slugs = [...grantedCredSlugs].filter((s) => enabled.has(s));
-            if (slugs.length > 0) {
-              const usable = records.filter((r) => slugs.includes(r.slug));
-              const lines = usable.map((r) => {
-                const methods = r.allowedMethods?.length ? r.allowedMethods.toSorted().join("/") : "GET";
-                const paths = r.allowedPathPrefixes?.length
-                  ? `paths ${r.allowedPathPrefixes.toSorted().join(", ")}`
-                  : "any path";
-                return `- \`${r.slug}\` (${r.name}; shared org credential) → ${r.host} (${methods}; ${paths})`;
-              });
-              sharedCredsBlock =
-                "\n\n## Shared org credentials available to you\n" +
-                "Select the corresponding `service_<slug>` handle in execute.credentials. You CANNOT see the secret — call the " +
-                "target BY PROXY through the broker, which injects it server-side. Use exactly this (with the " +
-                "$AGENT_CREDENTIAL_TOKEN env var, NOT $AGENT_API_TOKEN):\n" +
-                "```\n" +
-                'curl -fsS -X POST "$AGENT_API_URL/v1/credentials/broker" \\\n' +
-                '  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \\\n' +
-                '  -H "content-type: application/json" \\\n' +
-                '  -d \'{"credential":"<slug>","method":"GET","url":"https://<host>/<path>?<query>"}\'\n' +
-                "```\n" +
-                'The reply is `{"status":<upstream status>,"contentType":…,"body":"<upstream text>"}` — parse `body`. ' +
-                "For Git smart HTTP clone/fetch/push using a shared org credential, use core as the Git remote " +
-                "so the token stays server-side: " +
-                "`$AGENT_API_URL/v1/credentials/git/<slug>/<repo-path>.git`, with " +
-                '`git -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" ...`. ' +
-                "Git through this route uses the configured org account, not automatically the requesting user's account; " +
-                "a live personal OAuth connector does not switch this route's identity. The credential name is an admin label " +
-                "and does not identify the upstream username. Choose among credentials authorized for this conversation " +
-                "based on the task and the user's intent; a shared account is a valid choice, not an automatic fallback. " +
-                "For personal Git access, use an authorized personal login that supports Git transport. " +
-                "If the intended account is unclear before a write, clarify it rather than silently switching accounts. " +
-                "A non-2xx `status` is the UPSTREAM service's own answer (e.g. a bad query or its auth), not a broker " +
-                "error. Use ONLY these (slug → host; allowed methods; allowed paths):\n" +
-                lines.sort().join("\n");
-            }
-          }
-        }
       }
       const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
       const egressTokenForPolicy = async (egress: EgressPolicy): Promise<string | undefined> => {
@@ -1902,7 +1873,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   return { env: [{ key: credential.envKey!, value: current.secret }] };
                 },
               },
-              `${credential.name}, org credential, provides ${credential.envKey}`,
+              `${credential.name}; provides ${credential.envKey}`,
+              undefined,
+              "Organization",
             );
           } else if (deps.signingSecret && deps.apiBaseUrl) {
             addCredential(
@@ -1910,7 +1883,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 handle: `service_${credential.slug}`,
                 resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
               },
-              `org credential ${credential.slug}, provides scoped broker capability`,
+              `${credential.name}; proxy ${credential.host}; ${(credential.allowedMethods?.length ? credential.allowedMethods : ["GET"]).toSorted().join("/")}; ${credential.allowedPathPrefixes?.length ? `paths ${credential.allowedPathPrefixes.toSorted().join(", ")}` : "any path"}; use the use-shared-credential skill`,
+              undefined,
+              "Organization",
             );
           }
         }
@@ -2340,11 +2315,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         )
           systemPrompt +=
             "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
-        if (credentialDescriptions.length)
-          systemPrompt +=
-            "\n\n## Execution credentials\nRequest exact handles in execute.credentials:\n" +
-            credentialDescriptions.sort().join("\n");
-        systemPrompt += sharedCredsBlock;
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +
@@ -2420,17 +2390,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           })().catch(swallowAs("orchestrator: conversation roster", null));
           if (rosterBlock) systemPrompt += `\n\n${rosterBlock}`;
         }
-        if (!external && !strictReadOnly && deps.keychain && deps.signingSecret && deps.apiBaseUrl) {
+        if (!strictReadOnly) {
           const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
           const members = [
             ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
             ...audienceMembers,
           ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
           const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
-            deps.keychain.listByOwners(members.map((m) => m.id)),
-            deps.keychain.listConnectorsByOwners(members.map((m) => m.id)),
-            deps.keychain.grantsForScope(scopeId),
-            deps.keychain.listAsks({ requesterScopeId: scopeId }),
+            !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+            !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+            !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
+            !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
           ]);
           const keychainBlock = renderKeychainManifest({
             scopeId,
@@ -2441,7 +2411,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             entriesByOwner,
             connectorsByOwner,
             scopeGrants,
-            injected: [],
+            execution: credentialDescriptions,
             scopeAsks,
           });
           if (keychainBlock) systemPrompt += `\n\n${keychainBlock}`;

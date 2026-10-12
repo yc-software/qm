@@ -48,7 +48,7 @@ test("save-login uploads a private login home and re-saving keeps the entry and 
     return stdout;
   };
 
-  assert.match(await login("first"), /^saved aws \(2 files\) as kc_/);
+  assert.match(await login("first"), /^saved aws \(2 files\) as aws:/);
   const [saved] = await keychain.listByOwner("U1");
   const grant = await keychain.createGrant({
     credentialId: saved!.id,
