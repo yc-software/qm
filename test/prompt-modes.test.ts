@@ -192,6 +192,10 @@ test("Mode 1 (DM): live-conversation frame, org policy once, no template leaks, 
   );
 
   assert.match(prompt, /What you write IS your reply/);
+  assert.match(prompt, /Aim at the outcome they name, not the nearest adjacent task/);
+  assert.match(prompt, /Settle who is who before long work/);
+  assert.match(prompt, /Treat a correction as a change of plan/);
+  assert.match(prompt, /at most a couple from any one organization/);
 
   assert.equal(
     countOccurrences(prompt, ORG_SOUL),
