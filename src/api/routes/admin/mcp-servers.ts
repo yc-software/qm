@@ -7,6 +7,7 @@
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
 import { PROVIDERS } from "../../../connectors/oauth.ts";
 import { sendJson } from "../../http.ts";
+import { errMessage } from "../../../util/errors.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
@@ -31,19 +32,54 @@ function parseScopes(v: unknown): string[] | undefined {
     .map((x) => x.trim());
 }
 
-async function discoverOAuth(issuer: string): Promise<{ authorize?: string; token?: string }> {
+interface DiscoveredOAuth {
+  authorize?: string;
+  token?: string;
+  scopes?: string[];
+  errors: string[];
+}
+
+async function fetchMeta(url: string, errors: string[]): Promise<Record<string, unknown> | undefined> {
+  try {
+    const r = await fetch(url, { redirect: "error" });
+    if (r.ok) return (await r.json()) as Record<string, unknown>;
+    errors.push(`${url}: HTTP ${r.status}`);
+  } catch (e) {
+    errors.push(`${url}: ${errMessage(e)}`);
+  }
+  return undefined;
+}
+
+// Finds the authorization server the MCP way: the server's protected-resource
+// metadata (RFC 9728) names it, then its RFC 8414 metadata names the endpoints.
+async function discoverOAuth(issuer: string | undefined, resource: URL): Promise<DiscoveredOAuth> {
+  const errors: string[] = [];
+  let scopes: string[] | undefined;
+  if (!issuer) {
+    const path = resource.pathname === "/" ? "" : resource.pathname;
+    for (const url of [
+      ...new Set([
+        `${resource.origin}/.well-known/oauth-protected-resource${path}`,
+        `${resource.origin}/.well-known/oauth-protected-resource`,
+      ]),
+    ]) {
+      const meta = await fetchMeta(url, errors);
+      const servers = meta?.authorization_servers;
+      if (Array.isArray(servers) && typeof servers[0] === "string") {
+        issuer = httpsUrl(servers[0]);
+        scopes = parseScopes(meta?.scopes_supported);
+        break;
+      }
+    }
+    if (!issuer) return { errors };
+  }
   const base = issuer.replace(/\/+$/, "");
   for (const path of ["/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"]) {
-    try {
-      const r = await fetch(`${base}${path}`, { redirect: "error" });
-      if (!r.ok) continue;
-      const meta = (await r.json()) as { authorization_endpoint?: unknown; token_endpoint?: unknown };
-      return { authorize: httpsUrl(meta.authorization_endpoint), token: httpsUrl(meta.token_endpoint) };
-    } catch {
-      continue;
-    }
+    const meta = await fetchMeta(`${base}${path}`, errors);
+    if (meta)
+      return { authorize: httpsUrl(meta.authorization_endpoint), token: httpsUrl(meta.token_endpoint), scopes, errors };
   }
-  return {};
+  return { scopes, errors };
 }
 
 async function actor(ctx: ApiCtx) {
@@ -137,11 +173,11 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
   let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);
-  const issuer = httpsUrl((b as { oauthIssuer?: unknown }).oauthIssuer);
-  if (oauthUser && issuer && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
-    const found = await discoverOAuth(issuer);
-    oauthAuthorizeUrl ??= found.authorize;
-    oauthTokenUrl ??= found.token;
+  let discovered: DiscoveredOAuth | undefined;
+  if (oauthUser && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
+    discovered = await discoverOAuth(httpsUrl((b as { oauthIssuer?: unknown }).oauthIssuer), parsed);
+    oauthAuthorizeUrl ??= discovered.authorize;
+    oauthTokenUrl ??= discovered.token;
   }
   const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
   if (!["default", "personal", "company"].includes(credentialAccountType)) {
@@ -185,7 +221,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
           clientId: typeof b.clientId === "string" && b.clientId ? b.clientId.trim() : existing?.clientId,
           oauthAuthorizeUrl,
           oauthTokenUrl,
-          oauthScopes: parseScopes(b.oauthScopes) ?? existing?.oauthScopes ?? [],
+          oauthScopes: parseScopes(b.oauthScopes) ?? existing?.oauthScopes ?? discovered?.scopes ?? [],
         }
       : {}),
     ...(auth === "client-credentials"
@@ -212,7 +248,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
       message:
-        "oauth-user auth requires clientId plus HTTPS oauthAuthorizeUrl and oauthTokenUrl (or an oauthIssuer to discover them)",
+        "oauth-user auth requires clientId plus HTTPS oauthAuthorizeUrl and oauthTokenUrl, or OAuth metadata to discover them" +
+        (discovered?.errors.length ? ` (discovery: ${discovered.errors.join("; ")})` : ""),
     });
   }
   let toolNames: string[] | undefined;

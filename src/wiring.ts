@@ -205,7 +205,7 @@ import { createMemoryService, type MemoryService } from "./memory/memory-service
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, mcpPublicOAuthClients, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -279,13 +279,7 @@ import {
   type FeatureFlagRecord,
   type FeatureFlagStore,
 } from "./feature-flags.ts";
-import {
-  makeRefresh,
-  setPublicOAuthClients,
-  withPublicOAuthClients,
-  type OAuthClientResolver,
-  type OAuthState,
-} from "./connectors/oauth.ts";
+import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
   deriveConnectorKey,
@@ -1295,13 +1289,6 @@ export function buildApp(
         }
       : {}),
   });
-  const syncMcpOAuth = () =>
-    void mcpServers
-      .list()
-      .then((servers) => setPublicOAuthClients(mcpPublicOAuthClients(servers)))
-      .catch(reportFailureAs("mcp oauth client sync", undefined));
-  mcpServers.onChange(syncMcpOAuth);
-  syncMcpOAuth();
   const mcpTools = () => mcpToolService.toolDefs();
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })

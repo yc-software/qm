@@ -9,7 +9,7 @@
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
-import type { PublicOAuthClient } from "../connectors/oauth.ts";
+import { setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpFetch } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 
@@ -29,6 +29,7 @@ export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[]
             tokenUrl: s.oauthTokenUrl,
             scopes: s.oauthScopes ?? [],
             clientId: s.clientId,
+            resource: s.url,
           },
         ]
       : [],
@@ -137,7 +138,10 @@ export function createMcpToolService(opts: {
   }
 
   async function refresh(): Promise<void> {
-    const servers = (await opts.servers.list()).filter((s) => s.enabled);
+    const all = await opts.servers.list();
+    // Runs on boot, on change, and on the interval, so every instance converges on the stored servers.
+    setPublicOAuthClients(mcpPublicOAuthClients(all));
+    const servers = all.filter((s) => s.enabled);
     const next: McpToolDescriptor[] = [];
     for (const server of servers) {
       try {

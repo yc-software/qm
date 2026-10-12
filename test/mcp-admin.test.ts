@@ -155,10 +155,22 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints, and never s
     mcpServers: store,
   });
   const issuer = createServer((req, res) => {
-    if (req.url !== "/.well-known/oauth-authorization-server") return void res.writeHead(404).end();
     const base = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
+    const metadata: Record<string, object> = {
+      "/.well-known/oauth-authorization-server": {
+        authorization_endpoint: `${base}/authorize`,
+        token_endpoint: `${base}/token`,
+      },
+      "/.well-known/oauth-protected-resource/mcp": {
+        resource: `${base}/mcp`,
+        authorization_servers: [base],
+        scopes_supported: ["mcp:write"],
+      },
+    };
+    const meta = metadata[req.url ?? ""];
+    if (!meta) return void res.writeHead(404).end();
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token` }));
+    res.end(JSON.stringify(meta));
   });
   server.listen(0, "127.0.0.1");
   issuer.listen(0, "127.0.0.1");
@@ -175,7 +187,9 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints, and never s
       headers: ADMIN,
       body: JSON.stringify({ url: "https://tools.example.com/mcp", auth: "oauth-user", ...body }),
     });
-  assert.equal((await put("orders", { clientId: "c" })).status, 400);
+  const unreachable = await put("orders", { clientId: "c", oauthIssuer: "http://127.0.0.1:1" });
+  assert.equal(unreachable.status, 400);
+  assert.match(((await unreachable.json()) as { message: string }).message, /discovery: http:\/\/127\.0\.0\.1:1\//);
   assert.equal((await put("github", { clientId: "c", oauthIssuer: `http://127.0.0.1:1` })).status, 400);
   assert.equal(
     (await put("orders", { clientId: "c", oauthIssuer: "x", credentialHost: "api.github.com" })).status,
@@ -192,4 +206,15 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints, and never s
   assert.equal(record.oauthTokenUrl, `${issuerUrl}/token`);
   assert.deepEqual(record.oauthScopes, ["a", "b"]);
   assert.equal(record.clientSecret, undefined);
+
+  const discovered = await fetch(`${base}/orders-mcp`, {
+    method: "PUT",
+    headers: ADMIN,
+    body: JSON.stringify({ url: `${issuerUrl}/mcp`, auth: "oauth-user", clientId: "public" }),
+  });
+  assert.equal(discovered.status, 200, "endpoints and scopes come from the server's protected-resource metadata");
+  const viaResource = (await store.get("orders-mcp"))!;
+  assert.equal(viaResource.oauthAuthorizeUrl, `${issuerUrl}/authorize`);
+  assert.equal(viaResource.oauthTokenUrl, `${issuerUrl}/token`);
+  assert.deepEqual(viaResource.oauthScopes, ["mcp:write"]);
 });

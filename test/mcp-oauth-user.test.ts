@@ -51,6 +51,7 @@ test("oauth-user servers register a PKCE public client that exchanges and refres
   assert.equal(consent.searchParams.get("client_id"), "public-client");
   assert.equal(consent.searchParams.get("scope"), "mcp:write");
   assert.equal(consent.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(consent.searchParams.get("resource"), `https://${HOST}/mcp`);
 
   const bodies: URLSearchParams[] = [];
   const fetchImpl = async (_url: string, init: { body: string }) => {
@@ -100,9 +101,13 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
       return { ok: true, status: 200, text: async () => JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }) };
     },
   });
-  t.after(() => service.close());
+  t.after(() => {
+    service.close();
+    setPublicOAuthClients([]);
+  });
   await store.put(oauthServer());
   await service.refresh();
+  assert.ok(PROVIDERS.orders?.pkce, "refresh registers the server's OAuth client");
   assert.deepEqual(
     service.toolDefs().map((d) => d.name),
     ["orders_sign_in"],

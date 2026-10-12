@@ -449,6 +449,8 @@ export interface PublicOAuthClient {
   tokenUrl: string;
   scopes: string[];
   clientId: string;
+  /** RFC 8707 resource indicator: the protected resource (an MCP server URL) the token is for. */
+  resource?: string;
 }
 
 const publicClients = new Map<string, PublicOAuthClient>();
@@ -472,6 +474,7 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
       consentMode: "standard",
       egressRule: [],
       pkce: true,
+      ...(c.resource ? { authParams: { resource: c.resource } } : {}),
       setupGuide: { console: "Admin → MCP servers", url: "", steps: [] },
     };
   }
