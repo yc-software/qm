@@ -434,7 +434,7 @@ test("sandbox manages the box out-of-band instead of running a command", async (
   const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
   const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
 
-  const status = (await call(execute, { command: "", action: "status", purpose: "p" })) as {
+  const status = (await call(execute, { action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.match(
@@ -448,7 +448,7 @@ test("sandbox manages the box out-of-band instead of running a command", async (
     "a provisioned machine with a dead guest is called out as wedged, not left as two contradicting fields",
   );
 
-  const restart = (await call(execute, { command: "", action: "restart", purpose: "p" })) as {
+  const restart = (await call(execute, { action: "restart", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.equal(restarted.length, 1);
@@ -460,7 +460,7 @@ test("sandbox manages the box out-of-band instead of running a command", async (
       throw new Error("this computer's substrate (local) does not support restarting the computer");
     },
   };
-  const err = (await call(execute, { command: "", action: "restart", purpose: "p" })) as {
+  const err = (await call(execute, { action: "restart", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.match(err.content[0]!.text!, /does not support restarting/);
@@ -482,7 +482,7 @@ test("sandbox advertises available management actions and retires migrate", asyn
     "status",
     "restart",
   ]);
-  assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /unsupported sandbox action/);
+  assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /invalid sandbox arguments/);
   assert.match(textOut(await call(execute, { command: "", computer: "migrate" })), /invalid execute arguments/);
 });
 
@@ -544,7 +544,7 @@ test("computer status surfaces list-view disagreement and guest pressure", async
   };
   const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
   const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
-  const status = (await call(execute, { command: "", action: "status", purpose: "p" })) as {
+  const status = (await call(execute, { action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.match(status.content[0]!.text!, /machine: healthy \(listed: cold\)/);
@@ -575,7 +575,7 @@ test("computer status exposes paused lifecycle and recovery deadlines without cl
     scopeLabel: "personal:U1",
   };
   const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
-  const out = (await call(execute, { command: "", action: "status", purpose: "p" })) as {
+  const out = (await call(execute, { action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   const output = out.content[0]!.text!;
@@ -622,7 +622,7 @@ test("computer status verdicts: answering guest is ok, dead guest without a mach
       scopeLabel: "personal:U1",
     };
     const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
-    const out = (await call(execute, { command: "", action: "status", purpose: "p" })) as {
+    const out = (await call(execute, { action: "status", purpose: "p" })) as {
       content: Array<{ text?: string }>;
     };
     assert.equal(
@@ -1889,6 +1889,17 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
   );
   assert.match(members, /reachable by the 3 people currently in #C1/);
 
+  const channel = textOf(
+    await call(
+      createAgentTools({ current: withAudience({ kind: "members", channelRef: "C1" }) }).find(
+        (tool) => tool.name === "apps",
+      ),
+      { action: "publish", entrypoint: "x", name: "site" },
+    ),
+  );
+  assert.match(channel, /access follows the visibility and membership of its shared scopes/);
+  assert.doesNotMatch(channel, /0 people/);
+
   const owner = textOf(
     await call(
       createAgentTools({ current: withAudience({ kind: "owner" }) }).find((tool) => tool.name === "apps"),
@@ -2871,7 +2882,7 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
         assert.equal(Check(tool.parameters, { action, command: "forbidden", purpose: "Test old route" }), false);
         assert.match(
           textOut(await call(tool, { action, command: "forbidden", purpose: "Test old route" })),
-          /unsupported|invalid background arguments/,
+          /invalid (sandbox|background) arguments/,
         );
       }
     }
@@ -3466,13 +3477,13 @@ test("conversation coordinators cannot execute commands through any command tool
       const sandbox = tools.find((tool) => tool.name === "sandbox")!;
       assert.match(
         textOut(await call(sandbox, { action: "exec", command: "echo forbidden" })),
-        /unsupported sandbox action/,
+        /invalid sandbox arguments/,
       );
       assert.match(
         textOut(
           await call(sandbox, { action: "start_process", command: "echo forbidden", purpose: "Run background tests" }),
         ),
-        /unsupported sandbox action/,
+        /invalid sandbox arguments/,
       );
       assert.ok(tools.some((tool) => tool.name === "subagents"));
     }
@@ -4346,5 +4357,61 @@ test("invalid execution arguments cannot dispatch commands or retarget process o
     ),
     /invalid background arguments/,
   );
+  assert.equal(dispatched, 0);
+});
+
+test("split sandbox tools reject missing, mistyped, blank and unrelated fields without dispatch", async () => {
+  let dispatched = 0;
+  const tc = new Proxy(fakeToolContext(), {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (typeof value !== "function") return value;
+      return () => {
+        dispatched++;
+        throw new Error("must not dispatch");
+      };
+    },
+  });
+  const tools = createAgentTools({ current: tc }, { sandboxResources: true });
+  const inputs: Record<string, object[]> = {
+    sandbox: [
+      { action: "__proto__" },
+      { action: "constructor" },
+      { action: "retire", sandbox_id: null, purpose: "test" },
+      { action: "retire", sandbox_id: " ", purpose: "test" },
+      { action: "status", sandbox_id: null, purpose: "test" },
+      { action: "create", backend: "modal", command: "ignored", purpose: "test" },
+      { action: "create", backend: 42, purpose: "test" },
+      { action: "create", backend: " ", purpose: "test" },
+      { action: "set_default", purpose: "test" },
+      { action: "list", purpose: " " },
+    ],
+    execute: [
+      { command: "", purpose: "test" },
+      { command: " ", purpose: "test", background: true },
+      { command: "pwd", purpose: " " },
+      { command: "pwd", purpose: " ", background: true },
+    ],
+    background: [
+      { action: "poll", process_id: "job", sandbox_id: "other-box" },
+      { action: "poll", process_id: " " },
+      { action: "send_input", process_id: "job" },
+      { action: "stop", process_id: "job", signal: "NOPE" },
+      { action: "watch", process_id: "job", since_cursor: -1 },
+      { action: "unwatch", monitor_id: null },
+      { action: "list", command: "ignored" },
+    ],
+  };
+  for (const [name, cases] of Object.entries(inputs))
+    for (const input of cases)
+      assert.match(
+        textOut(
+          await call(
+            tools.find((t) => t.name === name),
+            input,
+          ),
+        ),
+        /\[error\]/,
+      );
   assert.equal(dispatched, 0);
 });

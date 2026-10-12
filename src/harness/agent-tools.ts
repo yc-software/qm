@@ -48,7 +48,9 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
   const note = a.note ? ` (note: ${a.note})` : "";
   if (a.kind === "org") return `Owned by you; reachable by anyone at ${a.orgId ?? "your org"}.${note}`;
   if (a.kind === "members") {
-    const n = a.memberCount ?? 0;
+    if (a.memberCount === undefined)
+      return `Owned by you; access follows the visibility and membership of its shared scopes.${note}`;
+    const n = a.memberCount;
     const who = a.channelRef
       ? `the ${n} ${n === 1 ? "person" : "people"} currently in #${a.channelRef}`
       : `${n} ${n === 1 ? "person" : "people"} you've shared it with`;
@@ -1151,12 +1153,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "publish",
     label: "publish",
     description:
-      "Publish a directory from the workspace as a durable, private-by-default web app " +
+      "Publish a directory from the workspace as a durable web app " +
       "(it keeps running after the turn ends and gets a stable link). Before publishing, verify the " +
       "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
-      "deployment name, not its ID. Publishing is always private to the owner and never changes who can reach an app; " +
+      "deployment name, not its ID. New apps are shared for read/use with their creation channel; DMs stay private. Republishing never changes access; " +
       "grant access separately with apps action share. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
@@ -4213,26 +4215,58 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...mcpTools,
     ...clientTools,
   ];
-  const processFields: Record<string, string[]> = {
-    poll: ["process_id", "since_cursor", "wait_seconds", "max_bytes"],
-    send_input: ["process_id", "data"],
-    stop: ["process_id", "signal"],
-    list: [],
-    watch: ["process_id", "since_cursor", "pattern", "instructions"],
-    unwatch: ["monitor_id"],
+  const operationFields: Record<string, Record<string, string[]>> = {
+    sandbox: {
+      status: ["sandbox_id"],
+      restart: ["sandbox_id"],
+      list: [],
+      create: ["backend", "name"],
+      set_default: ["sandbox_id"],
+      retire: ["sandbox_id"],
+    },
+    background: {
+      poll: ["process_id", "since_cursor", "wait_seconds", "max_bytes"],
+      send_input: ["process_id", "data"],
+      stop: ["process_id", "signal"],
+      list: [],
+      watch: ["process_id", "since_cursor", "pattern", "instructions"],
+      unwatch: ["monitor_id"],
+    },
   };
-  const validateExecution = (tool: ToolDefinition): ToolDefinition => {
-    if (tool.name !== "execute" && tool.name !== "background") return tool;
+  const validateSandboxTool = (tool: ToolDefinition): ToolDefinition => {
+    if (!["execute", "background", "sandbox"].includes(tool.name)) return tool;
     const properties = (tool.parameters as { properties: Record<string, TSchema> }).properties;
     const schema = Type.Object(properties, { additionalProperties: false });
     return {
       ...tool,
       parameters: schema,
       async execute(callId, params, signal, onUpdate, ctx) {
-        const fields = tool.name === "background" && isObj(params) ? processFields[String(params.action)] : undefined;
+        const action = isObj(params) ? String(params.action) : "";
+        const operations = operationFields[tool.name];
+        const fields = operations && Object.hasOwn(operations, action) ? operations[action] : undefined;
+        let required: string[];
+        if (tool.name === "execute") required = ["command", "purpose"];
+        else if (tool.name === "sandbox") {
+          required = ["purpose"];
+          if (["set_default", "retire"].includes(action)) required.push("sandbox_id");
+          if (action === "create") required.push("backend");
+        } else {
+          required = action === "list" ? [] : ["process_id"];
+          if (action === "unwatch") required = ["monitor_id"];
+          if (action === "send_input") required.push("data");
+        }
+        const missing = required.find(
+          (key) =>
+            !isObj(params) ||
+            params[key] === undefined ||
+            (typeof params[key] === "string" && key !== "data" && !params[key].trim()),
+        );
         if (
-          !Check(tool.name === "execute" ? schema : { ...schema, required: [] }, params) ||
-          (fields && Object.keys(params).some((key) => !["action", "purpose", ...fields].includes(key)))
+          !Check(schema, params) ||
+          missing ||
+          (operations &&
+            (!fields || Object.keys(params).some((key) => !["action", "purpose", ...fields].includes(key)))) ||
+          (tool.name === "sandbox" && params.sandbox_id === null && action !== "set_default")
         ) {
           await recordCall(callId, {
             tool: tool.name,
@@ -4242,7 +4276,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             callId,
             { tool: tool.name, invalid: true },
             text(
-              `[error] invalid ${tool.name} arguments: use only the advertised fields and types for this operation.`,
+              `[error] invalid ${tool.name} arguments: ${missing ? `requires \`${missing}\`` : "use only the advertised fields and types for this operation"}.`,
             ),
             true,
           );
@@ -4256,7 +4290,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   return active.map((t) =>
     withRetrySafety(
       withRuntimeBarrier(
-        withToolBodyTiming(withToolApprovalGate(validateExecution(t), ref, { recordCall, recordResult }), ref),
+        withToolBodyTiming(withToolApprovalGate(validateSandboxTool(t), ref, { recordCall, recordResult }), ref),
         ref,
       ),
       retryMarks,

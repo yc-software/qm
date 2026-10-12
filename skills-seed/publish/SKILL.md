@@ -109,18 +109,17 @@ publish:
 
 ## Sharing — say who can reach it
 
-Publishing is always private to you: a new app is reachable only by its owner, and
-republishing never changes who can reach it. Grant access as a separate step with the app
-ID or handle:
+New apps made in a channel are shared with that channel for authenticated read/use.
+Apps made in DMs stay private. Republishing never changes access; anonymous access is
+never enabled by default. Grant additional access separately with the app ID or handle:
 
 ```
 apps({ action: "share", id: "status-board", toScope: "org", permission: "read" })
 ```
 
 - **read** = can reach the app. **write** = can also manage it (redeploy/rollback).
-- Share to `personal:<id>` (one teammate), or `org:<id>` (the whole org). Team/channel
-  scopes can be granted, but team-membership reach at the link is not enforced yet — for
-  now use `org:` or `personal:` grants for reach.
+- Share to `personal:<id>` (one teammate), `channel:<id>` (a channel), or `org:<id>`
+  (the whole org). Channel access follows the current channel visibility and membership.
 
 ## What you can rely on
 
