@@ -1926,6 +1926,7 @@ export function buildApp(
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
     conversations: {
+      search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
       list: (actorId) => app.listSessions(actorId),
       start: (actorId, input) => startSession(app, sessions, actorId, input),
     },
@@ -2144,6 +2145,7 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
     shutdown: () => inlineShutdown.signal,

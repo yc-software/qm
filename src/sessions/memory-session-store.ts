@@ -612,9 +612,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (!session) continue;
         for (const row of indexed) {
           if (!entryWithinTenure(row, win)) continue;
+          const entry = entries.get(sessionId)?.[row.seq];
+          if (!entry) continue;
           if (!matchesSearchTerms(row.text, terms)) continue;
           hits.push({
             sessionId,
+            entryScopeLabel: entry.scopeLabel,
             scopeId: session.scopeId,
             ...((win.title ?? session.title) != null ? { title: win.title ?? session.title } : {}),
             ...(session.channelName ? { channelName: session.channelName } : {}),

@@ -532,6 +532,7 @@ export interface DistinctScope {
 }
 
 export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
+  entryScopeLabel: ScopeId;
   sessionId: string;
   seq: number;
   type: EntryType;

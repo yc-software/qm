@@ -1624,9 +1624,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const ts = tsPrefixQuery(query);
       if (!ts) return [];
       const rows = await q(
-        `SELECT h.session_id, h.seq, h.type, h.author, h.text, h.created_at,
+        `SELECT h.session_id, h.seq, h.type, h.author, h.text, h.created_at, e.scope_label,
                 s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
            FROM session_entry_search h
+           JOIN session_entries e ON e.session_id = h.session_id AND e.seq = h.seq
            JOIN participants p ON p.session_id = h.session_id AND p.principal_id = $1
            JOIN sessions s ON s.id = h.session_id
           WHERE h.search_tsv @@ to_tsquery('simple', $2)
@@ -1642,6 +1643,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         return [
           {
             sessionId: r.session_id as string,
+            entryScopeLabel: r.scope_label as ScopeId,
             scopeId: r.scope_id as ScopeId,
             ...(r.title != null ? { title: r.title as string } : {}),
             ...(r.channel_name ? { channelName: r.channel_name as string } : {}),

@@ -1701,7 +1701,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "sessions",
     label: "sessions",
     description:
-      "Work with sessions: the conversations people see in the web sidebar, within this same context. Subagents are not sessions; use the subagents tool for them. " +
+      "Work with sessions: the conversations people see in the web sidebar, with list/read scoped to this context. Subagents are not sessions; use the subagents tool for them. " +
+      "`search` finds matching entries across conversations visible to everyone here, with sessionId and entry seq references; it does not expand read/send_message access. " +
       "`list` shows the sessions here that you can see. `read` shows a session's recent transcript. " +
       "`send_message` delivers a private note to another session without starting a turn; it arrives there as internal context, not as a request from a person. " +
       "`new` starts a clean session whose first message is `text`; it inherits nothing from this conversation. " +
@@ -1710,11 +1711,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("list"),
+        Type.Literal("search"),
         Type.Literal("read"),
         Type.Literal("send_message"),
         Type.Literal("new"),
         Type.Literal("fork"),
       ]),
+      query: Type.Optional(Type.String({ description: "search: words to find across visible conversations." })),
       target: Type.Optional(Type.String({ description: "read and send_message: a sessionId from list." })),
       text: Type.Optional(
         Type.String({
@@ -1723,12 +1726,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }),
       ),
       title: Type.Optional(Type.String({ description: "new and fork: optional sidebar title." })),
-      limit: Type.Optional(Type.Integer({ description: "read: max transcript entries to show (default 30)." })),
+      limit: Type.Optional(
+        Type.Integer({ description: "read: max entries (default 30). search: max matches (default 20, maximum 100)." }),
+      ),
     }),
     async execute(callId, params) {
       const syscalls = ref.current?.sessionSyscalls;
       const p = params as {
-        action: "list" | "read" | "send_message" | "new" | "fork";
+        action: "search" | "list" | "read" | "send_message" | "new" | "fork";
+        query?: string;
         target?: string;
         text?: string;
         title?: string;
@@ -1743,6 +1749,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       });
       const fail = (message: string) =>
         recordResult(callId, { tool: "sessions", action: p.action, error: message }, text(`[error] ${message}`), true);
+      if (p.action === "search") {
+        if (!p.query?.trim()) return fail("search requires `query`.");
+        if (!syscalls?.search) return fail("session search isn't available on this turn.");
+        const result = await syscalls.search({ query: p.query, ...(p.limit !== undefined ? { limit: p.limit } : {}) });
+        return recordResult(
+          callId,
+          { tool: "sessions", action: "search", count: result.hits.length, failedBackends: result.failedBackends },
+          text(JSON.stringify(result)),
+        );
+      }
       if (!syscalls?.list || !syscalls.start) return fail("sessions aren't available on this turn.");
       if (p.action === "list") {
         const result = await syscalls.list();

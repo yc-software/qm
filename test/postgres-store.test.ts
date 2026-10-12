@@ -2772,6 +2772,7 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   await s.releaseLease(lease);
 
   const hits = await s.searchEntries("USRCH", "memo boar");
+  assert.ok(hits.every((hit) => hit.entryScopeLabel === scopeId("personal", "USRCH")));
   assert.equal(hits.length, 3, "prefix terms match user and assistant text; tool calls are ignored");
   assert.equal(hits[0]!.text, "memo board postscript", "newest first");
   assert.equal(hits[2]!.author, "josh", "user hits carry the author");
