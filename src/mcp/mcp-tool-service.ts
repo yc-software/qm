@@ -74,7 +74,6 @@ export function createMcpToolService(opts: {
   fetchImpl?: McpFetch;
   now?: () => number;
   refreshIntervalMs?: number;
-  /** Where a person signs in to a per-user OAuth server, e.g. the portal self-connect page. */
   signInUrl?: (serverId: string) => string;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
@@ -139,7 +138,6 @@ export function createMcpToolService(opts: {
 
   async function refresh(): Promise<void> {
     const all = await opts.servers.list();
-    // Runs on boot, on change, and on the interval, so every instance converges on the stored servers.
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
     const next: McpToolDescriptor[] = [];

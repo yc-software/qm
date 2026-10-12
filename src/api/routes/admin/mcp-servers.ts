@@ -50,8 +50,6 @@ async function fetchMeta(url: string, errors: string[]): Promise<Record<string, 
   return undefined;
 }
 
-// Finds the authorization server the MCP way: the server's protected-resource
-// metadata (RFC 9728) names it, then its RFC 8414 metadata names the endpoints.
 async function discoverOAuth(issuer: string | undefined, resource: URL): Promise<DiscoveredOAuth> {
   const errors: string[] = [];
   let scopes: string[] | undefined;

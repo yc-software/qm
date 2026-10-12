@@ -449,14 +449,11 @@ export interface PublicOAuthClient {
   tokenUrl: string;
   scopes: string[];
   clientId: string;
-  /** RFC 8707 resource indicator: the protected resource (an MCP server URL) the token is for. */
   resource?: string;
 }
 
 const publicClients = new Map<string, PublicOAuthClient>();
 
-// Registers admin-configured public OAuth clients (PKCE, no secret) alongside
-// the built-in providers, so the same start/callback/refresh paths serve them.
 export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
   for (const name of publicClients.keys()) delete PROVIDERS[name];
   publicClients.clear();
