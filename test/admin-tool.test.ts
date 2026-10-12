@@ -119,7 +119,7 @@ test("definition-only harnesses get admin schemas and cancelled calls never reac
   assert.equal(received, signal);
 });
 
-test("admin error diagnostics redact secrets without changing successful content", async () => {
+test("admin error diagnostics retain request evidence and redact secrets", async () => {
   const tool = createAgentTools(
     {
       current: {

@@ -262,7 +262,7 @@ export interface AdminToolAccess {
   operationsAvailable: boolean;
 }
 
-export type AdminCall = (
+type AdminCall = (
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ) => Promise<{ status: number; body: unknown; requestId?: string }>;
