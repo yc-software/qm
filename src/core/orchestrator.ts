@@ -1,3 +1,5 @@
+import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
+import { createAdminCall } from "../tools/admin.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
@@ -58,14 +60,24 @@ import { createBackgroundBroker } from "../connectors/background-exec-broker.ts"
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
-import { credentialHandle, renderKeychainManifest, type PublicServiceCredential } from "../credentials/keychain.ts";
+import {
+  credentialHandle,
+  renderKeychainManifest,
+  type PublicServiceCredential,
+  type KeychainManifestInput,
+} from "../credentials/keychain.ts";
 import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import {
   configuredConnectorProviders,
   connectorStatusIsStale,
   refreshConnectorStatus,
 } from "../credentials/connector-status.ts";
-import { renderComputerBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
+import {
+  environmentDelta,
+  renderComputerBlock,
+  renderConnectedAppsBlock,
+  renderSandboxProfiles,
+} from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
@@ -1154,10 +1166,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
-      const turnContextBlocks: string[] = [];
+      const turnContextBlocks: Record<string, string> = {};
       if (input.privateSessionMessage)
         systemPrompt +=
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
+
       const scopeProfile = supportsScopeProfile(deps.sandbox)
         ? await deps.sandbox
             .profileFor(memoryScopeId, swarmBinding?.sandboxId)
@@ -1200,12 +1213,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             )
           : [];
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
-      const visibleSkillsForTurn = async (): Promise<SkillResolution[]> => {
-        const resolved = filterConnectorSkills(await context.listSkills(), configuredProviders);
+      const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
+        const current = await context.listSkills(sources);
+        const resolved = filterConnectorSkills(current.skills, configuredProviders);
         const allowed: SkillResolution[] = [];
         for (const entry of resolved) {
           const skill = entry.skill;
-          if (!skill || !sharingSources.includes(skill.scopeId) || securityPolicy.screening === "off") {
+          if (!skill || !current.sharingSources.includes(skill.scopeId) || securityPolicy.screening === "off") {
             allowed.push(entry);
             continue;
           }
@@ -1255,49 +1269,51 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               detail: JSON.stringify({ actor: actor.id, source: skill.scopeId, target: scopeId }),
             });
         }
+        for (const entry of allowed) {
+          if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId: actor.id,
+            action: "sharing.cross_context_read",
+            resource: `skill:${entry.skill.id}`,
+            scopeLabel: scopeId,
+            detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
+          });
+        }
         return allowed;
       };
-      const visibleSkills = await visibleSkillsForTurn();
-      for (const entry of visibleSkills) {
-        if (!entry.skill || !sharingSources.includes(entry.skill.scopeId)) continue;
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "sharing.cross_context_read",
-          resource: `skill:${entry.skill.id}`,
-          scopeLabel: scopeId,
-          detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
-        });
-      }
+      const skillSourceContext = await context.listSkills([scopeId, resolution.orgScopeId]);
+      const otherSkillSources = skillSourceContext.skillSources
+        .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
+        .sort();
+      if (otherSkillSources.length)
+        systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
+      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders);
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
       const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
       const turnSharedDir = `${turnFilesDir}/${SHARED_DIR}`;
 
-      const computerBlock = renderComputerBlock(scopeProfile.spec, {
-        hasGlobal: resolution.layers.some((l) => l.mountPath === "global"),
-        teamCount: resolution.layers.filter((l) => l.mountPath.startsWith("team-")).length,
-      });
-      turnContextBlocks.push(computerBlock);
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
       }
-      if (visibleSkills.length) systemPrompt += `\n\n${skillsIndex(visibleSkills, sharingSources)}`;
+      systemPrompt +=
+        "\n\n## Skills\nThe per-turn shortlist is not exhaustive. Use skills action list to browse all or search with query to find omitted or new skills. Read a skill before relying on it.";
       const gatewayBlock = renderGatewayContext(input.surface, input.gatewayContext);
-      if (gatewayBlock) systemPrompt += `\n\n${gatewayBlock}`;
+      if (gatewayBlock) turnContextBlocks["Where you are"] = gatewayBlock;
       const homeChannel =
         conversation.kind === "group" && conversation.channelRef
           ? await deps.managedGroups
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
-      if (homeChannel) systemPrompt += `\n\n${renderProjectHomeChannel(homeChannel.channelName)}`;
-      systemPrompt += cronBlock;
+      if (homeChannel) turnContextBlocks["Project home channel"] = renderProjectHomeChannel(homeChannel.channelName);
+      turnContextBlocks["Where scheduled tasks post"] = cronBlock;
       const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles);
-      if (sharedFilesBlock) systemPrompt += `\n\n${sharedFilesBlock}`;
+      if (sharedFilesBlock) turnContextBlocks["Files shared with you"] = sharedFilesBlock;
 
-      const timeBlock = turnTimezone ? currentTimeBlock(turnTimezone, Date.now()) : "";
+      const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
       let memoryContext = "a channel";
       if (conversation.kind === "dm") memoryContext = "a direct message";
       else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
@@ -1466,7 +1482,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const connectorEnv: Record<string, string> = {};
       const credsStart = Date.now();
       const commandCredentials: CommandCredential[] = [];
-      const credentialDescriptions: string[] = [];
+      const credentialDescriptions: NonNullable<KeychainManifestInput["execution"]> = [];
       const credentialIdentities = new Map<string, string>();
 
       const authorizeOwnerCredentials = async (): Promise<void> => {
@@ -1499,6 +1515,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         credential: CommandCredential,
         description: string,
         identity = credential.handle,
+        ownerId = actor.id,
+        credentialId?: string,
       ): void => {
         const existing = credentialIdentities.get(credential.handle);
         if (existing !== undefined) {
@@ -1507,9 +1525,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         credentialIdentities.set(credential.handle, identity);
         commandCredentials.push(credential);
-        credentialDescriptions.push(
-          `- \`${credential.handle}\` — ${description}; execute scope \`${credential.scope ?? "scoped"}\`.`,
-        );
+        credentialDescriptions.push({
+          handle: credential.handle,
+          ownerId,
+          description,
+          credentialId,
+          scope: credential.scope ?? "scoped",
+        });
       };
       const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (external || strictReadOnly || !deps.keychain) return;
@@ -1518,7 +1540,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (credential.kind === "broker" || isBackendCredential(credential)) continue;
           addCredential(
             {
-              handle: credentialHandle(credential.id),
+              handle: credentialHandle(credential),
               resolve: async () => {
                 const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id);
                 return {
@@ -1529,6 +1551,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               },
             },
             `${credential.service}, owner ${credential.ownerId}, grant ${grant.id}`,
+            credential.id,
+            credential.ownerId,
             credential.id,
           );
         }
@@ -1541,7 +1565,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (credential.kind === "broker" || isBackendCredential(credential)) continue;
             addCredential(
               {
-                handle: credentialHandle(credential.id),
+                handle: credentialHandle(credential),
                 scope: isolateOwnerKeychain ? "owner" : "scoped",
                 resolve: async () => {
                   await authorizeOwnerCredentials();
@@ -1551,6 +1575,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
               },
               `${credential.service}, owner ${credential.ownerId}`,
+              credential.id,
+              credential.ownerId,
               credential.id,
             );
           }
@@ -1583,7 +1609,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (!healthy && !operatorFallback) continue;
               addCredential(
                 {
-                  handle: `connector_${host.replace(/[^a-zA-Z0-9]/g, "_")}_${accountType ?? "default"}`,
+                  handle: `connector:${host}:${accountType ?? "default"}`,
                   scope: isolateOwnerKeychain ? "owner" : "scoped",
                   resolve: async () => {
                     await authorizeOwnerCredentials();
@@ -1594,7 +1620,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
                 !healthy && operatorFallback
                   ? `${host}, configured operator fallback; availability checked on use`
-                  : `${host} connector, owner ${actor.id}, account ${accountType ?? "default"}`,
+                  : `${host} connector, account ${accountType ?? "default"}`,
+                healthy && status && "credentialId" in status ? status.credentialId : undefined,
+                actor.id,
+                healthy && status && "credentialId" in status ? status.credentialId : undefined,
               );
             }
           }
@@ -1602,7 +1631,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       await registerConnectorCredentials(addCredentialToCatalog);
       perf.credsMs += Date.now() - credsStart;
-      let sharedCredsBlock = "";
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       let serviceCredRecords: PublicServiceCredential[] = [];
@@ -1758,52 +1786,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
         );
-        if (deps.serviceCreds) {
-          const records = serviceCredRecords;
-          const enabled = new Set(
-            records
-              .filter((r) => !isBackendCredential(r) && r.enabled && r.hasSecret && r.delivery !== "env")
-              .map((r) => r.slug),
-          );
-          if (enabled.size > 0) {
-            const slugs = [...grantedCredSlugs].filter((s) => enabled.has(s));
-            if (slugs.length > 0) {
-              const usable = records.filter((r) => slugs.includes(r.slug));
-              const lines = usable.map((r) => {
-                const methods = r.allowedMethods?.length ? r.allowedMethods.toSorted().join("/") : "GET";
-                const paths = r.allowedPathPrefixes?.length
-                  ? `paths ${r.allowedPathPrefixes.toSorted().join(", ")}`
-                  : "any path";
-                return `- \`${r.slug}\` (${r.name}; shared org credential) → ${r.host} (${methods}; ${paths})`;
-              });
-              sharedCredsBlock =
-                "\n\n## Shared org credentials available to you\n" +
-                "Select the corresponding `service_<slug>` handle in execute.credentials. You CANNOT see the secret — call the " +
-                "target BY PROXY through the broker, which injects it server-side. Use exactly this (with the " +
-                "$AGENT_CREDENTIAL_TOKEN env var, NOT $AGENT_API_TOKEN):\n" +
-                "```\n" +
-                'curl -fsS -X POST "$AGENT_API_URL/v1/credentials/broker" \\\n' +
-                '  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \\\n' +
-                '  -H "content-type: application/json" \\\n' +
-                '  -d \'{"credential":"<slug>","method":"GET","url":"https://<host>/<path>?<query>"}\'\n' +
-                "```\n" +
-                'The reply is `{"status":<upstream status>,"contentType":…,"body":"<upstream text>"}` — parse `body`. ' +
-                "For Git smart HTTP clone/fetch/push using a shared org credential, use core as the Git remote " +
-                "so the token stays server-side: " +
-                "`$AGENT_API_URL/v1/credentials/git/<slug>/<repo-path>.git`, with " +
-                '`git -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" ...`. ' +
-                "Git through this route uses the configured org account, not automatically the requesting user's account; " +
-                "a live personal OAuth connector does not switch this route's identity. The credential name is an admin label " +
-                "and does not identify the upstream username. Choose among credentials authorized for this conversation " +
-                "based on the task and the user's intent; a shared account is a valid choice, not an automatic fallback. " +
-                "For personal Git access, use an authorized personal login that supports Git transport. " +
-                "If the intended account is unclear before a write, clarify it rather than silently switching accounts. " +
-                "A non-2xx `status` is the UPSTREAM service's own answer (e.g. a bad query or its auth), not a broker " +
-                "error. Use ONLY these (slug → host; allowed methods; allowed paths):\n" +
-                lines.sort().join("\n");
-            }
-          }
-        }
       }
       const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
       const egressTokenForPolicy = async (egress: EgressPolicy): Promise<string | undefined> => {
@@ -1897,7 +1879,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   return { env: [{ key: credential.envKey!, value: current.secret }] };
                 },
               },
-              `${credential.name}, org credential, provides ${credential.envKey}`,
+              `${credential.name}; provides ${credential.envKey}`,
+              undefined,
+              "Organization",
             );
           } else if (deps.signingSecret && deps.apiBaseUrl) {
             addCredential(
@@ -1905,7 +1889,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 handle: `service_${credential.slug}`,
                 resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
               },
-              `org credential ${credential.slug}, provides scoped broker capability`,
+              `${credential.name}; proxy ${credential.host}; ${(credential.allowedMethods?.length ? credential.allowedMethods : ["GET"]).toSorted().join("/")}; ${credential.allowedPathPrefixes?.length ? `paths ${credential.allowedPathPrefixes.toSorted().join(", ")}` : "any path"}; use the use-shared-credential skill`,
+              undefined,
+              "Organization",
             );
           }
         }
@@ -1990,6 +1976,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               )),
           })
         : deps.sandboxResources;
+      const workspaceLayout = {
+        hasGlobal: resolution.layers.some((l) => l.mountPath === "global"),
+        teamCount: resolution.layers.filter((l) => l.mountPath.startsWith("team-")).length,
+      };
+      if (turnSandboxResources) {
+        Object.assign(turnContextBlocks, renderSandboxProfiles(turnSandboxResources.profiles(), workspaceLayout));
+      } else {
+        turnContextBlocks["Sandbox environment profile"] = renderComputerBlock(scopeProfile.spec, workspaceLayout);
+      }
 
       const {
         box,
@@ -2075,6 +2070,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return true;
         });
         const memoryWindow = await deps.sessions.getContextWindow(session.id);
+
         memoryView = await context.memorySnapshot();
         recalled = memoryView.recalled;
         const latestMemoryContext = memoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
@@ -2335,11 +2331,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         )
           systemPrompt +=
             "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
-        if (credentialDescriptions.length)
-          systemPrompt +=
-            "\n\n## Execution credentials\nRequest exact handles in execute.credentials:\n" +
-            credentialDescriptions.sort().join("\n");
-        systemPrompt += sharedCredsBlock;
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +
@@ -2370,13 +2361,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ),
                 hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
                 mons.filter((m) => m.ownerScopeId === scopeId && m.expiresAt > nowMs),
+                turnTimezone,
               ),
             )
             .catch(swallowAs("orchestrator: standing-obligations read", null));
-          turnContextBlocks.push(
+          turnContextBlocks["Already scheduled here"] =
             obligations ??
-              "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.",
-          );
+            "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
         }
         if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
           systemPrompt +=
@@ -2391,7 +2382,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             await reachableChannelsFor(deps.directory!, actor.id),
             actor.displayName ?? "this person",
           );
-          if (roster) systemPrompt += `\n\n${roster}`;
+          if (roster) turnContextBlocks["Other computers you can reach"] = roster;
         }
         if (!external && deps.directory) {
           const rosterBlock = await (async () => {
@@ -2413,19 +2404,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
             return renderConversationRoster(resolved);
           })().catch(swallowAs("orchestrator: conversation roster", null));
-          if (rosterBlock) systemPrompt += `\n\n${rosterBlock}`;
+          if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
         }
-        if (!external && !strictReadOnly && deps.keychain && deps.signingSecret && deps.apiBaseUrl) {
+        if (!strictReadOnly && (deps.keychain || credentialDescriptions.length)) {
           const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
           const members = [
             ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
             ...audienceMembers,
           ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
           const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
-            deps.keychain.listByOwners(members.map((m) => m.id)),
-            deps.keychain.listConnectorsByOwners(members.map((m) => m.id)),
-            deps.keychain.grantsForScope(scopeId),
-            deps.keychain.listAsks({ requesterScopeId: scopeId }),
+            !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+            !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+            !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
+            !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
           ]);
           const keychainBlock = renderKeychainManifest({
             scopeId,
@@ -2436,10 +2427,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             entriesByOwner,
             connectorsByOwner,
             scopeGrants,
-            injected: [],
+            execution: credentialDescriptions,
             scopeAsks,
           });
-          if (keychainBlock) systemPrompt += `\n\n${keychainBlock}`;
+          if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
         }
         if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
           let status = null;
@@ -2453,7 +2444,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             swallow("orchestrator: connected-app status", e);
           }
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
+          turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
         }
         systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
         const stableSystemBytes = systemPrompt.length;
@@ -2734,6 +2725,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           useSkill,
+          listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
           ...(reachAvailable
             ? {
                 reach: {
@@ -2786,6 +2778,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           ...(deps.config ? { config: deps.config } : {}),
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
+          ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
+            ? {
+                admin: {
+                  call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
+                  operationsAvailable:
+                    actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
+                },
+              }
+            : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanTurn && !external ? { humanTurn: true } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
@@ -3176,13 +3177,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentsUnscreened
             ? unscreenedNotice("inbound content")
             : "";
+        const usedSkills = history.flatMap((entry) => {
+          const p = entry.payload;
+          return entry.type === "tool_call" &&
+            isObj(p) &&
+            p.tool === "skills" &&
+            p.action === "read" &&
+            typeof p.name === "string"
+            ? [p.name]
+            : [];
+        });
+        turnContextBlocks["Skills"] = skillsIndex(
+          nativeSkills,
+          [scopeId, resolution.orgScopeId],
+          input.text,
+          usedSkills,
+        );
         const turnEnvironmentContents = [
           manifest,
           principalDelivered,
           sender,
           unscreenedNote,
           input.conversationHeader?.trim(),
-          ...turnContextBlocks,
           volatileContext,
         ]
           .filter((s) => s && s.trim())
@@ -3460,8 +3476,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         ) => {
           const recall = memoryRecallDelta(recalled, continuation?.history ?? history);
+          const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
           const turnEnvironment = environmentNote(
-            [turnEnvironmentContents, recall.text ? `${memoryHeading}${recall.text}` : ""].filter(Boolean).join("\n\n"),
+            [turnEnvironmentContents, snapshot.text, recall.text ? `${memoryHeading}${recall.text}` : ""]
+              .filter(Boolean)
+              .join("\n\n"),
           );
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
           let recordedRecall = false;
@@ -3497,6 +3516,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (!recordedRecall && !payload.steered && !payload.overheard) {
                   recordedRecall = true;
                   payload.memoryContext = nextContext;
+                  payload.environmentSnapshot = snapshot.record;
                   if (environment) payload.environment = environment;
                   if (recall.text) payload.memoryRecall = recall.record;
                 }
@@ -3540,6 +3560,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               emitGapWork("persist", persistStart, Date.now());
             }
           };
+          const initialDocuments = [...documentInputs.documents];
           return deps.harness.turns.runTurn({
             session,
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
@@ -3607,6 +3628,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 remainingDocumentBytes,
                 turnAbort.signal,
                 remainingDocumentCount,
+                initialDocuments,
               );
               let steeredUnscreened = false;
               if (enforceScreen) steeredUnscreened = await screenDocuments(steeredDocuments, text);
@@ -3673,7 +3695,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
-            ...(continueTurn && !continuation ? { continueTurn: true } : {}),
+            ...(continueTurn && !continuation && !snapshot.text && !recall.text ? { continueTurn: true } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
             input: harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
@@ -3683,7 +3705,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
             ...(extras.images?.length ? { images: extras.images } : {}),
-            documents: [...documentInputs.documents],
+            documents: initialDocuments,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,

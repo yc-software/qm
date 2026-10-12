@@ -164,3 +164,60 @@ test("ambiguous file aliases fail closed in the shared reader", async () => {
   assert.ok(result && "error" in result);
   assert.match(result.error, /ambiguous shared handle/);
 });
+
+test("skill discovery refreshes carried membership and explicit grants in the same turn", async () => {
+  const { input, acl, removeMember } = await fixture();
+  const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
+  input.skills = {
+    visibleFor: async (scopes, grants) => {
+      seen.push({ scopes: [...scopes], grants });
+      return [];
+    },
+  } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
+  const context = await resolveTurnContext(input);
+  assert.deepEqual((await context.listSkills()).sharingSources, ["channel:eng"]);
+  await acl.grant(
+    {
+      ownerScopeId: "personal:owner",
+      ref: "skill:new",
+      granteeScopeId: "personal:alice",
+      permission: "read",
+      grantedBy: "owner",
+    },
+    "owner",
+  );
+  await context.listSkills();
+  assert.deepEqual(seen[1]!.grants, [{ id: "new", ownerScopeId: "personal:owner" }]);
+  await acl.revoke("personal:owner", "skill:new", "personal:alice", "owner");
+  removeMember();
+  assert.deepEqual((await context.listSkills()).sharingSources, []);
+  assert.deepEqual(seen[2], { scopes: ["personal:alice", "org:test"], grants: [] });
+});
+
+test("source selection precedes name shadowing and preserves skill-level grants", async () => {
+  const { input, acl } = await fixture();
+  await acl.grant(
+    {
+      ownerScopeId: "personal:owner",
+      ref: "skill:one",
+      granteeScopeId: "personal:alice",
+      permission: "read",
+      grantedBy: "owner",
+    },
+    "owner",
+  );
+  const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
+  input.skills = {
+    visibleFor: async (scopes, grants) => {
+      seen.push({ scopes: [...scopes], grants });
+      return [];
+    },
+  } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
+  const context = await resolveTurnContext(input);
+  await context.listSkills(["org:test"]);
+  assert.deepEqual(seen[0], { scopes: ["org:test"], grants: [] });
+  await context.listSkills(["personal:owner"]);
+  assert.deepEqual(seen[1], { scopes: [], grants: [{ id: "one", ownerScopeId: "personal:owner" }] });
+  await context.listSkills(["personal:stranger"]);
+  assert.deepEqual(seen[2], { scopes: [], grants: [] });
+});

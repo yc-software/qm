@@ -10,7 +10,7 @@ to the keychain with the script shipped with this skill. Never log in against th
 `$HOME`, and never treat a token or config already in `$HOME` as a usable login: only a
 keychain handle is.
 
-1. Make a fresh directory and start the login as a background job with every config
+1. Make a fresh directory and start the login with `execute(background:true)` with every config
    location pointed into it. Copy in any config the CLI needs first (for AWS, the
    `[profile …]`/`[sso-session …]` blocks in `.aws/config`); everything under that
    directory becomes the saved login.
@@ -43,8 +43,7 @@ keychain handle is.
    Saving the same service again replaces that entry in place: its id, handle, owner and
    grants stay the same.
 
-4. Use the login only by naming the handle in `credentials` on `execute` or a background
-   start, including to check that it works. The files are staged in a private home for
+4. Use the login only by naming the handle in `credentials` on `execute` (including `background:true`), including to check that it works. The files are staged in a private home for
    that command or job, and refreshes the CLI writes are saved back when it ends.
 
 Never print token files or paste their contents into the conversation. If the login fails

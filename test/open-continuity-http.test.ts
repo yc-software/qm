@@ -242,7 +242,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   const created = await b.request("POST", "/v1/crons", owner, {
     title: "Owner keychain proof",
     schedule: { everyMs: 3600000 },
-    task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential.id)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
+    task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
   });
   assert.equal(created.status, 200, JSON.stringify(created.body));
   assert.equal(created.body.cron.runAs, "scopeShared");
@@ -282,7 +282,7 @@ for (const isPrivate of [false, true]) {
       const response = await b.request("POST", "/v1/crons", await b.cap("alice"), {
         title: "Opt-out proof",
         schedule: { everyMs: 3600000 },
-        task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential.id)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
+        task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
       });
       assert.equal(response.status, 200, JSON.stringify(response.body));
       const id = response.body.cron.id;
@@ -332,7 +332,7 @@ test("HTTP legacy explicit private shared cron remains owner-authorized under is
     runAs: "scopeShared",
     members,
     schedule: { everyMs: 3600000 },
-    action: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential.id)], command: 'test "$CONTINUITY_LEGACY_TOKEN" = "synthetic-legacy-sentinel" && printf legacy-credential-present' })}`,
+    action: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_LEGACY_TOKEN" = "synthetic-legacy-sentinel" && printf legacy-credential-present' })}`,
     destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
   });
   assert.equal(cron.ownerResourcesRequireOpen, undefined);

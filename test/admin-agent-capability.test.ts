@@ -1,3 +1,6 @@
+import { createAdminCall } from "../src/tools/admin.ts";
+import { createAgentTools } from "../src/harness/agent-tools.ts";
+import type { ToolContext } from "../src/tools/primitives.ts";
 import "./support/auto-fake-sprites.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
@@ -501,7 +504,6 @@ test("revoking the admin grant cuts off an already-minted token immediately", as
     const cap = await capFor("admin-alice");
     const before = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": cap } });
     assert.equal(((await before.json()) as any).isAdmin, true);
-
     await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
 
     const after = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": cap } });
@@ -798,6 +800,62 @@ test("shared-channel admin runtime mutations do not return a private cron prompt
       body: JSON.stringify({ runtime: null }),
     });
     assert.equal(denied.status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+test("native admin tools use the authenticated handler, including its live authority, audience and audit checks", async () => {
+  const s = start();
+  const target = scopeId("personal", "U1");
+  try {
+    const call = createAdminCall(s.base, await capFor("admin-alice"));
+    const tool = createAgentTools(
+      { current: { admin: { call, operationsAvailable: true } } as ToolContext },
+      { controlTools: true },
+    ).find((t) => t.name === "admin")!;
+    const written = await tool.execute(
+      "native-write",
+      {
+        action: "replace_memory",
+        scope: target,
+        value: { content: "- synthetic admin tool fixture" },
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    assert.equal(JSON.parse((written.content[0] as { text: string }).text).status, 200);
+    const read = await tool.execute(
+      "native-read",
+      { action: "memory", scope: target },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    assert.equal(
+      JSON.parse((read.content[0] as { text: string }).text).body.content,
+      "- synthetic admin tool fixture\n",
+    );
+    assert.equal(
+      (await s.built.auditLog.events()).filter((e) => e.action === "memory.update" && e.principalId === "admin-alice")
+        .length,
+      1,
+    );
+    for (const claims of [
+      await capFor("U1"),
+      await capFor("admin-alice", { live: false }),
+      await capFor("admin-alice", { scope: "channel:C1" }),
+    ]) {
+      const denied = await createAdminCall(s.base, claims)({ action: "memory", scope: target });
+      assert.equal(denied.status, 403);
+      assert.doesNotMatch(JSON.stringify(denied.body), /synthetic admin tool fixture/);
+    }
+    const shared = createAdminCall(s.base, await capFor("admin-alice", { scope: "channel:C1" }));
+    assert.equal((await shared({ action: "scopes" })).status, 403);
+    assert.equal((await call({ action: "scopes" })).status, 200);
+    await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
+    assert.equal((await call({ action: "memory", scope: target })).status, 403);
   } finally {
     await s.close();
   }

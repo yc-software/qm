@@ -37,7 +37,14 @@ export interface SandboxDefault {
   sandboxId: string | null;
 }
 
+interface SandboxProviderProfile {
+  name: SandboxBackendName;
+  spec?: AgentComputerSpec;
+  actions: string[];
+}
+
 export interface SandboxResources {
+  profiles(): SandboxProviderProfile[];
   forTurn(turn: { actorId: string; scopeId: ScopeId; isCurrent: () => Promise<boolean> }): SandboxResources;
   initialize(): Promise<void>;
   list(
@@ -47,7 +54,7 @@ export interface SandboxResources {
     sandboxes: SandboxResource[];
     defaultSandboxId: string | null;
     defaultMode: "none" | "selected";
-    providers: Array<{ name: SandboxBackendName; spec?: AgentComputerSpec; actions: string[] }>;
+    providers: SandboxProviderProfile[];
   }>;
   create(
     actorId: string,
@@ -118,7 +125,16 @@ export function createSandboxResources(opts: {
       return action();
     });
   };
+  const profiles = (): SandboxProviderProfile[] =>
+    (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
+      .filter(([, backend]) => !!backend)
+      .map(([name, backend]) => ({
+        name,
+        ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
+        actions: actionsFor(backend),
+      }));
   return {
+    profiles,
     forTurn: (turn) =>
       createSandboxResources({
         ...opts,
@@ -216,18 +232,11 @@ export function createSandboxResources(opts: {
           availableActions = (record.cleanupPending || record.error) && backend?.destroyScope ? ["retire"] : [];
         sandboxes.push({ ...record, holders: undefined, availableActions });
       }
-      const providers = (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
-        .filter(([, backend]) => !!backend)
-        .map(([name, backend]) => ({
-          name,
-          ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
-          actions: actionsFor(backend),
-        }));
       return {
         sandboxes,
         defaultSandboxId: route?.sandboxId ?? null,
         defaultMode: route?.sandboxId ? "selected" : "none",
-        providers,
+        providers: profiles(),
       };
     },
     async create(actorId, scopeId, backend, name, reservationId) {

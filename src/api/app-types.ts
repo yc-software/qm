@@ -1,3 +1,4 @@
+import type { TeamStore } from "../teams/teams.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
@@ -360,6 +361,7 @@ export interface App {
     principalId: string,
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
+  searchConversations: App["search"];
   searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
   search(
     query: string,
@@ -659,6 +661,7 @@ export interface AppDeps {
   webhooks: WebhookStore;
   deliveries: DeliveryStore;
   directory: DirectoryStore;
+  teams?: Pick<TeamStore, "isMember">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
   deploy: DeployService;

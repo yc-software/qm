@@ -179,7 +179,7 @@ test("F1/F3 — a live DM receives only its requested connector; a channel recei
   const absent = `!run test -z "$${key}" && echo absent`;
   assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
   const command = `test "$${key}" = u1-gmail && echo authenticated`;
-  const selected = `!execute ${JSON.stringify({ command, credentials: ["connector_gmail_googleapis_com_default"] })}`;
+  const selected = `!execute ${JSON.stringify({ command, credentials: ["connector:gmail.googleapis.com:default"] })}`;
   assert.equal((await built.app.turn({ ...turn("dm", selected), liveActor: true })).reply, "authenticated");
   assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
   assert.equal((await built.app.turn(turn("channel", absent))).reply, "absent");
@@ -218,7 +218,7 @@ for (const surface of ["cron", "loop"]) {
     const key = envKey("gmail.googleapis.com");
     const absent = `!run test -z "$${key}" && test -z "$OWNER_TOKEN" && echo absent`;
     assert.equal((await built.app.turn(request(absent))).reply, "absent");
-    const selected = `!execute ${JSON.stringify({ command: `test "$${key}" = u1-gmail && test "$OWNER_TOKEN" = owner-secret && echo authenticated`, credentials: ["connector_gmail_googleapis_com_default", credentialHandle(saved.id)] })}`;
+    const selected = `!execute ${JSON.stringify({ command: `test "$${key}" = u1-gmail && test "$OWNER_TOKEN" = owner-secret && echo authenticated`, credentials: ["connector:gmail.googleapis.com:default", credentialHandle(saved)] })}`;
     assert.equal((await built.app.turn(request(selected))).reply, "authenticated");
     assert.equal((await built.app.turn(request(absent))).reply, "absent");
     await assert.rejects(
@@ -230,7 +230,7 @@ for (const surface of ["cron", "loop"]) {
     );
     await assert.rejects(
       built.app.turn(
-        request(`!execute ${JSON.stringify({ command: "true", credentials: [credentialHandle(other.id)] })}`),
+        request(`!execute ${JSON.stringify({ command: "true", credentials: [credentialHandle(other)] })}`),
       ),
       /not available/,
     );
@@ -280,11 +280,11 @@ for (const bulkInventory of [false, true])
       };
       const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
       assert.deepEqual(accesses, []);
-      assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_company/);
-      if (expiredPersonal) assert.doesNotMatch(prompt.reply ?? "", /connector_gmail_googleapis_com_personal/);
-      else assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_personal/);
+      assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:company/);
+      if (expiredPersonal) assert.doesNotMatch(prompt.reply ?? "", /connector:gmail.googleapis.com:personal/);
+      else assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:personal/);
       for (const account of expiredPersonal ? ["company"] : ["personal", "company"]) {
-        const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = ${account}-token && echo selected`, credentials: [`connector_gmail_googleapis_com_${account}`] })}`;
+        const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = ${account}-token && echo selected`, credentials: [`connector:gmail.googleapis.com:${account}`] })}`;
         assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
       }
       assert.deepEqual(accesses, expiredPersonal ? ["company"] : ["personal", "company"]);
@@ -336,8 +336,8 @@ test("explicit default OAuth accounts remain discoverable through bulk metadata"
     }),
   );
   const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
-  assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_default/);
-  const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = explicit-default-token && echo selected`, credentials: ["connector_gmail_googleapis_com_default"] })}`;
+  assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:default/);
+  const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = explicit-default-token && echo selected`, credentials: ["connector:gmail.googleapis.com:default"] })}`;
   assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
 });
 
@@ -367,10 +367,10 @@ for (const mixedOAuth of [false, true, "expired-default"] as const)
         }),
       );
       const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
-      assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_default.*configured operator fallback/);
-      if (mixedOAuth === true) assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_personal/);
+      assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:default.*configured operator fallback/);
+      if (mixedOAuth === true) assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:personal/);
       assert.equal(reads, 0);
-      const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = operator-fallback-token && echo selected`, credentials: ["connector_gmail_googleapis_com_default"] })}`;
+      const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = operator-fallback-token && echo selected`, credentials: ["connector:gmail.googleapis.com:default"] })}`;
       if (value) assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
       else await assert.rejects(built.app.turn({ ...turn("dm", text), liveActor: true }), /no longer available/);
       assert.equal(reads, value ? 1 : 2);

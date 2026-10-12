@@ -113,14 +113,21 @@ test("metrics: the cache aggregate reflects warm turns and flags a stable-prefix
       conversation: { kind: "dm", threadRef: "dm:U3:m1" },
       text: "!cachemiss",
     };
-    assert.equal((await s.built.app.turn(warm1)).status, "ok");
-    assert.equal((await s.built.app.turn(warm2)).status, "ok");
-    assert.equal((await s.built.app.turn(miss)).status, "ok");
+    const turns = [];
+    for (const request of [warm1, warm2, miss]) {
+      const result = await s.built.app.turn(request);
+      assert.equal(result.status, "ok");
+      const calls = await s.built.sessions.listLlmRequests(result.sessionId!);
+      const usage = calls.find((call) => call.model === "mock")!.usage!;
+      turns.push(usage.cacheRead! / (usage.cacheRead! + usage.cacheWrite! + usage.input));
+    }
 
     const m = await getJson(s.base, "/v1/admin/metrics?scope=org:default-org");
     assert.ok(m.cache, "the metrics response carries a cache block");
     assert.equal(m.cache.samples, 3, "all three turns carried cache telemetry");
-    assert.ok(m.cache.avgHitRatio > 0.5 && m.cache.avgHitRatio < 1, "avg hit ratio is the blend of warm + miss turns");
+    assert.ok(turns[0]! > 0 && turns[1]! > 0);
+    assert.equal(turns[2], 0);
+    assert.ok(Math.abs(m.cache.avgHitRatio - turns.reduce((sum, ratio) => sum + ratio, 0) / turns.length) < 1e-9);
     assert.ok(
       m.cache.pooledHitRatio > 0 && m.cache.pooledHitRatio <= 1,
       "pooled (token-weighted) ratio is a real fraction",
@@ -178,7 +185,7 @@ test("history /llm: per-call usage (cacheRead/cacheWrite) is plumbed through to 
       cacheWrite: req.usage.cacheWrite,
       uncachedInput: req.usage.input,
     });
-    assert.ok(ratio !== null && ratio > 0.5, "the call's hit ratio is high (warm)");
+    assert.ok(ratio !== null && ratio > 0 && ratio < 1, "the call serves cached prefix and uncached new context");
     assert.equal(
       isStablePrefixMiss({
         cacheRead: req.usage.cacheRead,

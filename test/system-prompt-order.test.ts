@@ -30,7 +30,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
-import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal, type TurnRequest } from "../src/types.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 
@@ -187,8 +187,8 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
     "Skills",
     "Where you are",
     "Where scheduled tasks post",
-    "Connected apps",
     "Sandbox environment profile",
+    "Connected apps",
     "What you remember",
   ];
   assert.doesNotMatch(prompt, /\n## Your logins\n/);
@@ -315,7 +315,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
   });
 });
 
-test("Open labels and audits a carried personal skill without granting it to the room", async () => {
+test("Open advertises the source and audits a carried skill read without granting it to the room", async () => {
   const personal = scopeId("personal", actor.id);
   const skills = createSkillStore();
   const skill = await skills.create({
@@ -348,7 +348,23 @@ test("Open labels and audits a carried personal skill without granting it to the
     text: "!sysprompt",
     origin: { kind: "human" },
   });
-  assert.match(result.reply ?? "", /\*\*private-method\*\* \[from personal:U1\]/);
+  assert.match(result.reply ?? "", /Additional skill sources: personal:U1/);
+  assert.doesNotMatch(result.reply ?? "", /private-method|Use a private working method/);
+  const read = await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    conversation: {
+      kind: "channel",
+      threadRef: "C1:skill",
+      channelRef: "C1",
+      audience: [actor],
+      publishMembers: [actor],
+    },
+    text: "!skill private-method",
+    origin: { kind: "human" },
+  });
+  assert.equal(read.status, "ok", read.reason);
+  assert.equal(read.reply, "Keep the method private.");
   const event = (await auditLog.events()).find(
     (candidate) => candidate.action === "sharing.cross_context_read" && candidate.resource === `skill:${skill.id}`,
   );
@@ -463,7 +479,15 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
   assert.equal(second.status, "ok");
 
   for (const title of ["Skills", "Where you are", "Where scheduled tasks post", "Connected apps"]) {
-    assert.ok(systemOf(first.reply ?? "").includes(`\n## ${title}\n`), `expected "## ${title}" in the system prompt`);
+    assert.ok(
+      environmentOf(first.reply ?? "").includes(`\n## ${title}\n`),
+      `expected "## ${title}" in the first environment`,
+    );
+    assert.ok(
+      !environmentOf(second.reply ?? "").includes(`\n## ${title}\n`),
+      `unchanged "## ${title}" must not repeat`,
+    );
+    if (title !== "Skills") assert.ok(!systemOf(first.reply ?? "").includes(`\n## ${title}\n`));
   }
   for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
     assert.ok(
@@ -500,7 +524,11 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
   assert.equal(second.status, "ok");
 
   const prefixA = prefixOf(first.reply ?? "");
-  assert.ok(prefixA.includes("**alpha**") && prefixA.includes("**zeta**"), "skills render in the cached prefix");
+  assert.ok(
+    first.reply!.includes("**alpha**") && first.reply!.includes("**zeta**"),
+    "skills render in the initial environment",
+  );
+  assert.doesNotMatch(second.reply!, /\*\*alpha\*\*|\*\*zeta\*\*/);
   assert.equal(
     prefixOf(second.reply ?? ""),
     prefixA,
@@ -511,8 +539,18 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
   const crons = createCronStore();
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
-  await crons.create({ ...base, schedule: { everyMs: 300_000 }, action: "poll the vendor status page" });
-  await crons.create({ ...base, schedule: { firstFireAt: Date.now() + 86_400_000 }, action: "follow up with legal" });
+  await crons.create({
+    ...base,
+    schedule: { everyMs: 300_000 },
+    title: "Vendor status",
+    action: "poll the vendor status page",
+  });
+  await crons.create({
+    ...base,
+    schedule: { firstFireAt: Date.now() + 86_400_000 },
+    title: "Legal follow-up",
+    action: "follow up with legal",
+  });
   await crons.create({ ...base, schedule: { firstFireAt: Date.now() - 1000 }, message: "hi alice" });
   await crons.create({
     ...base,
@@ -528,8 +566,9 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
 
   assert.match(prompt, /schedule the wake-up in the same turn/);
   assert.match(prompt, /\n## Already scheduled here\n/);
-  assert.match(prompt, /poll the vendor status page/);
-  assert.match(prompt, /follow up with legal/);
+  assert.match(prompt, /Vendor status — every 5 minutes/);
+  assert.match(prompt, /Legal follow-up — once at/);
+  assert.doesNotMatch(prompt, /poll the vendor status page|follow up with legal/);
   assert.doesNotMatch(prompt, /hi alice/);
   assert.doesNotMatch(prompt, /channel-only digest/);
 });
@@ -853,11 +892,11 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
       audience: [actor],
       publishMembers: [actor],
     },
-    text: "!sysprompt",
+    text: "!skill snapshot-method",
   });
   assert.equal(result.status, "ok", result.reason);
   assert.equal(updated, true);
-  assert.match(result.reply ?? "", /SAFE_DESCRIPTION/);
+  assert.match(result.reply ?? "", /SAFE_BODY/);
   assert.doesNotMatch(result.reply ?? "", /UNSCREENED_UPDATE|UNSCREENED_BODY/);
 });
 
@@ -981,11 +1020,11 @@ test("steered documents use the inbound security screen before writing their con
   );
 });
 
-for (const budget of ["count", "bytes"] as const) {
-  test(`steered documents share the initial turn ${budget} budget`, async () => {
+for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
+  test(`steered documents respect the initial turn budget (${budget})`, async () => {
     const blobTransfer = createMemoryBlobTransferStore();
     const blob = await blobTransfer.put(Buffer.from(budget === "bytes" ? "x".repeat(7_999_995) : "initial"));
-    const steerBlob = await blobTransfer.put(Buffer.from("steered document"));
+    const steerBlob = budget === "reupload" ? blob : await blobTransfer.put(Buffer.from("steered document"));
     const sandbox: Sandbox = {
       ...readSandbox(),
       removeDir: async () => {},
@@ -997,13 +1036,23 @@ for (const budget of ["count", "bytes"] as const) {
     let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
     harness.turns.runTurn = async (turn) => {
       assert.equal(turn.documents?.length, budget === "count" ? 10 : 1);
-      prepared = await turn.prepareSteer!("read this", {
+      const request: TurnRequest = {
         surface: "web",
         actor: { externalId: actor.id },
         conversation: { kind: "dm", threadRef: `steer-budget-${budget}` },
         text: "read this",
-        attachments: [{ name: "steered.txt", mimetype: "text/plain", ...steerBlob }],
-      });
+        attachments: [
+          { name: budget === "reupload" ? "initial-0.txt" : "steered.txt", mimetype: "text/plain", ...steerBlob },
+        ],
+      };
+      prepared = await turn.prepareSteer!("read this", request);
+      if (budget === "retry") {
+        assert.equal(prepared.documents?.length, 1);
+        prepared = await turn.prepareSteer!("read this", request);
+        assert.equal(turn.documents?.length, 1);
+      }
+      if (budget === "reupload")
+        assert.notEqual(prepared.attachments?.[0]?.artifactId, turn.documents?.[0]?.artifactId);
       return { reply: "done" };
     };
     const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
@@ -1017,8 +1066,10 @@ for (const budget of ["count", "bytes"] as const) {
       })),
     });
     assert.equal(result.status, "ok", result.reason);
-    assert.deepEqual(prepared?.documents, []);
-    assert.match(prepared?.text ?? "", /steered.txt.*count or byte budget/);
+    if (budget === "retry") assert.equal(prepared?.documents?.length, 1);
+    else assert.deepEqual(prepared?.documents, []);
+    if (budget === "reupload" || budget === "retry") assert.doesNotMatch(prepared?.text ?? "", /count or byte budget/);
+    else assert.match(prepared?.text ?? "", /steered.txt.*count or byte budget/);
   });
 }
 
@@ -1161,6 +1212,7 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
     createdBy: actor.id,
     ownerScopeId: scopeId("personal", actor.id),
     schedule: { everyMs: 300_000 },
+    title: "Synthetic status",
     action: "check the synthetic status page",
   });
   sandbox.profile.spec = { os: "Other Linux", cpus: 8, workdir: "/new/workspace", homeDir: "/new/home" };
@@ -1180,17 +1232,17 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
   assert.match(seen[0]!.environment!, /Debian 12/);
   assert.match(seen[0]!.environment!, /No active scheduled work/);
   assert.match(seen[1]!.environment!, /Other Linux|8 vCPU/);
-  assert.match(seen[1]!.environment!, /check the synthetic status page/);
-  assert.doesNotMatch(seen[2]!.environment!, /check the synthetic status page/);
+  assert.match(seen[1]!.environment!, /Synthetic status/g);
+  assert.doesNotMatch(seen[2]!.environment!, /Synthetic status/g);
   assert.match(seen[2]!.environment!, /No active scheduled work/);
-  assert.doesNotMatch(seen[3]!.environment!, /Sandbox environment profile/);
+  assert.match(seen[3]!.environment!, /No longer included: Sandbox environment profile/);
   assert.match(seen[3]!.environment!, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[3]!.environment!, /Other Linux|synthetic status|No active scheduled work/);
   assert.deepEqual(seen[1]!.history, originalHistory);
   assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
 });
 
-test("connector revocation still refreshes system-authority permissions", async () => {
+test("connector revocation refreshes the environment without treating historical inventories as authority", async () => {
   let revoked = false;
   const { orchestrator } = buildOrchestrator({
     connectorStatusCache: {
@@ -1206,10 +1258,11 @@ test("connector revocation still refreshes system-authority permissions", async 
   revoked = true;
   const second = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
   const prefix = (reply: string) => reply.split("\n\n<environment>")[0]!;
-  assert.match(prefix(first.reply!), /Connected: Google/);
-  assert.match(prefix(second.reply!), /Needs reconnect: Google.*Do not use these apps/);
-  assert.doesNotMatch(prefix(second.reply!), /Connected: Google/);
-  assert.notEqual(prefix(first.reply!), prefix(second.reply!));
+  assert.match(first.reply!, /Connected: Google/);
+  assert.match(second.reply!, /Needs reconnect: Google.*Do not use these apps/);
+  assert.doesNotMatch(second.reply!, /Connected: Google/);
+  assert.equal(prefix(first.reply!), prefix(second.reply!));
+  assert.match(second.reply!, /sections below replace their earlier versions/);
 });
 
 for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {

@@ -32,9 +32,9 @@
 
 ## Wall of shame
 
-Patterns from this repo's history, with the PRs that introduced or removed them.
+Patterns from this repo's history, with the PRs that introduced or removed them. Lenses marked _always reviewed_ get a reviewer on every PR; triage cannot mark them not relevant.
 
-### Overengineering (6 examples)
+### Overengineering (always reviewed, 6 examples)
 
 Let sLOC +/- be your guide here. Small and net-negative LOC fixes will be rewarded. This codebase at baseline is flabby -- many bugs can be fixed by _deleting_, _removing_, _simplifying_. For features: use restraint when adding new subsystems that increase surface area and widen the config matrix we will have to support.
 
@@ -47,7 +47,7 @@ Past mistakes and examples:
 - **Harness/model selection** (2026-07-17): A selector grew into a proposed "agent profile" platform with its own catalog, preference layers, upgrade acknowledgments, readiness handling, and cohort rollout. The smaller solution extended the existing scoped setting with a `{ harness, model }` pair and reused the existing configuration and picker machinery. [qm#2134](https://github.com/yc-software/qm/pull/2134).
 - **Admin tool** (2026-09-17–18): Concern about oversized responses grew into a 43-file, roughly 4,580-line patch with field limits, custom JSON validation, layered timeouts, duplicate concurrency limits, and a special handshake. Only after pushback did the agent inventory actual calls and identify large transcripts as the concrete risk. The replacement used bounded transcript pagination and a thin read-only tool: 9 files, +329/−18. _Source/status:_ original transcript and patch not yet recovered; size and rejection claims are unverified.
 
-### Band-aid fixes (10 examples)
+### Band-aid fixes (always reviewed, 10 examples)
 
 Hiding a symptom while leaving its true cause unfixed. Smells here are special cases (string matching and regex are especially bad), many-branched conditionals acquiring _yet another_ branch. A bug isn't a problem to fix, it is useful evidence that the system we have built is flawed.
 
@@ -62,7 +62,7 @@ Hiding a symptom while leaving its true cause unfixed. Smells here are special c
 - **[qm#394](https://github.com/yc-software/qm/pull/394)** (2026-08-13): Memory tool silently coerces malformed `remember` calls (content/query/bare string) into facts instead of fixing the tool schema.
 - **[qm#469](https://github.com/yc-software/qm/pull/469)** (2026-08-13): Sandbox status collapses any unanswering shell into a 'wedged' verdict with baked-in 'restart the computer' advice.
 
-### Duplication (7 examples)
+### Duplication (always reviewed, 7 examples)
 
 Giving the same behavior or fact multiple independent implementations or sources of truth. These copies drift, disagree, and multiply maintenance work; reuse the existing owner or consolidate the competing paths.
 
@@ -74,7 +74,7 @@ Giving the same behavior or fact multiple independent implementations or sources
 - **[qm#993](https://github.com/yc-software/qm/pull/993)** (2026-09-08): Chat search queried both the dedicated search index and legacy entry history for every visible conversation, causing timeouts. _Status:_ wound back in [qm#993](https://github.com/yc-software/qm/pull/993).
 - **[qm#488](https://github.com/yc-software/qm/pull/488)** (2026-08-13): Web-UI /api router had ~50 hand-copied body-parse/relay/path-decode fragments that drifted (some returned 400 instead of 413). _Status:_ wound back in [qm#488](https://github.com/yc-software/qm/pull/488).
 
-### Hand-rolling (5 examples)
+### Hand-rolling (always reviewed, 5 examples)
 
 Reimplementing a capability that an existing SDK, library, or supported API already provides. Custom protocols and plumbing make us own edge cases that the maintained integration already handles; use that integration when it meets the requirements.
 
@@ -84,7 +84,7 @@ Reimplementing a capability that an existing SDK, library, or supported API alre
 - **[qm#1419](https://github.com/yc-software/qm/pull/1419)** (2026-09-22): Sprites backend used raw REST fetches; moved to Sprites SDK 0.2.3 (WebSocket exec, filesystem APIs, checkpoints); sibling PRs #1420-#1422 aligned Modal/E2B/Smolmachines with provider docs. _Status:_ wound back in [qm#1419](https://github.com/yc-software/qm/pull/1419).
 - **[qm#1407](https://github.com/yc-software/qm/pull/1407)** (2026-09-22): Internal Fly transports piped data through `fly ssh console` (broke on Windows PTY); replaced with Machines exec API stdin. _Status:_ wound back in [qm#1407](https://github.com/yc-software/qm/pull/1407).
 
-### Non-durability (5 examples)
+### Non-durability (always reviewed, 5 examples)
 
 This is a distributed system that needs work to endure through deploys and crashes without hiccups. A common agent mistake has been to store data in process memory. Postgres is effectively the core's filesystem -- think of core memory as a cache at best.
 
@@ -94,7 +94,7 @@ This is a distributed system that needs work to endure through deploys and crash
 - **Completed runs with missing replies:** A run was durably marked complete, but enqueueing its delivery depended on an in-process `onTerminal` callback. A crash between completion and enqueue left finished work with no delivery. The fix scans persisted terminal runs and reconstructs missing deliveries. _Status:_ fixed in [qm#2053](https://github.com/yc-software/qm/pull/2053).
 - **Webhook work already in flight:** `runOnce` guarded running webhook work with a process-local `inflight` Set, while the receiver's durable idempotency check recognized only committed fires. A retry routed to another instance during a long turn could start the same work again. _Status:_ still present on main; [qm#1943](https://github.com/yc-software/qm/pull/1943) proposes shared Postgres claims and includes a two-instance regression test.
 
-### Config-matrix expansion (10 examples)
+### Config-matrix expansion (always reviewed, 10 examples)
 
 Helpful KPIs here are: how many env vars do we have? how large is the database schema? Implicit modes in the form of conditionals, text matching or hard-coded flags also count. The combined footprint of this config matrix is currently enormous and makes our task much more difficult. Driving this down is critical and PRs that reduce the size of these will be rewarded.
 

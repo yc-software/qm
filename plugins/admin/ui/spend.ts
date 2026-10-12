@@ -5,7 +5,8 @@ import { table, card, renderer } from "./shared.ts";
 
 type Services = Record<string, any>;
 
-const RANGES = ["7d", "30d", "90d"];
+const DAY = 86400000;
+const RANGES: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90 };
 const COLUMNS: Array<[string, string]> = [
   ["person", "Person"],
   ["costUsd", "Total"],
@@ -20,6 +21,37 @@ const rowName = (row: any) =>
   "model" in row ? row.model || "Unknown model" : row.displayName || row.principalId || row.scopeId || "";
 
 const fmtUsd = (n: any) => "$" + (Number(n) || 0).toFixed(2);
+
+const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+function dayMs(day: unknown): number | null {
+  const ms = Date.parse(`${day}T00:00:00.000Z`);
+  return Number.isFinite(ms) && isoDay(ms) === day ? ms : null;
+}
+
+interface SpendWindow {
+  from: string;
+  to: string;
+  custom: boolean;
+  bucket: "day" | "week";
+}
+
+export function spendWindow(
+  state: { range?: string | null; from?: string | null; to?: string | null },
+  now = Date.now(),
+): SpendWindow {
+  const from = dayMs(state.from);
+  const to = dayMs(state.to);
+  const custom = from !== null && to !== null && from < to ? { start: from, end: to } : null;
+  const end = custom?.end ?? Math.floor(now / DAY) * DAY + DAY;
+  const start = custom?.start ?? end - (RANGES[state.range ?? ""] ?? RANGES["30d"]!) * DAY;
+  return {
+    from: isoDay(start),
+    to: isoDay(end),
+    custom: custom !== null,
+    bucket: end - start > 62 * DAY ? "week" : "day",
+  };
+}
 
 function sortValue(row: any, key: string): number | string {
   if (key === "person") return String(rowName(row)).toLowerCase();
@@ -67,11 +99,14 @@ export class SpendView {
         [fmtUsd(org.cron?.costUsd), "Crons"],
         [org.cacheHitRatio == null ? "n/a" : s.fmtPct(org.cacheHitRatio), "Cache hit rate"],
       ],
-      tabs: RANGES.map((range) => ({
-        label: range,
-        active: (s.range || "30d") === range,
-        onClick: () => s.setRange(range),
-      })),
+      tabs: [
+        ...Object.keys(RANGES).map((range) => ({
+          label: range,
+          active: !s.window.custom && (s.range || "30d") === range,
+          onClick: () => s.setRange(range),
+        })),
+        { label: "Custom", active: s.window.custom, onClick: () => s.setCustomRange(s.window.from, s.window.to) },
+      ],
       search: {
         value: this.filter,
         placeholder: "person, scope or model",
@@ -87,6 +122,30 @@ export class SpendView {
       search.replaceWith(previous);
       if (focused) active?.focus({ preventScroll: true });
     } else this.search = search;
+  }
+  customRange() {
+    const current: SpendWindow = this.services.window;
+    if (!current.custom) return null;
+    const today = isoDay(Date.now());
+    const apply = () => {
+      const [first, last] = [...this.root.querySelectorAll<HTMLInputElement>(".spend-custom input")]
+        .map((input) => input.value)
+        .sort();
+      const end = dayMs(last);
+      if (dayMs(first) !== null && end !== null) this.services.setCustomRange(first, isoDay(end + DAY));
+    };
+    return html`<div class="spend-custom">
+      <input type="date" aria-label="First day" max=${today} .value=${current.from} @change=${apply} />
+      <span>to</span>
+      <input
+        type="date"
+        aria-label="Last day"
+        max=${today}
+        .value=${isoDay(Date.parse(current.to) - DAY)}
+        @change=${apply}
+      />
+      <span class="hint">UTC</span>
+    </div>`;
   }
   sortBy(key: string) {
     if (this.sortKey === key) this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
@@ -140,7 +199,7 @@ export class SpendView {
     const series = this.data.series || [];
     const org = this.data.org || {};
     this.paint(
-      html`${
+      html`${this.customRange()}${
         this.data.asOf == null
           ? null
           : html`<p class="subline">

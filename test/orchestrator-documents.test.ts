@@ -84,7 +84,7 @@ test("compaction stops automatic document replay while preserving the original f
 });
 
 test("compaction during a turn stops document replay immediately", async () => {
-  const built = freshApp(2000);
+  const built = freshApp(20_000);
   const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
   const request = {
     surface: "test" as const,
@@ -107,7 +107,7 @@ test("compaction during a turn stops document replay immediately", async () => {
   for (let i = 0; i < 8; i++) {
     await built.sessions.append(lease, {
       type: i % 2 === 0 ? "user" : "assistant",
-      payload: { text: "Synthetic conversation context. ".repeat(100) },
+      payload: { text: "Synthetic conversation context. ".repeat(2000) },
       scopeLabel: entries[0]!.scopeLabel,
     });
   }

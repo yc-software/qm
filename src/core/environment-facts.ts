@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { retainedSnapshot } from "../harness/context-snapshot.ts";
+import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
+import type { SessionEntry } from "../types.ts";
 import type { AgentComputerSpec } from "../sandbox/sandbox.ts";
 import { connectorLabel, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
 
@@ -72,4 +76,59 @@ export function renderConnectedAppsBlock(
     lines.push(`Needs reconnect: ${reconnect.join(", ")}. Do not use these apps until the user reconnects them.`);
   }
   return lines.join("\n");
+}
+
+interface EnvironmentSnapshot {
+  hashes: Record<string, string>;
+  sessionId: string;
+  anchorSeq?: number;
+}
+
+export function environmentDelta(
+  blocks: Record<string, string>,
+  history: readonly SessionEntry[],
+  sessionId: string,
+): { text: string; record: EnvironmentSnapshot } {
+  const { previous, anchorSeq } = retainedSnapshot(
+    history,
+    (entry) => (entry.payload as { environmentSnapshot?: EnvironmentSnapshot } | null)?.environmentSnapshot,
+  );
+  const current = Object.fromEntries(Object.entries(blocks).filter(([, text]) => text.trim()));
+  const hashes = Object.fromEntries(
+    Object.entries(current).map(([key, text]) => [key, createHash("sha256").update(text).digest("hex")]),
+  );
+  const record = { hashes, sessionId, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
+  if (!previous) return { text: Object.values(current).join("\n\n"), record };
+  const changed = Object.entries(current).filter(([key]) => previous.hashes[key] !== hashes[key]);
+  const removed = Object.keys(previous.hashes).filter((key) => !(key in current));
+  return {
+    text:
+      changed.length || removed.length
+        ? [
+            "Environment changes: sections below replace their earlier versions; unlisted sections are unchanged. Inventories are not permission grants; access is checked live.",
+            ...changed.map(([, text]) => text),
+            ...removed.map((key) => `No longer included: ${key}. Do not rely on its earlier inventory.`),
+          ].join("\n\n")
+        : "",
+    record,
+  };
+}
+
+export function renderSandboxProfiles(
+  providers: ReturnType<SandboxResources["profiles"]>,
+  layout: WorkspaceLayoutInfo,
+): Record<string, string> {
+  return Object.fromEntries(
+    providers
+      .toSorted((a, b) => a.name.localeCompare(b.name))
+      .map((provider) => [
+        `Sandbox provider ${provider.name}`,
+        [
+          `## Sandbox provider ${provider.name}`,
+          `Available actions: ${provider.actions.toSorted().join(", ")}.`,
+          renderComputerBlock(provider.spec, layout).replace("## Sandbox environment profile\n", "") ||
+            "Environment profile unknown.",
+        ].join("\n"),
+      ]),
+  );
 }

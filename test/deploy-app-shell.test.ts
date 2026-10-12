@@ -49,7 +49,7 @@ function appServingUpstream(upstreamPort: number) {
     identity: createIdentityService(),
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);
-  return { app, directory };
+  return { app, directory, acl };
 }
 
 function httpGet(
@@ -79,7 +79,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   upstream.listen(0);
   await new Promise((r) => upstream.once("listening", r));
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const { app, directory } = appServingUpstream(upstreamPort);
+  const { app, directory, acl } = appServingUpstream(upstreamPort);
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -103,7 +103,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   };
-  return { app, directory, port, close, featureFlags };
+  return { app, directory, acl, d, port, close, featureFlags };
 }
 
 const HOST = "mysite.apps.example.com";
@@ -332,6 +332,7 @@ test("app shell: manage grants are checked on every navigation and version reque
 test("app shell: a manager from the creation scope can load the app and its assets without a read grant", async () => {
   const f = await widgetFixture();
   try {
+    await f.acl.revoke(f.d.ownerScopeId, `deployment:${f.d.id}`, scopeId("channel", "CBUILT"), "U1");
     await f.directory.replaceChannels(
       [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
       [{ channelId: "CBUILT", principalId: "U2" }],

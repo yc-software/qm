@@ -198,7 +198,7 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
 test("sharing e2e: skill lazy assets execute, update, and disappear from the same computer after opt-out", async (t) => {
   const b = await fixture(t);
   const s = await b.skill("personal:U1", "carried-helper", "VERSION_ONE");
-  assert.match(await b.turn("!sysprompt", true), /carried-helper/);
+  assert.doesNotMatch(await b.turn("!sysprompt", true), /carried-helper/);
   assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_ONE");
   await b.skills.update(s.id, {
     ...s.manifest,
@@ -436,21 +436,21 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
       service: "custom-cli",
       files: [{ path: ".custom-cli/auth", contentBase64: Buffer.from(`file_${id}`).toString("base64") }],
     });
-    handles.set(id, [credentialHandle(credential.id), credentialHandle(login.id)]);
+    handles.set(id, [credentialHandle(credential), credentialHandle(login)]);
     await b.keychain.setConnectorToken("gmail.googleapis.com", id, {
       accessToken: `gmail_${id}`,
       expiresAt: Date.now() + 3600000,
     });
   }
   const prompt = await b.turn("!sysprompt", true);
-  assert.match(prompt, /execute scope:"owner"/);
-  assert.match(prompt, /U1[^\n]*npm[^\n]*no grant needed/);
-  assert.match(prompt, /U2[^\n]*npm[^\n]*no grant for this conversation/);
+  assert.match(prompt, /execute scope `owner`/);
+  assert.match(prompt, /### U1\n(?:(?!###)[\s\S])*npm[^\n]*own; Open live turn only/);
+  assert.match(prompt, /### U2\n(?:(?!###)[\s\S])*npm[^\n]*no grant for this conversation/);
   assert.ok(!prompt.includes("npm_U1"));
   await b.workspace.write("channel:C1", "room-only.txt", "room_data");
   const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
   const selected = (id = "U1") =>
-    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [...handles.get(id)!, "connector_gmail_googleapis_com_default"] })}`;
+    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [...handles.get(id)!, "connector:gmail.googleapis.com:default"] })}`;
   assert.equal(await b.turn(selected(), true), "True|True|file_U1|unset|isolated");
   assert.equal(await b.turn(selected("U2"), true, "U2"), "True|True|file_U2|unset|isolated");
   for (const id of ["U1", "U2", "U1"]) {
@@ -460,8 +460,8 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     );
   }
   const ambientPrompt = await b.turn("!sysprompt", true, "U2", { origin: { kind: "ambient", live: true } });
-  assert.match(ambientPrompt, /U2[^\n]*npm[^\n]*no grant needed/);
-  assert.match(ambientPrompt, /U1[^\n]*npm[^\n]*no grant for this conversation/);
+  assert.match(ambientPrompt, /### U2\n(?:(?!###)[\s\S])*npm[^\n]*own; Open live turn only/);
+  assert.match(ambientPrompt, /### U1\n(?:(?!###)[\s\S])*npm[^\n]*no grant for this conversation/);
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
   await b.directory.replaceGroups([
     { groupId: "G1", principalId: "U1" },

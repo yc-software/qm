@@ -1,3 +1,6 @@
+import type { AdminToolAccess } from "./admin.ts";
+import { rankedSkills } from "../skills/materialize.ts";
+import type { SkillResolution } from "../skills/skill-store.ts";
 import {
   prepareExecutionFiles,
   processCredentialFiles,
@@ -196,6 +199,7 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly string[]) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
+  admin?: AdminToolAccess;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
@@ -221,7 +225,20 @@ export interface ToolContext extends SurfaceToolDeps {
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
   restartComputer(sandboxId?: string): Promise<void>;
   read(path: string, signal?: AbortSignal): Promise<ReadResult>;
-  skill(name: string, opts?: { path?: string; sandboxId?: string; signal?: AbortSignal }): Promise<SkillResult>;
+  listSkills(
+    query?: string,
+    offset?: number,
+    limit?: number,
+    source?: string,
+  ): Promise<{
+    sourceScopeId: ScopeId | null;
+    skills: Array<{ name: string; description: string; source?: string }>;
+    nextOffset?: number;
+  }>;
+  skill(
+    name: string,
+    opts?: { path?: string; sandboxId?: string; source?: string; signal?: AbortSignal },
+  ): Promise<SkillResult>;
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
   setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
@@ -440,6 +457,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 };
 
 export interface ToolContextDeps {
+  admin?: AdminToolAccess;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
@@ -452,7 +470,8 @@ export interface ToolContextDeps {
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
   provisionOwnerAuth?: () => Promise<SandboxHandle>;
   ownerAuthCommand?: (command: string, env?: Record<string, string>) => string;
-  useSkill?: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>;
+  listSkills?: (source?: string) => Promise<SkillResolution[]>;
+  useSkill?: (name: string, path: string, sandboxId?: string, source?: string) => Promise<SkillResult>;
   reach?: {
     resolveChannel(query: string): Promise<ReachResolution>;
     provisionFor(scopeId: ScopeId): Promise<SandboxHandle>;
@@ -696,6 +715,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   return {
+    ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
       : {}),
@@ -963,15 +983,36 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
+    async listSkills(query = "", offset = 0, limit = 50, source?: string) {
+      const available = (await deps.listSkills?.(source)) ?? [];
+      const matches = rankedSkills(available, query, [], Boolean(query));
+      const start = Math.max(0, Math.floor(offset));
+      const selected = matches.slice(start, start + Math.max(1, Math.min(100, Math.floor(limit))));
+      const sourceScopeId = selected.length && source ? selected[0]!.skill!.scopeId : null;
+      const end = start + selected.length;
+      return {
+        sourceScopeId,
+        skills: selected.map(({ skill }) => ({
+          name: skill!.manifest.name,
+          description: skill!.manifest.description,
+          source: skill!.scopeId,
+        })),
+        ...(end < matches.length ? { nextOffset: end } : {}),
+      };
+    },
+
     async skill(
       name: string,
-      opts?: { path?: string; sandboxId?: string; signal?: AbortSignal },
+      opts?: { path?: string; sandboxId?: string; source?: string; signal?: AbortSignal },
     ): Promise<SkillResult> {
       opts?.signal?.throwIfAborted();
       if (!deps.useSkill) return { content: null, sourceScopeId: null };
       if (opts?.sandboxId && (!deps.sandboxResources || !deps.provisionResource))
         throw new Error("named sandboxes are not available here");
-      return withAbort(() => deps.useSkill!(name, opts?.path ?? "SKILL.md", opts?.sandboxId), opts?.signal);
+      return withAbort(
+        () => deps.useSkill!(name, opts?.path ?? "SKILL.md", opts?.sandboxId, opts?.source),
+        opts?.signal,
+      );
     },
 
     async write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
@@ -1055,7 +1096,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async publish(input: PublishInput): Promise<PublishResult> {
       if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
       if (input.share !== undefined || input.public !== undefined)
-        throw new Error("publish is always private to the owner; use apps action share to grant access");
+        throw new Error("publish does not accept sharing options; use apps action share to change access");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
       const createdInScope: ScopeId = writableScopeId;
       let effectiveEntrypoint = input.entrypoint;
@@ -1439,7 +1480,9 @@ function audienceFromGrantees(
   return {
     kind: "members",
     ...(origin.kind === "channel" ? { channelRef: origin.ref } : {}),
-    memberCount: granteeScopeIds.length,
+    ...(granteeScopeIds.every((g) => parseScopeId(g).kind === "personal")
+      ? { memberCount: granteeScopeIds.length }
+      : {}),
   };
 }
 

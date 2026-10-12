@@ -10,10 +10,10 @@ import type { Ctx } from "./live-slack/harness.ts";
 
 function evidence(sandboxId = "box", stdout = "nonce\n"): unknown[] {
   return [
-    { type: "tool_call", payload: { tool: "sandbox", action: "exec", sandbox_id: sandboxId, callId: "call" } },
+    { type: "tool_call", payload: { tool: "execute", sandbox_id: sandboxId, callId: "call" } },
     {
       type: "tool_result",
-      payload: { tool: "sandbox", action: "exec", callId: "call", isError: false, code: 0, timedOut: false, stdout },
+      payload: { tool: "execute", callId: "call", isError: false, code: 0, timedOut: false, stdout },
     },
   ];
 }
@@ -22,7 +22,7 @@ test("provider execution requires correlated success on the exact sandbox", () =
   assert.doesNotThrow(() => assertSandboxExecution(evidence(), "box", "nonce\n"));
   for (const patch of [
     { tool: "read" },
-    { action: "start_process" },
+    { background: true },
     { callId: "unrelated" },
     { isError: true },
     { code: 1 },
@@ -40,7 +40,7 @@ test("provider execution requires correlated success on the exact sandbox", () =
 
 test("projected sandbox results require exact successful execution evidence", () => {
   const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
-  entries[1]!.payload = { tool: "sandbox", callId: "call", isError: false, result: "nonce\n\n[exit 0]" };
+  entries[1]!.payload = { tool: "execute", callId: "call", isError: false, result: "nonce\n\n[exit 0]" };
   assert.doesNotThrow(() => assertSandboxExecution(entries, "box", "nonce\n"));
   for (const patch of [
     { result: "nonce\n" },
@@ -52,7 +52,7 @@ test("projected sandbox results require exact successful execution evidence", ()
     { callId: "unrelated" },
     { code: 1 },
     { timedOut: true },
-    { action: "start_process" },
+    { background: true },
   ]) {
     const changed = [entries[0], { ...entries[1], payload: { ...entries[1]!.payload, ...patch } }];
     assert.throws(() => assertSandboxExecution(changed, "box", "nonce\n"));
