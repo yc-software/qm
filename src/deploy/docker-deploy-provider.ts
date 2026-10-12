@@ -4,6 +4,8 @@ import { spawnDockerExec, type DockerExec } from "../sandbox/docker-exec.ts";
 import { errMessage } from "../util/errors.ts";
 
 const APP_PORT = 8080;
+const DATA_DIR = "/data";
+const RESERVED_ENV_KEYS = new Set(["PORT", "DATA_DIR"]);
 const LEGACY_NETWORK = "agent-deploynet";
 const DAEMON_PROBE_TIMEOUT_MS = 10_000;
 
@@ -57,6 +59,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
 
   const name = (d: Deployment) => `agent-deploy-${d.id.slice(0, 12)}`;
   const network = (d: Deployment) => `${name(d)}-net`;
+  const volume = (d: Deployment) => `${name(d)}-data`;
   const ensureNetwork = async (net: string): Promise<string> => {
     if ((await dexec(["network", "inspect", net])).code !== 0) {
       const r = await dexec(["network", "create", net]);
@@ -65,6 +68,15 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       }
     }
     return net;
+  };
+  const ensureVolume = async (vol: string): Promise<string> => {
+    if ((await dexec(["volume", "inspect", vol])).code !== 0) {
+      const r = await dexec(["volume", "create", vol]);
+      if (r.code !== 0 && !/already exists/i.test(r.stderr)) {
+        throw new Error(`docker volume create ${vol} failed: ${r.stderr.trim()}`);
+      }
+    }
+    return vol;
   };
 
   const migrateContainer = async (container: string): Promise<boolean> => {
@@ -101,13 +113,16 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
   };
 
   return {
-    profile: { managedScaleToZero: false },
+    profile: { managedScaleToZero: false, dataDir: DATA_DIR },
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
       const net = await ensureNetwork(network(d));
+      const vol = await ensureVolume(volume(d));
       await dexec(["rm", "-f", name(d)]);
       const hostPort = allocPort(name(d));
-      const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+      const envArgs = Object.entries(version.env ?? {})
+        .filter(([k]) => !RESERVED_ENV_KEYS.has(k))
+        .flatMap(([k, v]) => ["-e", `${k}=${v}`]);
       const r = await dexec([
         "run",
         "-d",
@@ -125,11 +140,15 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
         `127.0.0.1:${hostPort}:${APP_PORT}`,
         "-v",
         `${version.snapshotDir}:/app:ro`,
+        "-v",
+        `${vol}:${DATA_DIR}`,
         "-w",
         "/app",
+        ...envArgs,
         "-e",
         `PORT=${APP_PORT}`,
-        ...envArgs,
+        "-e",
+        `DATA_DIR=${DATA_DIR}`,
         image,
         "sh",
         "-c",

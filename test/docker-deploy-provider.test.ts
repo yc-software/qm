@@ -5,6 +5,129 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import type { DockerExec } from "../src/sandbox/docker-exec.ts";
 import { scopeId } from "../src/types.ts";
 
+function baseDockerExec(calls: string[][]): DockerExec {
+  return async (args) => {
+    calls.push(args);
+    const inspecting = args[1] === "inspect";
+    return { code: inspecting ? 1 : 0, stdout: "", stderr: inspecting ? "no such object" : "" };
+  };
+}
+
+test("apply mounts a per-deployment named volume at /data, sets DATA_DIR, and keeps the snapshot read-only", async () => {
+  const calls: string[][] = [];
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/one",
+  });
+  const provider = createDockerDeployProvider({ dockerExec: baseDockerExec(calls) });
+  const volumeName = `agent-deploy-${deployment.id.slice(0, 12)}-data`;
+
+  assert.equal(provider.profile.dataDir, "/data");
+  await provider.apply(deployment, deployment.versions[0]!);
+
+  assert.ok(calls.some((args) => args.join(" ") === `volume inspect ${volumeName}`));
+  assert.ok(calls.some((args) => args.join(" ") === `volume create ${volumeName}`));
+  const runArgs = calls.find((args) => args[0] === "run")!;
+  const runCmd = runArgs.join(" ");
+  assert.ok(runCmd.includes("-v /snap/one:/app:ro"));
+  assert.ok(runCmd.includes(`-v ${volumeName}:/data`));
+  assert.ok(!runCmd.includes(`-v ${volumeName}:/data:ro`));
+  assert.ok(runCmd.includes("-e DATA_DIR=/data"));
+});
+
+test("a redeploy of the same deployment reuses its named volume instead of a fresh one", async () => {
+  const calls: string[][] = [];
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/one",
+  });
+  const provider = createDockerDeployProvider({ dockerExec: baseDockerExec(calls) });
+  const volumeName = `agent-deploy-${deployment.id.slice(0, 12)}-data`;
+
+  await provider.apply(deployment, deployment.versions[0]!);
+  await provider.apply(deployment, deployment.versions[0]!);
+
+  const runs = calls.filter((args) => args[0] === "run");
+  assert.equal(runs.length, 2);
+  for (const run of runs) assert.ok(run.join(" ").includes(`-v ${volumeName}:/data`));
+  assert.ok(calls.filter((args) => args.join(" ") === `volume create ${volumeName}`).length >= 1);
+});
+
+test("two deployments get distinct, isolated named volumes", async () => {
+  const calls: string[][] = [];
+  const store = createDeployStore();
+  const first = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/one",
+  });
+  const second = await store.create({
+    ownerScopeId: scopeId("personal", "U2"),
+    createdBy: "U2",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/two",
+  });
+  const provider = createDockerDeployProvider({ dockerExec: baseDockerExec(calls) });
+
+  await provider.apply(first, first.versions[0]!);
+  await provider.apply(second, second.versions[0]!);
+
+  const firstVolume = `agent-deploy-${first.id.slice(0, 12)}-data`;
+  const secondVolume = `agent-deploy-${second.id.slice(0, 12)}-data`;
+  assert.notEqual(firstVolume, secondVolume);
+  const runs = calls.filter((args) => args[0] === "run");
+  assert.ok(runs[0]!.join(" ").includes(`${firstVolume}:/data`));
+  assert.ok(runs[1]!.join(" ").includes(`${secondVolume}:/data`));
+  assert.ok(!runs[0]!.join(" ").includes(secondVolume));
+  assert.ok(!runs[1]!.join(" ").includes(firstVolume));
+});
+
+test("destroy does not remove the deployment's named volume", async () => {
+  const calls: string[][] = [];
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/one",
+  });
+  const provider = createDockerDeployProvider({ dockerExec: baseDockerExec(calls) });
+
+  await provider.apply(deployment, deployment.versions[0]!);
+  await provider.destroy(deployment);
+
+  assert.ok(!calls.some((args) => args[0] === "volume" && args[1] === "rm"));
+});
+
+test("reserved PORT and DATA_DIR env always win over a conflicting declared value", async () => {
+  const calls: string[][] = [];
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/one",
+    env: { PORT: "1", DATA_DIR: "/tmp/evil", CUSTOM: "kept" },
+  });
+  const provider = createDockerDeployProvider({ dockerExec: baseDockerExec(calls) });
+
+  await provider.apply(deployment, deployment.versions[0]!);
+
+  const runArgs = calls.find((args) => args[0] === "run")!;
+  assert.equal(runArgs.filter((a) => a === "PORT=1").length, 0);
+  assert.equal(runArgs.filter((a) => a === "DATA_DIR=/tmp/evil").length, 0);
+  assert.equal(runArgs.filter((a) => a === "PORT=8080").length, 1);
+  assert.equal(runArgs.filter((a) => a === "DATA_DIR=/data").length, 1);
+  assert.ok(runArgs.includes("CUSTOM=kept"));
+});
+
 test("Docker deployments use isolated networks and remove them on destroy", async () => {
   const calls: string[][] = [];
   const dockerExec: DockerExec = async (args) => {
