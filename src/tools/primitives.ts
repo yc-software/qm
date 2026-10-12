@@ -1439,7 +1439,9 @@ function audienceFromGrantees(
   return {
     kind: "members",
     ...(origin.kind === "channel" ? { channelRef: origin.ref } : {}),
-    memberCount: granteeScopeIds.length,
+    ...(granteeScopeIds.every((g) => parseScopeId(g).kind === "personal")
+      ? { memberCount: granteeScopeIds.length }
+      : {}),
   };
 }
 

@@ -180,3 +180,14 @@ test("republishing channel apps neither widens their audience nor restores revok
   assert.deepEqual(await deploy.deploymentGrantees(d.id), []);
   assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "denied");
 });
+
+test("public-channel defaults follow existing channel visibility without anonymous access", async () => {
+  const { deploy, d, directory } = await setup();
+  await directory.replaceChannels(
+    [{ channelId: CH, name: "built", isPrivate: false }],
+    [{ channelId: CH, principalId: "U1" }],
+  );
+  assert.equal((await deploy.reachDeployment(d.id, "U3")).status, "ok");
+  assert.equal((await deploy.reachDeployment(d.id, "")).status, "denied");
+  assert.notEqual((await deploy.getDeployment(d.id))?.public, true);
+});
