@@ -1,3 +1,4 @@
+import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
@@ -71,7 +72,12 @@ import {
   connectorStatusIsStale,
   refreshConnectorStatus,
 } from "../credentials/connector-status.ts";
-import { renderComputerBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
+import {
+  environmentDelta,
+  renderComputerBlock,
+  renderConnectedAppsBlock,
+  renderSandboxProfiles,
+} from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
@@ -1158,7 +1164,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
-      const turnContextBlocks: string[] = [];
+      const turnContextBlocks: Record<string, string> = {};
       if (input.privateSessionMessage)
         systemPrompt +=
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
@@ -1281,11 +1287,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
       const turnSharedDir = `${turnFilesDir}/${SHARED_DIR}`;
 
-      const computerBlock = renderComputerBlock(scopeProfile.spec, {
-        hasGlobal: resolution.layers.some((l) => l.mountPath === "global"),
-        teamCount: resolution.layers.filter((l) => l.mountPath.startsWith("team-")).length,
-      });
-      turnContextBlocks.push(computerBlock);
       if (!external && deps.scratchExec) {
         systemPrompt +=
           '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS/tooling, read-only org-global files, this conversation\'s scoped Files/API capabilities, and credentials explicitly requested per execute call. Its local files are wiped after the turn, and resident workspace files and cached CLI logins are not restored. Use it for self-contained commands and API work; publish needed outputs to Files and verify success. Use scoped execution for existing workspace state or work that must continue locally.';
@@ -1293,21 +1294,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
       }
-      if (visibleSkills.length) systemPrompt += `\n\n${skillsIndex(visibleSkills, sharingSources)}`;
+      if (visibleSkills.length) turnContextBlocks["Skills"] = skillsIndex(visibleSkills, sharingSources);
       const gatewayBlock = renderGatewayContext(input.surface, input.gatewayContext);
-      if (gatewayBlock) systemPrompt += `\n\n${gatewayBlock}`;
+      if (gatewayBlock) turnContextBlocks["Where you are"] = gatewayBlock;
       const homeChannel =
         conversation.kind === "group" && conversation.channelRef
           ? await deps.managedGroups
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
-      if (homeChannel) systemPrompt += `\n\n${renderProjectHomeChannel(homeChannel.channelName)}`;
-      systemPrompt += cronBlock;
+      if (homeChannel) turnContextBlocks["Project home channel"] = renderProjectHomeChannel(homeChannel.channelName);
+      turnContextBlocks["Where scheduled tasks post"] = cronBlock;
       const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles);
-      if (sharedFilesBlock) systemPrompt += `\n\n${sharedFilesBlock}`;
+      if (sharedFilesBlock) turnContextBlocks["Files shared with you"] = sharedFilesBlock;
 
-      const timeBlock = turnTimezone ? currentTimeBlock(turnTimezone, Date.now()) : "";
+      const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
       let memoryContext = "a channel";
       if (conversation.kind === "dm") memoryContext = "a direct message";
       else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
@@ -1970,6 +1971,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               )),
           })
         : deps.sandboxResources;
+      const workspaceLayout = {
+        hasGlobal: resolution.layers.some((l) => l.mountPath === "global"),
+        teamCount: resolution.layers.filter((l) => l.mountPath.startsWith("team-")).length,
+      };
+      if (turnSandboxResources) {
+        Object.assign(turnContextBlocks, renderSandboxProfiles(turnSandboxResources.profiles(), workspaceLayout));
+      } else {
+        turnContextBlocks["Sandbox environment profile"] = renderComputerBlock(scopeProfile.spec, workspaceLayout);
+      }
 
       const {
         box,
@@ -2345,13 +2355,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ),
                 hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
                 mons.filter((m) => m.ownerScopeId === scopeId && m.expiresAt > nowMs),
+                turnTimezone,
               ),
             )
             .catch(swallowAs("orchestrator: standing-obligations read", null));
-          turnContextBlocks.push(
+          turnContextBlocks["Already scheduled here"] =
             obligations ??
-              "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.",
-          );
+            "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
         }
         if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
           systemPrompt +=
@@ -2366,7 +2376,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             await reachableChannelsFor(deps.directory!, actor.id),
             actor.displayName ?? "this person",
           );
-          if (roster) systemPrompt += `\n\n${roster}`;
+          if (roster) turnContextBlocks["Other computers you can reach"] = roster;
         }
         if (!external && deps.directory) {
           const rosterBlock = await (async () => {
@@ -2388,7 +2398,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
             return renderConversationRoster(resolved);
           })().catch(swallowAs("orchestrator: conversation roster", null));
-          if (rosterBlock) systemPrompt += `\n\n${rosterBlock}`;
+          if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
         }
         if (!strictReadOnly && (deps.keychain || credentialDescriptions.length)) {
           const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
@@ -2414,7 +2424,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             execution: credentialDescriptions,
             scopeAsks,
           });
-          if (keychainBlock) systemPrompt += `\n\n${keychainBlock}`;
+          if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
         }
         if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
           let status = null;
@@ -2428,7 +2438,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             swallow("orchestrator: connected-app status", e);
           }
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
+          turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
         }
         const stableSystemBytes = systemPrompt.length;
         if (swarmBinding)
@@ -3156,7 +3166,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sender,
           unscreenedNote,
           input.conversationHeader?.trim(),
-          ...turnContextBlocks,
           volatileContext,
         ]
           .filter((s) => s && s.trim())
@@ -3434,8 +3443,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         ) => {
           const recall = memoryRecallDelta(recalled, continuation?.history ?? history);
+          const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
           const turnEnvironment = environmentNote(
-            [turnEnvironmentContents, recall.text ? `${memoryHeading}${recall.text}` : ""].filter(Boolean).join("\n\n"),
+            [turnEnvironmentContents, snapshot.text, recall.text ? `${memoryHeading}${recall.text}` : ""]
+              .filter(Boolean)
+              .join("\n\n"),
           );
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
           let recordedRecall = false;
@@ -3471,6 +3483,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (!recordedRecall && !payload.steered && !payload.overheard) {
                   recordedRecall = true;
                   payload.memoryContext = nextContext;
+                  payload.environmentSnapshot = snapshot.record;
                   if (environment) payload.environment = environment;
                   if (recall.text) payload.memoryRecall = recall.record;
                 }
@@ -3649,7 +3662,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
-            ...(continueTurn && !continuation ? { continueTurn: true } : {}),
+            ...(continueTurn && !continuation && !snapshot.text && !recall.text ? { continueTurn: true } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
             input: harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),

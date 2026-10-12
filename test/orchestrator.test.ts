@@ -1178,7 +1178,7 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   const prompt = await app.turn(
     dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:tz-prompt" }, timezone: "America/New_York" }),
   );
-  assert.match(prompt.reply ?? "", /timezone America\/New_York/);
+  assert.match(prompt.reply ?? "", /\(America\/New_York\)/);
 
   captured = undefined;
   const invalid = await app.turn(
@@ -4539,3 +4539,63 @@ for (const [securityPosture, securityScreen] of [
     assert.doesNotMatch(prompts, /NOT security-screened/);
   });
 }
+
+test("environment inventories are incremental across real turns with a durable full-snapshot anchor", async () => {
+  const { app, sessions } = freshApp();
+  const first = await app.turn(dm("first", { timezone: "America/Los_Angeles" }));
+  assert.equal(first.status, "ok");
+  assert.match(first.reply ?? "", /## Sandbox provider/);
+  const second = await app.turn(dm("second", { timezone: "America/Los_Angeles" }));
+  assert.equal(second.status, "ok");
+  assert.doesNotMatch(second.reply ?? "", /## Sandboxes|## Sandbox provider/);
+  assert.match(second.reply ?? "", /## The user's local time/);
+  const entries = await sessions.getEntries(first.sessionId!);
+  const users = entries.filter((entry) => entry.type === "user");
+  const firstSnapshot = (users[0]!.payload as { environmentSnapshot: { hashes: Record<string, string> } })
+    .environmentSnapshot;
+  assert.ok(Object.keys(firstSnapshot.hashes).some((key) => key.startsWith("Sandbox provider")));
+  const secondSnapshot = (users[1]!.payload as { environmentSnapshot: { anchorSeq: number } }).environmentSnapshot;
+  assert.equal(secondSnapshot.anchorSeq, users[0]!.seq);
+});
+
+test("an isolated channel environment does not disclose the actor's private sandbox", async () => {
+  const built = freshApp({ sharingPosture: "isolated" });
+  await built.directory.replace([
+    { principalId: "U1", displayName: "One", type: "internal" },
+    { principalId: "U2", displayName: "Two", type: "internal" },
+  ]);
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "team" }],
+    [
+      { channelId: "C1", principalId: "U1" },
+      { channelId: "C1", principalId: "U2" },
+    ],
+  );
+  const privateName = "PRIVATE-ACQUISITION-REVIEW";
+  const personal = await built.sandboxResources.create("U1", "personal:U1", "sprites", privateName);
+  await selectComputer(built, "U1", "channel:C1");
+  const inventory = await built.sandboxResources.list("U1", "channel:C1");
+  assert.ok(inventory.sandboxes.some((sandbox) => sandbox.id === personal.id));
+
+  const request: TurnRequest = {
+    surface: "test",
+    actor: internalActor,
+    conversation: {
+      kind: "channel",
+      threadRef: "ch:C1:private-sandbox-environment",
+      channelRef: "C1",
+      audience: [{ externalId: "U1" }, { externalId: "U2" }],
+    },
+    text: "hello",
+  };
+  const result = await built.app.turn(request);
+  assert.equal(result.status, "ok");
+  const session = await built.sessions.getByThread(request.conversation.threadRef);
+  const entries = await built.sessions.getEntries(session!.id);
+  const environment = (entries.find((entry) => entry.type === "user")!.payload as { environment: string }).environment;
+  assert.match(environment, /## Sandbox provider sprites/);
+  for (const content of [environment, result.reply ?? ""]) {
+    assert.ok(!content.includes(privateName), "the private sandbox name must not reach the shared turn");
+    assert.ok(!content.includes(personal.id), "the private sandbox ID must not reach the shared turn");
+  }
+});

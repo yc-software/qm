@@ -187,8 +187,8 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
     "Skills",
     "Where you are",
     "Where scheduled tasks post",
-    "Connected apps",
     "Sandbox environment profile",
+    "Connected apps",
     "What you remember",
   ];
   assert.doesNotMatch(prompt, /\n## Your logins\n/);
@@ -464,7 +464,15 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
   assert.equal(second.status, "ok");
 
   for (const title of ["Skills", "Where you are", "Where scheduled tasks post", "Connected apps"]) {
-    assert.ok(systemOf(first.reply ?? "").includes(`\n## ${title}\n`), `expected "## ${title}" in the system prompt`);
+    assert.ok(
+      environmentOf(first.reply ?? "").includes(`\n## ${title}\n`),
+      `expected "## ${title}" in the first environment`,
+    );
+    assert.ok(
+      !environmentOf(second.reply ?? "").includes(`\n## ${title}\n`),
+      `unchanged "## ${title}" must not repeat`,
+    );
+    assert.ok(!systemOf(first.reply ?? "").includes(`\n## ${title}\n`));
   }
   for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
     assert.ok(
@@ -501,7 +509,11 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
   assert.equal(second.status, "ok");
 
   const prefixA = prefixOf(first.reply ?? "");
-  assert.ok(prefixA.includes("**alpha**") && prefixA.includes("**zeta**"), "skills render in the cached prefix");
+  assert.ok(
+    first.reply!.includes("**alpha**") && first.reply!.includes("**zeta**"),
+    "skills render in the initial environment",
+  );
+  assert.doesNotMatch(second.reply!, /\*\*alpha\*\*|\*\*zeta\*\*/);
   assert.equal(
     prefixOf(second.reply ?? ""),
     prefixA,
@@ -512,8 +524,18 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
   const crons = createCronStore();
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
-  await crons.create({ ...base, schedule: { everyMs: 300_000 }, action: "poll the vendor status page" });
-  await crons.create({ ...base, schedule: { firstFireAt: Date.now() + 86_400_000 }, action: "follow up with legal" });
+  await crons.create({
+    ...base,
+    schedule: { everyMs: 300_000 },
+    title: "Vendor status",
+    action: "poll the vendor status page",
+  });
+  await crons.create({
+    ...base,
+    schedule: { firstFireAt: Date.now() + 86_400_000 },
+    title: "Legal follow-up",
+    action: "follow up with legal",
+  });
   await crons.create({ ...base, schedule: { firstFireAt: Date.now() - 1000 }, message: "hi alice" });
   await crons.create({
     ...base,
@@ -529,8 +551,9 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
 
   assert.match(prompt, /schedule the wake-up in the same turn/);
   assert.match(prompt, /\n## Already scheduled here\n/);
-  assert.match(prompt, /poll the vendor status page/);
-  assert.match(prompt, /follow up with legal/);
+  assert.match(prompt, /Vendor status — every 5 minutes/);
+  assert.match(prompt, /Legal follow-up — once at/);
+  assert.doesNotMatch(prompt, /poll the vendor status page|follow up with legal/);
   assert.doesNotMatch(prompt, /hi alice/);
   assert.doesNotMatch(prompt, /channel-only digest/);
 });
@@ -1174,6 +1197,7 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
     createdBy: actor.id,
     ownerScopeId: scopeId("personal", actor.id),
     schedule: { everyMs: 300_000 },
+    title: "Synthetic status",
     action: "check the synthetic status page",
   });
   sandbox.profile.spec = { os: "Other Linux", cpus: 8, workdir: "/new/workspace", homeDir: "/new/home" };
@@ -1196,17 +1220,17 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
   assert.match(seen[0]!.environment!, /Debian 12/);
   assert.match(seen[0]!.environment!, /No active scheduled work/);
   assert.match(seen[1]!.environment!, /Other Linux|8 vCPU/);
-  assert.match(seen[1]!.environment!, /check the synthetic status page/);
-  assert.doesNotMatch(seen[2]!.environment!, /check the synthetic status page/);
+  assert.match(seen[1]!.environment!, /Synthetic status/g);
+  assert.doesNotMatch(seen[2]!.environment!, /Synthetic status/g);
   assert.match(seen[2]!.environment!, /No active scheduled work/);
-  assert.doesNotMatch(seen[3]!.environment!, /Sandbox environment profile/);
+  assert.match(seen[3]!.environment!, /No longer included: Sandbox environment profile/);
   assert.match(seen[3]!.environment!, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[3]!.environment!, /Other Linux|synthetic status|No active scheduled work/);
   assert.deepEqual(seen[1]!.history, originalHistory);
   assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
 });
 
-test("connector revocation still refreshes system-authority permissions", async () => {
+test("connector revocation refreshes the environment without treating historical inventories as authority", async () => {
   let revoked = false;
   const { orchestrator } = buildOrchestrator({
     connectorStatusCache: {
@@ -1222,10 +1246,11 @@ test("connector revocation still refreshes system-authority permissions", async 
   revoked = true;
   const second = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
   const prefix = (reply: string) => reply.split("\n\n<environment>")[0]!;
-  assert.match(prefix(first.reply!), /Connected: Google/);
-  assert.match(prefix(second.reply!), /Needs reconnect: Google.*Do not use these apps/);
-  assert.doesNotMatch(prefix(second.reply!), /Connected: Google/);
-  assert.notEqual(prefix(first.reply!), prefix(second.reply!));
+  assert.match(first.reply!, /Connected: Google/);
+  assert.match(second.reply!, /Needs reconnect: Google.*Do not use these apps/);
+  assert.doesNotMatch(second.reply!, /Connected: Google/);
+  assert.equal(prefix(first.reply!), prefix(second.reply!));
+  assert.match(second.reply!, /sections below replace their earlier versions/);
 });
 
 for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {

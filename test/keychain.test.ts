@@ -1288,14 +1288,16 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     mode: "standing",
     purpose: "use my gh here for repo work",
   });
+  const sys2 = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
+  assert.match(sys2.reply ?? "", /STANDING grant .*use my gh here for repo work/);
+  assert.match(sys2.reply ?? "", new RegExp(`github:${cred.id}`));
+
   mark = fakeSprites.execScripts().length;
   assert.equal((await built.app.turn(channelTurn("!run true", "U_ASKER", audience))).status, "ok");
   assert.ok(!execScriptsMention("export GITHUB_TOKEN=", mark), "standing grants are not ambient");
   assert.ok(!execScriptsMention("ghp_e2e", mark), "an unrequested command never receives the secret");
-
-  const sys2 = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
-  assert.match(sys2.reply ?? "", /STANDING grant .*use my gh here for repo work/);
-  assert.match(sys2.reply ?? "", new RegExp(`github:${cred.id}`));
+  const unchanged = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
+  assert.doesNotMatch(unchanged.reply ?? "", /STANDING grant|## Credentials/);
 
   await selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER");
   mark = fakeSprites.execScripts().length;
