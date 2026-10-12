@@ -2598,11 +2598,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               })
             : undefined;
 
-        const snapshotExcludeDirs = [
-          ...resolution.layers.filter((l) => l.mode === "ro" && l.mountPath).map((l) => l.mountPath),
-          TURN_FILES_DIR,
-        ];
-
         const spine: SpineState = {
           surfaceOutboundCount: 0,
           crossConversationPosts: 0,
@@ -2876,9 +2871,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           attempt: input.attempt ?? 1,
           ...(backgroundBroker ? { backgroundBroker } : {}),
           ...(monitorBroker ? { monitorBroker } : {}),
-          ...(scopeProfile.writablePersistence === "resident_disk"
-            ? { persistWritesToStore: { excludeDirs: snapshotExcludeDirs } }
-            : {}),
           onGapWork: (work) => {
             if (work.phase === "exec") {
               execMs += Math.max(0, work.end - work.start);

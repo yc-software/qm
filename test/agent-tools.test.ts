@@ -3684,10 +3684,10 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   const tools = createAgentTools({ current: tc }, { controlTools: true });
   const files = tools.find((tool) => tool.name === "files")!;
   await call(files, { action: "write", path: "notes", data: "" });
-  await call(files, { action: "share", path: "notes", scope: "org" });
+  await call(files, { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" });
   assert.deepEqual(writes, [
-    ["notes", ""],
-    ["notes", undefined, [{ scope: "org", permission: undefined }]],
+    ["notes", "", undefined, undefined],
+    ["notes", undefined, [{ scope: "org", permission: undefined }], "sb1"],
   ]);
   for (const [name, type, action] of [
     ["apps", "deploy", "share"],

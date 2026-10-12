@@ -184,19 +184,18 @@ test("write+share registers an artifact keyed on the SAME (owner, path) as the g
     acl,
     files: store,
     createdBy: "U1",
-    persistWritesToStore: { excludeDirs: ["inbox"] },
   });
 
-  await ctx.write("redline.md", undefined, [{ scope: grantee, permission: "read" }]);
+  const { artifactId } = await ctx.write("redline.md", undefined, [{ scope: grantee, permission: "read" }]);
 
+  const shared = (await store.get(artifactId!))!;
+  assert.equal(shared.name, "redline.md");
+  assert.equal(shared.path, "redline.md");
   assert.equal((await acl.grantsFor(owner, "redline.md")).length, 1);
-  const shared = await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "redline.md" }]);
-  assert.equal(shared.length, 1);
-  assert.equal(shared[0]!.name, "redline.md");
-  assert.deepEqual(await drain(store, shared[0]!.id), Buffer.from("v1 redline"));
+  assert.deepEqual(await drain(store, shared.id), Buffer.from("v1 redline"));
 });
 
-test("intentional write+share after deletion creates a fresh visible artifact generation", async () => {
+test("each share stores a fresh snapshot row behind one stable grant, even after deletion", async () => {
   const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const acl = createAclStore();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "republish-")));
@@ -214,23 +213,14 @@ test("intentional write+share after deletion creates a fresh visible artifact ge
     acl,
     files: store,
     createdBy: "U1",
-    persistWritesToStore: { excludeDirs: ["inbox"] },
   });
   const share = [{ scope: grantee, permission: "read" as const }];
-  await Promise.all([
-    ctx.write("report.txt", "first generation", share),
-    ctx.write("report.txt", "first generation", share),
-  ]);
-  assert.equal((await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }])).length, 1);
-  const first = (await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }]))[0]!;
-  await ctx.write("report.txt", undefined, share);
-  assert.equal((await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }])).length, 1);
-  await store.delete(first.id);
-  await ctx.write("report.txt", "new generation", share);
-  const current = await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }]);
-  assert.equal(current.length, 1);
-  assert.notEqual(current[0]!.id, first.id);
-  assert.deepEqual(await drain(store, current[0]!.id), Buffer.from("new generation"));
-  assert.equal(await store.get(first.id, { includeDisabled: true }), null);
-  await assert.rejects(store.publish({ ...first, blobKey: first.blobKey! }), /deleted/);
+  const first = await ctx.write("report.txt", "first generation", share);
+  await store.delete(first.artifactId!);
+  const second = await ctx.write("report.txt", "new generation", share);
+  assert.notEqual(second.artifactId, first.artifactId);
+  assert.deepEqual(await drain(store, second.artifactId!), Buffer.from("new generation"));
+  assert.equal(await store.get(first.artifactId!, { includeDisabled: true }), null);
+  assert.equal((await store.get(second.artifactId!))!.path, "report.txt");
+  assert.equal((await acl.grantsFor(owner, "report.txt")).length, 1);
 });

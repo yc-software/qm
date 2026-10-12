@@ -4122,7 +4122,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
       }
-      const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id))].join("\n");
+      const evidence = [
+        p.note ?? "",
+        ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id)),
+      ].join("\n");
       const verdict = ref.governGoal
         ? await ref
             .governGoal({

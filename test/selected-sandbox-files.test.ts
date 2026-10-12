@@ -20,7 +20,13 @@ function plan(id: string, ownerScopeId: string, crossScope = false): SandboxAcce
 function harness(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDeps> } = {}) {
   const disks = new Map<string, Map<string, string>>([
     ["default", new Map([["notes.md", "default copy"]])],
-    ["selected", new Map([["notes.md", "selected copy"], ["app/server.js", "listen()"]])],
+    [
+      "selected",
+      new Map([
+        ["notes.md", "selected copy"],
+        ["app/server.js", "listen()"],
+      ]),
+    ],
   ]);
   const stored: Array<{ scope: string; path: string }> = [];
   const artifacts: Array<Record<string, unknown>> = [];
@@ -46,7 +52,7 @@ function harness(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContext
       defaultProvisions += 1;
       return defaultBox;
     },
-    sandboxResources: {} as never,
+    sandboxResources: { resolve: async () => ({ id: "default" }) } as never,
     accessSandboxResource: async (id) => {
       if (!opts.access || opts.access.resource.id !== id) throw new Error(`sandbox not found: ${id}`);
       return opts.access;
@@ -85,7 +91,6 @@ function harness(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContext
       deploymentGrantees: async () => [],
     } as never,
     createdBy: "U1",
-    persistWritesToStore: { excludeDirs: [] },
     ...opts.extra,
   });
   return { ctx, disks, stored, artifacts, grants, deployed, provisions: () => defaultProvisions };
@@ -107,23 +112,28 @@ test("a selected write persists to that computer's backing store, not the conver
   await h.ctx.write("notes.md", "edited", undefined, "sb1");
   assert.equal(h.disks.get("selected")!.get("notes.md"), "edited");
   assert.equal(h.disks.get("default")!.get("notes.md"), "default copy");
-  assert.deepEqual(h.stored, [{ scope: "sandbox-sb1", path: "notes.md" }]);
+  assert.deepEqual(h.stored, [{ scope: conversation, path: "sandbox-files/sb1/notes.md" }]);
   assert.equal(h.provisions(), 0);
 });
 
-test("sharing from a selected sandbox grants a snapshot artifact owned by the computer's scope", async () => {
+test("repeated shares from a selected sandbox keep one stable grant over fresh snapshots", async () => {
   const h = harness({ access: plan("sb1", conversation) });
-  const result = await h.ctx.write("notes.md", undefined, [{ scope: scopeId("personal", "U2") }], "sb1");
-  assert.deepEqual(h.stored, []);
-  assert.equal(h.artifacts.length, 1);
-  const artifact = h.artifacts[0]!;
-  assert.match(String(artifact.path), /^artifacts\/[0-9a-f]{32}\/notes\.md$/);
-  assert.equal(artifact.ownerScopeId, conversation);
-  assert.equal(result.artifactId, artifact.id);
+  const grantee = [{ scope: scopeId("personal", "U2") }];
+  const first = await h.ctx.write("notes.md", undefined, grantee, "sb1");
+  const second = await h.ctx.write("notes.md", "edited", grantee, "sb1");
+  assert.notEqual(first.artifactId, second.artifactId);
   assert.deepEqual(
-    h.grants.map((g) => [g.ownerScopeId, g.ref, g.granteeScopeId]),
-    [[conversation, artifact.path, scopeId("personal", "U2")]],
+    h.artifacts.map((a) => [a.id, a.ownerScopeId, a.path]),
+    [
+      [first.artifactId, conversation, "sandbox-files/sb1/notes.md"],
+      [second.artifactId, conversation, "sandbox-files/sb1/notes.md"],
+    ],
   );
+  assert.deepEqual(
+    new Set(h.grants.map((g) => `${g.ownerScopeId} ${g.ref}`)),
+    new Set([`${conversation} sandbox-files/sb1/notes.md`]),
+  );
+  assert.ok(h.stored.every((entry) => entry.path === "sandbox-files/sb1/notes.md"));
 });
 
 test("another conversation's computer can be read but not written or shared from", async () => {
@@ -157,4 +167,27 @@ test("metadata-only publish needs no computer but still rejects an unknown sandb
   assert.equal(h.provisions(), 0);
   await assert.rejects(h.ctx.publish({ name: "site", rollbackTo: 1, sandboxId: "missing" }), /sandbox not found/);
   assert.equal(h.deployed.length, 1);
+});
+
+test("naming the default sandbox explicitly persists and shares exactly like omitting it", async () => {
+  const access = plan("sb1", conversation);
+  const h = harness({
+    access,
+    extra: {
+      provision: async () => ({ ...selectedBox, resourceId: "sb1" }),
+      sandboxResources: { get: async () => access.resource, resolve: async () => access.resource } as never,
+    },
+  });
+  const grantee = [{ scope: scopeId("personal", "U2") }];
+  await h.ctx.write("notes.md", "implicit", grantee);
+  await h.ctx.write("notes.md", "explicit", grantee, "sb1");
+  assert.deepEqual(new Set(h.stored.map((e) => `${e.scope} ${e.path}`)), new Set([`${conversation} notes.md`]));
+  assert.deepEqual(
+    h.artifacts.map((a) => [a.ownerScopeId, a.path]),
+    [
+      [conversation, "notes.md"],
+      [conversation, "notes.md"],
+    ],
+  );
+  assert.deepEqual(new Set(h.grants.map((g) => g.ref)), new Set(["notes.md"]));
 });
