@@ -81,6 +81,11 @@ export function childCodexAuthFromDerived(derived: {
 }): JsonObject | null {
   const auth: JsonObject = {
     auth_mode: "chatgpt",
+    // The Codex CLI reads a missing last_refresh as "refresh immediately",
+    // which the child cannot do (its refresh_token is the empty placeholder) —
+    // the turn then dies on "Failed to refresh token". The material here was
+    // centrally validated or refreshed moments ago, so stamp it as fresh.
+    last_refresh: new Date().toISOString(),
     tokens: {
       access_token: derived.accessToken,
       refresh_token: "",
@@ -94,6 +99,11 @@ export function childCodexAuthFromDerived(derived: {
 
 export function childCodexOAuthAuth(auth: JsonObject): JsonObject {
   const sanitized = sanitizedCodexOAuthAuth(auth);
+  // Same CLI behavior as above: a store record that never carried last_refresh
+  // must not reach the child without one.
+  if (typeof sanitized.last_refresh !== "string" || !sanitized.last_refresh) {
+    sanitized.last_refresh = new Date().toISOString();
+  }
   const tokens = asObject(sanitized.tokens);
   if (tokens) {
     const { refresh_token: _refresh, ...rest } = tokens;
