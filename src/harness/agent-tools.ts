@@ -1,3 +1,4 @@
+import { adminOperations } from "../tools/admin.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -3253,6 +3254,53 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     });
   }
 
+  const admin = resourceTool(
+    "admin",
+    Object.fromEntries(
+      Object.entries(
+        ref.current === null || ref.current.admin?.operationsAvailable
+          ? adminOperations
+          : { whoami: adminOperations.whoami },
+      ).map(([action, operation]) => [
+        action,
+        defineTool({
+          name: action,
+          label: action,
+          description: operation.description,
+          parameters: operation.parameters,
+          async execute(callId, params) {
+            await recordCall(callId, { tool: "admin", action });
+            try {
+              const result = await ref.current?.admin?.call({ ...params, action }, ref.abortSignal);
+              if (!result) throw new Error("Admin API is not available on this turn");
+              return recordResult(
+                callId,
+                { tool: "admin", action, status: result.status },
+                {
+                  ...text(result.status >= 400 ? redactSecrets(JSON.stringify(result)) : JSON.stringify(result)),
+                  isError: result.status >= 400,
+                },
+                result.status >= 400,
+              );
+            } catch (error) {
+              return recordResult(
+                callId,
+                { tool: "admin", action, error: redactSecrets(errMessage(error)) },
+                { ...text(redactSecrets(errMessage(error))), isError: true },
+                true,
+              );
+            }
+          },
+        }),
+      ]),
+    ),
+  );
+
+  if (ref.current === null || ref.current.admin?.operationsAvailable)
+    admin.description =
+      "Uses existing admin handlers and audit. Authority is rechecked on every call. Private content requires a live admin in a DM or Open conversation; unattended reads require explicit grants. Admin-role changes, impersonation, identity links, and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Binary/full captured-prompt downloads and raw-secret setters remain on the self-API; do not put secrets in native arguments.\n\n" +
+      admin.description;
+
   const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
   const surface = defineTool({
@@ -4204,6 +4252,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             share: sharingTool("cron"),
           }),
           webhook,
+          admin,
         ]
       : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
@@ -4373,12 +4422,14 @@ function withToolApprovalGate(
     async execute(callId: string, params: unknown) {
       const gate = ref.toolApprovalGate;
       const resourceAction =
-        ["sandbox", "background", "files", "apps", "skills", "goal", "cron"].includes(tool.name) &&
+        ["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"].includes(tool.name) &&
         isObj(params) &&
         typeof params.action === "string"
           ? params.action
           : undefined;
-      const approvalIdentity = ["sandbox", "background", "files", "apps", "skills", "goal", "cron"].includes(tool.name)
+      const approvalIdentity = ["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"].includes(
+        tool.name,
+      )
         ? `${tool.name}:${resourceAction ?? "invalid"}`
         : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;

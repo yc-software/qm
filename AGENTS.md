@@ -54,7 +54,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage:
   give one fast, cheap model (Haiku-class) the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
-  not, keeping any lens it is unsure about. Then dispatch a separate fresh-context
+  not, keeping any lens it is unsure about. Lenses marked _always reviewed_ in the spec
+  skip triage and always get a reviewer. Then dispatch a separate fresh-context
   subagent or independent reviewer for each relevant lens. Only
   Honorable mentions may share one combined reviewer. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for

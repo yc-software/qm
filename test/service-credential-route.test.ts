@@ -1205,15 +1205,10 @@ test("the system prompt advertises an entitled credential (host/methods/paths) s
   });
   const res = await built.app.turn(dm("!sysprompt"));
   const reply = res.reply ?? "";
-  assert.match(reply, /Shared org credentials available to you/);
-  assert.match(reply, /\/v1\/credentials\/broker/);
-  assert.match(reply, /x-agent-capability: \$AGENT_CREDENTIAL_TOKEN/);
+  assert.match(reply, /### Organization/);
   assert.match(reply, /x-firehose.*X firehose.*api\.x\.com.*GET.*\/2\/tweets\/search\//s);
-  assert.match(reply, /clone\/fetch\/push using a shared org credential/);
-  assert.match(reply, /configured org account, not automatically the requesting user's account/);
-  assert.match(reply, /live personal OAuth connector does not switch this route's identity/);
-  assert.match(reply, /Choose among credentials authorized for this conversation/);
-  assert.match(reply, /does not identify the upstream username/);
+  assert.match(reply, /use-shared-credential/);
+  assert.doesNotMatch(reply, /curl -fsS -X POST.*credentials\/broker/);
 });
 
 test("the system prompt does NOT advertise a credential the session isn't entitled to", async () => {
@@ -1232,7 +1227,7 @@ test("the system prompt does NOT advertise a credential the session isn't entitl
     grantedBy: "admin",
   });
   const res = await built.app.turn(dm("!sysprompt"));
-  assert.doesNotMatch(res.reply ?? "", /Shared org credentials available to you/);
+  assert.doesNotMatch(res.reply ?? "", /### Organization/);
 });
 
 test("the published-apps switch defaults on, round-trips, survives a partial update, and rejects non-booleans", async () => {
@@ -1374,7 +1369,7 @@ test("credential prompt blocks are byte-identical across inventory and policy or
   assert.equal(first.status, "ok");
   assert.match(first.reply ?? "", /service_z-service/);
   assert.match(first.reply ?? "", /service_a-service/);
-  assert.match(first.reply ?? "", /Shared org credentials available to you/);
+  assert.match(first.reply ?? "", /### Organization/);
   const list = built.serviceCreds.listServiceCredentials.bind(built.serviceCreds);
   built.serviceCreds.listServiceCredentials = async (...args) =>
     (await list(...args)).reverse().map((record) => ({
