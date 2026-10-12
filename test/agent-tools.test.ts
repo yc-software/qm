@@ -4362,16 +4362,19 @@ test("invalid execution arguments cannot dispatch commands or retarget process o
 
 test("split sandbox tools reject missing, mistyped, blank and unrelated fields without dispatch", async () => {
   let dispatched = 0;
-  const tc = new Proxy(fakeToolContext(), {
-    get(target, key, receiver) {
-      const value = Reflect.get(target, key, receiver);
-      if (typeof value !== "function") return value;
-      return () => {
-        dispatched++;
-        throw new Error("must not dispatch");
-      };
+  const tc = new Proxy(
+    { ...fakeToolContext(), sandboxResources: async () => ({ ok: true }) },
+    {
+      get(target, key, receiver) {
+        const value = Reflect.get(target, key, receiver);
+        if (typeof value !== "function") return value;
+        return () => {
+          dispatched++;
+          throw new Error("must not dispatch");
+        };
+      },
     },
-  });
+  );
   const tools = createAgentTools({ current: tc }, { sandboxResources: true });
   const inputs: Record<string, object[]> = {
     sandbox: [
