@@ -8,7 +8,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp, serverDeps } from "../src/wiring.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -95,7 +95,7 @@ test("spend export: the token authorizes the export and nothing else", async () 
   }
 });
 
-test("spend export: rows keep the ledger grain with canonical people, origin buckets and the org scope", async () => {
+test("spend export: rows keep the ledger grain with canonical people, origin buckets and the org scope, in code-point order", async () => {
   const s = fixture();
   try {
     const sessions = s.sessions!;
@@ -104,6 +104,7 @@ test("spend export: rows keep the ledger grain with canonical people, origin buc
     await bill(sessions, "cron:nightly:fire:1", "dm", scopeId("personal", "alice"), { costUsd: 0.5 }, "gpt-6-astra");
     await bill(sessions, "webhook:w1", "channel", scopeId("channel", "C1"), { costUsd: 4 }, "claude-opus-5");
     await bill(sessions, "ch:C1:t1", "channel", scopeId("channel", "C1"), { costUsd: 3 }, "claude-opus-5");
+    await bill(sessions, "dm:U1:t1", "dm", scopeId("personal", "U1"), { costUsd: 1 }, "claude-opus-5");
     const res = await s.get(`/v1/spend/export?${window}`);
     assert.equal(res.status, 200);
     const body: any = await res.json();
@@ -114,18 +115,19 @@ test("spend export: rows keep the ledger grain with canonical people, origin buc
       [
         [iso(today), "channel:C1", "channel", null, "live", "claude-opus-5", 1, 3],
         [iso(today), "channel:C1", "channel", null, "background", "claude-opus-5", 1, 4],
+        [iso(today), "personal:U1", "person", "U1", "live", "claude-opus-5", 1, 1],
         [iso(today), "personal:alice", "person", "alice", "live", "claude-opus-5", 2, 3],
         [iso(today), "personal:alice", "person", "alice", "cron", "gpt-6-astra", 1, 0.5],
       ],
     );
     assert.deepEqual(
-      [body.rows[2].input, body.rows[2].output, body.rows[2].cacheRead, body.rows[2].cacheWrite],
+      [body.rows[3].input, body.rows[3].output, body.rows[3].cacheRead, body.rows[3].cacheWrite],
       [200, 40, 800, 80],
     );
     const audited = (await s.built.auditLog.events()).filter((e) => e.action === "spend.export");
     assert.equal(audited.length, 1);
     assert.equal(audited[0]!.principalId, "spend-export");
-    assert.equal(audited[0]!.detail, `${iso(today - DAY)}..${iso(today + DAY)} rows=4`);
+    assert.equal(audited[0]!.detail, `${iso(today - DAY)}..${iso(today + DAY)} rows=5`);
   } finally {
     await s.close();
   }
@@ -173,4 +175,10 @@ test("spend export: an unavailable spend store is an error, not an empty export"
   } finally {
     await s.close();
   }
+});
+
+test("spend export: core receives the configured token", () => {
+  const config = testConfig({ spendExportToken: exportToken });
+  assert.equal(serverDeps(config, buildApp(config)).spendExportToken, exportToken);
+  assert.equal(serverDeps(testConfig(), buildApp(testConfig())).spendExportToken, undefined);
 });

@@ -22,7 +22,7 @@ import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strat
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
-import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
+import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import {
   parseSecurityPosture,
@@ -1181,10 +1181,13 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  if (env.SPEND_EXPORT_TOKEN) {
-    const reused = CORE_SECRET_SPECS.some((spec) => env[spec.name] === env.SPEND_EXPORT_TOKEN);
-    if (!isStrongSigningSecret(env.SPEND_EXPORT_TOKEN) || reused)
-      throw new Error("SPEND_EXPORT_TOKEN must be at least 32 characters and differ from every catalogued core secret");
+  const token = env.SPEND_EXPORT_TOKEN;
+  if (token) {
+    const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
+    if (!isStrongSigningSecret(token) || token !== token.trim() || reused)
+      throw new Error(
+        "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
+      );
   }
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
     if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
@@ -1193,10 +1196,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (
       !isStrongSigningSecret(env.CORE_SIGNING_SECRET) ||
       !isStrongSigningSecret(env.DEPLOYMENT_CONTROL_SECRET) ||
+      env.DEPLOYMENT_CONTROL_SECRET !== env.DEPLOYMENT_CONTROL_SECRET?.trim() ||
       env.DEPLOYMENT_CONTROL_SECRET === env.CORE_SIGNING_SECRET
     )
       throw new Error(
-        "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters and CORE_SIGNING_SECRET",
+        "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters without surrounding whitespace, and CORE_SIGNING_SECRET",
       );
   }
   const swarmDefaults = resolveSwarmSettings(

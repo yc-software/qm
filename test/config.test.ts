@@ -10,7 +10,6 @@ import {
   numEnv,
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
-import { CORE_SECRET_SPECS } from "../src/deployment/secret-schema.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -948,9 +947,13 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
+  assert.throws(
+    () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: `${env.DEPLOYMENT_CONTROL_SECRET}\n` }),
+    /DEPLOYMENT_CONTROL_SECRET/,
+  );
 });
 
-test("the spend export token is optional, strong and never shared with another core secret", () => {
+test("the spend export token is optional, strong, trimmed and never shared with another environment value", () => {
   const env = {
     CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
     CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
@@ -962,7 +965,13 @@ test("the spend export token is optional, strong and never shared with another c
   assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: "" }).spendExportToken, undefined);
   assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: "short" }), /SPEND_EXPORT_TOKEN/);
   assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: " ".repeat(40) }), /SPEND_EXPORT_TOKEN/);
-  for (const { name } of CORE_SECRET_SPECS) {
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: `${env.SPEND_EXPORT_TOKEN}\n` }), /SPEND_EXPORT_TOKEN/);
+  for (const name of [
+    "CORE_SIGNING_SECRET",
+    "QM_SLACK_SERVICE_TOKEN",
+    "DEPLOY_APPS_SESSION_SECRET",
+    "SLACK_SIGNING_SECRET",
+  ]) {
     assert.throws(
       () => loadConfig({ ...env, [name]: env.SPEND_EXPORT_TOKEN }),
       /SPEND_EXPORT_TOKEN/,

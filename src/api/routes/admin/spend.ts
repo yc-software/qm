@@ -209,6 +209,11 @@ function entityOf(acc: EntityAccumulator, label: (scopeId: ScopeId) => string): 
   };
 }
 
+function byCodePoint(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 function byCostThenId(a: SpendEntity, b: SpendEntity): number {
   if (a.costUsd !== b.costUsd) return b.costUsd - a.costUsd;
   if (a.scopeId === b.scopeId) return 0;
@@ -339,10 +344,10 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
     .map((out) => ({ ...out, displayName: displayNameOf(sources.get(out.scopeId) ?? [], label) }))
     .sort(
       (a, b) =>
-        a.day.localeCompare(b.day) ||
-        a.scopeId.localeCompare(b.scopeId) ||
+        byCodePoint(a.day, b.day) ||
+        byCodePoint(a.scopeId, b.scopeId) ||
         ORIGIN_BUCKETS.indexOf(a.origin) - ORIGIN_BUCKETS.indexOf(b.origin) ||
-        (a.model ?? "").localeCompare(b.model ?? ""),
+        byCodePoint(a.model ?? "", b.model ?? ""),
     );
 }
 
