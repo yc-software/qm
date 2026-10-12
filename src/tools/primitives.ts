@@ -1055,7 +1055,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async publish(input: PublishInput): Promise<PublishResult> {
       if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
       if (input.share !== undefined || input.public !== undefined)
-        throw new Error("publish is always private to the owner; use apps action share to grant access");
+        throw new Error("publish does not accept sharing options; use apps action share to change access");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
       const createdInScope: ScopeId = writableScopeId;
       let effectiveEntrypoint = input.entrypoint;
