@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createOrchestrator, type OrchestratorInput, type OrchestratorDeps } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore, type OrgBranding } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -73,6 +73,8 @@ const skills = {
 function buildOrchestrator(
   opts: {
     orgSoul?: string;
+    sessionSyscalls?: OrchestratorDeps["sessionSyscalls"];
+    featureFlags?: OrchestratorDeps["featureFlags"];
     scopeSoulFor?: { conversation: Conversation; soul: string };
     branding?: OrgBranding;
     brandingDefault?: OrgBranding;
@@ -102,6 +104,8 @@ function buildOrchestrator(
 
   return createOrchestrator({
     identity: createIdentityService(),
+    sessionSyscalls: opts.sessionSyscalls,
+    featureFlags: opts.featureFlags,
     resolution,
     sessions: createMemorySessionStore(),
     workspace,
@@ -279,8 +283,37 @@ test("shared-core platform guidance reaches both the DM and the spine prompt", a
     assert.match(prompt, /## Auth/);
     assert.match(prompt, /## Crons/);
     assert.match(prompt, /use `history` for this conversation/);
-    assert.match(prompt, /`sessions` search for other accessible conversations/);
+    assert.doesNotMatch(prompt, /`sessions` search for other accessible conversations/);
     assert.doesNotMatch(prompt, /## Scheduling & self-configuration/);
+  }
+});
+
+test("session search guidance follows the callable surface and feature gate", async () => {
+  for (const surface of ["web", "slack", "monitor"] as const) {
+    for (const enabled of [false, true]) {
+      for (const destination of [
+        undefined,
+        { type: "principal" as const, target: "U1", audienceScopeId: scopeId("personal", "U1"), onBehalfOf: "U1" },
+      ]) {
+        const orchestrator = buildOrchestrator({
+          sessionSyscalls: { forTurn: () => ({}) } as unknown as OrchestratorDeps["sessionSyscalls"],
+          featureFlags: { enabled: async () => enabled } as unknown as OrchestratorDeps["featureFlags"],
+        });
+        const prompt = await sysprompt(
+          orchestrator,
+          slackDm("", {
+            surface,
+            ...(destination
+              ? { origin: { kind: "automation", source: "cron", destination } as OrchestratorInput["origin"] }
+              : {}),
+          }),
+        );
+        assert.equal(
+          prompt.includes("`sessions` search for other accessible conversations"),
+          surface === "web" && enabled && !destination,
+        );
+      }
+    }
   }
 });
 

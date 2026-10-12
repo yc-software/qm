@@ -1153,6 +1153,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       }
+      const surfaceName =
+        input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
+      const sessionSyscalls =
+        !external &&
+        deps.sessionSyscalls &&
+        (delegationEnabled ||
+          (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true)
+          ? deps.sessionSyscalls
+          : undefined;
       const delegateWork = requiresDelegation(input, delegationEnabled);
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)
@@ -1161,7 +1170,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (modeName === "mode-conversation" && input.proactiveOpener) {
         modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
       }
-      const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, botHandle, orgName, web: isWeb, slack: isSlack });
+      const sharedCore = applyPromptVars(SHARED_CORE_MD, {
+        botName,
+        botHandle,
+        orgName,
+        web: isWeb,
+        slack: isSlack,
+        sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
+      });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=
@@ -2594,8 +2610,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         const turnKey = input.runId ?? randomUUID();
         const postKeys = turnPostKeys(turnKey);
-        const surfaceName =
-          input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
         let spineFirstBlock = "";
         let spineFirstBlockOpen = true;
         let spineAckText: string | undefined;
@@ -2790,12 +2804,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanTurn && !external ? { humanTurn: true } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
-          ...(!external &&
-          deps.sessionSyscalls &&
-          (delegationEnabled ||
-            (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true)
+          ...(sessionSyscalls
             ? {
-                sessionSyscalls: deps.sessionSyscalls.forTurn({
+                sessionSyscalls: sessionSyscalls.forTurn({
                   session,
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
