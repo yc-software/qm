@@ -5,10 +5,11 @@ description: Act for an org admin — the admin API (scope directory, per-scope 
 
 # admin — act for an org admin, from chat
 
-A connector skill: no new tool. When the chatting user is an org admin (your system
-prompt says so — "Acting for an org admin"), the `/v1/admin/*` endpoints accept your
-token. You are acting **as them**: authorization is re-checked against the live grant
-store on every call, and every call is audited under their name. Two standing rules:
+Use the native `admin` tool for the operations below. Its fixed actions call the same
+`/v1/admin/*` handlers and accept the same values; configuration and provider value
+objects are validated by those existing handlers. Binary and full captured-prompt downloads, raw-secret setters, connector configuration,
+and service-credential configuration still use the self-API, never native tool arguments. You are acting **as them**: authorization is re-checked against the live grant
+store on every call; existing admin audit events remain attributed to them. Two standing rules:
 **confirm before any mutation** (state exactly what you'll change and where), and report
 afterwards exactly what changed. Reads are fine to just do.
 
@@ -150,7 +151,7 @@ on the memory self-API is the lighter path; see the memory skill.)
 ## Inspect activity & content
 
 ```bash
-GET /v1/admin/sessions?scope=&limit=&offset=  → conversation listing (turns, last activity)
+GET /v1/admin/sessions?scope=&limit=&cursor=  → conversation listing (turns, last activity); pass nextCursor for older rows
 GET /v1/admin/sessions/<id>?scope=            → a transcript
 GET /v1/admin/sessions/<id>/llm?scope=        → captured provider requests — what the model actually saw (debugging "why did it do X")
 GET /v1/admin/runs?scope=                     → queued/in-flight/recent runs

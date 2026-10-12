@@ -283,6 +283,9 @@ test("connector token keys are Postgres-safe (no NUL byte) — round-trip throug
     seenKeys.push(k);
   };
   const creds: DurableMap<KeychainCredential> = {
+    async mutateMany() {
+      throw new Error("unused in connector token test");
+    },
     async all() {
       return [...store.values()];
     },
@@ -424,6 +427,7 @@ test("oauthRevoke: a capability token disconnects its own connector, but not a n
   const call = (capability: unknown, body: unknown) => {
     const out: { status?: number; body?: any } = {};
     const res = {
+      getHeader() {},
       writeHead(s: number) {
         out.status = s;
       },

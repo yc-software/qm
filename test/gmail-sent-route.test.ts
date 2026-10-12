@@ -11,6 +11,7 @@ test("sent mail requires portal identity and ignores a forged principal query", 
     url: new URL("http://localhost/v1/connectors/gmail/sent?principalId=someone-else"),
     res: {
       setHeader() {},
+      getHeader() {},
       writeHead(code: number) {
         status = code;
       },
@@ -56,6 +57,7 @@ test("sent mail resolves the connected Google account slot", async () => {
     params: {},
     res: {
       setHeader() {},
+      getHeader() {},
       writeHead(code: number) {
         status = code;
       },

@@ -12,7 +12,7 @@ import type { ShipGrantStore } from "../../loops/ship-grant-store.ts";
 import type { LoopFireService } from "../../loops/loop-fire.ts";
 import { collectVitals } from "../../loops/governor.ts";
 import { buildShipGrant } from "../../loops/ship-gate.ts";
-import { consolidates, sortLedgerItems } from "../../loops/ledger-view.ts";
+import { agentSourcePayload, consolidates, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { settleGroup } from "../../loops/triage.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
@@ -354,7 +354,22 @@ async function getLoop(ctx: ApiCtx): Promise<void> {
   ]);
   return sendJson(ctx.res, 200, {
     loop,
-    items: sortLedgerItems(items, loop),
+    items: sortLedgerItems(items, loop).map((item) =>
+      ctx.capability
+        ? {
+            ...item,
+            ...(item.sourcePayload ? { sourcePayload: agentSourcePayload(item.sourcePayload, item.source) } : {}),
+            ...(item.inboxPreview
+              ? {
+                  inboxPreview: agentSourcePayload(
+                    item.inboxPreview,
+                    item.source ?? String(item.sourcePayload?.source ?? ""),
+                  ),
+                }
+              : {}),
+          }
+        : item,
+    ),
     outputs,
     grants,
     vitals,

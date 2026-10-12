@@ -41,6 +41,7 @@ function fixture() {
       calls.push({ url: String(input), init });
       const result = replies.shift();
       if (result instanceof Error) throw result;
+      if (result instanceof Response) return result;
       return Response.json(result);
     }) as typeof fetch,
   };
@@ -50,6 +51,7 @@ function fixture() {
     const url = new URL(path, "http://localhost");
     const res = {
       setHeader() {},
+      getHeader() {},
       writeHead(code: number) {
         status = code;
       },
@@ -812,4 +814,28 @@ test("linked identities retain provider accounts and Slack status until unlinked
   } finally {
     installPrincipalLinks(null);
   }
+});
+
+test("authorization failures keep a redacted upstream cause for operators", async (t) => {
+  const f = fixture();
+  await f.own();
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+  f.replies.push(
+    new Response(JSON.stringify({ error: "toolkit not enabled", echoed: "private-key", api_key: "sk-other" }), {
+      status: 400,
+      headers: { "x-request-id": "req_123" },
+    }),
+  );
+  const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail" });
+  assert.equal(r.status, 502);
+  assert.equal(r.data.error, "composio_authorization_failed");
+  assert.doesNotMatch(r.text, /toolkit not enabled|private-key|req_123/);
+  const report = logged.find((line) => line.includes("composio: authorize"));
+  assert.ok(report, "authorization failure is reported");
+  assert.match(report, /toolkit=gmail/);
+  assert.match(report, /http 400/);
+  assert.match(report, /toolkit not enabled/);
+  assert.match(report, /req_123/);
+  assert.doesNotMatch(report, /private-key|sk-other/);
 });

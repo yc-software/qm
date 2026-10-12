@@ -21,6 +21,7 @@ function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
   return {
     res: {
+      getHeader() {},
       writeHead(status: number) {
         out.status = status;
         return this;
@@ -859,6 +860,7 @@ test("inbox list refreshes open Gmail items before returning counts, but not ano
   // Exercise the route with the real refresher via the same dependency used by wiring.
   const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
   w.sourceRefresh = createInboxSourceRefresh({
+    featureFlags: { enabled: async () => true },
     items: w.loops.items,
     tokens: { connectorAccessToken: async () => "synthetic" },
     fetchImpl: async (url) => {
@@ -1161,4 +1163,39 @@ test("only a person overrides triage, and archiving a whole group resolves its m
   const settled = (await w.loops.items.get(member.id))!;
   assert.equal(settled.actionKind, "consolidated");
   assert.deepEqual(settled.sourcePayload, member.sourcePayload);
+});
+
+test("an owner cannot trigger Slack avatar enrichment through item detail when Inbox is disabled", async () => {
+  const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  await w.loops.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "D1",
+      source: "slack",
+      sourceAt: 1000,
+      sourcePayload: { slack: { channelId: "D1", ts: "1.0", userId: "U1" } },
+    },
+  ]);
+  const [item] = await w.loops.items.byLoop(loop.id);
+  const before = structuredClone(item);
+  const enabled = async (flag: string, scope: string) => {
+    assert.equal(flag, "inbox_loops");
+    assert.equal(scope, "personal:josh");
+    return false;
+  };
+  w.sourceRefresh = createInboxSourceRefresh({
+    items: w.loops.items,
+    featureFlags: { enabled },
+    tokens: { connectorAccessToken: async () => assert.fail("disabled Inbox must not read credentials") },
+    fetchImpl: async () => assert.fail("disabled Inbox must not call Slack"),
+  });
+  const result = await call(w, {
+    method: "GET",
+    path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1`,
+    flagEnabled: enabled,
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(await w.loops.items.get(item!.id), before);
 });

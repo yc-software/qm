@@ -276,6 +276,7 @@ test("SOUL: the HTTP route reports durable storage failures as 500", async () =>
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number; body?: { error?: string } } = {};
   const res = {
+    getHeader() {},
     writeHead(status: number) {
       out.status = status;
     },
@@ -308,6 +309,7 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number } = {};
   const res = {
+    getHeader() {},
     writeHead(status: number) {
       out.status = status;
     },

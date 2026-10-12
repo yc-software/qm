@@ -73,11 +73,8 @@ test("provider default is pinned before retries and child provisioning, with no 
   const { createSwarmService } = await import("../src/swarms/swarm-service.ts");
   const f = await swarmFixture();
   const options: Parameters<typeof createSandboxResources>[0] = {
-    enabled: true,
-    rollout: createMemoryMap(),
     records: f.records,
     defaults: createMemoryMap(),
-    routes: createMemoryMap(),
     backends: { aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
     defaultBackend: "aws",
     lock: f.serviceOptions.lock,
@@ -104,11 +101,8 @@ test("selected scope computer determines new worker provider, but its private di
   const { createSwarmService } = await import("../src/swarms/swarm-service.ts");
   const f = await swarmFixture();
   const sandboxes = createSandboxResources({
-    enabled: true,
-    rollout: createMemoryMap(),
     records: f.records,
     defaults: createMemoryMap(),
-    routes: createMemoryMap(),
     backends: { modal: f.backend, aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
     defaultBackend: "modal",
     lock: f.serviceOptions.lock,

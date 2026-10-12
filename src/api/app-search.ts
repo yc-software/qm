@@ -126,18 +126,28 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
     },
   };
 }
-export function createSearchMethods(deps: AppDeps, app: App, helpers: AppHelpers): Pick<App, "search"> {
+export function createSearchMethods(
+  deps: AppDeps,
+  app: App,
+  helpers: AppHelpers,
+): Pick<App, "search" | "searchConversations"> {
   const slack = slackBackend(deps, app);
+  const options = {
+    onBackendError: (backend: string, error: unknown) =>
+      console.error(
+        "%s",
+        `[search] backend ${backend} failed:`,
+        error instanceof Error ? error.message : String(error),
+      ),
+  };
+  const conversationsBackend = conversationBackend(app);
   const core = createCoreSearch(
-    [conversationBackend(app), ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
-    {
-      onBackendError: (backend, error) =>
-        console.error(
-          "%s",
-          `[search] backend ${backend} failed:`,
-          error instanceof Error ? error.message : String(error),
-        ),
-    },
+    [conversationsBackend, ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
+    options,
   );
-  return { search: (query, principals, limit) => core.search({ query, principals, limit }) };
+  const conversations = createCoreSearch([conversationsBackend], options);
+  return {
+    search: (query, principals, limit) => core.search({ query, principals, limit }),
+    searchConversations: (query, principals, limit) => conversations.search({ query, principals, limit }),
+  };
 }

@@ -10,6 +10,7 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
+import { materializeGrant } from "./support/materialize-grant.ts";
 
 function keychain(now = Date.now) {
   return createKeychain({
@@ -118,13 +119,13 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
     assert.equal(f.grant.audienceScopeId, scope);
     assert.equal(f.grant.ownerId, "U_CREDENTIAL_OWNER");
     await assert.rejects(
-      f.k.materialize(f.grant.id, "channel:C_OTHER", request.actor.externalId),
+      materializeGrant(f.k, f.grant.id, "channel:C_OTHER", request.actor.externalId),
       (error: KeychainError) => error.status === 403,
     );
-    const materialized = await f.k.materialize(f.grant.id, scope, request.actor.externalId);
+    const materialized = await materializeGrant(f.k, f.grant.id, scope, request.actor.externalId);
     assert.ok(materialized.kind === "env" && materialized.env[0]!.value === "dummy-only-secret");
     await assert.rejects(
-      f.k.materialize(f.grant.id, scope, request.actor.externalId),
+      materializeGrant(f.k, f.grant.id, scope, request.actor.externalId),
       (error: KeychainError) => error.status === 410,
     );
     const pending = await f.deliveries.pending("principal");

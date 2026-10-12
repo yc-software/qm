@@ -28,7 +28,7 @@ import { collectVitals, evaluateGovernor, healthWorsened } from "./governor.ts";
 import { unresolvedOutput } from "./output-store.ts";
 import { decideShip, outputCandidate } from "./ship-gate.ts";
 import { evaluateSuccess, type SuccessCheckResult, type SuccessVerdict } from "./success-evaluation.ts";
-import { consolidates, ledgerState, prioritizes } from "./ledger-view.ts";
+import { agentSourcePayload, consolidates, ledgerState, prioritizes } from "./ledger-view.ts";
 import {
   DEFAULT_CONSOLIDATE_INSTRUCTIONS,
   DEFAULT_PRIORITIZE_INSTRUCTIONS,
@@ -111,7 +111,7 @@ function itemContextBlock(item: LoopItem): string {
     dedupeKey: item.sourceKey,
     state: ledgerState(item),
     ...(item.source ? { source: item.source } : {}),
-    sourcePayload: item.sourcePayload ?? {},
+    sourcePayload: agentSourcePayload(item.sourcePayload ?? {}, item.source),
     ...(item.proposal ? { proposal: item.proposal.data } : {}),
     thread: (item.thread ?? []).slice(-ITEM_THREAD_CONTEXT).map((message) => ({
       role: message.role,
@@ -395,7 +395,9 @@ function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: Loop
     sourceKey: promptText(item.sourceKey),
     loopId: loop.id,
     itemId: item.id,
-    ...(item.sourcePayload ? { sourcePayload: JSON.parse(promptText(JSON.stringify(item.sourcePayload))) } : {}),
+    ...(item.sourcePayload
+      ? { sourcePayload: JSON.parse(promptText(JSON.stringify(agentSourcePayload(item.sourcePayload, item.source)))) }
+      : {}),
     ...(item.sourceSummary ? { sourceSummary: promptText(item.sourceSummary) } : {}),
     ...(guidance ? { reviewerNote: promptText(guidance) } : {}),
     ...(similar.length

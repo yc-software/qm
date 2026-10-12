@@ -4,7 +4,7 @@ import { toSlackMrkdwn } from "./mrkdwn.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { ExternalSlackAccess } from "./external-access.ts";
-import { companySlackActor } from "./external-access.ts";
+import { companySlackActor, externalSlackNamespace } from "./external-access.ts";
 import { dmThreadRef } from "./message-gating.ts";
 import { encodeDeliveryTarget, parseDeliveryTarget, postWithVerify, slackReplyArgs } from "./delivery.ts";
 
@@ -48,7 +48,12 @@ export async function continueInPrivate(
   );
   const result = await core.submitTurn({
     actor,
-    slackSource: { accountId: origin.accountId, teamId: origin.teamId, userId: origin.userId },
+    slackSource: {
+      accountId: origin.accountId,
+      teamId: origin.teamId,
+      userId: origin.userId,
+      externalPolicyNamespace: externalSlackNamespace(origin.teamId, policy),
+    },
     conversation: {
       kind: "dm",
       threadRef: `slack-account:${origin.teamId}:${dmThreadRef(dm)}`,

@@ -28,6 +28,8 @@ import {
 } from "../src/model/model-verification.ts";
 import { setModelOverlays, resolveModel, modelUnavailableReason } from "../src/model/pi-models.ts";
 import type { StoredModelOverlay } from "../src/model/model-overlay-store.ts";
+import { ProviderTurnError, type ProviderErrorCode } from "../src/core/turn-error.ts";
+import { GatewayModelUnavailableError } from "../src/model/provider-endpoints.ts";
 
 const verified: ModelVerifier = async () => ({ fingerprint: "test-context", probe: async () => {} });
 afterEach(() => setModelOverlays([]));
@@ -53,7 +55,13 @@ test("failed probes never publish new models or replace previously verified defi
   const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
     fingerprint: "context",
     probe: async () => {
-      if (fail) throw Error("403 secret-credential-value");
+      if (fail)
+        throw new ProviderTurnError("secret-credential-value", {
+          code: "auth",
+          status: 403,
+          retryable: false,
+          raw: "",
+        });
     },
   }));
   await store.upsert(spec, "admin");
@@ -124,20 +132,26 @@ test("a changed serving context during a probe is not certified", async () => {
   assert.deepEqual(await store.statuses(), []);
 });
 
-test("provider errors are actionable without exposing raw provider text", () => {
-  for (const [raw, code] of [
-    ["401 secret", "access_denied"],
-    ["403 secret", "access_denied"],
-    ["404 secret", "model_unavailable"],
-    ["429 secret", "quota_or_rate_limit"],
-    ["400 unsupported secret", "unsupported_configuration"],
-    ["timeout secret", "timeout"],
-    ["500 secret", "provider_failure"],
-  ]) {
-    const error = verificationFailure(new Error(raw));
-    assert.equal(error.code, code);
-    assert.doesNotMatch(error.message, /secret/);
-    assert.ok(error instanceof ModelVerificationError);
+test("probe failures map from structured codes and error names, never provider text", () => {
+  const typed = (code: ProviderErrorCode, status?: number) =>
+    new ProviderTurnError("secret", { code, status, retryable: false, raw: "secret 401 429 timeout" });
+  for (const [error, code] of [
+    [typed("auth", 401), "access_denied"],
+    [typed("not_found", 404), "model_unavailable"],
+    [typed("rate_limit", 429), "quota_or_rate_limit"],
+    [typed("model_budget", 429), "quota_or_rate_limit"],
+    [typed("bad_request", 400), "unsupported_configuration"],
+    [typed("transient", 503), "provider_failure"],
+    [typed("unknown"), "provider_failure"],
+    [new DOMException("secret", "TimeoutError"), "timeout"],
+    [new DOMException("secret", "AbortError"), "timeout"],
+    [new GatewayModelUnavailableError("secret"), "model_unavailable"],
+    [new Error("401 timeout 429 secret"), "provider_failure"],
+  ] as const) {
+    const failure = verificationFailure(error);
+    assert.equal(failure.code, code);
+    assert.doesNotMatch(failure.message, /secret/);
+    assert.ok(failure instanceof ModelVerificationError);
   }
 });
 
@@ -314,7 +328,7 @@ test("a failed recheck of the saved definition removes its prior certification",
   const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
     fingerprint: "context",
     probe: async () => {
-      if (fail) throw Error("403");
+      if (fail) throw new ProviderTurnError("403", { code: "auth", status: 403, retryable: false, raw: "" });
     },
   }));
   await store.upsert(spec, "admin");

@@ -62,7 +62,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   };
 }
 
-test("previous-audience child title is not disclosed through session read", async () => {
+test("participant can read child history and title across memory checkpoints", async () => {
   const r = await rig();
   const child = await r.sessions.getOrCreateByThread("subagent:synthetic", "dm", scope);
   await r.sessions.setParentSession(child.id, r.room.id);
@@ -86,9 +86,13 @@ test("previous-audience child title is not disclosed through session read", asyn
   await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
   await r.sessions.releaseLease(lease);
   const result = await r.syscallsFor(r.room).read({ target: child.id });
-  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SENTINEL/);
+  assert.ok(result.ok && result.mode === "tape");
+  assert.equal(result.title, "PRIVATE_SENTINEL");
+  assert.match(result.rendered, /PRIVATE_SENTINEL/);
   const listed = await r.syscallsFor(r.room).read({});
-  assert.doesNotMatch(JSON.stringify(listed), /PRIVATE_SENTINEL/);
+  assert.ok(listed.ok && listed.mode === "children");
+  assert.equal(listed.children[0]?.title, "PRIVATE_SENTINEL");
+  assert.equal(listed.children[0]?.lastSaid, "PRIVATE_SENTINEL");
 });
 
 test("reset source title does not enter fresh child task", async () => {
@@ -118,7 +122,7 @@ test("reset source title does not enter fresh child task", async () => {
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   assert.doesNotMatch(run.request.text, /PRIVATE_SENTINEL/);
 });
-test("previous-audience child title is not disclosed through session write", async () => {
+test("participant sees child title in session write response", async () => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "task", name: "PRIVATE_SENTINEL" });
   assert.ok(opened.ok);
@@ -144,5 +148,5 @@ test("previous-audience child title is not disclosed through session write", asy
   await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
   await r.sessions.releaseLease(lease);
   const result = await r.syscallsFor(r.room).write({ target: child.id, text: "generic message" });
-  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SENTINEL/);
+  assert.match(JSON.stringify(result), /PRIVATE_SENTINEL/);
 });

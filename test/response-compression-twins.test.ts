@@ -15,7 +15,7 @@ const core = readFileSync(fileURLToPath(new URL("../src/api/http.ts", import.met
 const chassis = readFileSync(fileURLToPath(new URL("../plugins/chassis/src/http.ts", import.meta.url)), "utf8");
 
 test("the plugin chassis carries a byte-identical copy of the response compressor", () => {
-  for (const name of ["gzipAccepted", "sendBuffered"]) {
+  for (const name of ["gzipAccepted", "withVary", "sendBuffered"]) {
     assert.equal(
       extract(chassis, name),
       extract(core, name),

@@ -1,14 +1,13 @@
 ---
 name: cloud-cli
-description: Sign the agent computer in to a cloud provider's CLI (AWS, Google Cloud, Azure, or another) with a device-code flow, then run that CLI as the requesting user. Covers checking the CLI is installed, the login that survives the browser round-trip, and the boundaries on cloud writes.
+description: Sign a cloud provider's CLI in (AWS, Google Cloud, Azure, or another) with a device-code flow, then run that CLI as the requesting user. Covers checking the CLI is installed, the login that survives the browser round-trip, and the boundaries on cloud writes.
 ---
 
 # Cloud provider CLIs
 
-A resident-machine-auth connector. It adds NO new tool: a provider's CLI is a command on
-the agent computer and you drive it with the `execute` primitive. Tokens are cached on the
-machine across turns. Logins never enter workspace backups; the platform keeps an encrypted
-copy and restores it if the machine is replaced — if the token is still gone, log in again.
+It adds NO new tool: a provider's CLI is a command on the agent computer and you drive it
+with the `execute` primitive. Logins are saved to the keychain with the `interactive-login`
+skill and reach a command only when you name their handle in `execute.credentials`.
 
 ## First: is the CLI even here?
 
@@ -57,16 +56,10 @@ For AWS specifically, `--use-device-code` is mandatory rather than merely prefer
 (≥ 2.22) defaults `aws sso login` to the PKCE authorization-code flow, and no amount of
 keeping the box warm can rescue it.
 
-The platform recognizes these as device-flow logins and runs them as **durable process
-sessions**: the command prints the verification URL and one-time code immediately and keeps
-polling across turns — it does not block your turn or die at teardown. Give the user the URL
-and the code, tell them to approve and then say "done". See
-the `interactive-login` skill for how to drive that from the background tool.
-
-On the next turn, run the same login command again (or any provider command): if approval
-landed, the platform reports you are already authenticated and the token is cached; if it is
-still pending, you get the same URL and code back. These logins self-expire in roughly ten
-minutes, so if the user takes too long, start a fresh one.
+Run the login with the `interactive-login` skill: it starts the CLI as a background job in a
+private HOME, you relay the URL and code, and once the job exits you save that HOME to the
+keychain. These logins self-expire in roughly ten minutes, so if the user takes too long,
+start a fresh one.
 
 ## Boundaries
 

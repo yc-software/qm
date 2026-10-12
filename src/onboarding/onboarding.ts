@@ -1,9 +1,5 @@
-import type { ScopeId, TurnRequest } from "../types.ts";
-import type { SkillResolution } from "../skills/skill-store.ts";
-import type { MemoryService } from "../memory/memory-service.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
+import type { TurnRequest } from "../types.ts";
 
-const ONBOARDING_SKILL_NAME = "onboarding";
 const ONBOARDING_VERSION = "v2";
 
 export const PROACTIVE_OPENER_PROMPT =
@@ -53,48 +49,6 @@ export function setOnboardingStatus(
       ? `- Onboarding: pending ${version} since ${today}.`
       : `- Onboarding: ${status} ${version} on ${today}.`;
   return (base ? `${base}\n${line}` : line) + "\n";
-}
-
-export function onboardingSkillVisible(skills: SkillResolution[]): boolean {
-  return skills.some((r) => r.skill?.manifest.name === ONBOARDING_SKILL_NAME);
-}
-
-export async function resolveOnboardingStatus(
-  memory: MemoryService,
-  sessions: SessionStore,
-  scope: ScopeId,
-): Promise<OnboardingStatus> {
-  const status = detectOnboardingStatus(await memory.read(scope));
-  if (status === "completed" || status === "dismissed") return status;
-  if (!scope.startsWith("personal:") || (await sessions.countPersonalConversations(scope, 3)) < 3) return status;
-  if (memory.readHead && memory.replaceIfRevision) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const head = await memory.readHead(scope);
-      const current = detectOnboardingStatus(head.content);
-      if (current === "completed" || current === "dismissed") return current;
-      const next = setOnboardingStatus(head.content, "dismissed", new Date().toISOString().slice(0, 10));
-      if (await memory.replaceIfRevision(scope, next, head.revision, "system:onboarding")) break;
-    }
-  }
-  return "dismissed";
-}
-
-export function renderPendingOnboardingPrompt(status: OnboardingStatus, version = ONBOARDING_VERSION): string {
-  if (status === "completed" || status === "dismissed") return "";
-  const marker =
-    status === "pending"
-      ? `Memory says onboarding is pending for ${version}.`
-      : `Memory has no onboarding completion marker for ${version}.`;
-  return [
-    "## Pending Onboarding",
-    marker,
-    "",
-    "Onboarding is a high-priority setup task; already knowing who they are is no reason to skip it.",
-    "",
-    "Before ordinary work in this personal DM, load the onboarding skill with the skills tool and follow its complete ordered flow. Keep each turn light, but do not confuse a greeting or existing profile data with completion.",
-    "",
-    `Use the \`memory\` tool as the source of truth. On completion or an explicit stop, preserve the notebook and add \`- Onboarding: completed ${version} on YYYY-MM-DD.\` so onboarding does not recur.`,
-  ].join("\n");
 }
 
 export function isIdeasConversation(input: {

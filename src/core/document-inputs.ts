@@ -1,4 +1,5 @@
 import { addAbortSignal } from "node:stream";
+import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import type { AttachmentMeta, SessionEntry } from "../types.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
@@ -81,10 +82,20 @@ export async function loadDocumentInputs(
   maxBytes = MAX_DOCUMENT_BYTES,
   signal?: AbortSignal,
   maxDocuments = 10,
+  existingDocuments: readonly DocumentInput[] = [],
 ): Promise<{ documents: DocumentInput[]; notices: string[] }> {
   const documents: DocumentInput[] = [];
   const notices: string[] = [];
   const seen = new Set<string>();
+  const loadedContent = new Set(
+    existingDocuments.map((document) =>
+      JSON.stringify([
+        createHash("sha256").update(document.dataBase64, "base64").digest("hex"),
+        document.name,
+        document.mimeType,
+      ]),
+    ),
+  );
   let remaining = maxBytes;
   for (const meta of [...metas].reverse()) {
     signal?.throwIfAborted();
@@ -93,6 +104,8 @@ export async function loadDocumentInputs(
       seen.add(meta.artifactId);
       const artifact = await files.get(meta.artifactId);
       if (!artifact || !(await authorize(artifact)) || !artifact.sha256 || !isDocumentAttachment(artifact)) continue;
+      const contentKey = JSON.stringify([artifact.sha256, artifact.name, artifact.mimetype]);
+      if (loadedContent.has(contentKey)) continue;
       if (artifact.sizeBytes > remaining || documents.length >= maxDocuments) {
         notices.push(
           `${artifact.name}: document omitted from model input because it exceeds the attachment count or byte budget.`,
@@ -124,6 +137,7 @@ export async function loadDocumentInputs(
         continue;
       }
       remaining -= bytes.sizeBytes;
+      loadedContent.add(contentKey);
       documents.unshift({
         name: artifact.name,
         mimeType: artifact.mimetype,

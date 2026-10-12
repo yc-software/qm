@@ -319,3 +319,22 @@ test("gateway document support uses provider metadata rather than vision alone",
   for (const id of ["unknown-docs", "mixed-docs"])
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
 });
+
+test("gateway models send session-affinity headers on every API", async () => {
+  const f = fixture([
+    group("chat-model"),
+    group("anthropic-model", { providers: ["anthropic"] }),
+    group("openai-model", { providers: ["openai"] }),
+  ]);
+  await f.catalog.refresh();
+  const apis = new Set<string>();
+  for (const id of ["chat-model", "anthropic-model", "openai-model"]) {
+    const model = resolveModel(`gateway/${id}`)!;
+    apis.add(model.api);
+    assert.equal(
+      (model.compat as { sendSessionAffinityHeaders?: boolean } | undefined)?.sendSessionAffinityHeaders,
+      true,
+    );
+  }
+  assert.deepEqual([...apis].sort(), ["anthropic-messages", "openai-completions", "openai-responses"]);
+});

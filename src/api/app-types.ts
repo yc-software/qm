@@ -1,3 +1,4 @@
+import type { TeamStore } from "../teams/teams.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
@@ -217,7 +218,7 @@ interface DeploymentGitUrl {
 }
 
 interface SessionBackgroundView {
-  jobs: Array<{ processId: string; command: string; startedAt: number; expiresAt: number }>;
+  jobs: Array<{ processId: string; command: string; purpose?: string; startedAt: number; expiresAt: number }>;
   watches: Array<{
     id: string;
     processId: string;
@@ -360,6 +361,7 @@ export interface App {
     principalId: string,
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
+  searchConversations: App["search"];
   searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
   search(
     query: string,
@@ -618,6 +620,7 @@ export interface App {
 export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
+  shutdown?: () => AbortSignal;
   resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
@@ -658,6 +661,7 @@ export interface AppDeps {
   webhooks: WebhookStore;
   deliveries: DeliveryStore;
   directory: DirectoryStore;
+  teams?: Pick<TeamStore, "isMember">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
   deploy: DeployService;

@@ -1,9 +1,4 @@
-import {
-  memoryBoundedEntries,
-  memoryContextPayload,
-  nextMemoryContext,
-  type MemoryContextSnapshot,
-} from "../memory/context-boundary.ts";
+import { memoryContextPayload, type MemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
@@ -17,6 +12,7 @@ import { filterHistoryForAudience } from "../resolution/context-filter.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../util/objects.ts";
+import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
@@ -103,7 +99,7 @@ export async function delegatedAuthorizationOrigin(
   }
 }
 
-export const SUBAGENT_TREE_RUN_CAP = 10;
+export const SUBAGENT_TREE_RUN_CAP = 50;
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
@@ -113,7 +109,7 @@ const READ_MAX_CHARS_CEILING = 20_000;
 const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
 
-export interface SessionOpenInput {
+interface SessionOpenInput {
   requestId?: string;
   task: string;
   name?: string;
@@ -127,7 +123,7 @@ export interface SessionOpenInput {
 type SessionOpenResult =
   { ok: true; sessionId: string; title: string; liveRunsRemaining: number } | { ok: false; message: string };
 
-export interface SessionWriteInput {
+interface SessionWriteInput {
   target: string;
   peer?: boolean;
   text?: string;
@@ -145,7 +141,7 @@ type SessionWriteResult =
     }
   | { ok: false; message: string };
 
-export interface SessionReadInput {
+interface SessionReadInput {
   target?: string;
   peer?: boolean;
   limit?: number;
@@ -217,6 +213,7 @@ export interface SessionSyscalls {
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
   read(input: SessionReadInput): Promise<SessionReadResult>;
+  search?(input: { query: string; limit?: number }): ReturnType<CoreSearch["search"]>;
   list?(): Promise<SessionListResult>;
   start?(input: SessionStartInput): Promise<SessionStartResult>;
 }
@@ -253,6 +250,7 @@ export interface SessionSyscallDeps {
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
   conversations?: {
+    search?: CoreSearch["search"];
     list(actorId: string): Promise<Session[]>;
     start(
       actorId: string,
@@ -525,8 +523,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 
       function sidebarRefusal(): string | null {
         if (binding.request.surface !== "web") return WEB_ONLY;
-        if (binding.request.swarm || binding.session.parentSessionId || isSubagentThreadRef(binding.session.threadRef))
-          return "sessions belong to the person's sidebar; a subagent reports to its parent instead.";
+        if (binding.request.swarm) return "swarm workers coordinate through the swarm API.";
         return null;
       }
 
@@ -544,11 +541,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return inFlight.length ? "pending" : "idle";
       }
 
-      const readableTitles = new Set<string>();
-      const visibleTitle = (target: Session) =>
-        !binding.memoryContext || readableTitles.has(target.id) ? target.title?.trim() || target.id : target.id;
+      const visibleTitle = (target: Session) => target.title?.trim() || target.id;
       async function visibleHistory(target: Session): Promise<SessionEntry[]> {
-        readableTitles.delete(target.id);
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
@@ -557,15 +551,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             deps.sessions.visibleEntries(target.id, id),
           ),
         );
-        if (binding.memoryContext) {
-          const all = await deps.sessions.getEntries(target.id);
-          const last = all.findLast((entry) => memoryContextPayload(entry));
-          const next = nextMemoryContext(all, binding.memoryContext, all.at(-1)?.seq ?? -1);
-          if (next.throughSeq > (last ? memoryContextPayload(last)!.throughSeq : -1)) return [];
-          if (next.throughSeq < 0) readableTitles.add(target.id);
-          const visible = new Set(memoryBoundedEntries(all).map((entry) => entry.seq));
-          for (let i = 0; i < views.length; i++) views[i] = views[i]!.filter((entry) => visible.has(entry.seq));
-        }
         const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
         return filterHistoryForAudience(
           (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq))),
@@ -573,11 +558,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           binding.scopeId,
           binding.orgScopeId ?? binding.scopeId,
         );
-      }
-
-      async function safeTitle(target: Session): Promise<string> {
-        await visibleHistory(target);
-        return visibleTitle(target);
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -686,7 +666,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return {
                   ok: true,
                   sessionId: existing.id,
-                  title: await safeTitle(existing),
+                  title: visibleTitle(existing),
                   liveRunsRemaining: Math.max(0, cap - live),
                 };
               if (live >= cap) {
@@ -702,7 +682,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 binding.session.channelName,
                 binding.session.surface ?? binding.request.surface,
               );
-              const title = existing ? await safeTitle(existing) : input.name?.trim() || autoTitle(task);
+              const title = existing ? visibleTitle(existing) : input.name?.trim() || autoTitle(task);
               const meta: SpawnMeta = {
                 ...(caller.origin.kind === "automation"
                   ? {
@@ -823,7 +803,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               );
               const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
               assertAudienceCompatible(caller, request);
-              const title = await safeTitle(target);
+              const title = visibleTitle(target);
               if (input.interrupt) {
                 if (privateMessage)
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
@@ -902,7 +882,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     ? { privateSessionMessage: true as const, sessionMessageDepth: messageDepth }
                     : {}),
                   text: stamped,
-                  displayText: stamped,
+                  displayText: text,
                 },
                 maxAttempts: deps.maxAttempts,
               });
@@ -965,6 +945,22 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             rendered: rendered || "[no readable entries yet]",
           };
         },
+        async search(input) {
+          const caller = await currentCaller();
+          const refusal = sidebarRefusal();
+          if (refusal) throw new Error(refusal);
+          const search = deps.conversations?.search;
+          if (!search) throw new Error("session search isn't available on this deployment.");
+          const members = caller.conversation.publishMembers;
+          if (caller.conversation.kind !== "dm" && !members?.length)
+            throw new Error("search requires the complete principal set for a shared conversation");
+          if (!input.query.trim()) throw new Error("search requires a query");
+          return search({
+            query: input.query,
+            principals: [caller.actor, ...(members ?? caller.conversation.audience)],
+            ...(input.limit !== undefined ? { limit: input.limit } : {}),
+          });
+        },
         async list() {
           await currentCaller();
           const conversations = deps.conversations;
@@ -996,7 +992,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           for (const session of recent)
             sessions.push({
               sessionId: session.id,
-              title: binding.memoryContext ? await safeTitle(session) : session.title?.trim() || "Untitled",
+              title: session.title?.trim() || "Untitled",
               status: await statusOf(session),
               current: session.id === binding.session.id,
             });
@@ -1158,6 +1154,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "finalAttempt",
     "background",
     "cancel",
+    "shutdown",
     "queueMs",
     "modelAccount",
     "privateSessionMessage",
@@ -1221,12 +1218,10 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
-  if (
-    requiresDelegation(
-      { ...prepared, surfaceTools: meta.surfaceTools },
-      (await deps.delegationEnabled?.(prepared.actor.id)) === true,
-    )
-  ) {
+  if (!isSubagentThreadRef(parent.threadRef)) {
+    const surfaceTools =
+      meta.surfaceTools === true ||
+      requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
     const dedupKey = `subagent-return:${run.id}`;
     const existing = await deps.runs.getByDedupKey(dedupKey);
     const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
@@ -1243,7 +1238,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       dedupKey,
       request: {
         ...prepared,
-        surfaceTools: true,
+        ...(surfaceTools ? { surfaceTools } : {}),
         ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
         origin: { ...prepared.origin, kind: "automation", screenData: wake },
         text: wake,

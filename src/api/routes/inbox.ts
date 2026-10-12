@@ -1,4 +1,5 @@
 import { migrateInbox } from "../../loops/inbox-migration.ts";
+import { canonicalPerson } from "../../directory/person.ts";
 import { scopeId, type Loop } from "../../types.ts";
 import { ensureDefaultInboxLoops, findInboxLoop } from "../../loops/inbox-loop.ts";
 import {
@@ -68,7 +69,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
     await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
   }
-  const summaries = (await deps.items.summaries(selectedIds, { includeEmailClassification: true })).filter(
+  const summaries = (await deps.items.summaries(selectedIds, { includeInboxMetadata: true })).filter(
     (item) => selectedIds.includes(item.loopId) && item.inboxPreview?.sentChat !== true,
   );
   const itemId = ctx.url.searchParams.get("itemId");
@@ -87,7 +88,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
     return sendJson(ctx.res, 400, { error: "invalid_filter" });
   const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(acting.actorId, "inbox-filter")))?.value;
-  const inboxFilter = savedFilter === "all" || savedFilter === "human" ? savedFilter : "triaged";
+  const inboxFilter = savedFilter === "all" || savedFilter === "triaged" ? savedFilter : "human";
   const handled = ctx.url.searchParams.get("view") === "handled";
   const sent = ctx.url.searchParams.get("view") === "sent";
   const filter = ctx.url.searchParams.get("loopId");
@@ -140,6 +141,29 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   }
   const page = feed.slice(0, 40);
   const last = page.at(-1);
+  if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh) {
+    const slack = (
+      await Promise.all(
+        page
+          .filter(
+            (item) =>
+              item.source === "slack" &&
+              loopsById.get(item.loopId)?.owner === acting.actorId &&
+              !(
+                typeof item.inboxPreview?.slackAvatarsRefreshAt === "number" &&
+                Date.now() < item.inboxPreview.slackAvatarsRefreshAt
+              ),
+          )
+          .map((item) => deps.items.get(item.id)),
+      )
+    ).filter((item) => item !== null);
+    await ctx.deps.inboxSourceRefresh(acting.actorId, slack, "avatars");
+    for (const refreshed of await Promise.all(slack.map((item) => deps.items.get(item.id)))) {
+      const summary = page.find((entry) => entry.id === refreshed?.id);
+      if (summary && refreshed && refreshed.sourceAt === summary.sourceAt)
+        summary.inboxPreview = { ...summary.inboxPreview, participants: refreshed.sourcePayload?.participants };
+    }
+  }
   sendJson(ctx.res, 200, {
     selected: await Promise.all(
       selected.map(async (loop) => ({
@@ -200,8 +224,29 @@ async function access(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function viewers(ctx: ApiCtx): Promise<void> {
+  if (ctx.capability || ctx.actor) return sendJson(ctx.res, 403, { error: "forbidden" });
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const loop = typeof body.loopId === "string" ? await loopDeps(ctx)?.store.get(body.loopId) : undefined;
+  if (!loop) return sendJson(ctx.res, 404, { error: "not_found" });
+  const candidates = Array.isArray(body.candidates)
+    ? [...new Set(body.candidates.filter((value): value is string => typeof value === "string"))]
+    : [];
+  const identity = ctx.deps.identity;
+  await identity?.refresh();
+  const allowed = await Promise.all(
+    candidates.map(
+      async (id) =>
+        (!identity || identity.classify(id).type === "internal") &&
+        canAdministerLoop(ctx, loop, { actorId: canonicalPerson(id), liveHuman: false }),
+    ),
+  );
+  sendJson(ctx.res, 200, { viewers: candidates.filter((_, i) => allowed[i]) });
+}
+
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/inbox", auth: "source", handle: inbox },
+  { method: "POST", path: "/v1/inbox/viewers", auth: "source", handle: viewers },
   { method: "GET", path: "/v1/inbox/access", auth: "source", handle: access },
   { method: "PUT", path: "/v1/inbox", auth: "source", handle: inbox },
 ];

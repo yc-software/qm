@@ -11,6 +11,7 @@ Add `externalAccess` to the selected `SLACK_ACCOUNTS` entry:
   "appToken": "<Socket Mode token>",
   "externalAccess": {
     "companyDomains": ["company.example"],
+    "companyTeamIds": ["TCOMPANY"],
     "serviceCredentials": ["public-search"]
   }
 }
@@ -20,7 +21,9 @@ For the default Slack account, set `SLACK_EXTERNAL_ACCESS` to the JSON value of 
 
 ## Identity and public work
 
-Slack's authenticated user profile must contain an email whose exact domain is in `companyDomains`. Case is normalized. Subdomains are not implicitly included. Workspace membership, guest status, and Slack Connect status do not establish company identity. Missing emails, non-company emails, deleted users, and bots cannot initiate work. `allowFrom`, if configured, can further restrict access.
+Set `companyTeamIds` to Slack workspace IDs administered by your company. This required, non-empty list identifies the workspaces trusted to establish employee identity; do not include the partner workspace. Existing external-access configurations must add this list before restarting.
+
+The user's Slack `team_id` must be in `companyTeamIds`, and their profile must contain an email whose exact domain is in `companyDomains`. Email case is normalized; workspace IDs are matched exactly. Subdomains are not implicitly included. Company members connecting from those workspaces through Slack Connect are supported. Accounts belonging to the partner workspace, missing workspace IDs or emails, non-company emails, restricted guests, deleted users, and bots cannot initiate work, including DMs. `allowFrom`, if configured, can further restrict access.
 
 Every non-DM conversation in an opted-in workspace has an external audience, including private channels and group DMs with an apparently staff-only roster. Its computer and conversation use a workspace-and-policy namespace. Enabling this policy, or changing its allowlists, starts a fresh restricted namespace rather than exposing an older computer or retained private context.
 
@@ -33,7 +36,7 @@ The channel agent can answer and execute code using its own restricted computer.
 When the request needs personal context or a private service, the agent finishes the channel turn with a self-only continuation directive. The platform:
 
 1. Loads the originating request, not a model-selected recipient.
-2. Rechecks the employee's current Slack profile on the originating account.
+2. Rechecks the employee's company workspace membership and email against the current policy on the originating account.
 3. Opens that employee's DM and acknowledges the move in the source thread.
 4. Queues a normal personal-context turn with the original request, relevant channel history, and incoming attachments.
 5. Delivers results and approvals privately. There is no automatic result bridge back to the channel.
@@ -45,5 +48,6 @@ This is a general continuation mechanism, not a calendar-specific workflow. Exis
 - Explicit mentions, genuine replies in an engaged thread, and employee DMs are supported. Passive ambient ingestion is disabled for opted-in accounts so it cannot start an unclassified alternate turn.
 - Existing shared-scope approvals and legacy personal-agent bridges are not resumed in an opted-in workspace. Start a fresh request so it receives the current boundary.
 - Old shared replies without the restricted namespace are not released into an opted-in workspace during delivery recovery. Unprovenanced historical shared Slack requests are refused when an external policy is configured.
-- Restricted sessions cannot be resumed through a surface that omits their authenticated workspace policy. Normal private DMs are unaffected.
+- Recovered DM run results also require the current external-account policy. Results admitted before this policy configuration or under a previous policy are not delivered.
+- Restricted sessions cannot be resumed through a surface that omits their authenticated workspace policy. External-account DMs also require admission under the current policy; after a policy change, start a fresh request. DMs on other accounts are unaffected.
 - Configuration is deployment-level; there is no new admin UI in this change.

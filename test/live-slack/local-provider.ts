@@ -22,7 +22,7 @@ async function main(): Promise<void> {
     runStore: "memory",
     harness: "pi",
     sandboxBackend: "local",
-    sandboxResourcesEnabled: true,
+
     backgroundWorkEnabled: false,
     turnWallClockMs: 180_000,
     localSandbox: { ...config.localSandbox, coreContainer: process.env.QM_CORE_CONTAINER },
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
       surface: "qualification",
       actor: { externalId: actorId },
       conversation: { kind: "dm", threadRef: `qualification:${randomUUID()}` },
-      text: `Use sandbox action exec with sandbox_id ${sandbox.id} to run exactly: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result.`,
+      text: `Use execute with sandbox_id ${sandbox.id} to run exactly: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result.`,
     });
     assert.equal(result.status, "ok", result.reason ?? result.reply);
     assert.ok(result.sessionId);

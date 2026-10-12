@@ -1,3 +1,5 @@
+import { composeSoul } from "../resolution/resolution-service.ts";
+import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
@@ -438,27 +440,35 @@ export function createSessionMethods(
           if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
         }
       }
+      const working = sessions.filter((s) => workingThreadRefs.has(s.threadRef));
+      const idleChildren = sessions.filter(
+        (s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id),
+      );
+      const [latestRuns, recentEntries] = await Promise.all([
+        deps.runs.latestForThreads([...working, ...idleChildren].map((s) => s.threadRef)),
+        deps.sessions.getRecentEntries(
+          working.map((s) => s.id),
+          GOAL_LOOKBACK_ENTRIES,
+        ),
+      ]);
       const failedChildren = new Set<string>();
-      for (const s of sessions) {
-        if (!s.parentSessionId || workingThreadRefs.has(s.threadRef) || waiting.has(s.id)) continue;
-        const run = await deps.runs.latestForThread(s.threadRef);
+      for (const s of idleChildren) {
+        const run = latestRuns.get(s.threadRef);
         if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
       }
       const goals = new Map<
         string,
         { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> }
       >();
-      for (const s of sessions) {
-        if (!workingThreadRefs.has(s.threadRef)) continue;
-        const since = Math.max(0, (await deps.sessions.latestEntrySeq(s.id)) - GOAL_LOOKBACK_ENTRIES);
-        const goal = latestGoalRecord(await deps.sessions.getEntries(s.id, { sinceSeq: since }));
+      for (const s of working) {
+        const goal = latestGoalRecord(recentEntries.get(s.id) ?? []);
         if (!goal) continue;
-        const runningSince = (await deps.runs.latestForThread(s.threadRef))?.startedAt ?? undefined;
+        const runningSince = latestRuns.get(s.threadRef)?.startedAt ?? undefined;
         if (goal.status === "active")
           goals.set(s.id, {
             objective: goal.objective,
             activeMs: goal.activeMs ?? 0,
-            ...(runningSince ? { runningSince: Math.max(runningSince, goal.createdAt) } : {}),
+            ...(runningSince ? { runningSince: Math.max(runningSince, goal.activeSince ?? goal.createdAt) } : {}),
             ...(goal.floor ? { floor: { ...goal.floor } } : {}),
           });
       }
@@ -484,7 +494,7 @@ export function createSessionMethods(
     },
 
     async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
-      const capped = Math.max(1, Math.min(limit, 100));
+      const capped = Math.max(1, Math.min(Math.floor(limit), 100));
       const hits = await deps.sessions.searchEntries(principalId, query, capped);
       if (!hits.length) return [];
       const allowed = new Map(
@@ -494,9 +504,19 @@ export function createSessionMethods(
           ),
         ),
       );
+      const teamIds = [...new Set(hits.map((hit) => hit.entryScopeLabel))]
+        .map(parseScopeId)
+        .filter((label) => label.kind === "team")
+        .map((label) => label.ref);
+      const memberships = await Promise.all(
+        teamIds.map(async (id) => ((await deps.teams?.isMember(principalId, id)) ? id : null)),
+      );
+      const principal = { ...deps.identity.classify(principalId), teamIds: memberships.filter((id) => id !== null) };
       const terms = searchTerms(query);
       return hits.flatMap((hit) => {
         if (!allowed.get(hit.scopeId)) return [];
+        if (!principalEntitledToScope(principal, hit.entryScopeLabel, hit.scopeId, scopeId("org", orgIdOf())))
+          return [];
         const session = hit;
         return [
           {
@@ -523,7 +543,13 @@ export function createSessionMethods(
       const jobs = ((await deps.processes?.listLive(now)) ?? [])
         .filter((r) => r.kind === "background" && r.sessionRef === session.threadRef)
         .sort((a, b) => b.startedAt - a.startedAt)
-        .map((r) => ({ processId: r.processId, command: r.command, startedAt: r.startedAt, expiresAt: r.expiresAt }));
+        .map((r) => ({
+          processId: r.processId,
+          command: r.command,
+          ...(r.purpose ? { purpose: r.purpose } : {}),
+          startedAt: r.startedAt,
+          expiresAt: r.expiresAt,
+        }));
       const watches = ((await deps.monitors?.enabled()) ?? [])
         .filter((m) => m.threadRef === session.threadRef && m.expiresAt > now)
         .sort((a, b) => b.createdAt - a.createdAt)
@@ -928,18 +954,13 @@ export function createSessionMethods(
         );
         const { lease } = await deps.sessions.acquireLease(forked.id, "fork");
         if (!lease) throw new Error(`fork: could not lease fresh session ${forked.id}`);
-        let forkBoundarySeq: number | null = null;
+        let forkBoundarySeq: number | null;
         try {
-          const copiedEntries = [];
-          for (const entry of copied) {
-            const appended = await deps.sessions.append(lease, {
-              type: entry.type,
-              payload: entry.payload,
-              scopeLabel: entry.scopeLabel,
-            });
-            copiedEntries.push(appended);
-            forkBoundarySeq = appended.seq;
-          }
+          const copiedEntries = await deps.sessions.appendMany(
+            lease,
+            copied.map((entry) => ({ type: entry.type, payload: entry.payload, scopeLabel: entry.scopeLabel })),
+          );
+          forkBoundarySeq = copiedEntries.at(-1)?.seq ?? null;
           if (forkBoundarySeq !== null) {
             await appendCoverageImport(deps.sessions, lease, copiedEntries, source.scopeId).catch(
               swallowAs("fork: tape import", undefined),
@@ -1149,19 +1170,6 @@ export function createSessionMethods(
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
       const soul = deps.config.getSoul(scopeIdValue);
-      const includeScopeSoul = scopeIdValue !== orgScopeId && soul;
-      const soulParts: string[] = [];
-      if (orgSoul) soulParts.push(orgSoul);
-      if (includeScopeSoul) {
-        soulParts.push(
-          `--- Lower-scope instructions (may add to, but MUST NOT override, the organization policy above) ---\n${includeScopeSoul}`,
-        );
-      }
-      if (orgSoul && includeScopeSoul) {
-        soulParts.push(
-          "--- The organization policy above is authoritative and cannot be overridden by the lower-scope instructions. ---",
-        );
-      }
       return {
         scopeId: scopeIdValue,
         soul,
@@ -1169,7 +1177,11 @@ export function createSessionMethods(
         orgScopeId,
         orgSoul,
         orgSoulVersion: deps.config.soulVersion(orgScopeId),
-        effectiveSoul: soulParts.join("\n\n"),
+        effectiveSoul: composeSoul(
+          orgSoul,
+          scopeIdValue === orgScopeId ? null : soul,
+          deps.config.getPeopleDirectoryUrl(orgScopeId),
+        ),
       };
     },
 

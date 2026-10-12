@@ -4,10 +4,10 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import { isNonRetryable, NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
-import { errMessage, errorAlreadyReported, swallow } from "../util/errors.ts";
+import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
@@ -22,7 +22,7 @@ export interface ProcessDeps {
 
 export const LEASE_LOST_CONSECUTIVE = 3;
 
-const CLAIM_FAIL_CRASH_CONSECUTIVE = 20;
+const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
 export async function processRun(
   deps: ProcessDeps,
@@ -69,6 +69,7 @@ export async function processRun(
     clearInterval(beat);
   };
   try {
+    if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
     if (run.request.swarm) {
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
       workDeadline = setTimeout(() => cancel.abort(), turnMs);
@@ -84,6 +85,7 @@ export async function processRun(
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
       cancel: cancel.signal,
+      ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
       ...(queueMs !== undefined ? { queueMs } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
@@ -108,7 +110,7 @@ export async function processRun(
         err,
       );
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
-      retry: !(err instanceof NonRetryableTurnError),
+      retry: !isNonRetryable(err),
       retryAfterMs: retryDelay(run.errorAttempts),
     });
     throw err;
@@ -128,7 +130,6 @@ export interface WorkerDeps extends ProcessDeps {
   recoveryPollMs?: number;
   workerId?: string;
   canClaim?: () => boolean;
-  onClaimed?: () => void;
   admittedWork?: AdmittedWork;
 }
 
@@ -138,7 +139,6 @@ export interface Worker {
   drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
   releaseInFlight(): Promise<void>;
-  busy(): boolean;
 }
 
 const STOP_DRAIN_MS = 2_000;
@@ -192,7 +192,7 @@ export function createWorker(deps: WorkerDeps): Worker {
         claimed();
         claimDone = null;
         claimFailures += 1;
-        if (claimFailures >= CLAIM_FAIL_CRASH_CONSECUTIVE) throw e;
+        if (claimFailures === CLAIM_FAIL_REPORT_CONSECUTIVE) reportFailure("worker: persistent claim failure", e);
         swallow("worker: claim failed (transient, retrying)", e);
         await sleep(Math.min(pollMs * 2 ** Math.min(claimFailures, 5), 5_000));
         continue;
@@ -223,7 +223,6 @@ export function createWorker(deps: WorkerDeps): Worker {
       console.log(`[worker] claimed worker=${workerId} run=${run.id} thread=${run.sessionId}`);
       claimed();
       claimDone = null;
-      deps.onClaimed?.();
       try {
         const work = () => processRun(deps, run, { background: true, shutdown: shutdown.signal });
         if (deps.admittedWork) await deps.admittedWork.run(work);
@@ -258,9 +257,6 @@ export function createWorker(deps: WorkerDeps): Worker {
       loopDone = loop().finally(() => {
         loopDone = null;
       });
-    },
-    busy() {
-      return inFlight !== null;
     },
     async releaseInFlight() {
       await stopClaims();

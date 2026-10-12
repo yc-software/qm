@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -21,8 +21,8 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   const identity = createIdentityService();
   await directory.replaceChannels(
     [
-      { channelId: CH, name: "built" },
-      { channelId: CH_OTHER, name: "shared" },
+      { channelId: CH, name: "built", isPrivate: true },
+      { channelId: CH_OTHER, name: "shared", isPrivate: true },
     ],
     [
       { channelId: CH, principalId: "U1" },
@@ -56,7 +56,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
     name: "channel-app",
     createdInScope: scopeId("channel", CH),
   });
-  return { deploy, acl, d };
+  return { deploy, acl, d, directory };
 }
 
 test("canManage: a channel-creation member may manage from a DM/other context", async () => {
@@ -116,4 +116,100 @@ test("canManage: the creator may still manage from a DM context", async () => {
     createdInScope: scopeId("personal", "U1"),
   });
   assert.equal(renamed.name, "renamed-by-creator-dm");
+});
+
+test("new channel apps grant read access only to authenticated current channel members", async () => {
+  const { deploy, d, directory } = await setup();
+  assert.equal(d.ownerScopeId, scopeId("personal", "U1"));
+  assert.notEqual(d.public, true);
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), [{ scope: scopeId("channel", CH), permission: "read" }]);
+  assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "ok");
+  assert.equal((await deploy.reachDeployment(d.id, "U3")).status, "denied");
+  assert.equal((await deploy.reachDeployment(d.id, "")).status, "denied");
+  await directory.replaceChannels(
+    [{ channelId: CH, name: "built", isPrivate: true }],
+    [{ channelId: CH, principalId: "U1" }],
+  );
+  assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "denied");
+});
+
+test("direct deployment creation also grants channel read access", async () => {
+  const { deploy } = await setup();
+  const d = await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    createdInScope: scopeId("channel", CH),
+  });
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), [{ scope: scopeId("channel", CH), permission: "read" }]);
+  assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "ok");
+});
+
+test("DM apps stay private when republished or renamed in a channel", async () => {
+  const { deploy } = await setup();
+  const input = {
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "dm-app",
+  };
+  const d = await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("personal", "U1") });
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), []);
+  assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "denied");
+  await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH) });
+  await deploy.deployOrUpdate({
+    ...input,
+    name: "renamed-dm-app",
+    renameFrom: "dm-app",
+    createdInScope: scopeId("channel", CH_OTHER),
+  });
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), []);
+  assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "denied");
+});
+
+test("republishing channel apps neither widens their audience nor restores revoked grants", async () => {
+  const { deploy, acl, d } = await setup();
+  const input = { ownerScopeId: d.ownerScopeId, createdBy: "U1", name: d.name!, entrypoint: "x", files: [] };
+  await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH_OTHER) });
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), [{ scope: scopeId("channel", CH), permission: "read" }]);
+  assert.equal((await deploy.reachDeployment(d.id, "U3")).status, "denied");
+  await acl.revoke(d.ownerScopeId, `deployment:${d.id}`, scopeId("channel", CH), "U1");
+  await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH) });
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), []);
+  assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "denied");
+});
+
+test("public-channel defaults follow existing channel visibility without anonymous access", async () => {
+  const { deploy, d, directory } = await setup();
+  await directory.replaceChannels(
+    [{ channelId: CH, name: "built", isPrivate: false }],
+    [{ channelId: CH, principalId: "U1" }],
+  );
+  assert.equal((await deploy.reachDeployment(d.id, "U3")).status, "ok");
+  assert.equal((await deploy.reachDeployment(d.id, "")).status, "denied");
+  assert.notEqual((await deploy.getDeployment(d.id))?.public, true);
+});
+
+test("failed default grant leaves the app name free for a complete retry", async () => {
+  const { deploy, acl } = await setup();
+  const input = {
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    name: "retry-app",
+    entrypoint: "x",
+    files: [],
+    createdInScope: scopeId("channel", CH),
+  };
+  const failure = new Error("grant storage unavailable");
+  const grant = mock.method(acl, "grant", async () => {
+    throw failure;
+  });
+  await assert.rejects(deploy.deployOrUpdate(input), (error) => error === failure);
+  assert.equal(await deploy.getDeployment(input.name), null);
+  grant.mock.restore();
+  const d = await deploy.deployOrUpdate(input);
+  assert.deepEqual(await deploy.deploymentGrantees(d.id), [{ scope: scopeId("channel", CH), permission: "read" }]);
+  assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "ok");
 });

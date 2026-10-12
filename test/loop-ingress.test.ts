@@ -329,6 +329,7 @@ test("ingestion configuration rejects nonowners and unattended callers", async (
         managesScope: async () => false,
       },
       res: {
+        getHeader: () => undefined,
         writeHead: (value: number) => {
           status = value;
         },

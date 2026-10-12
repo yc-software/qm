@@ -84,6 +84,7 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
       supportsReasoningEffort:
         Array.isArray(info.supported_openai_params) && info.supported_openai_params.includes("reasoning_effort"),
       supportsUsageInStreaming: true,
+      sendSessionAffinityHeaders: true,
       maxTokensField:
         Array.isArray(info.supported_openai_params) && info.supported_openai_params.includes("max_completion_tokens")
           ? "max_completion_tokens"

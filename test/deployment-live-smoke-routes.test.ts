@@ -19,15 +19,8 @@ const path = "/v1/deployment/live-session";
 
 async function fixture(run: () => Promise<void> = async () => {}) {
   const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
-  await store.register({ instanceId: "instance-a", deploymentId: "cohort-a", taskArn: "task-a" });
-  await store.transition({
-    expectedGeneration: 0,
-    requestId: randomUUID(),
-    desiredDeploymentId: "cohort-a",
-    bootstrapTaskArns: ["task-a"],
-  });
-  await store.admit("instance-a", 1, false);
-  await store.markReady("instance-a", 1);
+  await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
+  let active = true;
   const dedupe = createMemoryReplayDedupe();
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const server = createServer(built.app, {
@@ -35,7 +28,7 @@ async function fixture(run: () => Promise<void> = async () => {}) {
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
     requireSignedPortalIdentity: true,
-    backgroundOwnership: { store, instanceId: "instance-a", deploymentId: "cohort-a" },
+    backgroundOwnership: { store, instanceId: "instance-a", deploymentId: "cohort-a", active: () => active },
     deploymentControlSecret: controlSecret,
     deploymentLiveSmoke: run,
     replayDedupe: { durable: true, claim: (...args) => dedupe.claim(...args) },
@@ -58,15 +51,17 @@ async function fixture(run: () => Promise<void> = async () => {}) {
       ...(raw ? { body: raw } : {}),
     });
   };
-  return { store, request, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  return {
+    store,
+    request,
+    deactivate: () => {
+      active = false;
+    },
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
 }
 
-const body = () => ({
-  requestId: randomUUID(),
-  expectedDeploymentId: "cohort-a",
-  expectedGeneration: 1,
-  expectedTaskArns: ["task-a"],
-});
+const body = () => ({ requestId: randomUUID(), expectedDeploymentId: "cohort-a" });
 
 test("live smoke requires distinct credentials, rejects capabilities and arbitrary inputs", async () => {
   let calls = 0;
@@ -90,18 +85,17 @@ test("live smoke requires distinct credentials, rejects capabilities and arbitra
     for (const request of [
       null,
       { ...body(), url: "https://untrusted.invalid" },
-      { ...body(), expectedTaskArns: [] },
-      { ...body(), expectedTaskArns: ["task-a", "task-a"] },
+      { ...body(), expectedGeneration: 1 },
       { ...body(), expectedDeploymentId: "other" },
+      { ...body(), requestId: "not-a-uuid" },
     ]) {
       assert.equal((await srv.request("POST", request)).status, 400);
     }
-    for (const request of [
-      { ...body(), expectedGeneration: 2 },
-      { ...body(), expectedTaskArns: ["different"] },
-    ]) {
-      assert.equal((await srv.request("POST", request)).status, 409);
-    }
+    await srv.store.set({ ownerDeploymentId: "cohort-b", setBy: "cohort-b" });
+    assert.equal((await srv.request("POST", body())).status, 409);
+    await srv.store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
+    srv.deactivate();
+    assert.equal((await srv.request("POST", body())).status, 409);
     assert.equal(calls, 0);
   } finally {
     await srv.close();
@@ -123,8 +117,6 @@ test("live smoke returns exact identity and rejects request replay", async () =>
       requestId: request.requestId,
       deploymentId: "cohort-a",
       instanceId: "instance-a",
-      taskArn: "task-a",
-      generation: 1,
     });
     assert.equal((await srv.request("POST", request)).status, 409);
     assert.equal(calls, 1);
@@ -165,7 +157,7 @@ test("live smoke keeps singleflight through client disconnect and cleanup", asyn
 
 test("live smoke fails when ownership changes and never returns raw errors", async () => {
   const srv = await fixture(async () => {
-    await srv.store.transition({ expectedGeneration: 1, requestId: randomUUID(), desiredDeploymentId: null });
+    await srv.store.set({ ownerDeploymentId: null, setBy: "operator" });
   });
   try {
     const result = (await (await srv.request("POST", body())).json()) as { ok: boolean; error: string };

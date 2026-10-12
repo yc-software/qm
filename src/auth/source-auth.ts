@@ -1,4 +1,4 @@
-import { signRequest as signCanonical } from "./source-auth-sign.ts";
+import { signRequest as signCanonical } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { createMemoryReplayDedupe, type ReplayDedupe } from "./replay-dedupe.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
@@ -7,6 +7,10 @@ export const MIN_SIGNING_SECRET_LENGTH = 32;
 
 export function isStrongSigningSecret(secret: string | undefined): secret is string {
   return (secret?.trim().length ?? 0) >= MIN_SIGNING_SECRET_LENGTH;
+}
+
+export function isBearerSecret(secret: string | undefined): secret is string {
+  return Boolean(secret) && secret === secret?.trim();
 }
 
 interface SourceAuthRequest {

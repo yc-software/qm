@@ -515,7 +515,7 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(rows[0]!.decision, "act");
     assert.ok(rows[0]!.prompt && rows[0]!.prompt.includes("NEW MESSAGES"));
-    assert.equal(rows[0]!.model, "claude-haiku-4-5", "the resolved judge model is recorded (default Haiku)");
+    assert.equal(rows[0]!.model, "claude-haiku-5-5", "the resolved judge model is recorded (default Haiku)");
     assert.equal(rows[0]!.tsFrom, "5.0");
     assert.equal(rows[0]!.tsTo, "5.0");
     assert.ok(typeof rows[0]!.latencyMs === "number");

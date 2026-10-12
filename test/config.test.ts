@@ -498,15 +498,14 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     ),
     "a stray key without a template must not enable the secondary backend",
   );
-  assert.throws(
+  assert.doesNotThrow(
     () =>
       loadConfig({
         SANDBOX_BACKEND: "local",
         SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}',
         SUPERSERVE_API_KEY: "ss_live_k",
       }),
-    /SUPERSERVE_TEMPLATE/,
-    "a scope routed to superserve needs the template even when it is not the primary backend",
+    "upgrade-only provider settings do not require live credentials or templates",
   );
   assert.doesNotThrow(() =>
     loadConfig({
@@ -886,16 +885,6 @@ test("direct Files initiation defaults off and requires explicit activation", ()
   assert.throws(() => loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "maybe" }));
 });
 
-test("sandbox resource rollout requires explicit activation", () => {
-  assert.equal(loadConfig({ ...productionEnv }).sandboxResourcesEnabled, false);
-  for (const value of ["true", "on", "1"])
-    assert.equal(loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: value }).sandboxResourcesEnabled, true);
-  assert.throws(
-    () => loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: "enable" }),
-    /not a recognized boolean/,
-  );
-});
-
 test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.equal(loadConfig({}).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
@@ -903,7 +892,7 @@ test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
 });
 
-test("sandbox scope defaults parse exact scope kinds and reject malformed mappings", () => {
+test("legacy sandbox scope defaults are parsed for upgrade", () => {
   const credentials = {
     SPRITES_TOKEN: "unit-test-sprites",
     MODAL_TOKEN_ID: "unit-test-modal-id",
@@ -911,7 +900,7 @@ test("sandbox scope defaults parse exact scope kinds and reject malformed mappin
   };
   assert.deepEqual(
     loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' })
-      .sandboxScopeDefaults,
+      .legacySandboxScopeDefaults,
     { personal: "modal", channel: "sprites" },
   );
   for (const value of [
@@ -958,6 +947,33 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
+});
+
+test("the spend export token is optional, strong, trimmed and never shared with another environment value", () => {
+  const env = {
+    CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
+    CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
+    PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
+    SPEND_EXPORT_TOKEN: "spend-export-token-0123456789abcdef01234",
+  };
+  assert.equal(loadConfig(env).spendExportToken, env.SPEND_EXPORT_TOKEN);
+  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: undefined }).spendExportToken, undefined);
+  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: "" }).spendExportToken, undefined);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: "short" }), /SPEND_EXPORT_TOKEN/);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: " ".repeat(40) }), /SPEND_EXPORT_TOKEN/);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: `${env.SPEND_EXPORT_TOKEN}\n` }), /SPEND_EXPORT_TOKEN/);
+  for (const name of [
+    "CORE_SIGNING_SECRET",
+    "QM_SLACK_SERVICE_TOKEN",
+    "DEPLOY_APPS_SESSION_SECRET",
+    "SLACK_SIGNING_SECRET",
+  ]) {
+    assert.throws(
+      () => loadConfig({ ...env, [name]: env.SPEND_EXPORT_TOKEN }),
+      /SPEND_EXPORT_TOKEN/,
+      `${name} must not share the export token`,
+    );
+  }
 });
 
 test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {

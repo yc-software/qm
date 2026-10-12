@@ -13,7 +13,7 @@ const upstream = createServer(async (req, res) => {
 });
 await new Promise<void>((resolve) => upstream.listen(0, resolve));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
-const portal = createServer((req, res) => proxyToAppHost(req, res, upstreamUrl));
+const portal = createServer((req, res) => proxyToAppHost(req, res, upstreamUrl, "198.51.100.1"));
 await new Promise<void>((resolve) => portal.listen(0, resolve));
 test.after(() => {
   upstream.close();
@@ -38,6 +38,7 @@ test("app proxy preserves uploads and app headers while stripping identity and h
           "x-signature": "forged",
           "x-as-principal": "admin",
           "x-agent-capability": "forged",
+          "x-qm-client-ip": "203.0.113.66",
           connection: "x-remove-me",
           "x-remove-me": "secret",
           cookie: "portal_session=test",
@@ -65,6 +66,7 @@ test("app proxy preserves uploads and app headers while stripping identity and h
   assert.equal(body.headers["x-app-key"], "app-key");
   assert.equal(body.headers.cookie, "portal_session=test");
   assert.equal(body.headers["x-qm-app-host"], "1");
+  assert.equal(body.headers["x-qm-client-ip"], "198.51.100.1", "the gateway, not the visitor, supplies the client IP");
   for (const header of ["x-signature", "x-as-principal", "x-agent-capability", "x-remove-me"])
     assert.equal(body.headers[header], undefined);
 });

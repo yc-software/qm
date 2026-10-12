@@ -1,4 +1,4 @@
-import { memoryForRequest, memoryBoundaryForRequest } from "./memory-access.ts";
+import { memoryForRequest } from "./memory-access.ts";
 import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
@@ -111,6 +111,8 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
 function agentConversation(session: Session) {
   return {
     id: session.id,
+    title: session.title,
+    status: session.status,
     type: session.type,
     scopeId: session.scopeId,
     threadRef: session.threadRef,
@@ -183,12 +185,10 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   }
   const found = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  const boundary = await memoryBoundaryForRequest(ctx, ctx.params.id!);
-  if (!boundary) return sendJson(res, 403, { error: "forbidden" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
-    entries: found.entries.filter((entry) => entry.seq > boundary.throughSeq && entry.type !== "system"),
-    ...(boundary.throughSeq < 0 && found.earlierEntries ? { earlierEntries: found.earlierEntries } : {}),
+    entries: found.entries.filter((entry) => entry.type !== "system"),
+    ...(found.earlierEntries ? { earlierEntries: found.earlierEntries } : {}),
   });
 }
 

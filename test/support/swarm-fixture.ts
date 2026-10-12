@@ -62,13 +62,9 @@ export async function swarmFixture(
       disks.delete(id);
     },
   };
-  const routes = createMemoryMap<import("../../src/sandbox/sandbox-routing.ts").SandboxRoute>();
   const sandboxes = createSandboxResources({
-    enabled: true,
-    rollout: createMemoryMap(),
     records,
     defaults: createMemoryMap(),
-    routes,
     backends: { modal: backend },
     defaultBackend: "modal",
     lock,
@@ -77,7 +73,6 @@ export async function swarmFixture(
   const sandbox = createSandboxRouter({
     backends: { modal: backend },
     defaultBackend: "modal",
-    routes,
     resources: sandboxes,
   });
   const actor = { id: "alice", type: "internal" as const };

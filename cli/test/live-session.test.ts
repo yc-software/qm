@@ -1,86 +1,59 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { checkControlledLiveSession, type LiveSessionCohort } from "../src/live-session.ts";
+import { checkControlledLiveSession, type LiveSessionOwner } from "../src/live-session.ts";
 
-function cohort(): LiveSessionCohort {
+function owner(): LiveSessionOwner {
   return {
     deploymentId: "core:release",
-    taskArns: ["task-a", "task-b"],
     status: {
-      protocol: 1,
-      enabled: true,
+      protocol: 2,
       deploymentId: "core:release",
       instanceId: "instance-a",
-      generation: 4,
-      desiredDeploymentId: "core:release",
-      lastRequestId: "handover",
-      members: ["a", "b"].map((suffix) => ({
-        instanceId: `instance-${suffix}`,
-        taskArn: `task-${suffix}`,
-        deploymentId: "core:release",
-        generation: 4,
-        state: "admitted",
-        retired: false,
-        ready: true,
-      })),
+      ownerDeploymentId: "core:release",
+      setAt: "2026-10-04T00:00:00.000Z",
+      setBy: "core:release",
+      active: true,
     },
   };
 }
 
 function success(body: string): Record<string, unknown> {
   const request = JSON.parse(body);
+  assert.deepEqual(Object.keys(request).sort(), ["expectedDeploymentId", "requestId"]);
   assert.equal(request.expectedDeploymentId, "core:release");
-  assert.equal(request.expectedGeneration, 4);
-  assert.deepEqual(request.expectedTaskArns, ["task-a", "task-b"]);
-  return {
-    ok: true,
-    requestId: request.requestId,
-    deploymentId: "core:release",
-    generation: 4,
-    instanceId: "instance-a",
-    taskArn: "task-a",
-  };
+  return { ok: true, requestId: request.requestId, deploymentId: "core:release", instanceId: "instance-a" };
 }
 
-test("live session accepts whitespace heartbeats and checks the exact cohort afterward", async () => {
+test("live session accepts whitespace heartbeats and checks ownership afterward", async () => {
   let reads = 0;
   await checkControlledLiveSession({
-    before: cohort(),
+    before: owner(),
     request: async (body) => ({ status: 200, body: ` \n\t\n${JSON.stringify(success(body))}\n` }),
     read: async () => {
       reads++;
-      return cohort();
+      return owner();
     },
   });
   assert.equal(reads, 1);
 });
 
-test("live session refuses incomplete or competing ownership before requesting a canary", async () => {
-  const mutations: Array<(value: LiveSessionCohort) => void> = [
+test("live session refuses an inactive or non-owning deployment before requesting a canary", async () => {
+  const mutations: Array<(value: LiveSessionOwner) => void> = [
     (value) => {
-      value.status.enabled = false;
+      value.status.ownerDeploymentId = null;
     },
     (value) => {
-      value.status.desiredDeploymentId = "other";
+      value.status.ownerDeploymentId = "other";
     },
     (value) => {
-      value.status.members[0]!.ready = false;
+      value.status.active = false;
     },
     (value) => {
-      value.status.members[0]!.generation--;
-    },
-    (value) => {
-      value.status.members[0]!.retired = true;
-    },
-    (value) => {
-      value.status.members[0]!.state = "relinquished";
-    },
-    (value) => {
-      value.status.members.push({ ...value.status.members[0]!, instanceId: "other", taskArn: "unexpected" });
+      value.status.deploymentId = "other";
     },
   ];
   for (const mutate of mutations) {
-    const before = cohort();
+    const before = owner();
     mutate(before);
     await assert.rejects(
       checkControlledLiveSession({
@@ -88,32 +61,30 @@ test("live session refuses incomplete or competing ownership before requesting a
         request: async () => {
           assert.fail("no canary before ownership proof");
         },
-        read: async () => cohort(),
+        read: async () => owner(),
       }),
-      /exact ready deployment cohort/,
+      /active deployment that owns background work/,
     );
   }
 });
 
-test("live session requires an explicit final success bound to request and instance", async () => {
+test("live session requires an explicit final success bound to request and deployment", async () => {
   for (const patch of [
     { ok: false, error: "sensitive server error" },
     { ok: undefined },
     { requestId: "another-request" },
     { deploymentId: "stale" },
-    { generation: 3 },
-    { instanceId: "old-instance" },
-    { taskArn: "old-task" },
+    { instanceId: "" },
   ]) {
     let calls = 0;
     await assert.rejects(
       checkControlledLiveSession({
-        before: cohort(),
+        before: owner(),
         request: async (body) => {
           calls++;
           return { status: 200, body: JSON.stringify({ ...success(body), ...patch }) };
         },
-        read: async () => cohort(),
+        read: async () => owner(),
       }),
       (error: Error) => {
         assert.match(error.message, /did not confirm success/);
@@ -130,7 +101,7 @@ test("live session never retries an ambiguous or truncated response", async () =
     let calls = 0;
     await assert.rejects(
       checkControlledLiveSession({
-        before: cohort(),
+        before: owner(),
         request: async () => {
           calls++;
           if (kind === "disconnect") throw new Error("Bearer secret must never escape");
@@ -139,7 +110,7 @@ test("live session never retries an ambiguous or truncated response", async () =
             body: kind === "heartbeat-only" ? " \n\n" : '{"ok":true',
           };
         },
-        read: async () => cohort(),
+        read: async () => owner(),
       }),
       (error: Error) => {
         assert.doesNotMatch(error.message, /Bearer secret/);
@@ -150,33 +121,30 @@ test("live session never retries an ambiguous or truncated response", async () =
   }
 });
 
-test("live session rejects ownership or task replacement during a successful model check", async () => {
-  const mutations: Array<(value: LiveSessionCohort) => void> = [
+test("live session rejects an ownership change during a successful model check", async () => {
+  const mutations: Array<(value: LiveSessionOwner) => void> = [
     (value) => {
-      value.status.generation++;
-      value.status.members.forEach((member) => member.generation++);
+      value.status.ownerDeploymentId = null;
     },
     (value) => {
-      value.taskArns[1] = "replacement";
-      value.status.members[1]!.taskArn = "replacement";
+      value.status.active = false;
     },
     (value) => {
-      value.status.members[0]!.instanceId = "replacement-instance";
-    },
-    (value) => {
-      value.status.desiredDeploymentId = null;
+      value.deploymentId = "core:replacement";
+      value.status.deploymentId = "core:replacement";
+      value.status.ownerDeploymentId = "core:replacement";
     },
   ];
   for (const mutate of mutations) {
-    const after = cohort();
+    const after = owner();
     mutate(after);
     await assert.rejects(
       checkControlledLiveSession({
-        before: cohort(),
+        before: owner(),
         request: async (body) => ({ status: 200, body: JSON.stringify(success(body)) }),
         read: async () => after,
       }),
-      /cohort/,
+      /owns background work|deployment changed/,
     );
   }
 });

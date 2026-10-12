@@ -44,7 +44,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     audienceScopeId: scopeId("channel", "C"),
     label: "#eng (the whole channel)",
   } as const;
-  const capChannel = async (actorId: string) =>
+  const capChannel = async (actorId: string, extra: Partial<CapabilityClaims> = {}) =>
     await mintCapabilityToken(
       {
         actorId,
@@ -53,6 +53,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         destinations: [THREAD, ROOT],
         defaultDestinationKey: THREAD.key,
         exp: Date.now() + CAPABILITY_TTL_MS,
+        ...extra,
       },
       SECRET,
     );
@@ -447,6 +448,19 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.ok(got.effectiveSoul.includes(got.orgSoul));
   });
 
+  it("effective SOUL deduplicates organization text without rewriting stored scope policy", async () => {
+    const orgScope = scopeId("org", "default-org");
+    const personalScope = scopeId("personal", "U7");
+    const orgSoul = built.config.getSoul(orgScope)!;
+    built.config.setSoul(personalScope, ` ${orgSoul} `);
+    const res = await get("/v1/soul", { "x-agent-capability": await capFor("U7") });
+    assert.equal(res.status, 200);
+    const got = (await res.json()) as any;
+    assert.equal(got.soul, ` ${orgSoul} `);
+    assert.equal(got.effectiveSoul.split(orgSoul).length - 1, 1);
+    assert.equal(built.config.getSoul(personalScope), got.soul);
+  });
+
   it("reads channel SOUL for a channel-scoped token without exposing the actor's personal SOUL", async () => {
     built.config.setSoul(scopeId("personal", "U8"), "Private U8 instruction.");
     built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");
@@ -814,6 +828,30 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     );
   });
 
+  it("refuses webhook registration without a live person in personal and channel scopes", async () => {
+    const webhooksBefore = await built.app.listWebhooks();
+    const auditBefore = await built.auditLog.events();
+    for (const scope of [scopeId("personal", "U1"), scopeId("channel", "C")]) {
+      for (const extra of [
+        {},
+        { liveActor: false, liveAuthor: false },
+        { triggered: true },
+        { triggered: true, liveActor: true },
+        { triggered: true, liveAuthor: true },
+      ]) {
+        const res = await post(
+          "/v1/webhooks",
+          { action: "handle the event", verification: { scheme: "hmac-sha256", secret: "secret" } },
+          { "x-agent-capability": await capFor("U1", scope, { aud: "control-plane", ...extra }) },
+        );
+        assert.equal(res.status, 403, JSON.stringify({ scope, extra }));
+        assert.equal(((await res.json()) as { error: string }).error, "forbidden");
+        assert.deepEqual(await built.app.listWebhooks(), webhooksBefore);
+        assert.deepEqual(await built.auditLog.events(), auditBefore);
+      }
+    }
+  });
+
   it("registers a webhook as the TOKEN's actor, ignoring a forged owner in the body", async () => {
     const res = await post(
       "/v1/webhooks",
@@ -825,7 +863,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         ownerScopeId: "personal:U2",
         destination: { type: "evil", target: "attacker" },
       },
-      { "x-agent-capability": await capFor("U1") },
+      { "x-agent-capability": await capFor("U1", scopeId("personal", "U1"), { liveActor: true }) },
     );
     assert.equal(res.status, 200);
     const { webhook, url } = (await res.json()) as any;
@@ -842,7 +880,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("registers a destination-less webhook when the token carries no destination (side-effect-only)", async () => {
     const noDest = await mintCapabilityToken(
-      { actorId: "U9", scopeId: "personal:U9", exp: Date.now() + CAPABILITY_TTL_MS },
+      { actorId: "U9", scopeId: "personal:U9", liveAuthor: true, exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
     const res = await post(
@@ -865,7 +903,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         destinationKey: "k-root",
         destination: { type: "slack", target: "C", audienceScopeId: "personal:U1" },
       },
-      { "x-agent-capability": await capChannel("U1") },
+      { "x-agent-capability": await capChannel("U1", { liveActor: true }) },
     );
     assert.equal(res.status, 200);
     const { webhook } = (await res.json()) as any;
@@ -882,7 +920,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         verification: { scheme: "hmac-sha256", secret: "unknown-destination-secret" },
         destinationKey: "k-not-in-set",
       },
-      { "x-agent-capability": await capChannel("U1") },
+      { "x-agent-capability": await capChannel("U1", { liveActor: true }) },
     );
     assert.equal(res.status, 400);
     assert.equal(((await res.json()) as any).error, "unknown_destination");
@@ -892,7 +930,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     await post(
       "/v1/webhooks",
       { action: "u2 hook", verification: { scheme: "hmac-sha256", secret: "s2" } },
-      { "x-agent-capability": await capFor("U2") },
+      { "x-agent-capability": await capFor("U2", scopeId("personal", "U2"), { liveActor: true }) },
     );
     const mine = (await (await get("/v1/webhooks", { "x-agent-capability": await capFor("U1") })).json()) as any;
     assert.ok(mine.webhooks.length >= 1);
@@ -908,7 +946,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       await post(
         "/v1/webhooks",
         { action: "u1 owned", verification: { scheme: "hmac-sha256", secret: "owned-secret" } },
-        { "x-agent-capability": await capFor("U1") },
+        { "x-agent-capability": await capFor("U1", scopeId("personal", "U1"), { liveActor: true }) },
       )
     ).json()) as any;
     const forbidden = await post(

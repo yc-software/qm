@@ -40,7 +40,7 @@ function parseFrame(data: string): SessionStateEvent | null {
 }
 
 function statesFor(events: SessionStateEvent[], threadRef: string): string[] {
-  return events.filter((e) => e.threadRef === threadRef).map((e) => e.state);
+  return events.filter((e) => e.threadRef === threadRef && e.state !== "metadata").map((e) => e.state);
 }
 
 test("a plain turn emits working then idle", async () => {
@@ -178,7 +178,8 @@ test("GET /v1/session-state/events streams transitions as SSE frames", async () 
           ?.slice("data: ".length);
         if (!data) continue;
         const ev = parseFrame(data);
-        if (ev && ev.threadRef === "web:U1:sse" && !frames.some((f) => f.state === ev.state)) frames.push(ev);
+        if (ev && ev.threadRef === "web:U1:sse" && ev.state !== "metadata" && !frames.some((f) => f.state === ev.state))
+          frames.push(ev);
       }
       if (frames.some((f) => f.state === "awaiting_approval")) break;
     }
@@ -284,10 +285,15 @@ test("a parent stays working while a subagent runs after its own turn ends — p
   const built = freshApp();
   const parentThread = "web:U1:parent";
   const childThread = "web:U1:parent-child";
+  const got = record(built.sessionStateBus);
   const parent = await built.app.turn(dm("hello", parentThread));
   const child = await built.app.turn(dm("hello", childThread));
+  assert.ok(
+    await waitFor(() => statesFor(got, parentThread).includes("idle") && statesFor(got, childThread).includes("idle")),
+    "both greeting turns settle before the delegation starts",
+  );
+  got.length = 0;
   await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
-  const got = record(built.sessionStateBus);
   const { run: parentRun } = await built.runs.enqueue({
     sessionId: parentThread,
     request: resolvedDm("delegate", parentThread),

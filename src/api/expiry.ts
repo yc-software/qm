@@ -7,12 +7,13 @@ export type InboundExpiry = { ok: true; value?: number } | { ok: false; message:
 export function normalizeInboundExpiresAt(value: unknown, field = "expiresAt"): InboundExpiry {
   if (value === undefined) return { ok: true };
 
+  const raw = typeof value === "string" && /^\s*\d+\s*$/.test(value) ? Number(value) : value;
   let ms: number;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return bad(field);
-    ms = value < SECONDS_VS_MS_CUTOFF ? value * 1000 : value;
-  } else if (typeof value === "string") {
-    const trimmed = value.trim();
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) return bad(field);
+    ms = raw < SECONDS_VS_MS_CUTOFF ? raw * 1000 : raw;
+  } else if (typeof raw === "string") {
+    const trimmed = raw.trim();
     if (!trimmed) return bad(field);
     ms = Date.parse(trimmed);
   } else {

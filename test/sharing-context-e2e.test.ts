@@ -29,6 +29,15 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
     );
   };
   await roster();
+  for (const [actor, scope] of [
+    ["U1", "personal:U1"],
+    ["U2", "personal:U2"],
+    ["U3", "personal:U3"],
+    ["U1", "channel:C1"],
+  ] as const) {
+    const computer = await built.sandboxResources.create(actor, scope, "sprites", "default");
+    await built.sandboxResources.setDefault(actor, scope, computer.id);
+  }
   await built.config.setSharingPosture("org:default-org", "open");
   const turn = async (text: string, room = false, actor = "U1", extra: Partial<TurnRequest> = {}) => {
     const result = await built.app.turn({
@@ -102,7 +111,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   );
 });
 
-test("sharing e2e: delegated live sharing requires the current pilot flag and current sharing permission", async (t) => {
+test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
   await b.workspace.write("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
   await b.turn("inspect my personal notes", true);
@@ -154,26 +163,16 @@ test("sharing e2e: delegated live sharing requires the current pilot flag and cu
     }
   };
   const read = "!read shared/open-personal-U1/notes.txt";
-  assert.match(await childTurn(read), /no file/);
-  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", true, "U1");
   assert.equal(await childTurn(read), "DELEGATED_PERSONAL_FILE");
   assert.equal(await childTurn("!run echo delegated"), "delegated");
   assert.ok(token);
   const delegatedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
   assert.equal(delegatedClaims?.liveAuthor, true);
-  assert.notEqual(delegatedClaims?.liveActor, true);
+  assert.equal(delegatedClaims?.liveActor, true);
   assert.equal(delegatedClaims?.triggered, true);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);
   await b.config.clearSharingPosture("personal:U1");
-  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", false, "U1");
-  assert.match(await childTurn(read), /no file/);
-  assert.equal(await childTurn("!run echo unprivileged"), "unprivileged");
-  assert.ok(token);
-  const unprivilegedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
-  assert.notEqual(unprivilegedClaims?.liveAuthor, true);
-  assert.notEqual(unprivilegedClaims?.liveActor, true);
-  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", true, "U1");
   await b.remove("U1");
   assert.match(await childTurn(read, "refused"), /access is no longer current/);
 });
@@ -199,7 +198,7 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
 test("sharing e2e: skill lazy assets execute, update, and disappear from the same computer after opt-out", async (t) => {
   const b = await fixture(t);
   const s = await b.skill("personal:U1", "carried-helper", "VERSION_ONE");
-  assert.match(await b.turn("!sysprompt", true), /carried-helper/);
+  assert.doesNotMatch(await b.turn("!sysprompt", true), /carried-helper/);
   assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_ONE");
   await b.skills.update(s.id, {
     ...s.manifest,
@@ -429,29 +428,29 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     maxAttempts: 1,
   });
   assert.ok(b.keychain);
-  const handles = new Map<string, string>();
+  const handles = new Map<string, string[]>();
   for (const id of ["U1", "U2"]) {
     const credential = await b.keychain.save({ ownerId: id, service: "npm", secret: `npm_${id}`, envKey: "NPM_TOKEN" });
-    handles.set(id, credentialHandle(credential.id));
-    await b.keychain.save({
+    const login = await b.keychain.save({
       ownerId: id,
       service: "custom-cli",
       files: [{ path: ".custom-cli/auth", contentBase64: Buffer.from(`file_${id}`).toString("base64") }],
     });
+    handles.set(id, [credentialHandle(credential), credentialHandle(login)]);
     await b.keychain.setConnectorToken("gmail.googleapis.com", id, {
       accessToken: `gmail_${id}`,
       expiresAt: Date.now() + 3600000,
     });
   }
   const prompt = await b.turn("!sysprompt", true);
-  assert.match(prompt, /execute scope:"owner"/);
-  assert.match(prompt, /U1[^\n]*npm[^\n]*no grant needed/);
-  assert.match(prompt, /U2[^\n]*npm[^\n]*no grant for this conversation/);
+  assert.match(prompt, /execute scope `owner`/);
+  assert.match(prompt, /### U1\n(?:(?!###)[\s\S])*npm[^\n]*own; Open live turn only/);
+  assert.match(prompt, /### U2\n(?:(?!###)[\s\S])*npm[^\n]*no grant for this conversation/);
   assert.ok(!prompt.includes("npm_U1"));
   await b.workspace.write("channel:C1", "room-only.txt", "room_data");
   const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
   const selected = (id = "U1") =>
-    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [handles.get(id), "connector_gmail_googleapis_com_default"] })}`;
+    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [...handles.get(id)!, "connector:gmail.googleapis.com:default"] })}`;
   assert.equal(await b.turn(selected(), true), "True|True|file_U1|unset|isolated");
   assert.equal(await b.turn(selected("U2"), true, "U2"), "True|True|file_U2|unset|isolated");
   for (const id of ["U1", "U2", "U1"]) {
@@ -461,8 +460,8 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     );
   }
   const ambientPrompt = await b.turn("!sysprompt", true, "U2", { origin: { kind: "ambient", live: true } });
-  assert.match(ambientPrompt, /U2[^\n]*npm[^\n]*no grant needed/);
-  assert.match(ambientPrompt, /U1[^\n]*npm[^\n]*no grant for this conversation/);
+  assert.match(ambientPrompt, /### U2\n(?:(?!###)[\s\S])*npm[^\n]*own; Open live turn only/);
+  assert.match(ambientPrompt, /### U1\n(?:(?!###)[\s\S])*npm[^\n]*no grant for this conversation/);
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
   await b.directory.replaceGroups([
     { groupId: "G1", principalId: "U1" },

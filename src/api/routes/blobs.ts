@@ -6,14 +6,8 @@ import {
   MAX_STAGE_BLOB_BYTES,
 } from "../../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import {
-  canonicalPayload,
-  extendBodyDeadline,
-  headerValue,
-  pipeToResponse,
-  sendJson,
-  verifyOrReject,
-} from "../http.ts";
+import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
+import { extendBodyDeadline, headerValue, pipeToResponse, sendJson, verifyOrReject } from "../http.ts";
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
 import type { BaseCtx, Route } from "./route.ts";

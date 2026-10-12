@@ -171,6 +171,28 @@ test("scope name is stable and slugged", () => {
   assert.match(a, /^qmt-person-tester-[0-9a-f]{6}$/);
 });
 
+test("scope names fit the 63-char provider limit for long prefixes, scratch included", () => {
+  const scope = "person:someone.with.a.rather.long.address@example-company.com";
+  const ids = [scope, "conversation:9f8e7d6c-5b4a-3210-fedc-ba9876543210", "owner:" + scope, ""];
+  for (const prefix of ["qm", "qm-long-generic-fleet-tenant-prefix", "x".repeat(70) + "-"]) {
+    for (const p of [prefix, `${prefix}-scratch`]) {
+      const names = ids.map((id) => sandboxScopeName(p, id));
+      for (const n of names) {
+        assert.ok(n.length <= 63, `${n} is ${n.length} chars`);
+        assert.match(n, /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/);
+      }
+      assert.equal(new Set(names).size, names.length);
+    }
+    assert.notEqual(sandboxScopeName(prefix, scope), sandboxScopeName(`${prefix}-scratch`, scope));
+  }
+  // Names that already fit are unchanged, so existing resident computers keep their identity.
+  assert.equal(sandboxScopeName("qmt", "person:tester"), "qmt-person-tester-7b537e");
+  assert.match(
+    sandboxScopeName("qm-long-generic-fleet-tenant-prefix", "person:tester"),
+    /^qm-long-generic-fleet-tenant-prefix-person-tester-[0-9a-f]{6}$/,
+  );
+});
+
 test("no egress force-through without a proxy url: no policy, no proxy env", async () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
   const h = await sandbox.provision(layers, { egressToken: "ignored" });
@@ -800,7 +822,7 @@ test("failed scratch initialization and deletion retain a safe retryable identit
     pending = error.handle;
     assert.equal(pending.backend, "sprites");
     assert.ok(fake.names().includes(pending.id));
-    assert.equal(error.cause, undefined);
+    assert.ok(error.cause);
     return true;
   });
   assert.ok(pending);

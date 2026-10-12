@@ -52,14 +52,13 @@ function fixture() {
           }
         : null;
     },
-    agentRequestForApproval: async () => null,
   } as unknown as SlackCoreClient;
   const flow = createTurnFlow(core);
   const directory = {
     classifyActor: async (_client: any, userId: string) => ({ externalId: userId, displayName: userId }),
     classifyUserCached: async (_client: any, userId: string) => ({ actor: { externalId: userId } }),
   } as never;
-  const approvals = createApprovals({ core, flow, directory, threads: createThreadTracker(), ids: {} as never });
+  const approvals = createApprovals({ core, flow, directory, threads: createThreadTracker() });
   const handlers: Array<{ pattern: RegExp; handler: ActionHandler }> = [];
   approvals.registerActions({ action: (pattern, handler) => void handlers.push({ pattern, handler }) });
   const ephemerals: any[] = [];

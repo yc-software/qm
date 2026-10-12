@@ -1,6 +1,7 @@
 export { loadConfigAt, sandboxCoreEnv, securityScreenEnv, CONTRACT_VERSION as contractVersion } from "./config.ts";
 export { orgEnv } from "./services.ts";
-export { compileApproval, parseSkillFrontmatter, validateSandboxLayer } from "./sandbox-layer.ts";
+export { compileApproval } from "./tool-descriptor.ts";
+export { parseSkillFrontmatter, validateSandboxLayer } from "./sandbox-layer.ts";
 export { renderTaskDefinition } from "./backends/aws.ts";
 export { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget } from "./providers.ts";
 export type {
@@ -12,12 +13,11 @@ export type {
   Target,
   QmConfig,
 } from "./config.ts";
+export type { SandboxValidation, SkillFrontmatter } from "./sandbox-layer.ts";
 export type {
   ApprovalDecision,
-  SandboxValidation,
-  SkillFrontmatter,
   ToolApproval,
   ToolAuthDescriptor,
   ToolCredentialPath,
   ToolDescriptor,
-} from "./sandbox-layer.ts";
+} from "./tool-descriptor.ts";

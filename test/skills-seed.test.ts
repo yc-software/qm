@@ -14,6 +14,7 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 test("seed skill parser reads the repo frontmatter subset", () => {
   const manifest = parseSeedSkill(`---
@@ -168,6 +169,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     dataDir: mkdtempSync(join(tmpdir(), "seeded-skills-")),
   });
   const built = buildApp(config);
+  await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
   await built.config.setConnectorClient(scopeId("org", "default-org"), "google", {
     clientId: "google-client",
     clientSecret: "google-secret",

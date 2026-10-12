@@ -1,3 +1,4 @@
+import { emojiCompletion } from "./emoji-completion";
 import { appEditSlug } from "./app-edit";
 import {
   runtimeConfigKey,
@@ -659,6 +660,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                 <textarea
                   class="composer-input"
                   dir="auto"
+                  ${emojiCompletion(composerState.draft)}
                   rows="1"
                   placeholder=${placeholder}
                   ?disabled=${inputBlocked}
@@ -842,6 +844,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             ? html` <div class="queued-chip queued-editing" role="listitem">
                 <textarea
                   class="queued-edit-input"
+                  ${emojiCompletion(queuedEdit.text)}
                   aria-label="Edit queued message"
                   rows="3"
                   .value=${live(queuedEdit.text)}
@@ -1997,6 +2000,60 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     resetComposer,
     focusComposerEnd,
     fillSuggestedPrompt,
+    addAnnotations: async (
+      text: string,
+      files: File[],
+      annotationId = crypto.randomUUID(),
+      remove = false,
+    ): Promise<boolean> => {
+      const agent = ctx.chat.state.agent;
+      if (
+        !agent ||
+        composerState.processingFiles ||
+        ctx.chat.hasUnresolvedApproval() ||
+        ctx.chat.state.resolvingApprovals.size > 0
+      )
+        return false;
+      const prefix = `annotation_${annotationId}_`;
+      const retained = composerState.attachments.filter((attachment) => !attachment.id.startsWith(prefix));
+      if (remove) {
+        composerState.attachments = retained;
+        ctx.chat.drawActiveChat(agent);
+        return true;
+      }
+      if (retained.length + 1 + files.length > MAX_FILES_PER_MESSAGE) return false;
+      composerState.processingFiles = true;
+      ctx.chat.drawActiveChat(agent);
+      try {
+        const loaded = await Promise.all(files.map((file) => loadAnyAttachment(file)));
+        if (agent !== ctx.chat.state.agent) return false;
+        const remaining = composerState.attachments.filter((attachment) => !attachment.id.startsWith(prefix));
+        if (remaining.length + 1 + loaded.length > MAX_FILES_PER_MESSAGE) return false;
+        const bytes = new TextEncoder().encode(text);
+        const annotation: Attachment = {
+          id: prefix + "context",
+          type: "document",
+          fileName: "App annotation.md",
+          mimeType: "text/markdown",
+          size: bytes.length,
+          content: bytesToBase64(bytes),
+          extractedText: text,
+        };
+        composerState.attachments = [
+          ...remaining,
+          annotation,
+          ...loaded.map((attachment, index) => ({ ...attachment, id: prefix + index })),
+        ];
+        composerState.error = "";
+        return true;
+      } catch {
+        composerState.error = "Could not prepare annotation attachments. Retrying automatically.";
+        return false;
+      } finally {
+        composerState.processingFiles = false;
+        ctx.chat.drawActiveChat(agent);
+      }
+    },
     sendSuggestedPrompt: async (prompt: string, agent: Agent): Promise<void> => {
       if (
         agent !== ctx.chat.state.agent ||

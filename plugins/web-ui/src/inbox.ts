@@ -15,6 +15,7 @@ import {
   sentMailTpl,
 } from "./sent-mail";
 import { html, nothing, render, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import {
@@ -34,8 +35,8 @@ import { embeddedComposer } from "./embedded-composer";
 import type { ComposerSubmission } from "./composer";
 import { api, ApiError, putUiState } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
-import { createInboxEventCoalescer, type InboxItemRef } from "./inbox-coalesce";
-import { charForName, ensureEmojiIndex } from "./emoji-picker";
+import { createInboxEventCoalescer } from "./inbox-coalesce";
+import { charForName } from "./emoji-picker";
 import type { DensityTier } from "./density";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { appState, can } from "./shell-state";
@@ -48,7 +49,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, icon, initials, relTime, sheenLabel, workingWave } from "./ui";
+import { brandName, fieldSelect, menuSelect, icon, initials, relTime, sheenLabel, slackMark, workingWave } from "./ui";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 
@@ -63,6 +64,8 @@ export interface InboxDraft {
 
 export interface InboxContextMessage {
   author: string;
+  authorId?: string;
+  avatarUrl?: string;
   at?: number;
   text: string;
   images?: string[];
@@ -119,6 +122,7 @@ export interface InboxItem {
   fromDetail?: string;
   snippet: string;
   context?: InboxContextMessage[];
+  participants?: Participant[];
   receivedAt: number;
   externalUrl?: string;
   draft?: InboxDraft;
@@ -127,7 +131,7 @@ export interface InboxItem {
   draftSessionId?: string;
   thread: LedgerThreadMessage[];
   gmail?: { threadId: string; subject?: string; to?: string[]; cc?: string[] };
-  slack?: { channelId: string; channelLabel?: string; ts: string; threadTs?: string };
+  slack?: { channelId: string; channelLabel?: string; ts: string; threadTs?: string; userId?: string };
   sentAt?: number;
   dismissedAt?: number;
   repliedAt?: number;
@@ -179,15 +183,23 @@ function inboxViewSegment(viewId: string): string {
 }
 
 const INBOX_FILTERS = [
-  { id: "triaged", label: "Needs attention", description: "Emails identified as needing a reply or review" },
-  { id: "human", label: "From people", description: "Emails from people, including conversations that need no reply" },
   { id: "all", label: "All emails", description: "All synced emails, including newsletters and automated mail" },
+  {
+    id: "human",
+    label: "Light filtering — exclude notifications",
+    description: "Emails from people, including conversations that need no reply",
+  },
+  {
+    id: "triaged",
+    label: "Heavy filtering — only emails that need your attention",
+    description: "Emails identified as needing a reply or review",
+  },
 ] as const;
 
 type InboxFilter = (typeof INBOX_FILTERS)[number]["id"];
 
 export const inboxState = {
-  filter: "triaged" as InboxFilter,
+  filter: "human" as InboxFilter,
   filterBusy: false,
   items: [] as InboxItem[],
   selected: [] as Array<{
@@ -297,14 +309,6 @@ function showArchiveToast(item: InboxItem): void {
   schedule();
 }
 
-let emojiIndexRequested = false;
-
-function ensureEmojiChips(): void {
-  if (emojiIndexRequested) return;
-  emojiIndexRequested = true;
-  void ensureEmojiIndex().then(() => drawAll());
-}
-
 interface InboxSurface {
   host: HTMLElement;
   viewId: string;
@@ -323,7 +327,7 @@ export function resetInboxState(): void {
   inboxState.selected = [];
   inboxState.available = [];
   inboxState.total = 0;
-  inboxState.filter = "triaged";
+  inboxState.filter = "human";
   inboxState.filterBusy = false;
   inboxState.nextCursor = null;
   feedWindows.clear();
@@ -428,6 +432,15 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     sourceContextFetched: payload.sourceContextFetched === true,
     sourceContextPartial: payload.sourceContextPartial === true,
     ...(typeof payload.sourceRefreshError === "string" ? { sourceRefreshError: payload.sourceRefreshError } : {}),
+    ...(source === "slack" && Array.isArray(payload.participants)
+      ? {
+          participants: payload.participants.flatMap((person) =>
+            person && typeof person.id === "string" && typeof person.name === "string"
+              ? [{ key: person.id, name: person.name, avatarUrl: str(person.avatarUrl) }]
+              : [],
+          ),
+        }
+      : {}),
     ...(Array.isArray(payload.context) ? { context: payload.context as InboxContextMessage[] } : {}),
     ...(str(payload.externalUrl) ? { externalUrl: payload.externalUrl as string } : {}),
     ...(draft ? { draft } : {}),
@@ -502,7 +515,7 @@ export async function refreshInbox(
     const fetchFeed = async (qs: URLSearchParams): Promise<Feed> => {
       if (refreshFilter) qs.set("filter", refreshFilter);
       const feed = await api<Feed>(`/api/inbox?${qs}`);
-      const filter = feed.filter ?? "triaged";
+      const filter = feed.filter ?? "human";
       if (refreshFilter && filter !== refreshFilter) throw new Error("Inbox filter changed during refresh. Try again.");
       refreshFilter = filter;
       return feed;
@@ -789,11 +802,15 @@ let realtimeWired = false;
 
 const enqueueRealtimeEvent = createInboxEventCoalescer(
   250,
-  (batch) => void applyRealtimeBatch(batch),
+  () => void refreshWhenVisible(),
   (fn, ms) => void window.setTimeout(fn, ms),
 );
 
-async function applyRealtimeBatch(_batch: InboxItemRef[]): Promise<void> {
+async function refreshWhenVisible(): Promise<void> {
+  if (document.visibilityState !== "visible" || !anySurfaceVisible()) {
+    resyncMissedWhileHidden = true;
+    return;
+  }
   await refreshInbox({ silent: true });
 }
 
@@ -807,16 +824,12 @@ function ensureRealtime(): void {
   realtimeWired = true;
   onInboxItemEvent((event) => {
     if (!can("inbox")) return;
-    if (!inboxState.selected.some((loop) => loop.id === event.loopId)) return;
+    if (inboxState.loaded && !inboxState.selected.some((loop) => loop.id === event.loopId)) return;
     enqueueRealtimeEvent({ loopId: event.loopId, itemId: event.itemId });
   });
   onInboxResync(() => {
     if (!can("inbox")) return;
-    if (document.visibilityState !== "visible" || !anySurfaceVisible()) {
-      resyncMissedWhileHidden = true;
-      return;
-    }
-    void refreshInbox({ silent: true });
+    void refreshWhenVisible();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !anySurfaceVisible()) return;
@@ -1119,6 +1132,7 @@ function fmtClock(ms: number): string {
 interface Participant {
   key: string;
   name: string;
+  avatarUrl?: string;
 }
 
 function participantName(raw: string): string {
@@ -1130,12 +1144,22 @@ function participantKey(raw: string): string {
 }
 
 function participantsOf(item: InboxItem): Participant[] {
-  const found = new Map<string, Participant>();
-  for (const raw of [item.from, ...(item.context ?? []).map((m) => m.author)]) {
-    const name = participantName(raw ?? "");
+  const slack = item.source === "slack";
+  const found = new Map<string, Participant>((slack ? (item.participants ?? []) : []).map((p) => [p.key, p]));
+  for (const message of [
+    {
+      author: item.from,
+      authorId: slack ? (item.slack?.userId ?? item.participants?.[0]?.key) : undefined,
+      avatarUrl: undefined,
+    },
+    ...(item.context ?? []),
+  ]) {
+    const name = participantName(message.author ?? "");
     if (!name) continue;
-    const key = participantKey(raw);
-    if (!found.has(key)) found.set(key, { key, name });
+    const id = slack ? message.authorId : undefined;
+    if (slack && !id && [...found.values()].some((person) => person.name === name)) continue;
+    const key = id ?? participantKey(message.author);
+    if (!found.has(key)) found.set(key, { key, name, avatarUrl: slack ? message.avatarUrl : undefined });
   }
   return [...found.values()];
 }
@@ -1146,6 +1170,35 @@ function avatarHue(key: string): number {
   return hash;
 }
 
+function avatarTpl(person: Participant): TemplateResult {
+  const photo = person.avatarUrl?.startsWith("https://") ? person.avatarUrl : undefined;
+  return html`<span
+    class="inbox-avatar"
+    style=${`--avatar-hue:${avatarHue(person.key)}`}
+    ${tip(person.name)}
+    aria-hidden="true"
+  >
+    ${initials(person.name)}
+    ${
+      photo
+        ? keyed(
+            photo,
+            html`<img
+              src=${photo}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              referrerpolicy="no-referrer"
+              @error=${(event: Event) => {
+                (event.currentTarget as HTMLImageElement).hidden = true;
+              }}
+            />`,
+          )
+        : nothing
+    }
+  </span>`;
+}
+
 const AVATARS_SHOWN = 4;
 
 export function participantsTpl(item: InboxItem): TemplateResult | typeof nothing {
@@ -1154,12 +1207,7 @@ export function participantsTpl(item: InboxItem): TemplateResult | typeof nothin
   const shown = people.length > AVATARS_SHOWN ? people.slice(0, AVATARS_SHOWN - 1) : people;
   const rest = people.slice(shown.length);
   return html`<span class="inbox-avatars" aria-label=${`In this conversation: ${people.map((p) => p.name).join(", ")}`}>
-    ${shown.map(
-      (p) =>
-        html`<span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(p.key)}`} ${tip(p.name)} aria-hidden="true"
-          >${initials(p.name)}</span
-        >`,
-    )}
+    ${shown.map(avatarTpl)}
     ${
       rest.length
         ? html`<span class="inbox-avatar more" ${tip(rest.map((p) => p.name).join(", "))} aria-hidden="true"
@@ -1245,6 +1293,7 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
         ...context.filter((m) => !item.slack || m.nearby === true),
         {
           author: item.from,
+          authorId: item.slack?.userId ?? (item.source === "slack" ? item.participants?.[0]?.key : undefined),
           at: item.receivedAt,
           text: item.snippet,
           images: item.images,
@@ -1269,12 +1318,13 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
     ${item.sourceRefreshError ? html`<div class="inbox-source-notice" role="status">${item.sourceRefreshError}</div>` : nothing}
     ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
     ${rows.slice(hidden).map((m) => {
-      const name = participantName(m.author) || m.author;
+      const participant = item.source === "slack" ? item.participants?.find((p) => p.key === m.authorId) : undefined;
+      const author = participant?.name ?? m.author;
+      const name = participantName(author) || author;
+      const avatarUrl = participant ? participant.avatarUrl : m.avatarUrl;
       return html`
         <div class="inbox-context-msg ${m.reply ? "inbox-thread-reply" : ""} ${m.nearby ? "inbox-nearby-context" : ""}">
-          <span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(participantKey(m.author))}`} aria-hidden="true"
-            >${initials(name)}</span
-          >
+          ${avatarTpl({ key: m.authorId ?? participantKey(m.author), name, avatarUrl: item.source === "slack" ? avatarUrl : undefined })}
           <div class="inbox-context-body">
             <div class="inbox-context-head">
               <span class="inbox-context-author">${name}</span>
@@ -1431,7 +1481,6 @@ export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothin
 }
 
 function reactionChipTpl(name: string): TemplateResult {
-  ensureEmojiChips();
   const char = charForName(name);
   return html`<span class="inbox-reaction-chip" title=${`:${name}:`}>${char ?? `:${name}:`}</span>`;
 }
@@ -1620,6 +1669,12 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
   const expandedAttr = inlineDetail ? String(open) : nothing;
   const handled = item.status !== "open";
   const gmail = item.source === "gmail";
+  const slack = item.source === "slack";
+  const senderId = item.slack?.userId ?? item.participants?.[0]?.key;
+  const sender = item.participants?.find((person) => person.key === senderId) ?? {
+    key: senderId ?? participantKey(item.from),
+    name: participantName(item.from) || "Slack",
+  };
   const heading = gmail ? item.from || item.title : (item.slack?.channelLabel ?? item.title);
   const sub = gmail ? item.title : item.from || inboxViewName(item.loopId);
   return html`
@@ -1641,7 +1696,17 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
             drawAll();
           }}
         >
-          <span class="inbox-item-glyph">${sourceGlyph(item)}</span>
+          <span class="inbox-item-glyph ${slack ? "inbox-sender-avatar" : ""}">
+            ${
+              slack
+                ? html`${participantsOf(item).length > 1 ? participantsTpl(item) : avatarTpl(sender)}<span
+                      class="inbox-sender-badge"
+                      aria-hidden="true"
+                      >${slackMark(10)}</span
+                    >`
+                : sourceGlyph(item)
+            }
+          </span>
           <span class="inbox-item-main">
             <span class="inbox-item-top">
               ${groupSize > 1 ? html`<span class="inbox-group-count">${groupSize} similar ·</span>` : nothing}
@@ -1651,7 +1716,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
             <span class="inbox-item-snippet">${slackTextTpl(item, item.snippet, { links: false })}</span>
           </span>
           <span class="inbox-item-side">
-            ${participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
+            ${slack ? nothing : participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
             <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
             ${icon(expanded ? ChevronDown : ChevronRight, 13)}
           </span>
@@ -1765,7 +1830,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     selectedLoop?.sources?.includes("gmail");
   let emptyMessage = "No messages in this view yet. Sync to check for new messages.";
   if (showEmailFilter && inboxState.filter === "triaged")
-    emptyMessage = "Nothing is waiting on you. Choose From people or All emails to see more emails.";
+    emptyMessage = "Nothing is waiting on you. Choose Light filtering or All emails to see more emails.";
   if (surface.viewId === "sent") emptyMessage = "No sent messages yet. Sent Email and Slack replies will appear here.";
   const handledItems = itemsFor(surface.viewId, "handled");
   const hasMore = !!feedWindows.get(surface.viewId)?.nextCursor;
@@ -1896,23 +1961,19 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
               <div class="inbox-filter-bar">
                 ${
                   showEmailFilter
-                    ? html`<label class="inbox-filter">
+                    ? html`<div class="inbox-filter">
                         <span>Emails</span>
-                        ${fieldSelect({
-                          className: "inbox-filter-control",
+                        ${menuSelect({
+                          className: "inbox-email-filter-control",
                           ariaLabel: "Email filter",
                           ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
                           value: inboxState.filter,
                           disabled: inboxState.filterBusy || inboxState.loading,
-                          onChange: (value) => void selectInboxFilter(value as InboxFilter),
-                          options: INBOX_FILTERS.map(
-                            (filter) =>
-                              html`<option value=${filter.id} ?selected=${filter.id === inboxState.filter}>
-                                ${filter.label}
-                              </option>`,
-                          ),
+                          keyboardNavigation: true,
+                          onSelect: (value) => void selectInboxFilter(value as InboxFilter),
+                          options: INBOX_FILTERS.map((filter) => ({ value: filter.id, label: filter.label })),
                         })}
-                      </label>`
+                      </div>`
                     : nothing
                 }
                 ${

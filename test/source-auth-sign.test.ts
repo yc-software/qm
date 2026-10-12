@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { canonicalPayload, signRequest, signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
+import { canonicalPayload, signRequest, signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest as legacySignRequest } from "../src/auth/source-auth.ts";
 
 test("canonicalPayload binds method + path + body with newlines", () => {

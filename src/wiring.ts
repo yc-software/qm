@@ -1,3 +1,4 @@
+import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
@@ -11,7 +12,7 @@ import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
   createBackgroundOwnershipStore,
-  type BackgroundOwnershipStore,
+  type BackgroundOwnershipControl,
   type BackgroundOwnership,
 } from "./runs/background-ownership.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
@@ -45,7 +46,6 @@ import {
   type SandboxResource,
   type SandboxDefault,
   type SandboxResources,
-  type SandboxResourceRollout,
 } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import type { probeModel } from "./harness/pi-harness.ts";
@@ -140,6 +140,7 @@ import type {
 import { personalScope, scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
+import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import { createRateLimiter, type RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
 import { createBudgetTracker, estimateCostUsd } from "./ratelimit/budget.ts";
@@ -231,17 +232,22 @@ import {
 import { createSdkSuperserveClient } from "./sandbox/superserve-client.ts";
 import { createE2bSandbox, type StoredE2bSandbox } from "./sandbox/e2b-sandbox.ts";
 import { createSdkE2bClient } from "./sandbox/e2b-client.ts";
+import {
+  createManagedAgentsSandbox,
+  QM_TEMPLATE_TOOLS,
+  type StoredManagedAgentsSandbox,
+} from "./sandbox/managed-agents-sandbox.ts";
+import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
 import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
+import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
-  createSandboxRouter,
-  ROUTE_CACHE_TTL_MS,
-  type SandboxBackendName,
-  type SandboxRoute,
-} from "./sandbox/sandbox-routing.ts";
-import { createSandboxMigrationRunner, type SandboxMigrationRunner } from "./sandbox/sandbox-migration-runner.ts";
+  upgradeLegacySandboxes,
+  legacySandboxBackendForScope,
+  type LegacyRoute,
+} from "./sandbox/sandbox-resource-upgrade.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
 import {
@@ -266,14 +272,7 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import { createLivenessCache, type LivenessCache, type ScopeLivenessRecord } from "./credentials/resident-auth.ts";
 import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
-import {
-  createDeviceFlowCutoverStore,
-  type DeviceFlowCutoverPolicy,
-  type DeviceFlowCutoverReset,
-  type DeviceFlowCutoverStore,
-} from "./credentials/device-flow-cutover.ts";
 import {
   createFeatureFlagStore,
   externalAppSharingAllowed,
@@ -346,11 +345,9 @@ import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createWorker, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
-  createLegacyEnrollmentBridge,
   createPostgresInstanceRegistry,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
-import { createEcsTaskProtection, type TaskProtection } from "./runs/task-protection.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
@@ -363,7 +360,8 @@ import { createProcessReaper, createReaperKillHook, type ProcessReaper } from ".
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller, type MonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
-import { supportsProcessSessions } from "./sandbox/sandbox.ts";
+import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
+import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
 import { createMemorySessionStateBus, type SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
@@ -373,7 +371,7 @@ import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
 import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
-import { createSlackCoreClient, type SlackAgentRequestContext, type SlackCoreClient } from "./api/slack-core-client.ts";
+import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
@@ -415,7 +413,6 @@ import { createMemoryReplayDedupe, createPostgresReplayDedupe, type ReplayDedupe
 import {
   emptyDeploymentLayer,
   loadDeploymentLayer,
-  type LayerCredentialTool,
   type BrokeredLayerTool,
   type DeploymentLayerRuntime,
 } from "./deployment/load-layer.ts";
@@ -429,7 +426,7 @@ import {
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
 import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
-import { errMessage, swallow, swallowAs } from "./util/errors.ts";
+import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
@@ -437,7 +434,7 @@ export interface Runtime {
   start(): void;
   startBackground(): void;
   stopBackgroundClaims(): Promise<void>;
-  setBackgroundAdmission(check: () => boolean): void;
+  setBackgroundAdmission(canClaim: () => boolean, active: () => boolean): void;
   stopBackground(): Promise<void>;
   backgroundDrained(): Promise<void>;
   stop(): Promise<void>;
@@ -478,13 +475,12 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
-  backgroundOwnership?: { store: BackgroundOwnershipStore; instanceId: string; deploymentId: string };
+  backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivityMaintenance: Sweeper;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   screenSecurity?: SecurityScreenProbe;
   deploymentLayer: DeploymentLayerRuntime;
-  credentialTools: readonly LayerCredentialTool[];
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: Promise<unknown>;
@@ -546,20 +542,19 @@ export interface BuiltApp {
   memory: MemoryService;
   sandbox: Sandbox;
   advisoryLock: AdvisoryLock;
-  sandboxMigration: SandboxMigrationRunner;
   sandboxResources: SandboxResources;
   blobTransfer: BlobTransferStore;
   files: FileArtifactStore;
   fileUploads?: DirectFileUploads;
-  livenessCache: LivenessCache;
-  deviceFlowCutover: DeviceFlowCutoverStore;
   featureFlags: FeatureFlagStore;
+  teams?: TeamStore;
   replayDedupe?: ReplayDedupe;
   brokerSessions?: BrokerSessionStore;
   directory: DirectoryStore;
   projects: ProjectStore;
   environments: EnvironmentStore;
   processes?: ProcessRegistry;
+  appPageViews?: AppPageViewLog;
   monitors: MonitorStore;
   browserSessionStore?: BrowserSessionStore;
   monitorPoller?: MonitorPoller;
@@ -585,11 +580,11 @@ export function buildApp(
   } = {},
 ): BuiltApp {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
-  let noteAdmitted = () => {};
+  let backgroundActive = () => false;
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
-    onAdmitted: () => noteAdmitted(),
   });
+  let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   if (config.databaseUrl && !config.connectorSecretKey) {
@@ -670,7 +665,7 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.hydrate();
+  void identity.hydrate().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
@@ -706,18 +701,18 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.();
+  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
+    advisoryLock,
     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const livenessCache = createLivenessCache(artifactMap<ScopeLivenessRecord>("credential_liveness"));
-  const deviceFlowCutover = createDeviceFlowCutoverStore(artifactMap<DeviceFlowCutoverPolicy>("device_flow_cutover"), {
-    resets: artifactMap<DeviceFlowCutoverReset>("device_flow_cutover_resets"),
-  });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
+  const teams = config.databaseUrl
+    ? createPostgresTeamStore(config.databaseUrl, featureFlags, scopeId("org", config.orgId))
+    : undefined;
   const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
@@ -728,7 +723,6 @@ export function buildApp(
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
-  const credentialTools = deploymentLayer.credentialTools;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog();
@@ -913,6 +907,7 @@ export function buildApp(
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey) throw new Error("SANDBOX_BACKEND=e2b requires E2B_API_KEY");
     return createE2bSandbox(workspace, {
+      advisoryLock,
       client: createSdkE2bClient({
         apiKey: e2b.apiKey,
         ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
@@ -939,6 +934,41 @@ export function buildApp(
       store: e2bBodies,
       ...(e2b.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
+        : {}),
+      onError: sandboxOnError,
+    });
+  };
+  const managedAgentsBodies = artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies");
+  const buildManagedAgents = (): Sandbox => {
+    const managedAgents = config.managedAgentsSandbox;
+    if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
+    return createManagedAgentsSandbox(workspace, {
+      client: createSdkManagedAgentsClient({
+        apiToken: managedAgents.apiToken,
+        ...(managedAgents.apiBaseUrl ? { apiBaseUrl: managedAgents.apiBaseUrl } : {}),
+        ...(managedAgents.template ? { template: managedAgents.template } : {}),
+        ...(managedAgents.sizeSlug ? { sizeSlug: managedAgents.sizeSlug } : {}),
+        ...(managedAgents.idleTimeoutSec ? { idleTimeoutSec: managedAgents.idleTimeoutSec } : {}),
+        ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
+      }),
+      ...(managedAgents.namePrefix ? { namePrefix: managedAgents.namePrefix } : {}),
+      ...(managedAgents.defaultTimeoutSec ? { defaultTimeoutSec: managedAgents.defaultTimeoutSec } : {}),
+      ...(managedAgents.snapshotIntervalSec !== undefined
+        ? { snapshotIntervalMs: managedAgents.snapshotIntervalSec * 1000 }
+        : {}),
+      ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
+      extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
+      credentialPaths: deploymentLayer.credentialPaths,
+      layerToolFiles: () => deploymentLayer.installFiles,
+      blobTransfer,
+      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      store: managedAgentsBodies,
+      ...(managedAgents.snapshotS3Bucket
+        ? {
+            snapshots: createS3SnapshotStore({ bucket: managedAgents.snapshotS3Bucket, prefix: "managed-agents-home" }),
+          }
         : {}),
       onError: sandboxOnError,
     });
@@ -1092,6 +1122,7 @@ export function buildApp(
     porter: buildPorter,
     agent37: buildAgent37,
     superserve: buildSuperserve,
+    "do-managed-agents": buildManagedAgents,
   };
   const enabledBackends = new Set(enabledSandboxBackends(config));
   const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
@@ -1100,38 +1131,47 @@ export function buildApp(
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
-  for (const backend of Object.values(config.sandboxScopeDefaults ?? {})) {
-    if (backend && !sandboxBackends[backend]) throw new Error(`Scope sandbox backend ${backend} is not configured`);
-  }
-  const sandboxRoutes = artifactMap<SandboxRoute>("sandbox_routing");
+  const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
+  const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
-    enabled: config.sandboxResourcesEnabled,
-    rollout: artifactMap<SandboxResourceRollout>("sandbox_resource_rollout"),
-    legacyScopes: async () => (await sessions.distinctScopes()).map((scope) => scope.scopeId),
-    legacySandboxes: async () => {
-      const [e2b, modal, aws, superserve] = await Promise.all([
-        e2bBodies.entries(),
-        modalBodies.entries(),
-        awsBodies.entries(),
-        superserveBodies.entries(),
-      ]);
-      return [
-        ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-        ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
-        ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-        ...superserve.map(([scopeId, body]) => ({
-          scopeId,
-          backend: "superserve" as const,
-          machineId: body.sandboxId,
-        })),
-      ];
-    },
-    records: artifactMap<SandboxResource>("sandbox_resources"),
-    defaults: artifactMap<SandboxDefault>("sandbox_defaults"),
-    routes: sandboxRoutes,
+    records: sandboxRecords,
+    defaults: sandboxDefaults,
+    upgrade: () =>
+      upgradeLegacySandboxes({
+        availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
+        records: sandboxRecords,
+        defaults: sandboxDefaults,
+        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
+        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
+        lock: advisoryLock,
+        legacyBackend: (scope) =>
+          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
+        specFor: (backend) => sandboxBackends[backend]?.profile.spec,
+        legacyScopes: async () => [
+          ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
+          ...(await environments.list()).map((environment) => environment.id),
+        ],
+        legacySandboxes: async () => {
+          const [e2b, modal, aws, superserve] = await Promise.all([
+            e2bBodies.entries(),
+            modalBodies.entries(),
+            awsBodies.entries(),
+            superserveBodies.entries(),
+          ]);
+          return [
+            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
+            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
+            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
+            ...superserve.map(([scopeId, body]) => ({
+              scopeId,
+              backend: "superserve" as const,
+              machineId: body.sandboxId,
+            })),
+          ];
+        },
+      }),
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
-    scopeDefaults: config.sandboxScopeDefaults,
     lock: advisoryLock,
     beforeRetire: async (record) => {
       if (
@@ -1168,36 +1208,8 @@ export function buildApp(
   const sandbox: Sandbox = createSandboxRouter({
     resources: sandboxResources,
     backends: sandboxBackends,
-    routes: sandboxRoutes,
     defaultBackend: config.sandboxBackend,
-    scopeDefaults: config.sandboxScopeDefaults,
     onError: sandboxOnError,
-  });
-  const sandboxMigration = createSandboxMigrationRunner({
-    backends: sandboxBackends,
-    routes: sandboxRoutes,
-    defaultBackend: config.sandboxBackend,
-    scopeDefaults: config.sandboxScopeDefaults,
-    advisoryLock,
-    settleMs: ROUTE_CACHE_TTL_MS,
-    provisionOptions: async (scopeId) => {
-      const egressSecret = config.capabilitySecret ?? config.signingSecret;
-      if (!egressSecret) return {};
-      const egressToken = await mintCapabilityToken(
-        {
-          actorId: "system:sandbox-migration",
-          scopeId: scopeId as ScopeId,
-          aud: EGRESS_PROXY_AUD,
-          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, config.apiBaseUrl ?? "", true),
-          exp: Date.now() + CAPABILITY_TTL_MS,
-        },
-        egressSecret,
-        config.capabilityTokenCompression,
-      );
-      return { egressToken };
-    },
-    withLegacyMutation: (scope, action) => sandboxResources.withLegacyMutation(scope, action),
-    hasLiveWork: async (scope) => !!processes && (await processes.liveByScope(scope)).length > 0,
   });
   const secretSource =
     config.secretsBackend === "aws"
@@ -1222,6 +1234,15 @@ export function buildApp(
     ...deriveConnectorKey(keychainKeyMaterial ?? randomBytes(32), "keychain"),
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/keychain_credentials/0002-delete-auto-captured-logins",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS keychain_credentials (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS keychain_grants (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture')`,
+      `DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'`,
+    ],
+  });
   const credentialStore: Keychain = createKeychain({
     creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
     grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
@@ -1278,7 +1299,7 @@ export function buildApp(
     void mcpServers
       .list()
       .then((servers) => setPublicOAuthClients(mcpPublicOAuthClients(servers)))
-      .catch((e: unknown) => swallow("mcp oauth client sync", e));
+      .catch(reportFailureAs("mcp oauth client sync", undefined));
   mcpServers.onChange(syncMcpOAuth);
   syncMcpOAuth();
   const mcpTools = () => mcpToolService.toolDefs();
@@ -1604,6 +1625,8 @@ export function buildApp(
     processes = config.databaseUrl ? createPostgresProcessRegistry(config.databaseUrl) : createMemoryProcessRegistry();
   }
 
+  const appPageViews =
+    config.databaseUrl && config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(config.databaseUrl) : undefined;
   const brokerSessions = config.databaseUrl ? createPostgresBrokerSessions(config.databaseUrl) : undefined;
   const replayDedupe = config.databaseUrl ? createPostgresReplayDedupe(config.databaseUrl) : createMemoryReplayDedupe();
   const metrics = config.databaseUrl ? createPostgresMetricsSink(config.databaseUrl) : createMetricsSink();
@@ -1731,8 +1754,8 @@ export function buildApp(
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, sessions });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity });
+  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
+  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
   const managesArtifactHome = createManagesArtifactHome({ managedGroups: projects, directory }, canManageScope);
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
@@ -1924,6 +1947,7 @@ export function buildApp(
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
     conversations: {
+      search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
       list: (actorId) => app.listSessions(actorId),
       start: (actorId, input) => startSession(app, sessions, actorId, input),
     },
@@ -1945,6 +1969,7 @@ export function buildApp(
     },
   });
   const orchestratorDeps: OrchestratorDeps = {
+    sessionStateBus,
     externalSlackPolicies: config.externalSlackPolicies,
     sessionSyscalls,
     refreshModels,
@@ -1960,7 +1985,6 @@ export function buildApp(
     workspace,
     files,
     sandbox,
-    sandboxMigration,
     sandboxResources,
     swarms,
     connectorTokens,
@@ -2009,9 +2033,8 @@ export function buildApp(
     runs,
     tasks,
     blobTransfer,
-    livenessCache,
-    deviceFlowCutover,
     featureFlags,
+    teams,
     credentialUsage,
     connectorStatusCache,
     resolveConnectorClient: resolveClient,
@@ -2034,7 +2057,6 @@ export function buildApp(
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,
-    credentialTools,
     brokeredTools,
     deploymentLayer,
     layerBrokerFor,
@@ -2047,7 +2069,7 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  wireRunResultDeliveries(runs, deliveries, tasks, recoveryAdminUrlFor, sessions);
+  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, tasks, recoveryAdminUrlFor, sessions);
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -2144,8 +2166,10 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
+    shutdown: () => inlineShutdown.signal,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -2261,7 +2285,6 @@ export function buildApp(
     runs,
     turnStream,
     tasks,
-    agentRequests: artifactMap<SlackAgentRequestContext>("slack_agent_requests"),
     ackPicks: ackEmojiPicks,
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
@@ -2357,6 +2380,14 @@ export function buildApp(
         : advisoryLock.withLock("session-return-sweep", sweepSessionReturns),
     1_000,
     { label: "session-returns", immediate: true },
+  );
+  const runResultSweeper = createSweeper(
+    () =>
+      advisoryLock.tryWithLock
+        ? advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep())
+        : advisoryLock.withLock("run-result-sweep", () => runResultRecovery.sweep()),
+    60_000,
+    { label: "run-results" },
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
@@ -2552,6 +2583,8 @@ export function buildApp(
     },
     app,
   );
+  const finishCredentials = (handle: SandboxHandle, processId: string) =>
+    finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
@@ -2567,6 +2600,7 @@ export function buildApp(
           currentScopeMembers,
           sessions,
           leaderLease,
+          onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
         })
       : null;
@@ -2585,45 +2619,23 @@ export function buildApp(
     directory,
     currentScopeMembers,
   });
-  const backgroundOwnership = config.backgroundDeploymentId
+  const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
         store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
         instanceId: randomUUID(),
         deploymentId: config.backgroundDeploymentId,
+        active: () => backgroundActive(),
       }
     : undefined;
-  const legacyRegistry =
-    pgArtifactMap && (backgroundOwnership || (config.buildSha && config.backgroundWorkEnabled))
+  const instanceRegistry: InstanceRegistry =
+    pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
           instanceId: randomUUID(),
-          buildSha: backgroundOwnership ? `enrollment:${backgroundOwnership.deploymentId}` : config.buildSha!,
+          buildSha: config.buildSha,
           startedAt: Date.now(),
         })
       : createNoopInstanceRegistry();
-  const instanceRegistry: InstanceRegistry = backgroundOwnership
-    ? createLegacyEnrollmentBridge(legacyRegistry, async () => {
-        if (!config.backgroundWorkEnabled || !backgroundAdmission()) return false;
-        const state = await backgroundOwnership.store.get();
-        const member = state.members.find((entry) => entry.instanceId === backgroundOwnership.instanceId);
-        return (
-          !state.enabled &&
-          state.generation === 0 &&
-          member?.generation === 0 &&
-          !member.retired &&
-          member.state === "admitted" &&
-          member.ready &&
-          backgroundAdmission()
-        );
-      })
-    : legacyRegistry;
-  const taskProtection: TaskProtection | null =
-    config.ecsTaskProtection && config.ecsAgentUri ? createEcsTaskProtection(config.ecsAgentUri) : null;
-  const drain: DrainController = createDrainController({
-    registry: instanceRegistry,
-    protection: taskProtection,
-    busy: () => admittedWork.busy() || workers.some((w) => w.busy()),
-  });
-  noteAdmitted = () => drain.noteBusy();
+  const drain: DrainController = createDrainController({ registry: instanceRegistry });
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
       admittedWork,
@@ -2634,13 +2646,14 @@ export function buildApp(
       errors,
       pollMs: 250,
       canClaim: () => backgroundAdmission() && drain.canClaim(),
-      onClaimed: () => drain.noteBusy(),
     }),
   );
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         intervalMs: config.processReaperIntervalMs,
-        ...(supportsProcessSessions(sandbox) ? { kill: createReaperKillHook(sandbox) } : {}),
+        ...(supportsProcessSessions(sandbox)
+          ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
+          : {}),
         leaderLease,
       })
     : null;
@@ -2737,6 +2750,7 @@ export function buildApp(
       swarms?.start();
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
+      runResultSweeper.start();
       approvalDeliverySweeper.start();
     };
     if (backgroundStopping)
@@ -2766,6 +2780,7 @@ export function buildApp(
       swarms?.stop(),
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
+      runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
       ...workers.map((worker) => worker.stopClaims()),
     ];
@@ -2778,15 +2793,26 @@ export function buildApp(
     backgroundStopping = draining;
     return draining;
   }
+  async function releaseInFlightRuns(): Promise<void> {
+    inlineShutdown.abort();
+    await Promise.all([
+      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
+        swallowAs("wiring: inline turn handback failed", undefined),
+      ),
+      ...workers.map((w) => w.releaseInFlight()),
+    ]);
+  }
   const runtime: Runtime = {
     start() {
+      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
-    setBackgroundAdmission(check) {
-      backgroundAdmission = check;
+    setBackgroundAdmission(canClaim, active) {
+      backgroundAdmission = canClaim;
+      backgroundActive = active;
     },
     async stopBackgroundClaims() {
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
@@ -2797,9 +2823,7 @@ export function buildApp(
       await backgroundStopping;
       await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
     },
-    async releaseInFlightRuns() {
-      await Promise.all(workers.map((w) => w.releaseInFlight()));
-    },
+    releaseInFlightRuns,
     async stop() {
       await stopBackground();
       await Promise.all([
@@ -2808,15 +2832,19 @@ export function buildApp(
         ),
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await Promise.all(workers.map((w) => w.releaseInFlight()));
+      await releaseInFlightRuns();
       await drain.stop();
-      runs.close?.();
-      void runSignals.close?.();
-      void sessionStateBus.close?.();
-      void ledgerEventBus.close?.();
-      void runActivity.close?.();
       stopStreamSync();
-      void runStreamEvents.close?.();
+      await Promise.all(
+        [
+          runs.close?.(),
+          runSignals.close?.(),
+          sessionStateBus.close?.(),
+          ledgerEventBus.close?.(),
+          runActivity.close?.(),
+          runStreamEvents.close?.(),
+        ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
+      );
       await harness.turns.close?.();
       await tasks.close?.();
       await flyTunnel?.stop();
@@ -2831,7 +2859,6 @@ export function buildApp(
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
-    credentialTools,
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
@@ -2891,21 +2918,20 @@ export function buildApp(
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
     sandbox,
-    sandboxMigration,
     sandboxResources,
     advisoryLock,
     blobTransfer,
     files,
     ...(fileUploads ? { fileUploads } : {}),
-    livenessCache,
-    deviceFlowCutover,
     featureFlags,
+    teams,
     ...(replayDedupe ? { replayDedupe } : {}),
     ...(brokerSessions ? { brokerSessions } : {}),
     directory,
     projects,
     environments,
     ...(processes ? { processes } : {}),
+    ...(appPageViews ? { appPageViews } : {}),
     monitors,
     ...(browserSessionStore ? { browserSessionStore } : {}),
     ...(monitorPoller ? { monitorPoller } : {}),
@@ -2954,6 +2980,7 @@ export function serverDeps(
         }
       : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
+    ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
@@ -3001,8 +3028,8 @@ export function serverDeps(
     rateLimiter: built.rateLimiter,
     acl: built.acl,
     credentialUsage: built.credentialUsage,
-    deviceFlowCutover: built.deviceFlowCutover,
     featureFlags: built.featureFlags,
+    ...(built.teams ? { teams: built.teams } : {}),
     egressAudit: built.egressAudit,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -3010,7 +3037,6 @@ export function serverDeps(
     metrics: built.metrics,
     crons: built.crons,
     loops: built.loops,
-    credentialServices: () => built.credentialTools.map((tool) => tool.service),
     deploymentLayer: built.deploymentLayerStore,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
@@ -3018,6 +3044,7 @@ export function serverDeps(
     ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
     ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
     ...(config.deployAppsLoginPath ? { deployAppsLoginPath: config.deployAppsLoginPath } : {}),
+    ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
     loopIngress: built.loopIngress,
@@ -3059,7 +3086,9 @@ export function serverDeps(
       ? {
           loopSourceTokens: built.keychain,
           inboxSourceRefresh: createInboxSourceRefresh({
+            featureFlags: built.featureFlags,
             items: built.loops.items,
+            errors: built.errors,
             tokens: built.keychain,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
           }),
@@ -3069,7 +3098,6 @@ export function serverDeps(
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
     environments: built.environments,
-    sandboxMigration: built.sandboxMigration,
     sandboxResources: built.sandboxResources,
   };
 }

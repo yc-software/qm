@@ -6,17 +6,25 @@ export async function reconcileProcesses(
   handle: SandboxHandle,
   registry: ProcessRegistry,
   scopeId: string,
+  onExit?: (handle: SandboxHandle, processId: string) => Promise<void>,
 ): Promise<void> {
-  const records = await registry.listByScope(scopeId);
-  const running = records.filter((r) => r.status === "running" && (!r.sandboxId || r.sandboxId === handle.resourceId));
-  if (!running.length) return;
-
-  const live = await sandbox.listProcesses(handle);
-  const byId = new Map(live.map((s) => [s.processId, s]));
-  for (const rec of running) {
-    const backend = byId.get(rec.processId);
-    if (!backend || backend.status.state === "exited") {
-      await registry.markStatus(rec.processId, "exited");
+  const records = (await registry.listByScope(scopeId)).filter(
+    (r) => !r.sandboxId || r.sandboxId === handle.resourceId,
+  );
+  const running = records.filter((r) => r.status === "running");
+  const finished = records.filter((r) => r.status !== "running" && r.credentialsPending).map((r) => r.processId);
+  if (running.length) {
+    const byId = new Map((await sandbox.listProcesses(handle)).map((s) => [s.processId, s]));
+    for (const rec of running) {
+      const backend = byId.get(rec.processId);
+      if (!backend || backend.status.state === "exited") {
+        await registry.markStatus(rec.processId, "exited");
+        finished.push(rec.processId);
+      }
     }
   }
+  if (!onExit) return;
+  const failures: unknown[] = [];
+  for (const processId of finished) await onExit(handle, processId).catch((error) => failures.push(error));
+  if (failures.length) throw new AggregateError(failures, "Could not finish exited background jobs");
 }

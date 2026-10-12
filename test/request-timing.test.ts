@@ -35,7 +35,7 @@ after(async () => {
   await new Promise<void>((resolve) => collector.close(() => resolve()));
 });
 
-test("core request timings carry registered route templates, never raw paths, and runs report queue wait", async () => {
+test("core request timings keep raw URLs alongside route templates and runs report queue wait", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "timing-")) }));
   const server = createInsecureTestServer(built.app);
   server.listen(0);
@@ -54,9 +54,20 @@ test("core request timings carry registered route templates, never raw paths, an
     await settle(3);
     const requests = captured.filter((event) => event.contexts?.trace?.op === "http.server");
     assert.equal(requests.length, 3);
-    assert.doesNotMatch(JSON.stringify(requests), /private/);
     assert.deepEqual(
-      requests.map((event) => [event.transaction, event.contexts?.trace?.status, event.tags?.http_status]),
+      requests.map((event) => event.contexts.trace.data.url),
+      [
+        "/v1/sessions/private-session-id?token=private-token",
+        "/v1/no-such-route/private-segment-9f3a/deep",
+        "/v1/blobs/private-blob-id",
+      ],
+    );
+    assert.deepEqual(
+      requests.map((event) => [
+        event.transaction,
+        event.contexts?.trace?.status,
+        event.contexts?.trace?.data?.http_status,
+      ]),
       [
         ["GET /v1/sessions/:id", "invalid_argument", "400"],
         ["POST /*", "not_found", "404"],
@@ -68,9 +79,6 @@ test("core request timings carry registered route templates, never raw paths, an
       assert.equal(event.tags?.service, "core");
       assert.ok(event.timestamp! >= event.start_timestamp!);
       assert.match(event.contexts!.trace!.trace_id!, /^[a-f0-9]{32}$/);
-      assert.equal(event.server_name, undefined);
-      assert.equal(event.contexts.otel, undefined);
-      assert.equal(event.contexts.trace.data, undefined);
       assert.deepEqual(event.spans, []);
     }
     const { run } = await built.runs.enqueue({
@@ -89,9 +97,10 @@ test("core request timings carry registered route templates, never raw paths, an
     await settle(4);
     const runs = captured.filter((event) => event.contexts?.trace?.op === "queue.task");
     assert.equal(runs.length, 1);
-    assert.doesNotMatch(JSON.stringify(runs), /private/);
     assert.equal(runs[0]!.transaction, "run");
-    assert.deepEqual(runs[0]!.tags, { service: "core", surface: "web", origin: "human" });
+    assert.deepEqual(runs[0]!.tags, { service: "core" });
+    assert.equal(runs[0]!.contexts.trace.data.surface, "web");
+    assert.equal(runs[0]!.contexts.trace.data.origin, "human");
     assert.equal(runs[0]!.contexts?.trace?.status, "ok");
     assert.equal(runs[0]!.measurements?.queue_wait?.unit, "millisecond");
     assert.ok(runs[0]!.measurements!.queue_wait!.value >= 0);

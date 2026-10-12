@@ -119,10 +119,10 @@ test("memory capture policy can disable automatic post-turn extraction", async (
   assert.doesNotMatch(res.reply ?? "", /billing service/);
 });
 
-test("the memory protocol is always present in the system prompt", async () => {
+test("memory discovery remains in the system orientation", async () => {
   const { app } = freshApp();
   const res = await app.turn(dm("!sysprompt", "dm:U1:tA"));
-  assert.match(res.reply ?? "", /## Memory/);
+  assert.match(res.reply ?? "", /search `memory`, use `history` for this conversation/);
 });
 
 test("capture dedupes, dates, and recall returns the stored memory", async () => {

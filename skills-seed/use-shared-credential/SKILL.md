@@ -13,12 +13,15 @@ core stamps the secret onto the outbound call at the wire and returns the respon
 
 ## When this applies
 
-Your system prompt lists, under **"Shared org credentials available to you"**, any credentials
-vended to _this_ conversation — each with its slug, host, and the methods/paths you may use. If
-that section is absent (or your environment has no `AGENT_CREDENTIAL_TOKEN`), you have no shared
-broker credentials. A separately authorized personal login or connected app may still be
-available; use only its advertised capabilities and permissions. Never route around a denial
-or ask the user to paste a token.
+The **Credentials** inventory groups available credentials by owner. Organization rows marked
+`proxy` give the host and allowed methods/paths. Select the exact `service_<slug>` handle in
+`execute.credentials` for the command making the request. Core supplies
+`AGENT_CREDENTIAL_TOKEN` only to that command; its absence before selection does not mean
+access is missing. Use that token, not `AGENT_API_TOKEN`, for broker requests.
+
+Only listed credentials are available. A separately authorized personal login or connected
+app may also be available; use only its advertised capabilities and permissions. Never
+route around a denial or ask the user to paste a token.
 
 ## How to call it
 
@@ -40,6 +43,7 @@ The reply is an envelope — the upstream status + body, never the secret:
 { "status": 200, "contentType": "application/json", "body": "<the upstream response text>" }
 ```
 
+A non-2xx `status` is the upstream service’s response, not a broker failure.
 Parse `body` as the upstream returned it (e.g. JSON). For a write (when the credential allows a
 non-GET method), put the request payload in the `body` field of your POST.
 

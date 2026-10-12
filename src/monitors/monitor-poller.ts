@@ -43,6 +43,7 @@ export interface MonitorPollerDeps {
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
+  onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
 }
@@ -107,7 +108,7 @@ function renderEvent(m: Monitor, output: string, ev: MonitorEvent): { input: str
       surface: "monitor",
       attrs: { "process-id": m.processId },
       at: new Date(),
-      why: `You are watching background job ${m.processId} (\`${m.command}\`) in this conversation. ${what}`,
+      why: `You are watching background job ${m.processId} (${m.purpose ? `“${m.purpose}”` : `\`${m.command}\``}) in this conversation. ${what}`,
       ...(m.instructions
         ? { orders: { note: "what you asked for when you armed this watch — follow it exactly", text: m.instructions } }
         : {}),
@@ -157,7 +158,10 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       threadRef: m.threadRef,
       ...(m.destination ? { destination: m.destination } : {}),
       ...(withErrorNotice
-        ? { errorNotice: (s) => `⚠️ A background-job update (\`${m.command}\`) could not run: ${s}` }
+        ? {
+            errorNotice: (s) =>
+              `⚠️ A background-job update (${m.purpose ? `“${m.purpose}”` : `\`${m.command}\``}) could not run: ${s}`,
+          }
         : {}),
     });
   }
@@ -251,7 +255,10 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
       if (exited || expired) await deps.monitors.setEnabled(m.id, false);
     }
-    if (exited) await deps.processes.markStatus(m.processId, "exited");
+    if (exited) {
+      await deps.processes.markStatus(m.processId, "exited");
+      await deps.onProcessExit?.(handle, m.processId).catch((e) => deps.monitors.recordError(m.id, errMessage(e)));
+    }
     return true;
   }
 

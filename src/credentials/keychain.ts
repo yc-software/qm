@@ -2,7 +2,6 @@ import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advi
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
-import { CAPABILITY_CURL_AUTH, keychainUseCommand } from "../api/contract.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
@@ -11,7 +10,6 @@ import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
-import type { CredentialPathSpec } from "./resident-paths.ts";
 import { envKey } from "./connector-token.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
@@ -103,7 +101,6 @@ export interface KeychainCredential {
   envKey?: string;
   target?: string;
   targets?: string[];
-  capturePaths?: CredentialPathSpec[];
   host?: string;
   accountLabel?: string;
   fields?: CredentialFieldMeta[];
@@ -310,9 +307,7 @@ interface SaveCredentialInput {
   files?: CredentialFile[];
   host?: string;
   accountLabel?: string;
-  capturePaths?: CredentialPathSpec[];
   origin?: string;
-  expectedOrigin?: string;
   expiresAt?: number;
 }
 
@@ -375,8 +370,6 @@ interface MaterializedFileCred {
 
 export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
 
-export const DEVICE_FLOW_ORIGIN = "device-flow-auto-capture";
-
 export class KeychainError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -393,15 +386,14 @@ interface GrantListFilter {
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
+  updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<void>;
+  writebackBaseline(
+    source: FileCredentialSource,
+    fingerprint: string,
+  ): Promise<Extract<MaterializedCred, { kind: "file" }>>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
-  setCapturePaths(
-    ownerId: string,
-    service: string,
-    capturePaths: CredentialPathSpec[],
-    expectedOrigin: string,
-  ): Promise<boolean>;
   listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
   /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
@@ -439,7 +431,6 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
     singleUse: boolean;
     commit(): Promise<void>;
   }>;
-  materialize(grantId: string, scopeId: ScopeId, usedBy: string): Promise<MaterializedCred>;
   materializeOwnById(ownerId: string, credentialId: string, scopeId: ScopeId): Promise<MaterializedCred>;
   materializeOwn(ownerId: string): Promise<MaterializedEnvCred[]>;
   materializeOwnFiles(ownerId: string): Promise<MaterializedFileCred[]>;
@@ -451,11 +442,26 @@ function fingerprintOf(secret: string): string {
   return hashId([secret]);
 }
 
-export function credentialHandle(credentialId: string): string {
-  return `kc_${credentialId.slice(0, 12)}`;
+export function credentialHandle(credential: Pick<KeychainCredential, "id" | "service">): string {
+  return `${encodeURIComponent(credential.service)}:${credential.id}`;
 }
 
-export function fileCredentialFingerprint(files: CredentialFile[]): string {
+export interface FileCredentialSource {
+  credentialId: string;
+  ownerId: string;
+  service: string;
+  grantId?: string;
+}
+
+export function credentialFilesFingerprint(files: CredentialFile[]): string {
+  return fileCredentialFingerprint(
+    files
+      .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
+      .sort((a, b) => homeRelativePath(a.path).localeCompare(homeRelativePath(b.path))),
+  );
+}
+
+function fileCredentialFingerprint(files: CredentialFile[]): string {
   return fingerprintOf(JSON.stringify(files.map((f) => ({ ...f, path: homeRelativePath(f.path) }))));
 }
 
@@ -500,7 +506,9 @@ function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: strin
   const { secretEnc: _, ...meta } = rec;
   return {
     ...meta,
-    ...(rec.kind === "env" && !isBackendCredential(rec) ? { credentialHandle: credentialHandle(rec.id) } : {}),
+    ...((rec.kind === "env" || rec.kind === "file") && !isBackendCredential(rec)
+      ? { credentialHandle: credentialHandle(rec) }
+      : {}),
   };
 }
 
@@ -821,9 +829,6 @@ export function createKeychain(deps: {
     }
   }
 
-  const oauthExpired = (rec: KeychainCredentialMeta, t: number) =>
-    rec.expiresAt !== undefined && t >= rec.expiresAt - oauthSkew;
-
   async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
     const t = now();
     const refreshable = rec.refresh?.refreshTokenEnc && deps.refreshConnector && rec.host ? rec.host : null;
@@ -836,23 +841,8 @@ export function createKeychain(deps: {
       }
       return pending;
     }
-    if (oauthExpired(rec, t) && !refreshable) return null;
+    if (oauthExpired(rec, t, oauthSkew) && !refreshable) return null;
     return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
-  }
-
-  function connectorMeta(rec: KeychainCredentialMeta, t: number): ConnectorMeta {
-    const hasRefresh = !!rec.refresh?.refreshTokenEnc;
-    const refreshFailed = typeof rec.refresh?.refreshFailedAt === "number";
-    const tokenExpired = oauthExpired(rec, t);
-    return {
-      credentialId: rec.id,
-      ownerId: rec.ownerId,
-      host: rec.host ?? rec.service,
-      ...(rec.refresh?.accountType ? { accountType: rec.refresh.accountType } : {}),
-      ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
-      connected: true,
-      ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
-    };
   }
 
   async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
@@ -860,7 +850,7 @@ export function createKeychain(deps: {
     if (!service) throw new KeychainError(400, "service required");
     let files: CredentialFile[] | undefined;
     if (input.files?.length) {
-      files = input.files.map((f) => ({ ...f, path: keychainFilePath(f.path) }));
+      files = checkedFiles(input.files.map((f) => ({ ...f, path: keychainFilePath(f.path) })));
     } else if (input.target && input.secret) {
       files = [
         {
@@ -902,7 +892,6 @@ export function createKeychain(deps: {
     const ownerId = canonicalPerson(input.ownerId);
     const id = credId(ownerId, service, slot);
     const buildRec = (prior?: KeychainCredential | null): KeychainCredential => {
-      const carriedCapturePaths = input.capturePaths ?? prior?.capturePaths;
       return {
         id,
         ownerId,
@@ -912,7 +901,6 @@ export function createKeychain(deps: {
         ...(envKey ? { envKey } : {}),
         ...(fieldsMeta ? { fields: fieldsMeta } : {}),
         ...(targets ? { targets } : {}),
-        ...(carriedCapturePaths ? { capturePaths: carriedCapturePaths } : {}),
         ...(input.host ? { host: input.host } : {}),
         ...(input.accountLabel ? { accountLabel: input.accountLabel } : {}),
         secretEnc: encryptSecret(secret, deps.key),
@@ -923,31 +911,9 @@ export function createKeychain(deps: {
         updatedAt: t,
       };
     };
-    const expectedOrigin =
-      input.expectedOrigin ?? (input.origin === DEVICE_FLOW_ORIGIN ? DEVICE_FLOW_ORIGIN : undefined);
-    if (expectedOrigin === undefined) {
-      const prior = await deps.creds.get(id);
-      const rec = buildRec(prior);
-      await deps.creds.put(id, rec);
-      return toMeta(rec);
-    }
-    if (!deps.creds.update || !deps.creds.insertIfAbsent)
-      throw new Error("credential store does not support atomic origin-guarded saves");
-    const guarded = (prior: KeychainCredential): KeychainCredential => {
-      if (prior.origin !== expectedOrigin)
-        throw new KeychainError(
-          409,
-          `a ${prior.origin ?? "manually saved"} credential for ${service} already exists — not overwritten`,
-        );
-      return buildRec(prior);
-    };
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const updated = await deps.creds.update(id, guarded);
-      if (updated) return toMeta(updated);
-      const fresh = buildRec();
-      if (await deps.creds.insertIfAbsent(id, fresh)) return toMeta(fresh);
-    }
-    throw new KeychainError(503, `credential for ${service} is being written concurrently — retry`);
+    const rec = buildRec(await deps.creds.get(id));
+    await deps.creds.put(id, rec);
+    return toMeta(rec);
   }
 
   async function materializeConnectorEnv(
@@ -1093,15 +1059,57 @@ export function createKeychain(deps: {
   return {
     save: saveCredential,
 
+    async updateFiles(materialized, files) {
+      if (materialized.grantId) return;
+      const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
+      if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
+      const fingerprint = credentialFilesFingerprint;
+      if (fingerprint(normalized) === fingerprint(materialized.files)) return;
+
+      if (!deps.creds.update) throw new Error("credential store does not support atomic file refresh");
+      const updated = await deps.creds.update(materialized.credentialId, (current) => {
+        if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
+          throw new KeychainError(409, "Credential changed during execution");
+        const currentFiles = decryptToFiles(current).files;
+        if (fingerprint(currentFiles) === fingerprint(normalized)) return current;
+        if (fingerprint(currentFiles) !== fingerprint(materialized.files))
+          throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
+        const secret = JSON.stringify(normalized);
+        return {
+          ...current,
+          targets: normalized.map((file) => file.path),
+          secretEnc: encryptSecret(secret, deps.key),
+          fingerprint: fingerprintOf(secret),
+          updatedAt: now(),
+        };
+      });
+      if (!updated) throw new KeychainError(410, "Credential was removed during execution");
+    },
+
+    async writebackBaseline(source, fingerprint) {
+      const current = await deps.creds.get(source.credentialId);
+      if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))
+        throw new KeychainError(410, "Credential was removed during execution");
+      const files = decryptToFiles(current).files;
+      if (credentialFilesFingerprint(files) !== fingerprint)
+        throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
+      return {
+        kind: "file",
+        credentialId: current.id,
+        ownerId: current.ownerId,
+        service: current.service,
+        files,
+        ...(source.grantId ? { grantId: source.grantId } : {}),
+      };
+    },
+
     async listAllMetadata() {
-      return (await deps.creds.select({ omit: ["secretEnc"] }))
-        .filter((c) => !c.managed && c.kind !== "broker")
-        .map(toMeta);
+      return (await deps.creds.select({ omit: ["secretEnc"] })).filter(listed).map(toMeta);
     },
 
     async listByOwner(ownerId) {
       return (await deps.creds.select({ omit: ["secretEnc"], where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && !c.managed && c.kind !== "broker")
+        .filter((c) => samePerson(c.ownerId, ownerId) && listed(c))
         .map(toMeta);
     },
 
@@ -1109,20 +1117,9 @@ export function createKeychain(deps: {
       return bucketByOwner(
         await deps.creds.select({ omit: ["secretEnc"], where: byOwners(ownerIds) }),
         ownerIds,
-        (c) => !c.managed && c.kind !== "broker",
+        listed,
         toMeta,
       );
-    },
-
-    async setCapturePaths(ownerId, service, capturePaths, expectedOrigin) {
-      const id = credId(ownerId, service, "file");
-      if (!deps.creds.update) throw new Error("credential store does not support atomic capture-path updates");
-      const updated = await deps.creds.update(id, (rec) => {
-        if (rec.origin !== expectedOrigin)
-          throw new KeychainError(409, `credential for ${service} was not created by a login capture — not updated`);
-        return { ...rec, capturePaths, updatedAt: now() };
-      });
-      return updated !== null;
     },
 
     async getCredential(id) {
@@ -1403,7 +1400,7 @@ export function createKeychain(deps: {
       const hasRefresh = !!rec.refresh?.refreshTokenEnc;
       const refreshFailedAt = rec.refresh?.refreshFailedAt;
       const refreshFailed = typeof refreshFailedAt === "number";
-      const tokenExpired = oauthExpired(rec, now());
+      const tokenExpired = oauthExpired(rec, now(), oauthSkew);
       return {
         connected: true,
         ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
@@ -1445,7 +1442,7 @@ export function createKeychain(deps: {
         await deps.creds.select({ omit: ["secretEnc"], where: byOwners(ownerIds) }),
         ownerIds,
         (c) => c.managed === "connector",
-        (c) => connectorMeta(c, t),
+        (c) => connectorMeta(c, t, oauthSkew),
       );
     },
 
@@ -1455,12 +1452,6 @@ export function createKeychain(deps: {
       return tryDecrypt(cred, decryptToEnv)?.env.find((e) => e.key === COMPOSIO_ENV_KEY)?.value ?? null;
     },
     prepareMaterialize,
-
-    async materialize(grantId, scopeId, usedBy) {
-      const prepared = await prepareMaterialize(grantId, scopeId, usedBy);
-      await prepared.commit();
-      return prepared.materialized;
-    },
 
     async materializeOwnById(ownerId, credentialId, scopeId) {
       if (scopeId !== toScopeId("personal", ownerId)) {
@@ -1496,7 +1487,7 @@ export function createKeychain(deps: {
 
     async materializeOwnFiles(ownerId) {
       return (await deps.creds.select({ where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && !c.managed)
+        .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && listed(c))
         .map((c) => tryDecrypt(c, decryptToFiles))
         .filter((c): c is MaterializedFileCred => c !== null);
     },
@@ -1530,65 +1521,27 @@ export function createKeychain(deps: {
   };
 }
 
-const tempCredentialPath = (rel: string): string =>
-  /^[A-Za-z0-9._@+ /-]+$/.test(rel) ? `"$__kc_dir/${rel}"` : `"$__kc_dir"${shq(`/${rel}`)}`;
-
-const FILE_ENV_POINTERS: Array<[RegExp, (rel: string) => string]> = [
-  [/(^|\/)\.aws\/credentials$/, (rel) => `export AWS_SHARED_CREDENTIALS_FILE=${tempCredentialPath(rel)}`],
-  [/(^|\/)\.aws\/config$/, (rel) => `export AWS_CONFIG_FILE=${tempCredentialPath(rel)}`],
-  [/(^|\/)\.kube\/config$/, (rel) => `export KUBECONFIG=${tempCredentialPath(rel)}`],
-  [
-    /(^|\/)\.config\/gh\/hosts\.yml$/,
-    (rel) => `export GH_CONFIG_DIR=${tempCredentialPath(rel.replace(/\/hosts\.yml$/, ""))}`,
-  ],
-  [
-    /(^|\/)(?:\.config\/(?:glab-cli|glab)|Library\/Application Support\/glab-cli)\/config\.yml$/,
-    (rel) => `export GLAB_CONFIG_DIR=${tempCredentialPath(rel.replace(/\/config\.yml$/, ""))}`,
-  ],
-  [
-    /(^|\/)\.docker\/config\.json$/,
-    (rel) => `export DOCKER_CONFIG=${tempCredentialPath(rel.replace(/\/config\.json$/, ""))}`,
-  ],
-  [/(^|\/)\.npmrc$/, (rel) => `export NPM_CONFIG_USERCONFIG=${tempCredentialPath(rel)}`],
-  [/(^|\/)\.netrc$/, (rel) => `export NETRC=${tempCredentialPath(rel)}`],
-  [
-    /(^|\/)\.ssh\/[^/]*(id_|key)[^/]*$/,
-    (rel) =>
-      /^[A-Za-z0-9._@+ /-]+$/.test(rel)
-        ? `export GIT_SSH_COMMAND="ssh -i $__kc_dir/${rel} -o IdentitiesOnly=yes"`
-        : `export GIT_SSH_COMMAND="ssh -i $__kc_dir"${shq(`/${rel}`)}" -o IdentitiesOnly=yes"`,
-  ],
-];
-
-export function renderUseScript(m: MaterializedCred): string {
-  if (m.kind === "env") return m.env.map((e) => `export ${e.key}=${shq(e.value)}`).join("\n") + "\n";
-  const files = m.files.map((f) => ({ ...f, path: homeRelativePath(f.path) }));
-  const lines = [`__kc_dir="$(mktemp -d "\${TMPDIR:-/tmp}/keychain.XXXXXX")"`, `umask 077`];
-  for (const f of files) {
-    const parent = f.path.includes("/") ? f.path.replace(/\/[^/]*$/, "") : "";
-    if (parent) lines.push(`mkdir -p ${tempCredentialPath(parent)}`);
-    const path = tempCredentialPath(f.path);
-    lines.push(
-      `printf '%s' ${shq(f.contentBase64)} | base64 -d > ${path}`,
-      `chmod ${restoredFileMode(f.mode).toString(8)} ${path}`,
-    );
-  }
-  const pointed = new Set<RegExp>();
-  for (const f of files) {
-    for (const [re, render] of FILE_ENV_POINTERS) {
-      if (re.test(f.path) && !pointed.has(re)) {
-        pointed.add(re);
-        lines.push(render(f.path));
-      }
+export function fileCredentialEnvironment(files: CredentialFile[], home: string): Record<string, string> {
+  const env: Record<string, string> = { HOME: home };
+  const pointers: Array<[RegExp, string, boolean?]> = [
+    [/^\.aws\/credentials$/, "AWS_SHARED_CREDENTIALS_FILE"],
+    [/^\.aws\/config$/, "AWS_CONFIG_FILE"],
+    [/^\.kube\/config$/, "KUBECONFIG"],
+    [/^\.config\/gh\/hosts\.yml$/, "GH_CONFIG_DIR", true],
+    [/^(?:\.config\/(?:glab-cli|glab)|Library\/Application Support\/glab-cli)\/config\.yml$/, "GLAB_CONFIG_DIR", true],
+    [/^\.docker\/config\.json$/, "DOCKER_CONFIG", true],
+    [/^\.npmrc$/, "NPM_CONFIG_USERCONFIG"],
+    [/^\.netrc$/, "NETRC"],
+  ];
+  for (const file of files) {
+    const rel = homeRelativePath(file.path);
+    for (const [pattern, key, directory] of pointers) {
+      if (pattern.test(rel) && !(key in env)) env[key] = `${home}/${directory ? rel.replace(/\/[^/]*$/, "") : rel}`;
     }
+    if (/^\.ssh\/[^/]*(id_|key)[^/]*$/.test(rel) && !env.GIT_SSH_COMMAND)
+      env.GIT_SSH_COMMAND = `ssh -i ${shq(`${home}/${rel}`)} -o IdentitiesOnly=yes`;
   }
-  if (files.some((f) => !FILE_ENV_POINTERS.some(([re]) => re.test(f.path)))) {
-    lines.push(
-      `for __e in "$HOME"/.[!.]* "$HOME"/*; do [ -e "$__e" ] || continue; __b=\${__e##*/}; [ -e "$__kc_dir/$__b" ] || ln -s "$__e" "$__kc_dir/$__b"; done`,
-      `export HOME="$__kc_dir"`,
-    );
-  }
-  return lines.join("\n") + "\n";
+  return env;
 }
 
 function hoursLeft(expiresAt: number, now: number): number {
@@ -1634,22 +1587,16 @@ export interface KeychainManifestInput {
   entriesByOwner: Map<string, KeychainCredentialMeta[]>;
   connectorsByOwner?: Map<string, ConnectorMeta[]>;
   scopeGrants: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>;
-  injected: MaterializedEnvCred[];
+  execution?: Array<{
+    handle: string;
+    ownerId: string;
+    credentialId?: string;
+    description: string;
+    scope: "scoped" | "owner";
+  }>;
   detectedByOwner?: Map<string, string[]>;
   scopeAsks?: KeychainAsk[];
 }
-
-const SAVE_HINT =
-  "Saving logins (the owner's own DM only). ALWAYS save a token-style login to the keychain right after it succeeds — " +
-  "device-flow file logins (gh, glab, gcloud, aws, ~/.netrc) are captured automatically, but other logins on this " +
-  "computer alone are not durable, and only keychain entries can be granted to other conversations. " +
-  'Token-style: `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" ' +
-  CAPABILITY_CURL_AUTH +
-  ' -H \'content-type: application/json\' -d \'{"service":"github","secret":"<token>","envKey":"GITHUB_TOKEN","accountLabel":"<who the service says they are>","expiresAt":<ms epoch, if the service reports one>}\'` — ' +
-  "verify first (e.g. `gh api user`) and pass what the service reports as `accountLabel`. " +
-  "File-style (one bundle per service — e.g. ~/.aws/config + ~/.aws/credentials together): pass " +
-  '`"files":[{"path":".aws/config","contentBase64":"<base64 of the file>"}, …]` instead of `secret`/`envKey`. ' +
-  "Device-flow login bundles are captured and restored as-is, never renewed by the platform — when one expires, re-run the tool's interactive login.";
 
 function expiryNote(c: KeychainCredentialMeta, now: number, own: boolean): string {
   if (c.kind === "file" || typeof c.expiresAt !== "number") return "";
@@ -1661,182 +1608,150 @@ function expiryNote(c: KeychainCredentialMeta, now: number, own: boolean): strin
   return `, expires at ${new Date(c.expiresAt).toISOString()}`;
 }
 
-function credLine(
-  owner: { id: string; displayName?: string },
-  c: KeychainCredentialMeta,
-  grantNote: string,
-  now: number,
-  own: boolean,
-): string {
-  const who = owner.displayName ? `${owner.displayName} (${owner.id})` : owner.id;
+function credentialDescription(c: KeychainCredentialMeta, now: number, own: boolean): string {
+  if (c.managed === "connector") return connectorDescription(connectorMeta(c, now));
   if (isBackendCredential(c))
-    return `- ${who}: Composio backend access — use the composio skill and /v1/composio; this key cannot be loaded into a computer`;
-  let slot = `files ${(c.targets ?? [c.target]).filter(Boolean).sort().join(", ")}`;
-  if (c.kind === "env") {
-    slot = c.fields
-      ? c.fields
-          .map((f) => `\`${f.envKey}\``)
+    return "Composio backend access — use the composio skill; cannot be loaded into a computer";
+  const slot =
+    c.kind === "env"
+      ? (c.fields?.map((f) => f.envKey) ?? [c.envKey])
+          .filter(Boolean)
           .sort()
+          .map((key) => `\`${key}\``)
           .join(" + ")
-      : `\`${c.envKey}\``;
-  }
-  const label = c.accountLabel ? `, account ${c.accountLabel}` : "";
-  return `- ${who}: ${c.service} (${slot}${label}${expiryNote(c, now, own)}) — credential id \`${c.id}\` — ${grantNote}`;
+      : `files ${(c.targets ?? [c.target]).filter(Boolean).sort().join(", ")}`;
+  return `${c.service} (${slot}${c.accountLabel ? `, account ${c.accountLabel}` : ""}${expiryNote(c, now, own)})`;
 }
 
-function connectorLine(
-  owner: { id: string; displayName?: string },
-  cm: ConnectorMeta,
-  grantNote: string,
-  own: boolean,
-): string {
-  const who = owner.displayName ? `${owner.displayName} (${owner.id})` : owner.id;
-  const account = cm.accountType ? `, ${cm.accountType}` : "";
-  let status = "";
-  if (cm.needsReconnect) {
-    status = own
-      ? ", NEEDS RECONNECT — they must reconnect the app before it can be used"
-      : ", NEEDS RECONNECT — owner must reconnect the app before a grant can be used";
-  }
-  return `- ${who}: connected app ${cm.host}${account}${status} — credential id \`${cm.credentialId}\` — ${grantNote}`;
+const oauthExpired = (rec: KeychainCredentialMeta, t: number, oauthSkew: number) =>
+  rec.expiresAt !== undefined && t >= rec.expiresAt - oauthSkew;
+
+function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_000): ConnectorMeta {
+  const hasRefresh = !!rec.refresh?.refreshTokenEnc;
+  const refreshFailed = typeof rec.refresh?.refreshFailedAt === "number";
+  const tokenExpired = oauthExpired(rec, t, oauthSkew);
+  return {
+    credentialId: rec.id,
+    ownerId: rec.ownerId,
+    host: rec.host ?? rec.service,
+    ...(rec.refresh?.accountType ? { accountType: rec.refresh.accountType } : {}),
+    ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
+    connected: true,
+    ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
+  };
+}
+
+function connectorDescription(cm: ConnectorMeta): string {
+  return `connected app ${cm.host}, account ${cm.accountType ?? "default"}${
+    cm.needsReconnect ? ", NEEDS RECONNECT — owner must reconnect the app before use" : ""
+  }${typeof cm.expiresAt === "number" ? `, token expires at ${new Date(cm.expiresAt).toISOString()}` : ""}`;
+}
+
+export const MAX_CREDENTIAL_FILES = 500;
+export const MAX_CREDENTIAL_BYTES = 8 * 1024 * 1024;
+
+function checkedFiles(files: CredentialFile[]): CredentialFile[] {
+  const bytes = files.reduce((sum, file) => sum + Buffer.byteLength(file.contentBase64, "base64"), 0);
+  if (files.length > MAX_CREDENTIAL_FILES || bytes > MAX_CREDENTIAL_BYTES)
+    throw new KeychainError(
+      413,
+      `A saved login is limited to ${MAX_CREDENTIAL_FILES} files and ${MAX_CREDENTIAL_BYTES} bytes`,
+    );
+  return files;
+}
+
+function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
+  return !c.managed && c.kind !== "broker";
 }
 
 export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {
-  const lines: string[] = [];
-  const byCred = new Map(input.scopeGrants.map((g) => [g.credential.id, g.grant]));
-  const grantNoteFor = (id: string, file = false): string => {
-    const g = byCred.get(id);
-    if (!g) return "no grant for this conversation";
-    const note =
-      g.mode === "standing"
-        ? `STANDING grant for this conversation (purpose: "${g.purpose}")`
-        : `one-time grant \`${g.id}\` available (purpose: "${g.purpose}")`;
-    return file ? `${note} — load with \`${keychainUseCommand({ grant: g.id })}\`` : note;
+  const groups = new Map<string, Map<string, string>>();
+  const put = (ownerId: string, id: string, text: string): void => {
+    const owner = personKey(ownerId);
+    let rows = groups.get(owner);
+    if (!rows) groups.set(owner, (rows = new Map()));
+    rows.set(id, text);
   };
   const ownPersonal = input.scopeId === toScopeId("personal", input.actorId);
-  const openSpeaker =
-    input.openSpeakerKeychain === true && (input.conversationKind === "channel" || input.conversationKind === "group");
-  const OWN_NOTE = openSpeaker
-    ? 'their own — available with execute scope:"owner" for this live Open turn; no grant needed'
-    : "their own — execute.credentials needs no grant in their personal conversation, including background turns";
-  const memberLines: string[] = [];
-  let hasOwn = false;
+  const openSpeaker = input.openSpeakerKeychain === true && input.conversationKind !== "dm";
+  const isOwn = (ownerId: string): boolean => (ownPersonal || openSpeaker) && samePerson(ownerId, input.actorId);
+  const grants = new Map(input.scopeGrants.map(({ grant, credential }) => [credential.id, grant]));
+  const execution = input.execution ?? [];
+  const access = (ownerId: string, id: string): string => {
+    if (grants.has(id)) return grantNote(id);
+    if (isOwn(ownerId))
+      return openSpeaker
+        ? "own; Open live turn only, isolated owner execution"
+        : "own; no grant needed (including background turns)";
+    return grantNote(id);
+  };
+  const grantNote = (id: string): string => {
+    const grant = grants.get(id);
+    if (!grant) return "no grant for this conversation";
+    return `${grant.mode === "standing" ? "STANDING" : "one-time"} grant \`${grant.id}\` (purpose: "${grant.purpose}")${
+      grant.expiresAt === undefined ? "" : `; expires at ${new Date(grant.expiresAt).toISOString()}`
+    }`;
+  };
+  const entries = new Map(input.scopeGrants.map(({ credential }) => [credential.id, credential]));
+  for (const member of input.members)
+    for (const credential of input.entriesByOwner.get(member.id) ?? []) entries.set(credential.id, credential);
+  for (const credential of entries.values()) {
+    const handles = execution
+      .filter((entry) => entry.credentialId === credential.id)
+      .map((entry) => `\`${entry.handle}\` (execute scope \`${entry.scope}\`)`)
+      .sort();
+    put(
+      credential.ownerId,
+      credential.id,
+      `- ${handles.join(", ") || `credential id \`${credential.id}\``} — ${credentialDescription(credential, now, isOwn(credential.ownerId))}; ${access(credential.ownerId, credential.id)}`,
+    );
+  }
   for (const member of input.members) {
-    const own = (ownPersonal || openSpeaker) && samePerson(member.id, input.actorId);
-    for (const c of input.entriesByOwner.get(member.id) ?? []) {
-      let note = own ? OWN_NOTE : grantNoteFor(c.id, c.kind === "file");
-      if (own && ownPersonal && c.kind === "file")
-        note = "their own — raw file loading needs no grant on their live turn; background turns need a grant";
-      memberLines.push(credLine(member, c, note, now, own));
-      hasOwn ||= own;
+    for (const connector of input.connectorsByOwner?.get(member.id) ?? []) {
+      const handles = execution
+        .filter((entry) => entry.credentialId === connector.credentialId)
+        .map((entry) => `\`${entry.handle}\` (execute scope \`${entry.scope}\`)`)
+        .sort();
+      put(
+        member.id,
+        connector.credentialId,
+        `- ${handles.join(", ") || `credential id \`${connector.credentialId}\``} — ${connectorDescription(connector)}; ${access(member.id, connector.credentialId)}`,
+      );
     }
-    for (const cm of input.connectorsByOwner?.get(member.id) ?? []) {
-      memberLines.push(connectorLine(member, cm, own ? OWN_NOTE : grantNoteFor(cm.credentialId), own));
-      hasOwn ||= own;
-    }
+    const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service.toLowerCase()));
+    for (const service of input.detectedByOwner?.get(member.id) ?? [])
+      if (!registered.has(service.toLowerCase()))
+        put(member.id, `detected:${service}`, `- ${service} — detected on their computer, NOT registered or grantable`);
   }
-
-  const detectedLines: string[] = [];
-  for (const member of input.members) {
-    const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service));
-    const services = (input.detectedByOwner?.get(member.id) ?? []).filter((s) => !registered.has(s.toLowerCase()));
-    if (!services.length) continue;
-    const who = member.displayName ? `${member.displayName} (${member.id})` : member.id;
-    detectedLines.push(
-      `- ${who}: ${services.sort().join(", ")} — signed in on their own computer, not in the keychain`,
-    );
+  for (const entry of execution) {
+    if (entry.credentialId && groups.get(personKey(entry.ownerId))?.has(entry.credentialId)) continue;
+    put(entry.ownerId, entry.handle, `- \`${entry.handle}\` — ${entry.description}; execute scope \`${entry.scope}\``);
   }
-
-  const inDm = input.conversationKind === "dm";
-
-  let ownershipGuidance =
-    "Using one here requires a grant from its OWNER — you never see another person's secret or token without one. ";
-  if (ownPersonal)
-    ownershipGuidance =
-      "You are in this person's own personal conversation: their env credentials and connector tokens need no grant through execute.credentials, including background and scheduled turns. Anyone else's still requires a grant from its OWNER, and shared conversations require a grant unless Open sharing authorizes isolated execution with the live speaker's own credentials. ";
-  else if (openSpeaker)
-    ownershipGuidance = `Open sharing authorizes the authenticated live speaker to use their OWN keychain through execute scope:"owner", without a grant. Other people's credentials still require their owner's grant. This does not give the room or background jobs continuing access. `;
-  lines.push("## Teammate keychains");
-  lines.push(
-    "Teammates keep personal logins — and connected apps (Gmail, Calendar, Slack, …) — in a keychain. " +
-      ownershipGuidance +
-      "A connector grant works exactly like any other: ask for it; the owner approves on the card.",
-  );
-  if (memberLines.length) {
-    lines.push("", "In this conversation:", ...memberLines.sort());
-  } else {
-    lines.push("", "No keychain credentials registered yet for the people here.");
-  }
-
-  if (hasOwn && openSpeaker) {
+  const lines = [
+    "## Credentials",
+    "Execution handles are shown in backticks; select them in execute.credentials. Credential IDs identify entries for access requests, not execution handles.",
+  ];
+  for (const [ownerId, rows] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+    const member = input.members.find((member) => personKey(member.id) === ownerId);
     lines.push(
       "",
-      `Use execute with scope:"owner" for commands needing the speaker's logins or connected apps. Request env credentials and connector tokens explicitly using execute.credentials. Saved CLI logins are restored there separately. Do not load them through /v1/keychain/use on the shared computer.`,
-      "This is a separate, disposable computer: it cannot see the shared workspace, and is destroyed at the end of this turn. Keep credential-using commands there; return only the results needed for the task. Never copy secrets into the shared workspace or pass them to background jobs. Normal command approvals still apply.",
-    );
-  } else if (hasOwn) {
-    lines.push(
-      "",
-      "Use the execute tool handle for env-style logins. Load file-style bundles on demand with:",
-      `   \`${keychainUseCommand({ credential: "<credential id>" })}\``,
-      "That form works only on their live turn in their personal conversation. For background turns, use execute.credentials for env credentials and connector tokens; this raw file-loading form still requires a grant.",
+      `### ${member?.displayName ? `${member.displayName} (${ownerId})` : ownerId}`,
+      ...[...rows.values()].sort(),
     );
   }
-
-  if (detectedLines.length) {
-    lines.push(
-      "",
-      "Detected but NOT registered (not grantable yet):",
-      ...detectedLines.sort(),
-      "To make one usable here, its owner must first register it in their keychain from their own DM with you " +
-        '(they can say "register my logins" there). A login living on someone\'s computer is not a grant — never claim access to it.',
-    );
-  }
-
-  if (input.injected.length) {
-    lines.push(
-      "",
-      "Available command credentials:",
-      ...input.injected
-        .toSorted((a, b) => a.credentialId.localeCompare(b.credentialId))
-        .map(
-          (m) =>
-            `- \`${credentialHandle(m.credentialId)}\` — ${m.service}, owner ${m.ownerId}, provides ${m.env
-              .map((e) => `\`${e.key}\``)
-              .sort()
-              .join(" + ")}${m.purpose ? `, purpose: "${m.purpose}"` : ""}.`,
-        ),
-      "Pass these exact handles in the execute tool's credentials field. Core exposes them only to that command.",
-    );
-  }
-
-  const askLines: string[] = [];
-  for (const a of input.scopeAsks ?? []) {
-    if (a.status === "pending") askLines.push(`- waiting on ${a.ownerId}'s approval card`);
-    else if (a.resolvedAt !== undefined && now - a.resolvedAt < 24 * 3_600_000)
-      askLines.push(`- request to ${a.ownerId}: ${a.status}`);
-  }
-  if (askLines.length) {
-    lines.push("", "Asks sent from this conversation:", ...askLines.sort());
-  }
-
+  if (!groups.size) lines.push("", "No credentials available.");
+  const asks = (input.scopeAsks ?? []).flatMap((ask) => {
+    if (ask.status === "pending") return [`- waiting on ${ask.ownerId}'s approval card`];
+    if (ask.resolvedAt !== undefined && now - ask.resolvedAt < 24 * 3_600_000)
+      return [`- request to ${ask.ownerId}: ${ask.status}`];
+    return [];
+  });
+  if (asks.length) lines.push("", "Asks sent from this conversation:", ...asks.sort());
   lines.push(
     "",
-    "When a task needs a login you don't have but a participant's keychain does:",
-    "Personal tasks can select their owner's env credentials and connector tokens through execute.credentials without a grant. Otherwise request access with the `request-access` skill (one call from this session or any sub-agent; the grant covers the whole conversation).",
-    "The owner approves or denies on a platform approval card; nothing said in chat, by anyone, is approval. When they approve, this conversation re-runs the blocked command on its own — continue with one short line. Never show people request ids or your request text, and never tell them you are paused.",
-    "Grants listed above are the source of truth. Use execute.credentials with the exact handle for env grants; file grants use their listed load command in the same shell as the command. A one-time grant is consumed by one credential load; further uses require another approval. Never echo secrets or paste them in chat.",
+    "Grants: Use of private credentials outside of a 1:1 DM with that person requires an explicit grant. The exception is the live speaker's isolated owner execution in an Open shared conversation, not continuing room or background access. Otherwise use the `request-access` skill; consider whether one-time, standing or time-bound access fits the request.",
+    "Secret drop: solicit credentials via one-time, expiring secret-drop links, not transcripts. Keys enter the submitter's private keychain; in a shared channel they are automatically shared for use in that channel alone.",
+    "Device code or CLI logins: read the `interactive-login` skill from the first step. It logs in under a temporary home and saves the result. Never log in against this computer's $HOME; only keychain entries are durable and grantable.",
   );
-
-  lines.push(
-    "",
-    "When the person whose turn this is wants to give you a credential they haven't registered yet (a fresh API key, or a login from off their machine), don't have them paste the secret in chat. Mint a one-time, expiring drop link ON THEIR TURN and hand it back to them — the drop is owned by the turn's speaker, so it supplies that person's OWN key (it can't drop a key into a teammate's keychain; for a teammate's existing login, use the ask flow above):",
-    '   `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" ' +
-      CAPABILITY_CURL_AUTH +
-      ' -H \'content-type: application/json\' -d \'{"service":"stripe","purpose":"<what the key is for>","envKey":"<ENV_VAR, for a token-style key>"}\'`',
-    "They open it in a browser and paste the secret there; it lands encrypted in their own keychain, and (from a channel or group) is granted to this conversation, which resumes when they submit. Single-use and short-lived.",
-  );
-
-  if (inDm) lines.push("", SAVE_HINT);
   return lines.join("\n");
 }

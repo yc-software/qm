@@ -12,6 +12,7 @@ import { reachEnqueue } from "../src/reach/reach.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
 
@@ -50,6 +51,7 @@ describe("POST /v1/reach with files", () => {
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
     ]);
+    await selectDefaultSandbox(built, "U-carol", scopeId("personal", "U-carol"));
     server = createServer(built.app, {
       signingSecret: SECRET,
       sandbox: built.sandbox,

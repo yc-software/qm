@@ -20,7 +20,7 @@ test("Files uses compact rows that open directly", () => {
   const start = source.indexOf("function fileRow(");
   const end = source.indexOf("\nfunction rowsFromPage", start);
   const row = source.slice(start, end);
-  assert.match(row, /<a class="list-row file-row" href=\$\{contentUrl\} target="_blank"/);
+  assert.match(row, /<a\s+class="list-row file-row"\s+href=\$\{contentUrl\}\s+target="_blank"/);
   assert.doesNotMatch(row, /file-row-type|\$\{f\.mimetype\}|class="badge"|\$\{f\.kind\}|>Open</);
   assert.doesNotMatch(row, /scopeChip|fileScope\(f\)/);
   assert.match(row, /formatBytes\(f\.sizeBytes\)/);

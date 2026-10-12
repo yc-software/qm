@@ -18,6 +18,7 @@ import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
 import { secretDropRoutes } from "./secret-drop.ts";
 import { adminRoutes } from "./admin.ts";
+import { spendExport } from "./admin/spend.ts";
 import { skillPackRoutes } from "./skill-packs.ts";
 import { fileUploadRoutes } from "./file-uploads.ts";
 import { surfaceRoutes } from "./surface.ts";
@@ -68,6 +69,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     },
   },
   ...slackEventRawRoutes,
+  { method: "GET", path: "/v1/spend/export", auth: "public", handle: spendExport },
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,
   ...deploymentRawRoutes,

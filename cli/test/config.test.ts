@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CONFIG_FILENAME,
+  awsWorkloadArchitecture,
   loadConfigAt,
   loadConfigInDir,
   localSandboxActive,
@@ -622,8 +623,7 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
         },
       },
       ({ path }) => {
-        if (scopeBackend === "aws") assert.throws(() => loadConfigAt(path), /AWS_DEPLOY_IMAGE/);
-        else assert.equal(loadConfigAt(path).config.env.core?.DEPLOY_PROVIDER, "fly");
+        assert.equal(loadConfigAt(path).config.env.core?.DEPLOY_PROVIDER, "fly");
       },
     );
   }
@@ -968,20 +968,6 @@ test("superserve backend requires the agent template in env.core", () => {
     {
       sandbox: { backend: "local" },
       env: { core: { SANDBOX_SCOPE_BACKENDS: JSON.stringify({ personal: "superserve" }) } },
-    },
-    ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE/);
-    },
-  );
-  withConfig(
-    {
-      sandbox: { backend: "local" },
-      env: {
-        core: {
-          SANDBOX_SCOPE_BACKENDS: JSON.stringify({ personal: "superserve" }),
-          SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-        },
-      },
     },
     ({ path }) => assert.doesNotThrow(() => loadConfigAt(path)),
   );
@@ -1504,4 +1490,20 @@ test("proxy deployment rendering names the mode and classifier", () => {
       });
     },
   );
+});
+
+test("AWS built-in architecture defaults match published images and retain explicit choices", () => {
+  const workloads = ["core", "web-ui", "admin", "portal", "auth", "linear"];
+  const config = {
+    plugins: [{ name: "linear" }],
+    imageOverrides: {},
+    aws: { services: Object.fromEntries(workloads.map((name) => [name, {}])) },
+  } as unknown as import("../src/config.ts").QmConfig;
+  for (const workload of workloads) {
+    assert.equal(awsWorkloadArchitecture(config, workload), workload === "linear" ? "arm64" : "amd64");
+    for (const architecture of ["arm64", "amd64"] as const) {
+      config.aws!.services[workload]!.architecture = architecture;
+      assert.equal(awsWorkloadArchitecture(config, workload), architecture);
+    }
+  }
 });

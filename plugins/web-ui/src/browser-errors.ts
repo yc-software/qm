@@ -1,26 +1,10 @@
 import type * as Browser from "@sentry/browser";
-import type { init, ErrorEvent, StackFrame } from "@sentry/browser";
+import type { init } from "@sentry/browser";
 import type { Me } from "./shell-state";
 import { parseDeepLink, UI_BASE } from "./deep-link.ts";
-import {
-  finishTiming,
-  sanitizeTransactionEvent,
-  traceStatus,
-  type TimingResult,
-  type TransactionEvent,
-} from "../../chassis/src/timing.ts";
+import { finishTiming, traceStatus, type TimingResult } from "../../chassis/src/timing.ts";
+import { errDetail, swallow } from "../../chassis/src/errors.ts";
 
-const ERROR_TYPES = new Set([
-  "Error",
-  "TypeError",
-  "RangeError",
-  "ReferenceError",
-  "SyntaxError",
-  "URIError",
-  "EvalError",
-  "AggregateError",
-  "UnhandledRejection",
-]);
 const MAX_TIMINGS_PER_PAGE = 200;
 const API_RESOURCES = new Set([
   "approvals",
@@ -62,58 +46,6 @@ let timingBudget = 0;
 let largestContentfulPaint: number | undefined;
 let pageLoadReported = false;
 
-function safeFrame(frame: StackFrame, origin: string): StackFrame[] {
-  try {
-    const url = new URL(frame.filename ?? "", origin);
-    const filename = url.pathname.match(/\/assets\/([a-zA-Z0-9_-]{1,100}-[a-zA-Z0-9_-]{8}\.js)$/)?.[1];
-    if (url.origin !== origin || !filename) return [];
-    const position = (value: number | undefined) => (Number.isSafeInteger(value) && value! > 0 ? value : undefined);
-    return [{ filename, lineno: position(frame.lineno), colno: position(frame.colno), in_app: true }];
-  } catch {
-    return [];
-  }
-}
-
-export function sanitizeBrowserError(event: ErrorEvent, origin: string, release?: string): ErrorEvent {
-  const sanitized: ErrorEvent = {
-    type: undefined,
-    event_id: /^[a-f0-9]{32}$/.test(event.event_id ?? "") ? event.event_id : undefined,
-    timestamp: Number.isFinite(event.timestamp) ? event.timestamp : undefined,
-    platform: "javascript",
-    level: "error",
-    release,
-    tags: { service: "web-ui-browser" },
-    exception: {
-      values: (event.exception?.values?.slice(-5) ?? [{}]).map((exception) => ({
-        type: ERROR_TYPES.has(exception.type ?? "") ? exception.type : "Error",
-        value: "Browser error; details omitted",
-        stacktrace: {
-          frames: exception.stacktrace?.frames?.slice(-50).flatMap((frame) => safeFrame(frame, origin)) ?? [],
-        },
-        mechanism: {
-          handled: false,
-          type:
-            exception.mechanism?.type === "auto.browser.global_handlers.onunhandledrejection"
-              ? "onunhandledrejection"
-              : "onerror",
-        },
-      })),
-    },
-  };
-  sanitized.fingerprint = [
-    "web-ui-browser-v1",
-    ...(sanitized.exception?.values ?? []).flatMap((exception) => {
-      const frame = exception.stacktrace?.frames?.at(-1);
-      return [
-        exception.type ?? "Error",
-        exception.mechanism?.type ?? "onerror",
-        frame ? `${frame.filename}:${frame.lineno ?? 0}:${frame.colno ?? 0}` : "no-app-frame",
-      ];
-    }),
-  ];
-  return sanitized;
-}
-
 function timing(op: string, name: string, startMs: number, result: TimingResult): void {
   if (!client || !sdk || timingBudget <= 0) return;
   timingBudget--;
@@ -149,7 +81,7 @@ export function reportRequestTiming(url: string, method: string, startMs: number
   if (target.origin !== window.location.origin) return;
   timing("http.client", `${/^[A-Z]{3,7}$/.test(method) ? method : "GET"} ${apiRouteName(target.pathname)}`, startMs, {
     status: status === null ? "internal_error" : traceStatus(status),
-    data: { http_status: status === null ? "network" : String(status) },
+    data: { url: target.href, http_status: status === null ? "network" : String(status) },
   });
 }
 
@@ -162,7 +94,7 @@ function reportPageLoad(): void {
     timing("pageload", "pageload", performance.timeOrigin, {
       status: "ok",
       endMs: performance.timeOrigin + navigation.loadEventEnd,
-      data: { page: view ?? "other" },
+      data: { page: view ?? "other", url: navigation.name },
       measurements: {
         ttfb: navigation.responseStart,
         dom_content_loaded: navigation.domContentLoadedEventEnd,
@@ -196,6 +128,12 @@ function startTiming(rate: number): void {
   }
 }
 
+export function reportHandledError(context: string, error: unknown): void {
+  console.warn(`[handled] ${context}: ${errDetail(error)}`);
+  if (!client || !sdk) return;
+  sdk.captureException(error, { tags: { error_code: context }, fingerprint: ["{{ default }}", context] });
+}
+
 export function stopBrowserErrors(): void {
   generation++;
   timingBudget = 0;
@@ -213,52 +151,37 @@ export async function initializeBrowserErrors(me: Me): Promise<void> {
     const browser = await import("@sentry/browser");
     if (current !== generation) return;
     sdk = browser;
-    const safeEvents = new WeakSet<ErrorEvent | TransactionEvent>();
     client = browser.init({
       dsn,
       release,
       defaultIntegrations: false,
-      integrations: [browser.globalHandlersIntegration()],
-      sendDefaultPii: false,
-      maxBreadcrumbs: 0,
+      integrations: [
+        browser.globalHandlersIntegration(),
+        browser.linkedErrorsIntegration(),
+        browser.extraErrorDataIntegration({ depth: 8 }),
+      ],
       attachStacktrace: true,
       sendClientReports: false,
       enableLogs: false,
       tracesSampleRate: rate,
       tracePropagationTargets: [],
-      transportOptions: { fetchOptions: { credentials: "omit", referrerPolicy: "no-referrer" } },
-      transport: (options) => {
-        const transport = browser.makeFetchTransport(options);
-        return {
-          flush: (timeout) => transport.flush(timeout),
-          send: (envelope) => {
-            const [item] = envelope[1];
-            if (
-              current !== generation ||
-              envelope[1].length !== 1 ||
-              (item?.[0].type !== "event" && item?.[0].type !== "transaction") ||
-              !safeEvents.has(item[1] as ErrorEvent | TransactionEvent)
-            )
-              return Promise.resolve({});
-            return transport.send(envelope);
-          },
-        };
-      },
+      initialScope: { tags: { service: "web-ui-browser", org: me.org }, user: { username: me.user } },
       beforeSend: (event, hint) => {
-        if (current !== generation) return null;
-        hint.attachments = [];
-        const sanitized = sanitizeBrowserError(event, window.location.origin, release);
-        safeEvents.add(sanitized);
-        return sanitized;
+        const error = hint.originalException;
+        return current !== generation ||
+          (error instanceof Error &&
+            (error.name === "AbortError" ||
+              (error.name === "TypeError" &&
+                ["Failed to fetch", "NetworkError when attempting to fetch resource.", "Load failed"].includes(
+                  error.message,
+                ))))
+          ? null
+          : event;
       },
-      beforeSendTransaction: (event) => {
-        if (current !== generation) return null;
-        const sanitized = sanitizeTransactionEvent(event, "javascript");
-        if (sanitized) safeEvents.add(sanitized);
-        return sanitized;
-      },
+      beforeSendTransaction: (event) => (current === generation ? event : null),
     });
-  } catch {
+  } catch (error) {
+    swallow("browser error reporting initialization", error);
     if (current === generation) client = undefined;
   }
   if (client) startTiming(rate);

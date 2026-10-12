@@ -22,6 +22,7 @@ async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTai
     scopeId: SCOPE,
     kind: "background",
     command: "bg: npm test",
+    purpose: "Run regression tests",
     ttlMs: 60_000,
   });
   const broker = createMonitorBroker({
@@ -52,6 +53,7 @@ test("watch arms a monitor inheriting the turn's owner, scope, thread, and desti
   assert.equal(m?.pattern, "FAIL");
   assert.equal(m?.instructions, "summarize failures");
   assert.equal(m?.command, "bg: npm test");
+  assert.equal(m?.purpose, "Run regression tests");
 });
 
 test("watching the same job in the same thread twice reattaches instead of double-arming", async () => {

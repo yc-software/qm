@@ -18,6 +18,7 @@ function res(): ServerResponse & PassThrough & { capturedHeaders?: Record<string
   const r = new PassThrough() as ServerResponse & PassThrough & { capturedHeaders?: Record<string, string> };
   let sent = false;
   Object.defineProperty(r, "headersSent", { get: () => sent });
+  r.getHeader = () => undefined;
   r.writeHead = ((statusCode: number, headers?: Record<string, string>) => {
     r.statusCode = statusCode;
     r.capturedHeaders = headers ?? {};

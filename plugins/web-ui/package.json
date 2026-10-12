@@ -16,10 +16,16 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
+    "@codemirror/language": "6.12.4",
+    "@codemirror/language-data": "6.5.2",
+    "@codemirror/search": "6.7.2",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
     "@date-fns/tz": "^1.5.0",
     "@earendil-works/pi-agent-core": "0.77.0",
     "@earendil-works/pi-ai": "0.77.0",
     "@earendil-works/pi-web-ui": "0.75.3",
+    "@lezer/highlight": "1.2.4",
     "@mariozechner/mini-lit": "^0.2.0",
     "@sentry/browser": "10.75.0",
     "@sentry/node": "10.75.0",
@@ -35,11 +41,13 @@
     "marked": "^18.0.5",
     "mermaid": "^12.0.0",
     "morphdom": "2.7.8",
+    "papaparse": "5.7.0",
     "posthog-js": "1.433.10"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.3",
     "@types/node": "^24.0.0",
+    "@types/papaparse": "5.5.2",
     "jsdom": "^29.1.1",
     "katex": "^0.16.47",
     "typescript": "^5.8.2",
@@ -51,6 +59,9 @@
     },
     "@mariozechner/mini-lit": {
       "marked": "^18.0.5"
-    }
+    },
+    "@codemirror/lang-liquid": "6.3.2",
+    "@lezer/highlight": "1.2.4",
+    "@lezer/javascript": "1.5.5"
   }
 }

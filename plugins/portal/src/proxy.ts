@@ -1,5 +1,6 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
+import { withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const IDENTITY_TTL_MS = 60_000;
@@ -75,6 +76,7 @@ function relay(
           continue;
         out[k] = v;
       }
+      if (out.vary !== undefined) out.vary = withVary(res, String(out.vary));
       if (target.honorFramePolicy && declaresFrameAncestors(out)) res.removeHeader("x-frame-options");
       res.writeHead(upRes.statusCode ?? 502, out);
       upRes.on("error", () => res.destroy());
@@ -240,7 +242,7 @@ export function proxyToUpstream(
 
 export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type", "content-length"];
 
-export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string): void {
+export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string, clientIp?: string): void {
   const upstream = new URL(coreBase);
   const blocked = new Set([
     ...DROP_RESPONSE_HEADERS,
@@ -251,13 +253,17 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
     "x-agent-capability",
     PORTAL_IDENTITY_HEADER,
     "x-qm-app-host",
+    "x-qm-client-ip",
     "forwarded",
     "x-forwarded-host",
     "x-forwarded-proto",
     "x-forwarded-for",
     ...(req.headers.connection ?? "").split(",").map((name) => name.trim().toLowerCase()),
   ]);
-  const headers: Record<string, string | string[]> = { "x-qm-app-host": "1" };
+  const headers: Record<string, string | string[]> = {
+    "x-qm-app-host": "1",
+    ...(clientIp ? { "x-qm-client-ip": clientIp } : {}),
+  };
   for (const [name, value] of Object.entries(req.headers)) {
     if (value !== undefined && !blocked.has(name)) headers[name] = value;
   }

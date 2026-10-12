@@ -153,7 +153,7 @@ export function createSuggestedActivityService(deps: {
       if (!owned(cron, principalId) || cron.archived) return fallback;
       const { runs } = await deps.crons.listFires(cron.id, { limit: 10 });
       let pending = runs.some((run) => run.status === "running");
-      for (const run of runs) {
+      for (const run of runs.toReversed()) {
         if (run.status !== "ok" || !run.sessionId) continue;
         const session = await deps.sessions.get(run.sessionId);
         if (!session || session.scopeId !== scopeId("personal", principalId) || session.threadRef !== run.threadRef)

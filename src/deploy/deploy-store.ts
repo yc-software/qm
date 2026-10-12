@@ -90,6 +90,7 @@ interface VersionInput {
 export interface DeployStore {
   create(
     input: {
+      id?: string;
       ownerScopeId: ScopeId;
       createdBy: string;
       name?: string;
@@ -314,7 +315,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
 
   return {
     async create(input) {
-      const id = randomUUID();
+      const id = input.id ?? randomUUID();
       const v = await makeVersion(id, 1, input);
       const d: Deployment = {
         id,

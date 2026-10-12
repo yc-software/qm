@@ -55,6 +55,7 @@ export function isSharedScope(id: ScopeId | undefined): boolean {
 export type ConversationKind = "dm" | "channel" | "group";
 
 export interface Conversation {
+  teamIds?: string[];
   kind: ConversationKind;
   threadRef: string;
   channelRef?: string;
@@ -207,6 +208,7 @@ export interface TriggerBase {
 export interface Destination {
   slackAccountId?: string;
   slackTeamId?: string;
+  slackPolicyNamespace?: string;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -318,6 +320,7 @@ export interface Webhook extends TriggerBase {
 export interface Monitor extends TriggerBase {
   processId: string;
   command: string;
+  purpose?: string;
   threadRef: string;
   instructions?: string;
   pattern?: string;
@@ -656,12 +659,13 @@ export interface ClientToolResult {
 }
 
 export interface TurnRequest {
-  slackSource?: { accountId: string; teamId: string; userId: string };
+  slackSource?: { accountId: string; teamId: string; userId: string; externalPolicyNamespace?: string };
   externalSlack?: {
     accountId: string;
     teamId: string;
     userId: string;
     companyDomains: string[];
+    companyTeamIds: string[];
     serviceCredentials: string[];
   };
   sessionSenderId?: string;
@@ -788,7 +792,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy";
+  refusalKind?: "security_quarantine" | "session_busy" | "model_budget";
   adminUrl?: string;
   runId?: string;
   steered?: true;
