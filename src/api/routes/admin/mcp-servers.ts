@@ -5,7 +5,7 @@
 // model-provider credential, not like a personal connector.
 
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
-import { isBuiltInOAuthProvider, PROVIDERS } from "../../../connectors/oauth.ts";
+import { PROVIDERS } from "../../../connectors/oauth.ts";
 import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../../../mcp/oauth-discovery.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -82,7 +82,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   const existing = await ctx.deps.mcpServers.get(id);
   const oauthUser = auth === "oauth-user";
-  if (oauthUser && isBuiltInOAuthProvider(id)) {
+  if (oauthUser && PROVIDERS[id]) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
   }
   const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
@@ -93,12 +93,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (
     oauthUser &&
     typeof credentialHost === "string" &&
-    Object.entries(PROVIDERS).some(
-      ([name, p]) =>
-        isBuiltInOAuthProvider(name) &&
-        p.hosts.some(
-          (h) => credentialHost === h || credentialHost.endsWith(`.${h}`) || h.endsWith(`.${credentialHost}`),
-        ),
+    Object.values(PROVIDERS).some((p) =>
+      p.hosts.some((h) => credentialHost === h || credentialHost.endsWith(`.${h}`) || h.endsWith(`.${credentialHost}`)),
     )
   ) {
     return sendJson(ctx.res, 400, {

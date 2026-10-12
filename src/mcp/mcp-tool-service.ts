@@ -197,7 +197,8 @@ export function createMcpToolService(opts: {
         const client = await callerClient(server, principalId);
         if (def.signIn) {
           const tools = (await client.listTools()).slice(0, MAX_TOOLS_PER_SERVER);
-          await opts.servers.put({ ...server, tools });
+          const current = await opts.servers.get(server.id);
+          if (current) await opts.servers.put({ ...current, tools });
           await refresh();
           record("call", `${def.serverId}/sign_in`, `ok tools=${tools.length}`, principalId);
           return `Signed in to ${server.name}. Tools now available: ${tools.map((t) => `${server.id}_${t.name}`).join(", ")}`;

@@ -458,19 +458,15 @@ export interface PublicOAuthClient {
 }
 
 const publicClients = new Map<string, PublicOAuthClient>();
-const builtInProviders = new Set(Object.keys(PROVIDERS));
-
-export function isBuiltInOAuthProvider(name: string): boolean {
-  return builtInProviders.has(name);
-}
+const publicProviders = new Map<string, OAuthProviderConfig>();
 
 export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
-  for (const name of publicClients.keys()) delete PROVIDERS[name];
   publicClients.clear();
+  publicProviders.clear();
   for (const c of clients) {
-    if (builtInProviders.has(c.name)) continue;
+    if (PROVIDERS[c.name]) continue;
     publicClients.set(c.name, c);
-    PROVIDERS[c.name] = {
+    publicProviders.set(c.name, {
       hosts: [c.host],
       authUrl: c.authUrl,
       tokenUrl: c.tokenUrl,
@@ -483,8 +479,12 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
       pkce: true,
       ...(c.resource ? { authParams: { resource: c.resource } } : {}),
       setupGuide: { console: "Admin → MCP servers", url: "", steps: [] },
-    };
+    });
   }
+}
+
+export function oauthProvider(name: string): OAuthProviderConfig | undefined {
+  return PROVIDERS[name] ?? publicProviders.get(name);
 }
 
 export function withPublicOAuthClients(resolve: OAuthClientResolver): OAuthClientResolver {
@@ -597,7 +597,7 @@ export function authorizeUrl(
     codeChallenge?: string;
   },
 ): string {
-  const p = PROVIDERS[provider];
+  const p = oauthProvider(provider);
   if (!p) throw new Error(`unknown OAuth provider: ${provider}`);
   const accountType = opts.accountType ?? "default";
   const scopes = scopesFor(p, opts.client);
@@ -629,7 +629,7 @@ export async function exchangeCode(
     codeVerifier?: string;
   },
 ): Promise<{ hosts: string[]; token: OAuthToken }> {
-  const p = PROVIDERS[provider];
+  const p = oauthProvider(provider);
   if (!p) throw new Error(`unknown OAuth provider: ${provider}`);
   const adapter = p.exchange ?? defaultExchange;
   return adapter({
@@ -645,7 +645,7 @@ export async function exchangeCode(
 }
 
 function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {
-  for (const [name, config] of Object.entries(PROVIDERS)) {
+  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicProviders]) {
     if (config.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return { name, config };
   }
   return null;

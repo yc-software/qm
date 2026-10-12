@@ -6,7 +6,7 @@ import {
   authorizeUrl,
   exchangeCode,
   makeRefresh,
-  PROVIDERS,
+  oauthProvider,
   setPublicOAuthClients,
   withPublicOAuthClients,
 } from "../src/connectors/oauth.ts";
@@ -37,8 +37,8 @@ function oauthServer(partial?: Partial<McpServer>): McpServer {
 test("oauth-user servers register a PKCE public client that exchanges and refreshes without a secret", async (t) => {
   t.after(() => setPublicOAuthClients([]));
   setPublicOAuthClients(mcpPublicOAuthClients([oauthServer(), oauthServer({ id: "off", enabled: false })]));
-  assert.ok(PROVIDERS.orders?.pkce);
-  assert.equal(PROVIDERS.off, undefined);
+  assert.ok(oauthProvider("orders")?.pkce);
+  assert.equal(oauthProvider("off"), undefined);
   const resolve = withPublicOAuthClients(async () => {
     throw new Error("secret resolver must not be used");
   });
@@ -79,9 +79,9 @@ test("oauth-user servers register a PKCE public client that exchanges and refres
   for (const b of bodies) assert.equal(b.get("resource"), `https://${HOST}/mcp`);
 
   setPublicOAuthClients([]);
-  assert.equal(PROVIDERS.orders, undefined);
+  assert.equal(oauthProvider("orders"), undefined);
   setPublicOAuthClients(mcpPublicOAuthClients([oauthServer({ id: "github", credentialHost: "x.example" })]));
-  assert.notEqual(PROVIDERS.github?.pkce, true, "built-in providers are never shadowed");
+  assert.notEqual(oauthProvider("github")?.pkce, true, "built-in providers are never shadowed");
 });
 
 test("oauth-user tools offer a sign-in link until the caller connects, then use only their token", async (t) => {
@@ -108,7 +108,7 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   });
   await store.put(oauthServer());
   await service.refresh();
-  assert.ok(PROVIDERS.orders?.pkce, "refresh registers the server's OAuth client");
+  assert.ok(oauthProvider("orders")?.pkce, "refresh registers the server's OAuth client");
   assert.deepEqual(
     service.toolDefs().map((d) => d.name),
     ["orders_sign_in"],
