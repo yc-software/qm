@@ -78,7 +78,7 @@ import {
   renderConnectedAppsBlock,
   renderSandboxProfiles,
 } from "./environment-facts.ts";
-import { PROVIDERS } from "../connectors/oauth.ts";
+import { isBuiltInOAuthProvider, PROVIDERS } from "../connectors/oauth.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -259,7 +259,9 @@ const SESSION_GONE_REASON = "this conversation is no longer available — start 
 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
-const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
+const CONNECTOR_HOSTS = Object.entries(PROVIDERS)
+  .filter(([name]) => isBuiltInOAuthProvider(name))
+  .flatMap(([, p]) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 

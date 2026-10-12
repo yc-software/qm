@@ -6,89 +6,12 @@
 
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
 import { isBuiltInOAuthProvider, PROVIDERS } from "../../../connectors/oauth.ts";
+import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../../../mcp/oauth-discovery.ts";
 import { sendJson } from "../../http.ts";
-import { errMessage } from "../../../util/errors.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
-
-function httpsUrl(v: unknown): string | undefined {
-  if (typeof v !== "string") return undefined;
-  try {
-    const u = new URL(v.trim());
-    return u.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)
-      ? u.toString()
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseScopes(v: unknown): string[] | undefined {
-  const raw: unknown[] | undefined = typeof v === "string" ? v.split(/\s+/) : undefined;
-  return (raw ?? (Array.isArray(v) ? (v as unknown[]) : undefined))
-    ?.filter((x): x is string => typeof x === "string" && !!x.trim())
-    .map((x) => x.trim());
-}
-
-interface DiscoveredOAuth {
-  authorize?: string;
-  token?: string;
-  scopes?: string[];
-  errors: string[];
-}
-
-async function fetchMeta(url: string, errors: string[]): Promise<Record<string, unknown> | undefined> {
-  let r: Response;
-  try {
-    r = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(5_000) });
-  } catch (e) {
-    errors.push(`${url}: ${errMessage(e)}`);
-    return undefined;
-  }
-  if (!r.ok) {
-    errors.push(`${url}: HTTP ${r.status}`);
-    return undefined;
-  }
-  const meta: unknown = await r.json().catch(() => undefined);
-  if (meta && typeof meta === "object") return meta as Record<string, unknown>;
-  errors.push(`${url}: response is not a JSON object`);
-  return undefined;
-}
-
-function wellKnown(base: URL, suffix: string): string[] {
-  const path = base.pathname.replace(/\/+$/, "");
-  return [...new Set([`${base.origin}/.well-known/${suffix}${path}`, `${base.origin}/.well-known/${suffix}`])];
-}
-
-async function discoverOAuth(resource: URL): Promise<DiscoveredOAuth> {
-  const errors: string[] = [];
-  for (const url of wellKnown(resource, "oauth-protected-resource")) {
-    const meta = await fetchMeta(url, errors);
-    const issuer = Array.isArray(meta?.authorization_servers) ? httpsUrl(meta.authorization_servers[0]) : undefined;
-    if (!issuer) continue;
-    const scopes = parseScopes(meta?.scopes_supported);
-    const base = new URL(issuer);
-    const path = base.pathname.replace(/\/+$/, "");
-    for (const candidate of [
-      `${base.origin}/.well-known/oauth-authorization-server${path}`,
-      `${base.origin}/.well-known/openid-configuration${path}`,
-      ...(path ? [`${base.origin}${path}/.well-known/openid-configuration`] : []),
-    ]) {
-      const server = await fetchMeta(candidate, errors);
-      if (server)
-        return {
-          authorize: httpsUrl(server.authorization_endpoint),
-          token: httpsUrl(server.token_endpoint),
-          scopes,
-          errors,
-        };
-    }
-    return { scopes, errors };
-  }
-  return { errors };
-}
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -182,6 +105,11 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "credentialHost is already used by another connector",
     });
+  }
+  for (const field of ["oauthAuthorizeUrl", "oauthTokenUrl"] as const) {
+    if (oauthUser && b[field] !== undefined && !httpsUrl(b[field])) {
+      return sendJson(ctx.res, 400, { error: "bad_request", message: `${field} must be an HTTPS URL` });
+    }
   }
   let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
   let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);

@@ -32,7 +32,7 @@ import {
   type ServiceCredentialInput,
 } from "../../credentials/keychain.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
-import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
+import { authorizeUrl, isBuiltInOAuthProvider, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
@@ -869,7 +869,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         delete?: unknown;
       };
       const provider = typeof b.provider === "string" ? b.provider : "";
-      if (!PROVIDERS[provider]) return { error: `unknown OAuth provider: ${provider}` };
+      if (!isBuiltInOAuthProvider(provider)) return { error: `unknown OAuth provider: ${provider}` };
       if (b.delete === true) {
         await deps.config!.deleteConnectorClient(scope, provider);
         return { ok: true };

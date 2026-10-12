@@ -193,8 +193,8 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadat
   assert.equal(undiscoverable.status, 400);
   assert.match(((await undiscoverable.json()) as { message: string }).message, /discovery: .*HTTP 404/);
   assert.equal((await put("github", { clientId: "c" })).status, 400, "built-in connector ids are reserved");
-  assert.equal((await put("orders", { clientId: "c", credentialHost: "api.github.com" })).status, 400);
   assert.equal((await put("orders", { clientId: "c", credentialHost: "github.com" })).status, 400);
+  assert.equal((await put("orders", { clientId: "c", oauthTokenUrl: "http://id.example.com/token" })).status, 400);
 
   assert.equal((await put("orders", { clientId: " c " })).status, 200);
   const record = (await store.get("orders"))!;

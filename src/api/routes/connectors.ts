@@ -5,6 +5,7 @@ import {
   exchangeCode,
   openOAuthState,
   PROVIDERS,
+  isBuiltInOAuthProvider,
   withPublicOAuthClients,
   sealOAuthState,
   createSecretClientResolver,
@@ -487,15 +488,17 @@ async function setToken(ctx: ApiCtx): Promise<void> {
 async function catalog(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const entries = await Promise.all(
-    Object.entries(PROVIDERS).map(async ([name, p]) => ({
-      provider: name,
-      hosts: p.hosts,
-      scopes: p.scopes,
-      consentMode: p.consentMode,
-      redirectPath: p.redirectPath,
-      setupGuide: p.setupGuide,
-      configured: await providerConfigured(deps, name),
-    })),
+    Object.entries(PROVIDERS)
+      .filter(([name]) => isBuiltInOAuthProvider(name))
+      .map(async ([name, p]) => ({
+        provider: name,
+        hosts: p.hosts,
+        scopes: p.scopes,
+        consentMode: p.consentMode,
+        redirectPath: p.redirectPath,
+        setupGuide: p.setupGuide,
+        configured: await providerConfigured(deps, name),
+      })),
   );
   return sendJson(res, 200, { catalog: entries });
 }
