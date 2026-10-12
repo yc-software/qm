@@ -3544,6 +3544,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               emitGapWork("persist", persistStart, Date.now());
             }
           };
+          const initialDocuments = [...documentInputs.documents];
           return deps.harness.turns.runTurn({
             session,
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
@@ -3611,7 +3612,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 remainingDocumentBytes,
                 turnAbort.signal,
                 remainingDocumentCount,
-                documentInputs.documents,
+                initialDocuments,
               );
               let steeredUnscreened = false;
               if (enforceScreen) steeredUnscreened = await screenDocuments(steeredDocuments, text);
@@ -3688,7 +3689,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
             ...(extras.images?.length ? { images: extras.images } : {}),
-            documents: [...documentInputs.documents],
+            documents: initialDocuments,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,

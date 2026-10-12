@@ -30,7 +30,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
-import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal, type TurnRequest } from "../src/types.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 
@@ -982,7 +982,7 @@ test("steered documents use the inbound security screen before writing their con
   );
 });
 
-for (const budget of ["count", "bytes", "reupload"] as const) {
+for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
   test(`steered documents respect the initial turn budget (${budget})`, async () => {
     const blobTransfer = createMemoryBlobTransferStore();
     const blob = await blobTransfer.put(Buffer.from(budget === "bytes" ? "x".repeat(7_999_995) : "initial"));
@@ -998,7 +998,7 @@ for (const budget of ["count", "bytes", "reupload"] as const) {
     let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
     harness.turns.runTurn = async (turn) => {
       assert.equal(turn.documents?.length, budget === "count" ? 10 : 1);
-      prepared = await turn.prepareSteer!("read this", {
+      const request: TurnRequest = {
         surface: "web",
         actor: { externalId: actor.id },
         conversation: { kind: "dm", threadRef: `steer-budget-${budget}` },
@@ -1006,7 +1006,13 @@ for (const budget of ["count", "bytes", "reupload"] as const) {
         attachments: [
           { name: budget === "reupload" ? "initial-0.txt" : "steered.txt", mimetype: "text/plain", ...steerBlob },
         ],
-      });
+      };
+      prepared = await turn.prepareSteer!("read this", request);
+      if (budget === "retry") {
+        assert.equal(prepared.documents?.length, 1);
+        prepared = await turn.prepareSteer!("read this", request);
+        assert.equal(turn.documents?.length, 1);
+      }
       if (budget === "reupload")
         assert.notEqual(prepared.attachments?.[0]?.artifactId, turn.documents?.[0]?.artifactId);
       return { reply: "done" };
@@ -1022,8 +1028,9 @@ for (const budget of ["count", "bytes", "reupload"] as const) {
       })),
     });
     assert.equal(result.status, "ok", result.reason);
-    assert.deepEqual(prepared?.documents, []);
-    if (budget === "reupload") assert.doesNotMatch(prepared?.text ?? "", /count or byte budget/);
+    if (budget === "retry") assert.equal(prepared?.documents?.length, 1);
+    else assert.deepEqual(prepared?.documents, []);
+    if (budget === "reupload" || budget === "retry") assert.doesNotMatch(prepared?.text ?? "", /count or byte budget/);
     else assert.match(prepared?.text ?? "", /steered.txt.*count or byte budget/);
   });
 }
