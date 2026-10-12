@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FIRST_PARTY_SECRET_SPECS } from "../cli/src/secrets.ts";
 import { MODEL_PROVIDERS, MODEL_PROVIDER_HARNESSES } from "../cli/src/config.ts";
+import { isInvalidSecret as cliRejectsSecret } from "../cli/src/util.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
 import { HARNESS_IDS, defaultModelForProvider } from "../src/model/pi-models.ts";
 
@@ -26,6 +27,7 @@ test("background ownership requires strong control credentials only for configur
       }),
       ["DEPLOYMENT_CONTROL_SECRET"],
     );
+    assert.equal(cliRejectsSecret("DEPLOYMENT_CONTROL_SECRET", secret), true, `the CLI preflight agrees on ${secret}`);
   }
   assert.deepEqual(
     validateCoreSecretEnv({
@@ -34,6 +36,7 @@ test("background ownership requires strong control credentials only for configur
     }),
     [],
   );
+  assert.equal(cliRejectsSecret("DEPLOYMENT_CONTROL_SECRET", "separate-control-secret-value-0000000000"), false);
 });
 
 test('deploy/core/Dockerfile pins NODE_ENV=production — the "production" secret gate is load-bearing on that line', () => {
