@@ -3139,7 +3139,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordResult(
           callId,
           { tool: "guidance", scope, soulVersion: r.soulVersion },
-          text(r.effectiveSoul ? r.effectiveSoul : "(no standing instructions set)"),
+          text(r.soul ? r.soul : "(no standing instructions set)"),
         );
       }
       let content = params.content;

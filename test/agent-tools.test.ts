@@ -2364,8 +2364,8 @@ test("webhook create requires task + verification; list and disable dispatch", a
   assert.match(textOut(await call(tool("webhook"), { action: "disable" })), /\[error\].*requires `id`/);
 });
 
-test("guidance conversation scope reads the effective SOUL; replace requires content and reports the version", async () => {
-  assert.match(textOut(await call(tool("guidance"), { action: "read", scope: "conversation" })), /Be terse\./);
+test("guidance conversation scope reads its own instructions; replace requires content and reports the version", async () => {
+  assert.equal(textOut(await call(tool("guidance"), { action: "read", scope: "conversation" })), "Be terse.");
   assert.match(
     textOut(await call(tool("guidance"), { action: "replace", scope: "conversation", content: "New guidance." })),
     /version 4/,
@@ -2374,6 +2374,35 @@ test("guidance conversation scope reads the effective SOUL; replace requires con
     textOut(await call(tool("guidance"), { action: "replace", scope: "conversation" })),
     /\[error\].*requires `content`/,
   );
+});
+
+test("guidance conversation scope with no own instructions does not return inherited policy", async () => {
+  for (const soul of [null, ""]) {
+    const tc: ToolContext = {
+      ...fakeToolContext(),
+      soulRead: () => ({ effectiveSoul: "Org policy.", soul, soulVersion: 0 }),
+    };
+    assert.equal(
+      textOut(await call(tool("guidance", tc), { action: "read", scope: "conversation" })),
+      "(no standing instructions set)",
+    );
+  }
+});
+
+test("guidance read then replace keeps inherited policy out of saved instructions", async () => {
+  let soul = "Be terse.";
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    soulRead: () => ({ effectiveSoul: `Org policy.\n\n${soul}`, soul, soulVersion: 3 }),
+    async soulWrite(content) {
+      soul = content;
+      return { ok: true, version: 4 };
+    },
+  };
+  const guidance = tool("guidance", tc);
+  const content = textOut(await call(guidance, { action: "read", scope: "conversation" }));
+  await call(guidance, { action: "replace", scope: "conversation", content: `${content}\nUse plain text.` });
+  assert.equal(soul, "Be terse.\nUse plain text.");
 });
 
 test("guidance defaults to channel scope when a channel is available, and rewrites the channel order", async () => {
