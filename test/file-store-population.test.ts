@@ -1,3 +1,4 @@
+import { readContextFile } from "../src/resolution/context-files.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { collectNamedOutbound, materializeInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
@@ -223,4 +224,7 @@ test("each share stores a fresh snapshot row behind one stable grant, even after
   assert.equal(await store.get(first.artifactId!, { includeDisabled: true }), null);
   assert.equal((await store.get(second.artifactId!))!.path, "report.txt");
   assert.equal((await acl.grantsFor(owner, "report.txt")).length, 1);
+  const read = await readContextFile("shared/report.txt", await acl.handlesFor([grantee]), workspace, store);
+  assert.ok(read && "bytes" in read);
+  assert.equal(read.bytes?.toString(), "new generation");
 });
