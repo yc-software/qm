@@ -24,12 +24,17 @@ function bundle(packId: string, files: SkillFile[]): SkillBundle {
 
 function fakeSandbox() {
   const files = new Map<string, string>();
+  const commands: string[] = [];
   const sandbox = {
     async writeFile(_h: SandboxHandle, rel: string, data: string) {
       files.set(rel, data);
     },
+    async run(_h: SandboxHandle, command: string) {
+      commands.push(command);
+      return { code: 0, stdout: "", stderr: "" };
+    },
   } as unknown as Sandbox;
-  return { sandbox, files };
+  return { sandbox, files, commands };
 }
 
 test("materialized skill directory names are validated and never lossy", () => {
@@ -147,4 +152,21 @@ test("a pack bundle may ship a root SKILL.md of its own", async () => {
     bundle("s1", [{ path: "SKILL.md", content: "pack readme" }]),
   ]);
   assert.equal(files.get(`${root}/.packs/s1/SKILL.md`), "pack readme");
+});
+
+test("scripts a skill ships as executable are chmod +x after they are laid, and nothing else is", async () => {
+  const { sandbox, commands } = fakeSandbox();
+  await materializeSkillTree(
+    sandbox,
+    handle,
+    root,
+    res("runner", "R", [
+      { path: "scripts/run it.sh", content: "#!/bin/sh\necho hi", executable: true },
+      { path: "references/notes.md", content: "# notes" },
+    ]),
+  );
+  assert.deepEqual(commands, [`chmod +x -- '${root}/runner/scripts/run it.sh'`]);
+  const plain = fakeSandbox();
+  await materializeSkillTree(plain.sandbox, handle, root, res("docs", "D", [{ path: "a.md", content: "a" }]));
+  assert.deepEqual(plain.commands, [], "no exec round trip when nothing is executable");
 });

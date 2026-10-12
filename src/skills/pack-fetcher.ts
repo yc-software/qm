@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -230,10 +230,12 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
         totalBytes += buf.length;
         if (totalBytes > maxTotalBytes) throw new Error(`pack exceeds max bytes (${maxTotalBytes})`);
         const binary = isProbablyBinary(buf);
+        const executable = ((await stat(abs)).mode & 0o111) !== 0;
         files.push({
           path: relative(root, abs).split(sep).join("/"),
           text: binary ? "" : buf.toString("utf8"),
           binary,
+          ...(executable ? { executable: true } : {}),
         });
       }
     };

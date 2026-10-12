@@ -2,6 +2,7 @@ import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "..
 import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill-store.ts";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import { swallow } from "../util/errors.ts";
+import { shq } from "../util/shell.ts";
 import { assertSafeSkillName } from "./skill-name.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -36,6 +37,7 @@ export function renderSkillBody(resolution: SkillResolution, root = SKILLS_DIR):
 interface LayEntry {
   path: string;
   content: string;
+  executable?: boolean;
 }
 
 function entriesUnder(
@@ -49,7 +51,8 @@ function entriesUnder(
   for (const f of files) {
     try {
       const rel = safeSkillFilePath(f.path);
-      if (!skip(rel)) entries.push({ path: `${dir}/${rel}`, content: content(f) });
+      if (!skip(rel))
+        entries.push({ path: `${dir}/${rel}`, content: content(f), ...(f.executable ? { executable: true } : {}) });
     } catch (e) {
       swallow(`skills: bad ${label} path ${f.path}`, e);
     }
@@ -78,6 +81,17 @@ export async function materializeSkillTree(
   ];
   for (const b of bundles)
     entries.push(...entriesUnder(`${root}/.packs/${safeSkillDirName(b.packId)}`, b.files, "bundle"));
+  await layEntries(sandbox, handle, entries);
+  // File writes don't carry a mode, so scripts a skill ships as executable would land 0644 and
+  // fail with "Permission denied" when the skill says to run them.
+  const executable = entries.filter((e) => e.executable).map((e) => shq(e.path));
+  if (executable.length) {
+    const r = await sandbox.run(handle, `chmod +x -- ${executable.join(" ")}`, { timeoutMs: 30_000 });
+    if (r.code !== 0) throw new Error(`skills: chmod +x failed: ${r.stderr.trim() || `exit ${r.code}`}`);
+  }
+}
+
+async function layEntries(sandbox: Sandbox, handle: SandboxHandle, entries: LayEntry[]): Promise<void> {
   if (sandbox.importFiles) {
     try {
       await sandbox.importFiles(
