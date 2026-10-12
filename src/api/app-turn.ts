@@ -114,7 +114,7 @@ export function createTurnMethods(
       if (!deps.identity.isInternal(actor)) {
         return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
       }
-      let projectAudience: Principal[] | undefined;
+      let memberAudience: Principal[] | undefined;
       let projectName: string | undefined;
       let projectVersion: string | undefined;
       let sessionParticipantIds: string[] | undefined;
@@ -136,7 +136,7 @@ export function createTurnMethods(
         const activeMemberIds = roster.filter((memberId) => deps.identity.isInternal(deps.identity.classify(memberId)));
         if (!activeMemberIds.includes(actor.id))
           return { status: "refused", reason: "you're not a member of that context" };
-        projectAudience = await Promise.all(
+        memberAudience = await Promise.all(
           activeMemberIds.map(async (memberId) => {
             if (memberId === actor.id) return actor;
             const principal = deps.identity.classify(memberId);
@@ -151,6 +151,11 @@ export function createTurnMethods(
         if (!conversationRef || !(await mayUseSharedScope(req.conversation.kind, conversationRef, actor))) {
           return { status: "refused", reason: "you're not a member of that context" };
         }
+        const members = req.conversation.publishMembers
+          ? undefined
+          : await h.currentScopeMembers(scopeId(req.conversation.kind, conversationRef));
+        if (members?.some((p) => p.id === actor.id))
+          memberAudience = members.map((p) => (p.id === actor.id ? actor : p));
       }
 
       if (req.surface === "webhook" && req.triggered && !sessionParticipantIds) {
@@ -339,7 +344,7 @@ export function createTurnMethods(
 
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
-        projectAudience ??
+        memberAudience ??
         rawAudience.map((a) => {
           const p = deps.identity.classify(a.externalId, a.isExternalGuest);
           if (p.id === actor.id) return actor;
@@ -348,7 +353,7 @@ export function createTurnMethods(
       if (!audience.some((p) => p.id === actor.id)) audience.push(actor);
 
       const publishMembers =
-        projectAudience ??
+        memberAudience ??
         req.conversation.publishMembers?.map((a) => deps.identity.classify(a.externalId, a.isExternalGuest));
 
       const conversation: Conversation = {

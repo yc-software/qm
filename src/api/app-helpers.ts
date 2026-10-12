@@ -22,6 +22,7 @@ import {
   createCanReadScope,
   createCanManageScope,
   createCanWriteScope,
+  createCurrentScopeMembers,
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
   createMembershipControlsScope,
@@ -421,6 +422,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   const principalCanWriteScope = createCanWriteScope(scopeMembershipDeps);
 
+  const currentScopeMembers = createCurrentScopeMembers(scopeMembershipDeps, true);
+
   async function principalCanAccessCurrentScope(principalId: string, targetScope: ScopeId): Promise<boolean> {
     if (await principalCanWriteScope(principalId, targetScope)) return true;
     const { kind, ref } = parseScopeId(targetScope);
@@ -751,6 +754,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     canUseContext,
     principalCanAccessCurrentScope,
     principalCanWriteScope,
+    currentScopeMembers,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,

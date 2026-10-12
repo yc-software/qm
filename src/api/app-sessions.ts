@@ -1,4 +1,3 @@
-import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import {
@@ -796,14 +795,7 @@ export function createSessionMethods(
       return principalCanManageScope(principalId, scope);
     },
 
-    currentScopeMembers: createCurrentScopeMembers(
-      {
-        managedGroups: deps.projects,
-        directory: deps.directory,
-        identity: deps.identity,
-      },
-      true,
-    ),
+    currentScopeMembers: h.currentScopeMembers,
     isCurrentSharedScopeMember(principalId, scope) {
       const { kind } = parseScopeId(scope);
       return kind === "channel" || kind === "group"
