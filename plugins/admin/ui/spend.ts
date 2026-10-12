@@ -6,7 +6,12 @@ import { table, card, renderer } from "./shared.ts";
 type Services = Record<string, any>;
 
 const DAY = 86400000;
-const RANGES: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90 };
+const PRESETS = new Map([
+  ["7d", 7],
+  ["30d", 30],
+  ["90d", 90],
+]);
+const MAX_CUSTOM_DAYS = 366;
 const COLUMNS: Array<[string, string]> = [
   ["person", "Person"],
   ["costUsd", "Total"],
@@ -32,25 +37,26 @@ function dayMs(day: unknown): number | null {
 interface SpendWindow {
   from: string;
   to: string;
-  custom: boolean;
+  preset: string | null;
   bucket: "day" | "week";
+}
+
+function windowOf(start: number, end: number, preset: string | null): SpendWindow {
+  return { from: isoDay(start), to: isoDay(end), preset, bucket: end - start > 62 * DAY ? "week" : "day" };
 }
 
 export function spendWindow(
   state: { range?: string | null; from?: string | null; to?: string | null },
   now = Date.now(),
 ): SpendWindow {
+  const tomorrow = Math.floor(now / DAY) * DAY + DAY;
   const from = dayMs(state.from);
   const to = dayMs(state.to);
-  const custom = from !== null && to !== null && from < to ? { start: from, end: to } : null;
-  const end = custom?.end ?? Math.floor(now / DAY) * DAY + DAY;
-  const start = custom?.start ?? end - (RANGES[state.range ?? ""] ?? RANGES["30d"]!) * DAY;
-  return {
-    from: isoDay(start),
-    to: isoDay(end),
-    custom: custom !== null,
-    bucket: end - start > 62 * DAY ? "week" : "day",
-  };
+  const end = to === null ? null : Math.min(to, tomorrow);
+  if (from !== null && end !== null && from < end)
+    return windowOf(Math.max(from, end - MAX_CUSTOM_DAYS * DAY), end, null);
+  const preset = state.range && PRESETS.has(state.range) ? state.range : "30d";
+  return windowOf(tomorrow - PRESETS.get(preset)! * DAY, tomorrow, preset);
 }
 
 function sortValue(row: any, key: string): number | string {
@@ -100,12 +106,16 @@ export class SpendView {
         [org.cacheHitRatio == null ? "n/a" : s.fmtPct(org.cacheHitRatio), "Cache hit rate"],
       ],
       tabs: [
-        ...Object.keys(RANGES).map((range) => ({
+        ...[...PRESETS.keys()].map((range) => ({
           label: range,
-          active: !s.window.custom && (s.range || "30d") === range,
+          active: s.window.preset === range,
           onClick: () => s.setRange(range),
         })),
-        { label: "Custom", active: s.window.custom, onClick: () => s.setCustomRange(s.window.from, s.window.to) },
+        {
+          label: "Custom",
+          active: s.window.preset === null,
+          onClick: () => s.setCustomRange(s.window.from, s.window.to),
+        },
       ],
       search: {
         value: this.filter,
@@ -125,27 +135,23 @@ export class SpendView {
   }
   customRange() {
     const current: SpendWindow = this.services.window;
-    if (!current.custom) return null;
+    if (current.preset !== null) return null;
     const today = isoDay(Date.now());
-    const apply = () => {
+    const apply = (event: Event) => {
+      event.preventDefault();
       const [first, last] = [...this.root.querySelectorAll<HTMLInputElement>(".spend-custom input")]
         .map((input) => input.value)
         .sort();
       const end = dayMs(last);
       if (dayMs(first) !== null && end !== null) this.services.setCustomRange(first, isoDay(end + DAY));
     };
-    return html`<div class="spend-custom">
-      <input type="date" aria-label="First day" max=${today} .value=${current.from} @change=${apply} />
+    return html`<form class="spend-custom" @submit=${apply}>
+      <input type="date" aria-label="First day" max=${today} .value=${current.from} />
       <span>to</span>
-      <input
-        type="date"
-        aria-label="Last day"
-        max=${today}
-        .value=${isoDay(Date.parse(current.to) - DAY)}
-        @change=${apply}
-      />
-      <span class="hint">UTC</span>
-    </div>`;
+      <input type="date" aria-label="Last day" max=${today} .value=${isoDay(Date.parse(current.to) - DAY)} />
+      <button class="primary">Apply</button>
+      <span class="hint">UTC, up to a year</span>
+    </form>`;
   }
   sortBy(key: string) {
     if (this.sortKey === key) this.sortDir = this.sortDir === "asc" ? "desc" : "asc";

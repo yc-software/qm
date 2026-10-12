@@ -108,6 +108,11 @@ test("the spend window round-trips through the URL so Back restores the prior ra
   const { stateToUrl } = routerAt("/admin/spend");
   assert.equal(stateToUrl({ view: "spend", scope: "org:acme", range: "7d" }), "/admin/spend?range=7d");
   assert.equal(stateToUrl({ view: "spend", scope: "org:acme", range: null }), "/admin/spend");
+  assert.equal(
+    stateToUrl({ view: "spend", scope: "org:acme", range: "constructor" }),
+    "/admin/spend?range=30d",
+    "an unknown preset neither throws nor survives into the URL",
+  );
   const router = routerAt("/admin/spend", "?range=90d");
   const st = router.urlToState();
   assert.equal(st.view, "spend");

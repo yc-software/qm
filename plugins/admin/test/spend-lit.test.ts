@@ -75,8 +75,7 @@ function render(data: any, services: Record<string, unknown> = {}) {
   const f = litFixture();
   const calls: any = { shell: null, ranges: [], customs: [], opened: [], downloads: 0, modelDownloads: 0, api: 0 };
   const view = f.ui.spend.spend(f.root, data, {
-    range: "30d",
-    window: { from: "2026-09-01", to: "2026-10-01", custom: false, bucket: "day" },
+    window: { from: "2026-09-01", to: "2026-10-01", preset: "30d", bucket: "day" },
     defaultShell: (opts: any) => {
       calls.shell = opts;
     },
@@ -384,14 +383,20 @@ test("spend chart: person toggle is disabled for reports without person buckets"
   f.window.close();
 });
 
-test("spend view: Custom turns the current window into two editable UTC days, applied as a sorted half-open window", () => {
-  const preset = render(DATA);
+test("spend view: Custom turns the current window into two editable UTC days, applied on Apply as a sorted half-open window", () => {
+  const preset = render(DATA, { window: { from: "2026-09-24", to: "2026-10-01", preset: "7d", bucket: "day" } });
   assert.equal(preset.f.root.querySelector(".spend-custom"), null);
+  assert.deepEqual(JSON.parse(JSON.stringify(preset.calls.shell.tabs.map((t: any) => t.active))), [
+    true,
+    false,
+    false,
+    false,
+  ]);
   preset.calls.shell.tabs.at(-1).onClick();
-  assert.deepEqual(preset.calls.customs, [["2026-09-01", "2026-10-01"]]);
+  assert.deepEqual(preset.calls.customs, [["2026-09-24", "2026-10-01"]]);
   preset.f.window.close();
 
-  const { f, calls } = render(DATA, { window: { from: "2026-08-28", to: "2026-09-03", custom: true, bucket: "day" } });
+  const { f, calls } = render(DATA, { window: { from: "2026-08-28", to: "2026-09-03", preset: null, bucket: "day" } });
   assert.deepEqual(JSON.parse(JSON.stringify(calls.shell.tabs.map((t: any) => [t.label, t.active]))), [
     ["7d", false],
     ["30d", false],
@@ -400,11 +405,14 @@ test("spend view: Custom turns the current window into two editable UTC days, ap
   ]);
   const [first, last] = [...f.root.querySelectorAll<HTMLInputElement>(".spend-custom input")];
   assert.deepEqual([first!.value, last!.value], ["2026-08-28", "2026-09-02"]);
+  const applyButton = f.root.querySelector<HTMLButtonElement>(".spend-custom button")!;
   last!.value = "2026-08-01";
-  last!.dispatchEvent(new f.window.Event("change"));
+  last!.dispatchEvent(new f.window.Event("change", { bubbles: true }));
+  assert.deepEqual(calls.customs, [], "editing a day applies nothing until Apply");
+  applyButton.click();
   assert.deepEqual(calls.customs, [["2026-08-01", "2026-08-29"]]);
   first!.value = "";
-  first!.dispatchEvent(new f.window.Event("change"));
+  applyButton.click();
   assert.equal(calls.customs.length, 1, "a cleared day applies nothing");
   calls.shell.tabs[0].onClick();
   assert.deepEqual(calls.ranges, ["7d"]);
