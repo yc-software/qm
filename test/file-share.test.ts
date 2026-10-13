@@ -325,7 +325,7 @@ test("write without data or share is rejected; sharing a missing file / from a r
   );
 });
 
-test("a viewer-uploaded artifact (artifacts/<id>/<name>) is readable through its shared handle (public #94)", async () => {
+test("shared artifacts return text inline or a binary Files ID without a sandbox", async () => {
   const workspace = ws();
   const acl = createAclStore();
   const owner = scopeId("personal", "U1");
@@ -350,8 +350,10 @@ test("a viewer-uploaded artifact (artifacts/<id>/<name>) is readable through its
   assert.equal(handles.length, 1, "the grant materializes as a handle");
 
   const ctx = createToolContext({
-    sandbox: memSandbox().sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
+    sandbox: {} as Sandbox,
+    provision: async () => {
+      throw new Error("artifact reads must not provision a sandbox");
+    },
     layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
@@ -365,6 +367,24 @@ test("a viewer-uploaded artifact (artifacts/<id>/<name>) is readable through its
   const got = await ctx.read(handles[0]!.handlePath);
   assert.equal(got.content, "hello from the upload");
   assert.equal(got.sourceScopeId, owner);
+  const binaryId = fileArtifactId("upload:U1:test:binary", "in", 0);
+  const binaryPath = artifactPath(binaryId, "orange.jpg");
+  await files.put({
+    id: binaryId,
+    ownerScopeId: owner,
+    createdBy: "U1",
+    name: "orange.jpg",
+    path: binaryPath,
+    mimetype: "image/jpeg",
+    data: JPEG,
+    direction: "in",
+    createdInScope: grantee,
+  });
+  handles.push({ ...handles[0]!, handlePath: "shared/orange.jpg", ownerPath: binaryPath });
+  const binary = await ctx.read("shared/orange.jpg");
+  assert.equal(binary.content, `[binary file orange.jpg, Files ID ${binaryId}; send it by ID]`);
+  assert.equal(binary.sourceScopeId, owner);
+  assert.equal(binary.shared, true);
 });
 
 test("a workspace-backed share is never served from a stale artifact snapshot", async () => {

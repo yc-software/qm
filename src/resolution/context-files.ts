@@ -8,7 +8,7 @@ async function readGrantedArtifactBytes(
   files: FileArtifactStore | undefined,
   ownerScopeId: ScopeId,
   ownerPath: string,
-): Promise<Buffer | null> {
+): Promise<{ fileId: string; bytes: Buffer } | null> {
   if (!files) return null;
   const rows = await files.resolveByOwnerPaths([{ ownerScopeId, path: ownerPath }]);
   // Re-assert the tuple: the (owner_scope_id, path) index isn't unique and
@@ -38,7 +38,7 @@ async function readGrantedArtifactBytes(
     }
     chunks.push(buf);
   }
-  return Buffer.concat(chunks);
+  return { fileId: row.id, bytes: Buffer.concat(chunks) };
 }
 
 export async function readContextFile(
@@ -47,7 +47,7 @@ export async function readContextFile(
   workspace: Pick<WorkspaceStore, "readBytes">,
   files?: FileArtifactStore,
   onRead?: (grant: GrantedHandle) => void,
-): Promise<{ grant: GrantedHandle; bytes: Uint8Array | null } | { error: string } | null> {
+): Promise<{ grant: GrantedHandle; bytes: Uint8Array | null; fileId?: string } | { error: string } | null> {
   const matches = handles.filter((grant) => grant.handlePath === path);
   if (!matches.length) return null;
   const distinct = new Set(matches.map((grant) => `${grant.ownerScopeId}\0${grant.ownerPath}`));
@@ -55,9 +55,12 @@ export async function readContextFile(
     return { error: `ERROR: ambiguous shared handle "${path}" maps to ${distinct.size} different files` };
   const grant = matches[0]!;
   // Artifact and workspace namespaces must not shadow each other with stale snapshots.
-  const bytes = isArtifactPath(grant.ownerPath)
-    ? await readGrantedArtifactBytes(files, grant.ownerScopeId, grant.ownerPath)
-    : await workspace.readBytes(grant.ownerScopeId, grant.ownerPath);
+  if (isArtifactPath(grant.ownerPath)) {
+    const artifact = await readGrantedArtifactBytes(files, grant.ownerScopeId, grant.ownerPath);
+    if (artifact) onRead?.(grant);
+    return { grant, bytes: artifact?.bytes ?? null, ...(artifact && { fileId: artifact.fileId }) };
+  }
+  const bytes = await workspace.readBytes(grant.ownerScopeId, grant.ownerPath);
   if (bytes !== null) onRead?.(grant);
   return { grant, bytes };
 }

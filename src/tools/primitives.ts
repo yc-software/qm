@@ -979,6 +979,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             sourceScopeId: granted.ownerScopeId,
           };
         }
+        if (sharedFile.fileId) {
+          return {
+            content: `[binary file ${granted.ownerPath.split("/").pop()}, Files ID ${sharedFile.fileId}; send it by ID]`,
+            sourceScopeId: granted.ownerScopeId,
+            shared: true,
+          };
+        }
         const { handle, crossScope } = await machine(sandboxId);
         if (crossScope) throw new Error("shared binary files can't be copied onto another conversation's computer");
         const name = granted.handlePath.split(/[\\/]/).pop() ?? granted.handlePath;
