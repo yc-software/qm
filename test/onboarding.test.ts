@@ -43,12 +43,12 @@ test("onboarding memory markers are detected from readable memory bullets", () =
 test("setOnboardingStatus replaces the marker fact and round-trips through detect", async () => {
   const memory = createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "onboarding-mem-"))));
   const scope = scopeId("personal", "U1");
-  await memory.capture(scope, ["some prefs", "Onboarding: pending v2 since 2026-06-01."], Date.UTC(2026, 5, 1));
+  await memory.capture(scope, ["some prefs", "onboarding:  Pending v2."], Date.UTC(2026, 5, 1));
 
   await setOnboardingStatus(memory, scope, "completed", "2026-06-22", "admin");
   const completed = await memory.read(scope);
   assert.equal(detectOnboardingStatus(completed), "completed");
-  assert.doesNotMatch(completed, /pending/);
+  assert.doesNotMatch(completed, /pending/i);
   assert.match(completed, /some prefs/);
 
   await setOnboardingStatus(memory, scope, "not_started", "2026-06-22", "admin");

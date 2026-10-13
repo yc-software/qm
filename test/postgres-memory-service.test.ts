@@ -50,7 +50,7 @@ test("pg memory: notebook snapshots migrate into one row per fact, in order", { 
   );
   await sql("INSERT INTO memory_revisions(scope_id, seq, op, body, at) VALUES ($1, 1, 'replace', $2, $3)", [
     "personal:U2",
-    "# Memory\n\nIntro paragraph\nthat wraps.\n- (2026-04-01) Owns billing\n<!-- consolidated: 2026-04-02 -->\n* Second fact\n",
+    "# Memory\n\nIntro paragraph\nthat wraps.\n- (2026-04-01) Owns billing\n<!-- consolidated: 2026-04-02 -->\n* Second fact\n## Projects\nWorks on search.\n- (2026-02-30) Bad date\n- (2026-10-01)\n",
     at,
   ]);
 
@@ -64,10 +64,11 @@ test("pg memory: notebook snapshots migrate into one row per fact, in order", { 
   const legacy = await memory.facts!("personal:U2");
   assert.deepEqual(
     legacy.map((fact) => fact.text),
-    ["Intro paragraph\nthat wraps.", "Owns billing", "Second fact"],
+    ["Intro paragraph\nthat wraps.", "Owns billing", "Second fact", "Works on search.", "Bad date"],
   );
   assert.equal(legacy[1]!.createdAt, Date.UTC(2026, 3, 1));
   assert.equal(legacy[2]!.createdAt, at);
+  assert.equal(legacy[4]!.createdAt, at);
 });
 
 test("pg memory: add, edit and delete by id; a bad id rolls back the whole call", { skip }, async () => {

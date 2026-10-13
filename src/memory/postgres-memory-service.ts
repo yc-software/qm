@@ -48,11 +48,16 @@ const SCHEMA = [
        GROUP BY scope_id, at, block
     )
     INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, created_at, updated_at)
-    SELECT scope_id, regexp_replace(body, '^\\(\\d{4}-\\d\\d-\\d\\d\\)\\s*', ''), sensitivity, sources, source_unknown,
-           COALESCE((extract(epoch FROM substring(body FROM '^\\((\\d{4}-\\d\\d-\\d\\d)\\)')::date) * 1000)::bigint, at), at
-      FROM (SELECT f.*, regexp_replace(btrim(text), '^[-*]\\s+', '') AS body
-              FROM (SELECT * FROM snapshot UNION ALL SELECT * FROM legacy) f
-             WHERE btrim(text) <> '' AND text !~ '^(<!-- (consolidated|captures-since-promote)|#{1,6} )') f
+    SELECT scope_id, fact, sensitivity, sources, source_unknown,
+           COALESCE(CASE WHEN to_char(day, 'YYYY-MM-DD') = d THEN (extract(epoch FROM day) * 1000)::bigint END, at), at
+      FROM (SELECT g.*, regexp_replace(body, '^\\(\\d{4}-\\d\\d-\\d\\d\\)\\s*', '') AS fact,
+                   timestamp '2000-01-01' + make_interval(years => substr(d, 1, 4)::int - 2000,
+                     months => substr(d, 6, 2)::int - 1, days => substr(d, 9, 2)::int - 1) AS day
+              FROM (SELECT f.*, substring(body FROM '^\\((\\d{4}-\\d\\d-\\d\\d)\\)') AS d
+                      FROM (SELECT u.*, regexp_replace(btrim(regexp_replace(btrim(text), '^#{1,6} [^\\n]*\\n?', '')), '^[-*]\\s+', '') AS body
+                              FROM (SELECT * FROM snapshot UNION ALL SELECT * FROM legacy) u
+                             WHERE text !~ '^\\s*<!-- (consolidated|captures-since-promote)') f) g) x
+     WHERE btrim(fact) <> ''
      ORDER BY scope_id, ord;
   END $$`,
 ];
