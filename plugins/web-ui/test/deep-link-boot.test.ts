@@ -344,3 +344,33 @@ test("a message link loads older history and highlights the addressed row", asyn
     await h.close();
   }
 });
+
+test("switching conversations adds history entries, and Back and Forward reopen them", async () => {
+  const other = { id: "sess-other", threadRef: "web:tester:other", scopeId: "personal:tester", title: "Other" };
+  const h = await harness({ path: "/s/sess-deep", listSessions: [other, SESSION] });
+  try {
+    const booted = h.boot();
+    h.releaseSessions();
+    await booted;
+    await h.sessionsReady();
+    const popped = () => new Promise((resolve) => h.window.addEventListener("popstate", resolve, { once: true }));
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+    const start = h.window.history.length;
+    await h.openSession(other as unknown as Parameters<Harness["openSession"]>[0]);
+    assert.equal(h.window.location.pathname, "/s/sess-other");
+    assert.equal(h.window.history.length, start + 1, "opening another conversation is a new history entry");
+    let wait = popped();
+    h.window.history.back();
+    await wait;
+    await settle();
+    assert.equal(h.window.location.pathname, "/s/sess-deep");
+    assert.equal(h.visibleConversation().state.sessionId, SESSION.id, "Back reopens the previous conversation");
+    wait = popped();
+    h.window.history.forward();
+    await wait;
+    await settle();
+    assert.equal(h.visibleConversation().state.sessionId, other.id, "Forward reopens the next one");
+  } finally {
+    await h.close();
+  }
+});

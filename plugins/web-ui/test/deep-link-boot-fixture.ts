@@ -23,6 +23,7 @@ export interface Harness {
   sessionsState: { list: Array<{ id: string }>; loaded: boolean; openingKey: string | null };
   visibleConversation: () => Conversation;
   mainText: () => string;
+  window: Window;
   close: () => Promise<void>;
 }
 
@@ -281,6 +282,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         .find((conv: { state: { host: HTMLElement | null } }) => conv.state.host?.isConnected) ??
       conversations.mainConversation(),
     mainText: () => dom.window.document.querySelector(".main")?.textContent ?? "",
+    window: dom.window as unknown as Window,
     close: async () => {
       split.exitSplitIfActive();
       for (const conversation of conversations.allConversations()) conversations.disposeConversation(conversation);
