@@ -28,12 +28,16 @@ const report = (message: string, tone = "") => {
   memory.tone = tone;
   redraw();
 };
+const failed = (response: Data, fallback: string) => {
+  if (!response.ok) throw new Error(response.data?.message || response.data?.error || fallback);
+};
 async function refresh() {
   const [registry, providers] = await Promise.all([
     config.api("GET", "/api/model-registry"),
     config.api("GET", "/api/model-providers?catalog=cached"),
   ]);
-  if (!registry.ok || !providers.ok) throw new Error("Could not load embedding models.");
+  failed(registry, "Could not load embedding models (HTTP " + registry.status + ").");
+  failed(providers, "Could not load the OpenAI key status (HTTP " + providers.status + ").");
   memory.catalog = registry.data.embeddingModels || [];
   memory.registered = (registry.data.models || []).filter(
     (row: Data) => row.spec?.kind === "embedding" && !row.disabled,
@@ -69,19 +73,15 @@ async function run(pending: string, action: () => Promise<string>) {
     redraw();
   }
 }
-const failed = (response: Data, fallback: string) => {
-  if (!response.ok) throw new Error(response.data?.message || response.data?.error || fallback);
-};
 const apply = () =>
   run("Saving…", async () => {
     const modelId = memory.selected || null;
-    const response = await config.api(
-      "PUT",
-      "/api/scopes/" + encodeURIComponent(memory.scope) + "/memory-embedding-model",
-      { modelId },
-    );
+    const scope = memory.scope;
+    const response = await config.api("PUT", "/api/scopes/" + encodeURIComponent(scope) + "/memory-embedding-model", {
+      modelId,
+    });
     failed(response, "Could not change the embedding model.");
-    memory.saved = memory.selected;
+    if (memory.scope === scope) memory.saved = memory.selected = modelId ?? "";
     return modelId ? "Saved. Recall ranks by relevance from the next turn." : "Saved. Recall uses newest facts.";
   });
 const saveKey = () =>
@@ -129,8 +129,10 @@ function mode() {
     <small>No embedding model is selected, so recall uses the newest facts that fit the budget.</small>`;
 }
 function keyStatus() {
-  if (memory.openai?.source === "admin") return "Organization OpenAI key: set by an administrator.";
-  if (memory.openai?.configured) return "Organization OpenAI key: provided by the deployment.";
+  if (memory.openai?.configured)
+    return memory.openai.source === "admin"
+      ? "Organization OpenAI key: set by an administrator."
+      : "Organization OpenAI key: provided by the deployment.";
   return "Organization OpenAI key: not set. OpenAI embedding models cannot be verified or used until one is saved.";
 }
 const label = (model: Data) => (model.provider ? `${model.name} · ${source(model)}` : model.name);
@@ -155,6 +157,7 @@ function template() {
       <label for="memory-embedding-model">Embedding model</label
       ><select
         id="memory-embedding-model"
+        .value=${memory.selected}
         ?disabled=${memory.busy}
         @change=${(e: Event) => {
           memory.selected = value(e);

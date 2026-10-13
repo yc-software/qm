@@ -31,7 +31,7 @@ function fixture(registered: any[] = []) {
           },
         };
       if (path.startsWith("/api/model-providers?"))
-        return { ok: true, data: { providers: [{ provider: "openai", configured: false, source: "absent" }] } };
+        return { ok: true, data: { providers: [{ provider: "openai", configured: false, source: "admin" }] } };
       return { ok: true, data: { ok: true } };
     },
   });
@@ -109,4 +109,17 @@ test("saves the OpenAI key and registers an embedding model through the existing
     ],
   );
   assert.match($("st-memory-recall").textContent, /Large verified/);
+});
+
+test("a reload during Apply keeps the submitted model as saved", async () => {
+  const { ui, $, type } = fixture();
+  await ui.loadMemory({ memoryEmbeddingModel: null }, "org:acme");
+  type("memory-embedding-model", gateway.id);
+  $("memory-embedding-save").click();
+  await ui.loadMemory({ memoryEmbeddingModel: null }, "org:acme");
+  await settle();
+  await settle();
+  assert.equal(ui.memory.saved, gateway.id);
+  assert.equal($("memory-embedding-model").value, gateway.id);
+  assert.match($("memory-recall-mode").textContent, /Relevance ranking/);
 });
