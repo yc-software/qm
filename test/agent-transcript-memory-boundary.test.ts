@@ -208,7 +208,6 @@ test("agent transcript retains viewer-visible history across memory checkpoints"
     const old = await f.append("assistant", { text: "PRIVATE_SENTINEL" });
     await f.built.sessions.addPin(f.session.id, { addedBy: "alice", text: "PRIVATE_SENTINEL" });
     await f.built.sessions.updateTitle(f.session.id, "PRIVATE_SENTINEL");
-    await f.built.sessions.updateStatus(f.session.id, { emoji: "✅", text: "PRIVATE_SENTINEL" });
     f.setAudience([{ id: "alice", type: "internal" }]);
     await f.checkpoint(old.seq);
     await f.append("user", { text: "new question" });
@@ -256,17 +255,15 @@ test("adding an authorized fact preserves an otherwise compatible checkpoint", a
   }
 });
 
-test("agent list and patch responses include viewer-visible titles and statuses", async () => {
+test("agent list and patch responses include viewer-visible titles", async () => {
   const f = await fixture();
   try {
     await f.built.sessions.updateTitle(f.session.id, "PRIVATE_TITLE");
-    await f.built.sessions.updateStatus(f.session.id, { emoji: "✅", text: "PRIVATE_STATUS" });
     const listed = await f.list();
     assert.equal(listed.status, 200);
     const listing = await listed.text();
     assert.match(listing, new RegExp(f.session.id));
     assert.match(listing, /PRIVATE_TITLE/);
-    assert.match(listing, /PRIVATE_STATUS/);
     const patch = await f.post("", { archived: true });
     assert.equal(patch.status, 200);
     assert.match(await patch.text(), /PRIVATE_TITLE/);
@@ -274,10 +271,6 @@ test("agent list and patch responses include viewer-visible titles and statuses"
     assert.equal(renamed.status, 200);
     const renamedBody = await renamed.text();
     assert.match(renamedBody, /safe title/);
-    assert.match(renamedBody, /PRIVATE_STATUS/);
-    const cleared = await f.post("", { status: null });
-    assert.equal(cleared.status, 200);
-    assert.equal(((await cleared.json()) as { conversation: { status: null } }).conversation.status, null);
   } finally {
     await f.close();
   }

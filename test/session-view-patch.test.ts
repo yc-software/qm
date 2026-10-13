@@ -94,18 +94,16 @@ test("POST /v1/sessions/:id rejects malformed colors and non-boolean pins", asyn
   }
 });
 
-test("surface session route sets and clears status, rejecting malformed input", async () => {
+test("surface session route marks a conversation unread and read", async () => {
   const srv = start();
   try {
-    const id = await newSession(srv.base, "web:U1:status");
-    const status = { emoji: "🚀", text: "Live in production" };
-    const set = await patch(srv.base, id, { principalId: "U1", status });
-    assert.equal(set.status, 200);
-    assert.deepEqual(set.session?.status, status);
-    assert.equal((await patch(srv.base, id, { principalId: "U1", status: {} })).status, 400);
-    const cleared = await patch(srv.base, id, { principalId: "U1", status: null });
-    assert.equal(cleared.status, 200);
-    assert.equal(cleared.session?.status ?? null, null);
+    const id = await newSession(srv.base, "web:U1:unread");
+    const unread = await patch(srv.base, id, { principalId: "U1", unread: true });
+    assert.equal(unread.status, 200);
+    const read = await patch(srv.base, id, { principalId: "U1", unread: false });
+    assert.equal(read.status, 200);
+    assert.equal(read.session?.unread ?? false, false);
+    assert.equal((await patch(srv.base, id, { principalId: "U1", unread: "yes" })).status, 400);
   } finally {
     await srv.close();
   }

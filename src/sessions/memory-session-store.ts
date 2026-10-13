@@ -112,8 +112,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     const visible = view ? all.some((e) => entryWithinTenure(e, view)) : false;
     const replies = all.filter((e) => e.type === "assistant" || e.type === "delivery");
     const lastReply = replies.length ? Math.max(...replies.map((e) => e.createdAt)) : null;
-    const slack = s.threadRef.startsWith("dm:") || s.threadRef.startsWith("ch:");
-    const unread = lastReply !== null && lastReply > (view?.readAt ?? 0) && !slack;
+    const unread = lastReply !== null && lastReply > (view?.readAt ?? 0) && s.threadRef.startsWith("web:");
     return {
       ...s,
       ...(view?.title != null ? { title: view.title } : {}),
@@ -165,11 +164,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async updateTitle(sessionId, title) {
       const s = sessions.get(sessionId);
       if (s) s.title = title;
-    },
-
-    async updateStatus(sessionId, status) {
-      const s = sessions.get(sessionId);
-      if (s) s.status = status ? { ...status } : null;
     },
 
     async updateForkProvenance(sessionId, provenance) {

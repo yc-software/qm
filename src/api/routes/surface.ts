@@ -1,6 +1,5 @@
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
-import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
@@ -114,7 +113,6 @@ function agentConversation(session: Session) {
   return {
     id: session.id,
     title: session.title,
-    status: session.status,
     type: session.type,
     scopeId: session.scopeId,
     threadRef: session.threadRef,
@@ -341,7 +339,6 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
     pinned?: unknown;
     color?: unknown;
     unread?: unknown;
-    status?: unknown;
   };
   const principalId = typeof b.principalId === "string" ? b.principalId : null;
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
@@ -351,7 +348,6 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
     pinned?: boolean;
     color?: string | null;
     readAt?: number;
-    status?: Session["status"];
   } = {};
   if ("unread" in b) {
     if (typeof b.unread !== "boolean") {
@@ -384,26 +380,16 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
     }
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
   }
-  if ("status" in b) {
-    if (!isSessionStatus(b.status)) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "status must be null or {emoji: one Unicode emoji, text: 1–200 characters without control characters}",
-      });
-    }
-    patch.status = b.status;
-  }
   if (
     patch.title === undefined &&
     patch.archived === undefined &&
     patch.pinned === undefined &&
     patch.color === undefined &&
-    patch.readAt === undefined &&
-    patch.status === undefined
+    patch.readAt === undefined
   ) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "title, archived, pinned, color, unread, or status required",
+      message: "title, archived, pinned, color, or unread required",
     });
   }
   const session = await app.updateSession(id, principalId, patch);
@@ -433,7 +419,6 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     archived?: boolean;
     pinned?: boolean;
     color?: string | null;
-    status?: Session["status"];
   } = {};
   if ("archived" in b) {
     if (typeof b.archived !== "boolean") {
@@ -460,29 +445,13 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     }
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
   }
-  if ("status" in b) {
-    if (capability.surface === "slack") {
-      return sendJson(res, 403, {
-        error: "forbidden",
-        message: "conversation status is a web UI feature and is not available on Slack turns",
-      });
-    }
-    if (!isSessionStatus(b.status)) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "status must be null or {emoji: one Unicode emoji, text: 1–200 characters without control characters}",
-      });
-    }
-    patch.status = b.status;
-  }
   if (
     patch.archived === undefined &&
     patch.pinned === undefined &&
     patch.title === undefined &&
-    patch.color === undefined &&
-    patch.status === undefined
+    patch.color === undefined
   ) {
-    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, color, or status required" });
+    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, or color required" });
   }
   const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
@@ -497,7 +466,6 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     conversation: {
       ...agentConversation(session),
       ...(patch.title !== undefined ? { title: patch.title } : {}),
-      ...(patch.status !== undefined ? { status: patch.status } : {}),
     },
   });
 }

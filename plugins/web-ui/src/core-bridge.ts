@@ -126,7 +126,6 @@ export interface DeliveredFile {
 }
 
 export interface CoreSession {
-  status?: { emoji: string; text: string } | null;
   id: string;
   type: "dm" | "channel" | "group";
   scopeId: string;

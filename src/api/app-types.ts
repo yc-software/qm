@@ -391,7 +391,6 @@ export interface App {
       pinned?: boolean;
       color?: string | null;
       readAt?: number;
-      status?: Session["status"];
     },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;

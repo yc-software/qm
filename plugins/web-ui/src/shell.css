@@ -665,14 +665,6 @@ a.chat-row-open {
   white-space: nowrap;
 }
 
-.session-status {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  font-size: var(--font-14);
-  line-height: 1;
-}
-
 .unread-dot {
   flex: 0 0 auto;
   width: 8px;
@@ -688,9 +680,6 @@ a.chat-row-open {
 }
 .session-row.unread .title .tl {
   font-weight: 600;
-}
-.split-pane-title > .session-status {
-  margin-inline-start: auto;
 }
 .working-mark {
   display: inline-flex;

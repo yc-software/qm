@@ -90,11 +90,6 @@ export interface SpawnMeta {
   fastMode?: boolean;
 }
 
-export interface SessionStatus {
-  emoji: string;
-  text: string;
-}
-
 export interface Session {
   id: string;
   type: SessionType;
@@ -109,7 +104,6 @@ export interface Session {
   color?: string;
   /** An agent reply arrived after this participant last read the conversation (or they marked it unread). */
   unread?: boolean;
-  status?: SessionStatus | null;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
   parentSessionId?: string;

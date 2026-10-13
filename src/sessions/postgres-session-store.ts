@@ -78,7 +78,6 @@ export function rowToSession(r: Record<string, unknown>): Session {
     threadRef: r.thread_ref as string,
     ...(r.surface != null ? { surface: r.surface as string } : {}),
     createdAt: Number(r.created_at),
-    ...(r.status != null ? { status: r.status as Session["status"] } : {}),
     ...(r.title != null ? { title: r.title as string } : {}),
     ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),
     ...(r.forked_from_session_id != null && r.fork_boundary_seq != null
@@ -95,8 +94,6 @@ export function rowToSession(r: Record<string, unknown>): Session {
   };
 }
 
-const isSlackThread = (threadRef: string): boolean => threadRef.startsWith("dm:") || threadRef.startsWith("ch:");
-
 function rowToParticipantSession(r: Record<string, unknown>): Session {
   const s = rowToSession(r);
   if (r.p_title != null) s.title = r.p_title as string;
@@ -106,7 +103,7 @@ function rowToParticipantSession(r: Record<string, unknown>): Session {
   if (
     r.agent_last_reply != null &&
     Number(r.agent_last_reply) > Number(r.p_read_at ?? 0) &&
-    !isSlackThread(s.threadRef)
+    s.threadRef.startsWith("web:")
   )
     s.unread = true;
   if (r.user_last_activity != null) s.lastActivityAt = Number(r.user_last_activity);
@@ -828,6 +825,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         statements: [
           `ALTER TABLE participants ADD COLUMN IF NOT EXISTS read_at BIGINT`,
           `UPDATE participants SET read_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint WHERE read_at IS NULL`,
+          `ALTER TABLE sessions DROP COLUMN IF EXISTS status`,
         ],
       },
     ],
@@ -1014,13 +1012,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async updateTitle(sessionId, title): Promise<void> {
       await q("UPDATE sessions SET title = $2 WHERE id = $1", [sessionId, title]);
-    },
-
-    async updateStatus(sessionId, status): Promise<void> {
-      await q("UPDATE sessions SET status = $2::jsonb WHERE id = $1", [
-        sessionId,
-        status ? JSON.stringify(status) : null,
-      ]);
     },
 
     async updateForkProvenance(sessionId, provenance): Promise<void> {

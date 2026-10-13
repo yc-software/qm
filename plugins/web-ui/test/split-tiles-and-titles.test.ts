@@ -107,7 +107,6 @@ test("tab actions sit in the title's flow so the title truncates around them", (
   const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
   assert.doesNotMatch(actions, /position: absolute;|right: 0;|transform:/, "nothing may paint over the title");
   assert.match(actions, /flex: 0 0 auto;/);
-  assert.doesNotMatch(css, /\.split-pane-title:has\(> \.session-status\) \.split-tab-actions/);
   assert.match(css, /\.split-pane-title-text \{[^}]*overflow: hidden;/);
   assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*flex: 1 1 auto;/);
   const draw = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
