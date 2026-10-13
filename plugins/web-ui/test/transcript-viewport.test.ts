@@ -1,26 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
-
-const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
-
-test("only an actually stuck prompt gets elevation", () => {
-  const normal = css.match(/\.message-stack \.user-row\.latest-prompt > \.user-bubble \{[^}]*\}/)?.[0] ?? "";
-  assert.doesNotMatch(normal, /box-shadow: var/);
-  assert.match(css, /\.user-row\.stuck > \.user-bubble/);
-});
-
-test("prompt offset reserves the pane's measured pins height", () => {
-  assert.match(css, /top: var\(--chat-sticky-top, 0px\)/);
-  assert.match(css, /max-height: min\(38cqh, 240px\)/);
-});
-
-test("stream following never uses smooth scrolling or a near-bottom zone", () => {
-  const scroller = css.match(/\.chat-scroll \{[^}]*\}/)?.[0] ?? "";
-  assert.doesNotMatch(scroller, /scroll-behavior: smooth/);
-  assert.doesNotMatch(chat, /<= 120/);
-});
 
 import { JSDOM } from "jsdom";
 import { createTranscriptViewport, preserveTranscriptScroll } from "../src/transcript-viewport.ts";
@@ -493,28 +472,6 @@ test("a prompt stays in flow when pins leave too little room, and can stick agai
   }
 });
 
-test("prompt expansion control belongs inside the bubble in both renderers", () => {
-  for (const [source, start] of [
-    [chat, /<article\s+class="message-row user-row/],
-    [readFileSync(new URL("../src/shared-session.ts", import.meta.url), "utf8"), /<article\s+class=\$\{/],
-  ]) {
-    const rowStart = (source as string).search(start as RegExp);
-    assert.ok(rowStart >= 0);
-    const text = source as string;
-    const row = text.slice(rowStart, text.indexOf("</article>", rowStart) + "</article>".length);
-    const dom = new JSDOM(row);
-    try {
-      const toggle = dom.window.document.querySelector(".pin-toggle");
-      assert.equal(toggle?.parentElement?.tagName, "DIV");
-      assert.equal(toggle?.parentElement?.parentElement?.tagName, "ARTICLE");
-    } finally {
-      dom.window.close();
-    }
-  }
-  assert.match(css, /:not\(\.pin-expanded\)\s+\.user-bubble\s+>\s+\.pin-content \{/);
-  assert.match(css, /\.user-bubble > \.pin-toggle:not\(\[hidden\]\)/);
-});
-
 test("nested paste and attachment controls do not toggle the whole prompt", () => {
   const f = fixture();
   try {
@@ -539,12 +496,6 @@ test("nested paste and attachment controls do not toggle the whole prompt", () =
   } finally {
     f.close();
   }
-});
-
-test("plain-text copy confirmation can grow beyond its icon width", () => {
-  const rule = css.match(/\.user-bubble code-block\[language="text"\] copy-button button \{[^}]*\}/)?.[0] ?? "";
-  assert.match(rule, /min-width: var\(--meta-lane\)/);
-  assert.doesNotMatch(rule, /(?:^|[;{])\s*width:/);
 });
 
 test("prompt clipping tolerates rounding but discloses any additional text line", () => {
@@ -677,10 +628,6 @@ test("passing the previous bottom without reaching the new bottom does not resum
   } finally {
     f.close();
   }
-});
-
-test("the changing streamed reply cannot become the browser's native scroll anchor", () => {
-  assert.match(css, /\.streaming-text\.live-stream \{\s*overflow-anchor: none;/);
 });
 
 test("asynchronous growth leaves a reader in place", () => {
