@@ -12,6 +12,10 @@ export interface TurnStream {
   replying(runId: string): boolean;
   publish(runId: string, delta: string): void;
   publishBlockStart(runId: string): void;
+  restart(runId: string): void;
+  markMessageStart(runId: string): void;
+  retractMessage(runId: string): void;
+  epoch(runId: string): number;
   noteToolCall(runId: string): void;
   noteGoal(runId: string, goal: GoalView): void;
   goal(runId: string): GoalView | null;
@@ -32,6 +36,9 @@ interface TurnStreamListener {
 
 interface Entry {
   text: string;
+  epoch: number;
+  messageStart: number;
+  firstBlockMessageStart: number;
   goal: GoalView | null;
   firstBlock: string;
   firstBlockOpen: boolean;
@@ -57,6 +64,9 @@ const BLOCK_JOIN = "\n\n";
 function makeEntry(partial: Partial<Entry> = {}): Entry {
   return {
     text: "",
+    epoch: 0,
+    messageStart: 0,
+    firstBlockMessageStart: 0,
     goal: null,
     firstBlock: "",
     firstBlockOpen: true,
@@ -123,6 +133,40 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       const added = BLOCK_JOIN.slice(0, Math.max(0, maxChars - offset));
       entry.text += added;
       if (added) opts.onDelta?.(runId, added, offset);
+    },
+
+    restart(runId) {
+      const entry = runs.get(runId);
+      if (!entry) return;
+      if (entry.timer) {
+        clearTimeout(entry.timer);
+        entry.timer = null;
+      }
+      entry.messageStart = 0;
+      if (!entry.text) return;
+      entry.text = "";
+      if (entry.firstBlockOpen) entry.firstBlock = "";
+      entry.epoch += 1;
+      opts.onChange?.(runId);
+    },
+
+    markMessageStart(runId) {
+      const entry = ensure(runId);
+      entry.messageStart = entry.text.length;
+      entry.firstBlockMessageStart = entry.firstBlock.length;
+    },
+
+    retractMessage(runId) {
+      const entry = runs.get(runId);
+      if (!entry || entry.text.length <= entry.messageStart) return;
+      entry.text = entry.text.slice(0, entry.messageStart);
+      if (entry.firstBlockOpen) entry.firstBlock = entry.firstBlock.slice(0, entry.firstBlockMessageStart);
+      entry.epoch += 1;
+      opts.onChange?.(runId);
+    },
+
+    epoch(runId) {
+      return runs.get(runId)?.epoch ?? 0;
     },
 
     noteToolCall(runId) {

@@ -474,3 +474,33 @@ test("monitor wakes persist engagement after the reply gate", async () => {
     await built.runtime.stop();
   }
 });
+
+test("a retracted assistant message drops only its own text and bumps the epoch", () => {
+  const changes: string[] = [];
+  const s = createTurnStream({ onChange: (runId) => changes.push(runId) });
+  s.begin("r1");
+  s.markMessageStart("r1");
+  s.publish("r1", "Checking the logs.");
+  s.markMessageStart("r1");
+  s.publish("r1", " Partial answer before the line drops");
+  assert.equal(s.epoch("r1"), 0);
+  s.retractMessage("r1");
+  assert.equal(s.snapshot("r1"), "Checking the logs.");
+  assert.equal(s.epoch("r1"), 1);
+  assert.ok(changes.length >= 2, "retraction notifies listeners");
+  s.retractMessage("r1");
+  assert.equal(s.epoch("r1"), 1, "nothing left to retract leaves the epoch alone");
+});
+
+test("a new attempt of the same run starts from empty text", () => {
+  const s = createTurnStream();
+  s.begin("r1");
+  s.publish("r1", "first attempt text");
+  s.end("r1");
+  s.restart("r1");
+  s.begin("r1");
+  assert.equal(s.snapshot("r1"), null);
+  assert.equal(s.epoch("r1"), 1);
+  s.publish("r1", "second");
+  assert.equal(s.snapshot("r1"), "second");
+});

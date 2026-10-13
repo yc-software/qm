@@ -175,3 +175,42 @@ test("poll requests never put bearer credentials in the URL", async () => {
   assert.ok(urls[0]!.endsWith("/api/runs/run-r5"), urls[0]);
   assert.doesNotMatch(urls[0]!, /[?&](?:rt|token)=/);
 });
+
+test("text withdrawn by a failed provider attempt is replaced, not stacked", async () => {
+  let clock = 3_000_000;
+  setClock(() => clock);
+  instantSleep();
+  const polls = [
+    { status: "running", result: null, partial: "Partial answer" },
+    { status: "running", result: null, partial: "Fresh", partialEpoch: 1 },
+    { status: "running", result: null, partial: "Fresh start", partialEpoch: 1 },
+    {
+      status: "done",
+      result: { status: "ok", reply: "Fresh start, done." },
+      partial: "Fresh start, done.",
+      partialEpoch: 1,
+    },
+  ];
+  let i = 0;
+  globalThis.fetch = (async () => {
+    clock += 1_000;
+    const body = polls[Math.min(i++, polls.length - 1)];
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
+  }) as typeof fetch;
+
+  const stream = createAssistantMessageEventStream();
+  const seen: string[] = [];
+  const watch = (async () => {
+    for await (const event of stream) {
+      if (event.type !== "text_delta") continue;
+      const block = event.partial.content[0];
+      seen.push(block?.type === "text" ? block.text : "");
+    }
+  })();
+  await pollRun(stream, blankAssistant(), "run-r-epoch", freshAcc(clock));
+  await drain(stream);
+  await watch;
+
+  assert.deepEqual(seen.slice(0, 3), ["Partial answer", "Fresh", "Fresh start"]);
+  assert.ok(!seen.some((text) => text.includes("Partial answer") && text.includes("Fresh")));
+});
