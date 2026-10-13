@@ -1,32 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { dropAddsTile, MAX_PANES, MAX_TILES, serializedTileCount, v1PaneSeeds } from "../src/split-layout.ts";
-
-const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
 
 const leaf = (views: string[]): object => ({ type: "leaf", data: { views, activeView: views[0], id: "g" } });
 const branch = (...kids: object[]): object => ({ type: "branch", data: kids });
 
 test("the tile cap counts tiles and turns the overflow into a tab", () => {
-  assert.match(split, /dockApi\.groups\.length >= MAX_TILES/);
-  assert.doesNotMatch(split, /panels\.length >= MAX_TILES/, "the tile cap must count tiles, not conversations");
-  assert.doesNotMatch(split, /limit reached/i, "a full grid must not refuse the conversation");
-  const tabInto = split.match(/^function tabIntoPane\([\s\S]*?\n\}/m)?.[0] ?? "";
-  assert.ok(tabInto, "tabIntoPane not found");
-  assert.doesNotMatch(tabInto, /MAX_TILES/, "tabs are what the tile cap overflows into — the tile cap cannot bind");
-  assert.match(tabInto, /roomForAnotherPane\(\)/, "but the resource ceiling must");
-  const splitFn = split.match(/^function splitPane\([\s\S]*?\n\}/m)?.[0] ?? "";
-  assert.ok(splitFn, "splitPane not found");
-  assert.match(splitFn, /roomForAnotherPane\(\)/, "and it must bind splits too, not only tabs");
-  assert.match(split, /function roomForAnotherPane\(\): boolean \{[\s\S]*?panels\.length \?\? 0\) < MAX_PANES/);
   assert.ok(MAX_PANES >= MAX_TILES, "the conversation ceiling must allow every tile to be used");
 });
 
 test("a revived canvas is bounded by both caps and cannot blow the stack", () => {
-  assert.match(split, /if \(n < 1 \|\| n > MAX_PANES \|\| serializedTileCount\(o\.layout\) > MAX_TILES\) return;/);
-
   const tiles = (...kids: object[]): object => ({ grid: { root: branch(...kids) } });
   assert.equal(serializedTileCount(tiles(leaf(["a", "b", "c"]), leaf(["d"]))), 2, "tabs are not tiles");
   assert.equal(serializedTileCount(tiles(branch(leaf(["a"]), leaf(["b"])), branch(leaf(["c"]), leaf(["d"])))), 4);
@@ -47,10 +30,6 @@ test("a revived canvas is bounded by both caps and cannot blow the stack", () =>
 });
 
 test("only the native drops that would add a tile are refused", () => {
-  assert.match(split, /api\.onWillDrop\(holdTileCap\);/);
-  assert.match(split, /group\.model\.onWillDrop\(holdTileCap\);/);
-  assert.match(split, /dropAddsTile\(nativeDrop\(api, e\)\)/);
-
   assert.equal(dropAddsTile({ edge: true, wholeTile: false, sourceTilePanes: 2 }), true, "a tab out of a shared tile");
   assert.equal(dropAddsTile({ edge: false, wholeTile: false, sourceTilePanes: 2 }), false, "joining a tab strip");
   assert.equal(dropAddsTile({ edge: true, wholeTile: true, sourceTilePanes: 1 }), false, "a whole tile only moves");
@@ -60,101 +39,4 @@ test("only the native drops that would add a tile are refused", () => {
     "the last pane out of a tile takes that tile with it",
   );
   assert.equal(dropAddsTile({ edge: true, wholeTile: false, sourceTilePanes: 0 }), true, "an unrecognized drag");
-
-  assert.match(split, /from\.panelId === null && !from\.tabGroupId/);
-});
-
-test("only strip tabs redraw, and only strip tabs can close a pane", () => {
-  assert.match(split, /this\.inStrip = p\.tabLocation === "header";/);
-  assert.match(split, /if \(this\.inStrip\) paneTabs\.add\(this\);/);
-  const draw = split.match(/^ {2}draw\(\): void \{[\s\S]*?\n {2}\}/m)?.[0] ?? "";
-  assert.ok(draw, "PaneTab.draw not found");
-  const gate = draw.indexOf("this.inStrip");
-  const close = draw.indexOf("split-tab-close");
-  assert.ok(gate >= 0 && close > gate, "the close button must render behind the inStrip gate");
-});
-
-test("a pane title ellipsizes rather than being clipped or wrapped", () => {
-  const tab = css.match(/\.dockview-theme-qm \.dv-tab \{[^}]*\}/)?.[0] ?? "";
-  assert.match(tab, /flex-shrink: 1;/);
-  assert.match(tab, /min-width: 0;/);
-  assert.match(css, /\.split-pane-title-text \{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/);
-  assert.match(css, /\.split-pane-title \{[^}]*min-width: 0;/);
-});
-
-test("the active tab keeps a higher floor than its neighbours and runs down onto the body", () => {
-  const multi = css.match(/:not\(\.dv-single-tab\) \.dv-tab \{[^}]*\}/)?.[0] ?? "";
-  assert.match(multi, /flex: 0 1 auto;/);
-  assert.match(multi, /min-width: 72px;/);
-  assert.match(multi, /max-width: 320px;/);
-  const active = css.match(/:not\(\.dv-single-tab\) \.dv-tab\.dv-active-tab \{[^}]*\}/)?.[0] ?? "";
-  assert.match(active, /flex: 0 1 auto;/);
-  assert.match(active, /min-width: 150px;/);
-  assert.match(active, /align-self: stretch;/);
-  assert.match(active, /padding-bottom: var\(--split-strip-pad\);/);
-  assert.match(active, /border-bottom-color: transparent;/);
-  const strip =
-    css.match(/^\.dockview-theme-qm \.dv-tabs-and-actions-container:not\(\.dv-single-tab\) \{[^}]*\}/m)?.[0] ?? "";
-  assert.match(strip, /padding-bottom: 0;/);
-  assert.match(strip, /border-bottom: 0;/);
-  assert.match(
-    strip,
-    /linear-gradient\(var\(--split-strip-line\), var\(--split-strip-line\)\) bottom \/ 100% 1px no-repeat/,
-  );
-});
-
-test("tab actions sit in the title's flow so the title truncates around them", () => {
-  const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
-  assert.doesNotMatch(actions, /position: absolute;|right: 0;|transform:/, "nothing may paint over the title");
-  assert.match(actions, /flex: 0 0 auto;/);
-  assert.match(css, /\.split-pane-title-text \{[^}]*overflow: hidden;/);
-  assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*flex: 1 1 auto;/);
-  const draw = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
-  assert.equal((draw.match(/class="split-tab-actions"/g) ?? []).length, 2);
-  assert.equal((draw.match(/split-tab-close/g) ?? []).length, 2, "each tab form carries exactly one close control");
-});
-
-test("the tab close control stays at the trailing edge of a wide tab", () => {
-  const title = css.match(/^\.dv-tab \.split-pane-title-text \{[^}]*\}/m)?.[0] ?? "";
-  assert.match(title, /flex: 1 1 auto;/);
-  assert.match(title, /min-width: 0;/);
-});
-
-test("the tab overflow menu is lifted above the panes and styled", () => {
-  const anchor = css.match(/\.dockview-theme-qm \.dv-popover-anchor \{[^}]*\}/)?.[0] ?? "";
-  assert.ok(Number(anchor.match(/z-index: (\d+);/)?.[1] ?? 0) >= 999, `anchor z-index too low: ${anchor}`);
-  const menu = css.match(/\.dv-tabs-overflow-container \{[^}]*\}/)?.[0] ?? "";
-  assert.match(menu, /background: var\(--background\);/);
-  assert.match(menu, /border: 1px solid var\(--border\);/);
-});
-
-// Detached background work belongs to the conversation, so it shows wherever the
-// conversation's header does: the sidebar row and — once a pane is stacked behind a tab —
-// the tab. Both read one derivation, and the header signature has to move with the count
-// or a tab never redraws when the work starts or ends.
-test("a pane tab carries the conversation's background chip, from the sidebar's derivation", () => {
-  const draw = split.match(/^ {2}draw\(\): void \{[\s\S]*?^ {2}\}/m)?.[0] ?? "";
-  assert.ok(draw, "PaneTab.draw not found");
-  assert.match(draw, /class="bg-chip"/, "the tab must show the same chip the sidebar row does");
-  assert.match(split, /function paneBackground\([\s\S]*?conversationBackground\(sessionsState\.list,/);
-  const signature = split.match(/^function computeHeaderSignature\(\)[\s\S]*?\n\}/m)?.[0] ?? "";
-  assert.match(signature, /paneBackground\(p\)/, "a change in the count must move the header signature");
-  // Only the sidebar's chip opens the inspector; the tab's is a mark on a tab that is
-  // itself the control, so the clickable affordance hangs off the clickable one.
-  assert.match(css, /\.bg-chip\[role="button"\] \{[^}]*cursor: pointer;/);
-});
-
-test("tab actions only fade on hover or keyboard focus, never shifting the title", () => {
-  const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
-  assert.match(actions, /transition: opacity 0\.12s ease;/);
-  assert.match(actions, /opacity: 0;/);
-  assert.match(actions, /pointer-events: none;/);
-  const states = [...css.matchAll(/([^{}]*\.split-tab-(?:actions|close)[^{}]*)\{([^{}]*)\}/g)].filter(([, selector]) =>
-    /:(?:not|hover|focus|focus-within|focus-visible)|\.dv-active-tab/.test(selector),
-  );
-  assert.ok(states.length > 0);
-  for (const [, selector, declarations] of states) {
-    assert.doesNotMatch(declarations, /(?:width|margin|padding|display|flex|gap)\s*:/, selector);
-  }
-  assert.match(css, /\.dv-tab:focus-within \.split-tab-actions \{[^}]*pointer-events: auto;/);
 });

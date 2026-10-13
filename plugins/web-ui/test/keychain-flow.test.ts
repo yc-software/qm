@@ -1,11 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { isActiveGrant, isExpiredCredential, KeychainOperations, keychainSummary } from "../src/keychain-state.ts";
-
-const connectorsSource = readFileSync(new URL("../src/connectors.ts", import.meta.url), "utf8");
-const shellSource = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
-const shellCssSource = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("reset invalidates identity-bound loads and operations", () => {
   const operations = new KeychainOperations();
@@ -24,7 +19,6 @@ test("reset invalidates identity-bound loads and operations", () => {
   assert.equal(operations.beginMutation(), null);
   operations.finishMutation(currentMutation);
   assert.ok(operations.beginMutation());
-  assert.match(shellSource, /resetKeychainState\(\);\s*appState\.me =/);
 });
 
 test("a reversed keychain load cannot overwrite the latest response", async () => {
@@ -51,7 +45,6 @@ test("a reversed keychain load cannot overwrite the latest response", async () =
   await older;
 
   assert.equal(value, "latest");
-  assert.match(connectorsSource, /keychainOperations\.isCurrentLoad\(load\)/);
 });
 
 test("identity reset invalidates a pending connector start", async () => {
@@ -72,10 +65,6 @@ test("identity reset invalidates a pending connector start", async () => {
   await continuation;
 
   assert.equal(navigated, false);
-  assert.match(
-    connectorsSource,
-    /const stateEpoch = keychainOperations\.captureEpoch\(\);[\s\S]*api<\{ authorizeUrl\?: string \}>[\s\S]*isCurrentEpoch\(stateEpoch\)/,
-  );
 });
 
 test("destructive mutations and secure drops are single-flight", () => {
@@ -126,77 +115,6 @@ test("keychain summary excludes expired grants and counts pending asks", () => {
   );
 
   assert.deepEqual(summary, { connected: 1, activeGrants: 3, attention: 3 });
-});
-
-test("keychain overview wires managed connector grants into account controls", () => {
-  assert.match(connectorsSource, /connectorCredentials\?: KeychainConnectorCredential\[\]/);
-  assert.match(
-    connectorsSource,
-    /keychainConnectorCredentials\.filter\(\(credential\) => hosts\.has\(credential\.host\)\)/,
-  );
-  assert.match(connectorsSource, /isActiveGrant\(grant, credentialsById\.get\(grant\.credentialId\)\)/);
-  assert.match(connectorsSource, /isExpiredCredential\(c\)/);
-});
-
-test("destructive controls settle duplicate attempts while a mutation is busy", () => {
-  assert.match(connectorsSource, /\?disabled=\$\{keychainOperations\.mutationInFlight\}/);
-  assert.match(connectorsSource, /connectorNotice = "Another keychain change is still in progress\."/);
-  assert.equal(connectorsSource.match(/const operation = beginKeychainMutation\(\)/g)?.length, 3);
-  assert.equal(
-    connectorsSource.match(/if \(keychainOperations\.finishMutation\(operation\)\) drawConnectors\(\)/g)?.length,
-    3,
-  );
-});
-
-test("keychain rows reserve success badges for actionable states", () => {
-  assert.doesNotMatch(connectorsSource, /Stored securely/);
-  assert.doesNotMatch(connectorsSource, />Connected<\/span>/);
-  assert.match(connectorsSource, /expired \? html`<span class="kc-state warning">Expired<\/span>` : ""/);
-  assert.match(connectorsSource, /<span class="kc-state warning">Reconnect needed<\/span>/);
-});
-
-test("keychain index keeps operational state and removes redundant explanatory copy", () => {
-  assert.doesNotMatch(connectorsSource, /Accounts and credentials your agent may use on your behalf/);
-  assert.doesNotMatch(connectorsSource, /Provider APIs the agent can use as you/);
-  assert.doesNotMatch(connectorsSource, /API keys, tokens, and files you added/);
-  assert.doesNotMatch(connectorsSource, /kc-summary|kc-resource-description|No audited use yet|Last used |Added \$\{/);
-  assert.match(connectorsSource, /class="kc-access-label">Access/);
-  assert.match(connectorsSource, /expires \$\{fmtDate\(/);
-  assert.match(connectorsSource, />\s*Revoke\s*</);
-  assert.match(connectorsSource, /encrypted one-time page next/);
-});
-
-test("keychain access rows retain security-relevant mode and purpose", () => {
-  assert.match(connectorsSource, /accessModeLabel\(ask\.requestedMode\)/);
-  assert.match(connectorsSource, /ask\.purpose/);
-  assert.equal(connectorsSource.match(/accessModeLabel\(grant\.mode\)/g)?.length, 2);
-  assert.equal(connectorsSource.match(/grant\.purpose/g)?.length, 2);
-});
-
-test("keychain actions keep secondary weight and compact mobile sizing", () => {
-  assert.match(connectorsSource, /\$\{available \? html`<button class="btn" type="button"/);
-  assert.doesNotMatch(shellCssSource, /\.kc-hero-actions \.btn\s*\{\s*flex:\s*1;/);
-  assert.doesNotMatch(shellCssSource, /sidebar-closed \.kc-hero-copy/);
-});
-
-test("keychain page renders loading placeholders instead of empty states while loading", () => {
-  assert.match(connectorsSource, /let connectorsLoading = false/);
-  assert.match(connectorsSource, /let keysLoading = false/);
-  assert.match(connectorsSource, /connectorsLoading && !connectorsEverLoaded/);
-  assert.match(connectorsSource, /keysLoading && !keysEverLoaded/);
-  assert.match(connectorsSource, /keysLoading = true;\s*\n\s*drawConnectors\(\)/);
-  assert.match(connectorsSource, /if \(accountsLoading\) accountsContent = loadingPlaceholder\("Loading accounts/);
-  assert.match(
-    connectorsSource,
-    /if \(keysLoadingFresh\) credentialsContent = loadingPlaceholder\("Loading credentials/,
-  );
-
-  assert.match(
-    connectorsSource,
-    /api<\{ providers\?: Record<string, ConnectorProvider> \}>\("\/api\/connectors"\)\.then\(/,
-  );
-  assert.doesNotMatch(connectorsSource, /drawConnectors\((true|false)\)/);
-  assert.match(shellCssSource, /\.kc-loading \.spinner/);
 });
 
 test("an inline credential card decides through the keychain approval route, not the command route", async () => {

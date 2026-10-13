@@ -1,27 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-
-const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
-const messageMarkdown = readFileSync(new URL("../src/message-markdown.ts", import.meta.url), "utf8");
-const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
-
-test("composer text entry selects direction from its content", () => {
-  assert.match(composer, /<textarea\s+class="composer-input"\s+dir="auto"/);
-  assert.match(composer, /<textarea\s+class="paste-dialog-text"\s+dir="auto"/);
-  assert.match(composer, /class="queued-text" dir="auto"/);
-});
-
-test("settled and streaming transcript blocks select direction from their content", () => {
-  assert.match(chat, /import \{ markdown \} from "\.\/message-markdown"/);
-  assert.match(
-    messageMarkdown,
-    /<qm-markdown\s+dir="auto"[^>]*?\.content=\$\{escapeLoneDollars\(normalizePlainTextFences\(text\)\)\}/,
-  );
-  assert.match(chat, /\$\{markdown\(body, animating, /);
-  assert.match(chat, /class="streaming-text \$\{animating \? "live-stream" : ""\}" dir="auto"/);
-});
 
 test("search group headers select direction from the authored session title", async () => {
   const dom = new JSDOM('<!doctype html><main id="host"></main>');

@@ -51,7 +51,10 @@
         "src/lazy-hljs.ts",
         "src/hljs-lang-stub.ts",
         "test/**/*.test.ts",
-        "src/app-devbar.ts"
+        "src/app-devbar.ts",
+        "src/inbox.ts",
+        "src/context-model.ts",
+        "src/assistant-sidebar.ts"
       ],
       "ignoreDependencies": [
         "katex-real",

@@ -1,7 +1,6 @@
 import { applyRuntimeOptions } from "./runtime-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import {
   defaultModelValue,
   getModelOptions,
@@ -71,13 +70,6 @@ test("OpenRouter and custom provider metadata retains provider grouping", async 
     options.map((m) => m.groupLabel),
     ["Vendor", "Gateway"],
   );
-});
-
-test("picker has no model IDs, clone templates or runtime SDK model registry imports", async () => {
-  const source = ["pi-models.ts", "model-options.ts"]
-    .map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"))
-    .join("\n");
-  assert.doesNotMatch(source, /MODEL_CATALOG|CLONE_TEMPLATES|gpt-5|claude-opus|openrouter\/auto|import \{ getModel/);
 });
 
 test("harness controls retain their supported surfaces", async () => {

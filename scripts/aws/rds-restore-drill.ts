@@ -244,7 +244,7 @@ function deleteDrill(config: QmConfig, identifier: string): void {
   awsText(config, ["rds", "wait", "db-instance-deleted", "--db-instance-identifier", identifier]);
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
+async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
   const { config } = loadConfigAt(args.configPath);
   assertAwsCaller(config);
