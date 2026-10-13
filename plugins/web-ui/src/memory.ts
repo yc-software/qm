@@ -3,7 +3,7 @@ import { Pencil, Search, Trash2 } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
-import { appState, replacePanePreservingFocus } from "./shell";
+import { appState, paneHost } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { tip } from "./tooltip";
 
@@ -49,7 +49,6 @@ function factRow(fact: Fact) {
     return html`<div class="memory-fact editing">
       <textarea
         class="memory-text"
-        data-focus-key="memory-edit"
         ?disabled=${busy}
         .value=${editing.text}
         @input=${(e: Event) => (editing = { id: fact.id, text: (e.target as HTMLTextAreaElement).value })}
@@ -108,7 +107,7 @@ function factRow(fact: Fact) {
 function drawMemory(loading = false): void {
   if (appState.currentView !== "memory" || !appState.mainEl) return;
   const visible = facts.filter((fact) => !search || fact.text.toLowerCase().includes(search.toLowerCase()));
-  const host = document.createElement("div");
+  const host = paneHost("memory");
   host.className = scopedSession.active ? "pane scoped-view" : "pane";
   render(
     html`
@@ -119,7 +118,6 @@ function drawMemory(loading = false): void {
         </div>
         <label class="list-search"
           >${icon(Search, 16)}<input
-            data-focus-key="memory-search"
             aria-label="Search memory"
             type="search"
             placeholder="Search remembered facts"
@@ -145,7 +143,6 @@ function drawMemory(loading = false): void {
     `,
     host,
   );
-  replacePanePreservingFocus(host);
 }
 
 export async function renderMemory(): Promise<void> {

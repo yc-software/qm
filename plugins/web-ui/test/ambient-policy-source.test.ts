@@ -8,12 +8,9 @@ const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
 const sessions = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
-test("policy edits redraw immediately and preserve focused text controls", () => {
+test("policy edits redraw immediately", () => {
   const markDirty = policy.match(/function markDirty\(\)[^]*?\n\}/)?.[0] ?? "";
   assert.match(markDirty, /redraw\(\)/);
-  assert.match(policy, /data-focus-key="ambient-orders"/);
-  assert.match(policy, /data-focus-key="ambient-bot-name"/);
-  assert.match(policy, /data-focus-key=\$\{`ambient-hours-\$\{i\}`\}/);
 });
 
 test("policy controls use product language and persistent accessible labels", () => {

@@ -518,11 +518,8 @@ test("the personal-account picker preserves composer choices and saves context d
     resetContext = context.resetContextModel;
     const contextHost = document.createElement("section");
     document.body.append(contextHost);
-    const { replaceChildrenPreservingFocus } = await vite.ssrLoadModule("/src/pane-focus.ts");
     const drawContext = () => {
-      const next = document.createElement("div");
-      render(context.contextModelSection(config.scopeId), next);
-      replaceChildrenPreservingFocus(contextHost, next);
+      render(context.contextModelSection(config.scopeId), contextHost);
     };
     await context.loadContextModel(config.scopeId, drawContext);
     const contextButton = (selector: string): HTMLButtonElement => {
@@ -624,9 +621,7 @@ test("the personal-account picker preserves composer choices and saves context d
     });
     localStorage.removeItem("web-ui:loadout");
     const drawStale = () => {
-      const next = document.createElement("div");
-      render(context.contextModelSection(staleScope), next);
-      replaceChildrenPreservingFocus(contextHost, next);
+      render(context.contextModelSection(staleScope), contextHost);
     };
     await context.loadContextModel(staleScope, drawStale);
     assert.match(contextHost.textContent ?? "", /retired.*no longer offered/);

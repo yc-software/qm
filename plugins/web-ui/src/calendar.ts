@@ -1,9 +1,9 @@
 import { html, render } from "lit";
-import { appState, replacePanePreservingFocus } from "./shell";
+import { appState, paneHost } from "./shell";
 
 export function renderCalendar(): void {
   if (appState.currentView !== "calendar" || !appState.mainEl) return;
-  const host = document.createElement("div");
+  const host = paneHost("calendar");
   host.className = "pane content-wide-page";
   render(
     html`
@@ -14,5 +14,4 @@ export function renderCalendar(): void {
     `,
     host,
   );
-  replacePanePreservingFocus(host);
 }

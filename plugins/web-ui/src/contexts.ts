@@ -28,7 +28,7 @@ import {
 import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
-import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
+import { appState, paneHost, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
@@ -293,13 +293,12 @@ function sessionsIn(scopeId: string): CoreSession[] {
 
 function drawContexts(): void {
   if (appState.currentView !== "contexts" || !appState.mainEl) return;
-  const host = document.createElement("div");
+  const host = paneHost("contexts");
   host.className = "pane contexts-pane";
   const selected = contextsState.selected
     ? contextsState.list.find((c) => c.scopeId === contextsState.selected)
     : undefined;
   render(selected ? detailTpl(selected) : gridTpl(), host);
-  replacePanePreservingFocus(host);
   const dialog = host.querySelector<HTMLDialogElement>(".project-dialog");
   if (dialog && !dialog.open) dialog.showModal();
 }
@@ -365,7 +364,6 @@ function gridTpl(): TemplateResult {
         <label class="list-search"
           >${icon(Search, 16)}<span class="sr-only">Search projects</span
           ><input
-            data-focus-key="contexts-search"
             type="search"
             aria-label="Search projects"
             placeholder="Search projects…"
@@ -613,7 +611,6 @@ function projectSlackEditor(context: CoreContext): TemplateResult {
         ${icon(Hash, 16)}
         <input
           type="text"
-          data-focus-key="project-slack-channel"
           autocomplete="off"
           maxlength="200"
           placeholder="channel name"
@@ -754,7 +751,6 @@ function memberPicker(context: CoreContext): TemplateResult {
         ${icon(Search, 16)}
         <input
           id="project-member-search"
-          data-focus-key="project-member-search"
           name="query"
           type="search"
           autocomplete="off"
@@ -1057,7 +1053,6 @@ function createProjectDialog(): TemplateResult | typeof nothing {
           <span>Name</span>
           <input
             id="project-name"
-            data-focus-key="project-name"
             name="name"
             maxlength="200"
             autocomplete="off"

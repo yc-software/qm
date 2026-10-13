@@ -336,7 +336,6 @@ function editorPane() {
           class="skill-desc-input"
           type="text"
           .value=${e.description}
-          data-focus-key="skill-edit-description"
           ?disabled=${saving}
           @input=${(ev: Event) => {
             e.description = (ev.target as HTMLInputElement).value;
@@ -349,7 +348,6 @@ function editorPane() {
         <textarea
           class="skill-body-input"
           spellcheck="false"
-          data-focus-key="skill-edit-body"
           ?disabled=${saving}
           @input=${(ev: Event) => {
             e.body = (ev.target as HTMLTextAreaElement).value;
@@ -433,7 +431,6 @@ function creatorPane() {
           class="skill-desc-input"
           type="text"
           placeholder="watch-pipeline"
-          data-focus-key="skill-create-name"
           .value=${c.name}
           ?disabled=${creatingSaving}
           @input=${(ev: Event) => {
@@ -463,7 +460,6 @@ function creatorPane() {
           class="skill-desc-input"
           type="text"
           placeholder="One line: what it does / when to use it"
-          data-focus-key="skill-create-description"
           .value=${c.description}
           ?disabled=${creatingSaving}
           @input=${(ev: Event) => {
@@ -478,7 +474,6 @@ function creatorPane() {
           class="skill-body-input"
           spellcheck="false"
           placeholder="The SKILL.md contents: the steps to follow when this skill is used."
-          data-focus-key="skill-create-body"
           ?disabled=${creatingSaving}
           @input=${(ev: Event) => {
             c.body = (ev.target as HTMLTextAreaElement).value;

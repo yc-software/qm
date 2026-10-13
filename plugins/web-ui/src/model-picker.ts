@@ -350,7 +350,6 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                 ><span class="sr-only">Search models</span>
                 <input
                   type="search"
-                  data-focus-key=${`${loadoutMenuId}-search`}
                   placeholder="Search models…"
                   .value=${live(composerState.menuQuery)}
                   @input=${(e: InputEvent) => {
@@ -470,7 +469,6 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     >
       <button
         class="menu-button loadout-button ${ultrafastOn ? "ultrafast-active" : ""}"
-        data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
         aria-label=${choice ? `Model: ${modelLabel(choice)}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}` : "Choose model"}
         aria-haspopup="menu"

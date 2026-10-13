@@ -4,7 +4,7 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import { connectorLogo } from "./connector-logo";
-import { appState, replacePanePreservingFocus } from "./shell";
+import { appState, paneHost } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keychain-state";
@@ -523,7 +523,7 @@ function drawConnectors(): void {
       keysLoadingFresh,
     ),
   );
-  const host = document.createElement("div");
+  const host = paneHost("connectors");
   host.className = scopedSession.active ? "pane keychain-page scoped-view" : "pane keychain-page";
   render(
     html`
@@ -547,7 +547,6 @@ function drawConnectors(): void {
     `,
     host,
   );
-  replacePanePreservingFocus(host);
   if (confirmation) focusDialogCancel(host);
 }
 

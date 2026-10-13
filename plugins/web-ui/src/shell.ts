@@ -68,7 +68,6 @@ import {
   singlePaneSessionId,
 } from "./split";
 import { activityOf } from "./session-list";
-import { replaceChildrenPreservingFocus } from "./pane-focus";
 import {
   openSession,
   closeOpenSessionMenu,
@@ -967,9 +966,15 @@ function updateSidebarToggleLabels(): void {
   });
 }
 
-export function replacePanePreservingFocus(host: HTMLElement): void {
-  if (!appState.mainEl) return;
-  replaceChildrenPreservingFocus(appState.mainEl, host);
+// One mounted host per view: Lit patches it in place, so typing (and IME composition) is never torn down mid-word.
+export function paneHost(view: string): HTMLElement {
+  const main = appState.mainEl!;
+  const mounted = main.firstElementChild as HTMLElement | null;
+  if (mounted?.dataset.pane === view) return mounted;
+  const host = document.createElement("div");
+  host.dataset.pane = view;
+  main.replaceChildren(host);
+  return host;
 }
 
 window.addEventListener("popstate", () => {

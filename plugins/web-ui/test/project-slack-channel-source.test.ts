@@ -12,8 +12,8 @@ test("project detail offers a Slack home-channel section", () => {
   assert.match(source, /Link a channel/);
 });
 
-test("the slack-channel input keeps focus across redraws and commits to state", () => {
-  const input = source.match(/<input\s+type="text"\s+data-focus-key="project-slack-channel"[^]*?\/>/)?.[0] ?? "";
+test("the slack-channel input commits to state", () => {
+  const input = source.match(/<input\s+type="text"[^]*?aria-label="Slack channel to link"[^]*?\/>/)?.[0] ?? "";
   assert.match(input, /\.value=\$\{contextsState\.slackValue\}/);
   assert.match(input, /contextsState\.slackValue = \(e\.target as HTMLInputElement\)\.value/);
 });

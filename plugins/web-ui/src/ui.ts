@@ -244,7 +244,6 @@ export function fieldSelect(props: {
   ariaLabel?: string;
   ariaDescription?: string;
   describedBy?: string;
-  focusKey?: string;
   disabled?: boolean;
   compact?: boolean;
   className?: string;
@@ -257,7 +256,6 @@ export function fieldSelect(props: {
       aria-label=${props.ariaLabel ?? nothing}
       aria-description=${props.ariaDescription ?? nothing}
       aria-describedby=${props.describedBy ?? nothing}
-      data-focus-key=${props.focusKey ?? nothing}
       .value=${props.value === undefined ? nothing : live(props.value)}
       ?disabled=${props.disabled ?? false}
       @change=${(e: Event) => props.onChange((e.currentTarget as HTMLSelectElement).value, e)}

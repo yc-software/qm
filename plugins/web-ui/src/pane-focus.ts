@@ -24,22 +24,6 @@ function applySelection(
   element.setSelectionRange(selection.start, selection.end, selection.direction ?? undefined);
 }
 
-export function replaceChildrenPreservingFocus(container: HTMLElement, host: HTMLElement): void {
-  const view = container.ownerDocument.defaultView;
-  const active = container.contains(container.ownerDocument.activeElement)
-    ? (container.ownerDocument.activeElement as HTMLElement)
-    : null;
-  const key = active?.dataset.focusKey;
-  const selection = readSelection(view, active);
-  container.replaceChildren(host);
-  if (!key) return;
-  const next = [...container.querySelectorAll<HTMLElement>("[data-focus-key]")].find(
-    (element) => element.dataset.focusKey === key,
-  );
-  next?.focus();
-  if (next) applySelection(view, next, selection);
-}
-
 export function preservingFocus(doc: Document, mutate: () => void): void {
   const view = doc.defaultView;
   const active = doc.activeElement as HTMLElement | null;

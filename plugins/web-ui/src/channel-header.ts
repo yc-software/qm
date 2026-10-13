@@ -122,7 +122,6 @@ export function channelHeaderSection(scopeId: string): TemplateResult | typeof n
           ? fieldSelect({
               id: "channel-header-select",
               className: "channel-header-select",
-              focusKey: "channel-header",
               describedBy: "channel-header-hint",
               ariaLabel: "Pinned Slack header for this channel",
               disabled: channelHeaderState.saving,

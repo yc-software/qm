@@ -4,22 +4,9 @@ import test from "node:test";
 
 const source = readFileSync(new URL("../src/contexts.ts", import.meta.url), "utf8");
 
-test("contexts pane redraws preserve focus instead of raw-replacing the DOM", () => {
-  assert.match(
-    source,
-    /render\(selected \? detailTpl\(selected\) : gridTpl\(\), host\);\s+replacePanePreservingFocus\(host\);/,
-  );
+test("contexts pane redraws patch the mounted pane instead of rebuilding it", () => {
+  assert.match(source, /const host = paneHost\("contexts"\);/);
   assert.doesNotMatch(source, /appState\.mainEl\.replaceChildren/);
-});
-
-test("contexts pane text inputs carry focus keys", () => {
-  assert.match(source, /data-focus-key="project-member-search"/);
-  assert.match(source, /data-focus-key="contexts-search"/);
-  assert.match(source, /data-focus-key="project-name"/);
-  assert.match(
-    readFileSync(new URL("../src/ambient-policy.ts", import.meta.url), "utf8"),
-    /data-focus-key="ambient-orders"/,
-  );
 });
 
 test("member search commits the typed query to state on input", () => {

@@ -185,7 +185,6 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
                 type="number"
                 min="1"
                 step="1"
-                data-focus-key=${`ambient-hours-${i}`}
                 aria-label=${`Batch interval for ${b.name} in hours`}
                 .value=${String(b.rollupHours ?? 24)}
                 ?disabled=${ambientPolicyState.saving}
@@ -239,7 +238,6 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
         ${fieldSelect({
           id: "ambient-enabled",
           className: "ambient-enabled-select",
-          focusKey: "ambient-enabled",
           describedBy: "ambient-enabled-hint",
           disabled: ambientPolicyState.saving,
           value: ambientValue(ambientPolicyState.ambientEnabled),
@@ -262,7 +260,6 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
         <label class="ambient-field-label" for="ambient-orders">Standing orders</label>
         <textarea
           id="ambient-orders"
-          data-focus-key="ambient-orders"
           class="ambient-orders"
           rows="4"
           aria-describedby="ambient-orders-hint"
@@ -290,7 +287,6 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           }}
         >
           <input
-            data-focus-key="ambient-bot-name"
             type="text"
             maxlength="120"
             aria-label="Bot name"
