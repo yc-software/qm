@@ -52,7 +52,7 @@ export async function createLiveVoice(
   return { session: { id: data.session.id }, transport: { type: "webrtc", sdp: data.transport.sdp } };
 }
 
-export function liveVoiceConfiguration() {
+function liveVoiceConfiguration() {
   return {
     model: "gpt-live-1",
     store: false,
