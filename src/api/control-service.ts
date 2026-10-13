@@ -908,7 +908,15 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const home = await app.getArtifactHome(req.type, req.id);
-      if (!home) return { ok: false, code: "not_found", message: `no ${req.type} "${req.id}"` };
+      if (!home)
+        return {
+          ok: false,
+          code: "not_found",
+          message:
+            req.type === "file"
+              ? `no Files record "${req.id}"; put the file in Files first using POST /v1/files/uploads, then share its ID`
+              : `no ${req.type} "${req.id}"`,
+        };
 
       const target = await resolveArtifactTarget(app, req);
       if (target.kind === "invalid") return { ok: false, code: "bad_request", message: target.message };

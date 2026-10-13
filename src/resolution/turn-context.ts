@@ -7,7 +7,6 @@ import { principalEntitledToScope } from "./context-filter.ts";
 import { swallowAs } from "../util/errors.ts";
 import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
@@ -25,7 +24,6 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   memoryPolicy: MemoryPolicy;
   useMemory: boolean;
   memory: MemoryService;
-  workspace: WorkspaceStore;
   files: FileArtifactStore;
   skills?: SkillStore;
   auditLog?: AuditLog;
@@ -69,10 +67,7 @@ export async function resolveTurnContext(input: ContextInput) {
     currentScopeMembers: input.currentScopeMembers,
   };
   const memory = disclosedMemory(input.memory, disclosure);
-  const handles = [
-    ...resolution.grantedHandles,
-    ...(await carriedFileHandles(sharingSources, input.workspace, input.files)),
-  ];
+  const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
   return {
     sharingSources,
     memoryScopeId,
@@ -153,8 +148,8 @@ export async function resolveTurnContext(input: ContextInput) {
       };
     },
     readFile: (path: string) =>
-      readContextFile(path, handles, input.workspace, input.files, (grant) => {
-        if (grant.carried) recordRead(grant.ownerScopeId, grant.ownerPath);
+      readContextFile(path, handles, input.files, (grant) => {
+        if (grant.carried) recordRead(grant.ownerScopeId, grant.fileId);
       }),
   };
 }

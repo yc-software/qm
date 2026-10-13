@@ -17,7 +17,6 @@ import {
   type BlobTransferStore,
 } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
-import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
@@ -268,15 +267,10 @@ export function inboundIssueList(opts: {
   return issues;
 }
 
-function isFileHandle(h: GrantedHandle): boolean {
-  return parseRef(h.ownerPath).kind === "file";
-}
-
 export function sharedManifest(handles: readonly GrantedHandle[]): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const h of handles) {
-    if (!isFileHandle(h)) continue;
     if (seen.has(h.handlePath)) continue;
     seen.add(h.handlePath);
     lines.push(`- ${h.handlePath}${h.permission === "write" ? " (writable)" : ""}`);
@@ -289,10 +283,7 @@ export function sharedManifest(handles: readonly GrantedHandle[]): string {
     shown.push(`…and ${omitted} more (read shared/<name> to fetch)`);
   }
   const noun = total === 1 ? "file" : "files";
-  return (
-    `${total} ${noun} shared with you — read a path below to fetch that file on demand, ` +
-    `then attach it to a message to pass it on (name its path in the surface \`post\` action's \`files\`):\n${shown.join("\n")}`
-  );
+  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${shown.join("\n")}`;
 }
 
 export function sharedFilesSystemSection(handles: readonly GrantedHandle[]): string {

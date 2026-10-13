@@ -1189,7 +1189,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "write",
     label: "write",
     description:
-      "Save file contents in the writable workspace scope, durable across sessions. Use files action share to grant access separately.",
+      "Save file contents in the writable workspace scope. To share it, upload it to Files with POST /v1/files/uploads, then use files action share with the returned ID.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
       data: Type.String({ description: "File contents, including an empty string to empty the file." }),
@@ -1207,7 +1207,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...sandboxNote,
       });
       try {
-        await tc.write(params.path, params.data, undefined, params.sandbox_id);
+        await tc.write(params.path, params.data, params.sandbox_id);
         return recordResult(
           callId,
           { tool: "files", action: "write", path: params.path, bytes: params.data.length, ...sandboxNote },
@@ -3119,84 +3119,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const fileShare = defineTool({
-    name: "share",
-    label: "share",
-    description:
-      "Grant access to an existing workspace file without changing its contents. The file stays in its current home; recipients see it under shared/.",
-    parameters: Type.Object(
-      {
-        path: Type.Optional(Type.String({ description: "Workspace file path; pair with scope." })),
-        id: Type.Optional(Type.String({ description: "Existing file artifact ID; pair with toScope." })),
-        sandbox_id: sandboxSelector("Sandbox holding `path`; omit for the default."),
-        toScope: Type.Optional(Type.String({ description: "Destination scope or teammate name for an artifact ID." })),
-        scope: Type.Optional(
-          Type.String({ description: 'Destination: "org", personal:<userId>, channel:<id>, or team:<id>.' }),
-        ),
-        permission: Type.Optional(
-          Type.Union([Type.Literal("read"), Type.Literal("write")], {
-            description: "read = view (default); write = view/manage.",
-          }),
-        ),
-      },
-      {
-        anyOf: [
-          { required: ["path", "scope"], properties: { id: false, toScope: false } },
-          { required: ["id", "toScope"], properties: { path: false, scope: false, sandbox_id: false } },
-        ],
-      },
-    ),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc) return text("[error] no active tool context");
-      if (params.id !== undefined && params.toScope !== undefined) {
-        if (!controlTools) return unavailable(callId, "files");
-        return sharingTool("file").execute(
-          callId,
-          { id: params.id, toScope: params.toScope, permission: params.permission },
-          undefined,
-          undefined,
-          undefined as never,
-        );
-      }
-      await recordCall(callId, { tool: "files", action: "share", ...params });
-      try {
-        const result = await tc.write(
-          params.path!,
-          undefined,
-          [{ scope: params.scope!, permission: params.permission }],
-          params.sandbox_id,
-        );
-        return recordResult(
-          callId,
-          {
-            tool: "files",
-            action: "share",
-            path: params.path,
-            shared: result.shared,
-            ...(result.artifactId ? { file_id: result.artifactId } : {}),
-          },
-          text(
-            result.shared.map((grant) => `shared ${params.path} with ${grant.scope} (${grant.permission})`).join("; ") +
-              (result.artifactId ? `; stored as file_id ${result.artifactId}` : ""),
-          ),
-        );
-      } catch (e) {
-        return recordResult(
-          callId,
-          { tool: "files", action: "share", path: params.path, error: errMessage(e) },
-          text(`[share failed] ${errMessage(e)}`),
-          true,
-        );
-      }
-    },
-  });
-
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
     let description =
       "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
+    if (type === "file")
+      description =
+        "Share an existing Files record by ID. A sandbox path cannot be shared; upload it with POST /v1/files/uploads first.";
     if (move)
       description =
         "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
@@ -3343,14 +3273,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             `${actions.join("/")}: ${operation.description} Required fields: ${((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action").join(", ") || "none"}.`,
         )
         .join("\n\n"),
-      parameters: Type.Object(properties, { additionalProperties: false }),
+      parameters: Type.Object(properties, { additionalProperties: name === "files" }),
       async execute(callId, params, signal, onUpdate, ctx) {
         const index = groups.findIndex((group) => group.actions.includes(String(params.action)));
         if (index < 0 || !Check(variants[index]!, params)) {
           return recordResult(
             callId,
             { tool: name, action: params.action, error: "invalid_arguments" },
-            text(`[error] Invalid arguments for ${name} action ${String(params.action)}.`),
+            text(
+              `[error] Invalid arguments for ${name} action ${String(params.action)}.` +
+                (name === "files" && params.action === "share"
+                  ? " Share a Files ID; put the file in Files first using POST /v1/files/uploads."
+                  : ""),
+            ),
             true,
           );
         }
@@ -4335,7 +4270,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
-    resourceTool("files", { read, write, share: fileShare }),
+    resourceTool("files", { read, write, ...(controlTools ? { share: sharingTool("file") } : {}) }),
     resourceTool("apps", {
       publish,
       ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),

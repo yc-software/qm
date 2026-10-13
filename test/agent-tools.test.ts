@@ -43,14 +43,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ? { content: "data", sourceScopeId: "personal:U1" }
         : { content: null, sourceScopeId: null };
     },
-    async write(_path, _data, share) {
-      return {
-        shared: (share ?? []).map((s) => ({
-          scope: s.scope === "org" ? "org:default-org" : s.scope,
-          permission: s.permission ?? "read",
-        })),
-      };
-    },
+    async write() {},
     async publish(input) {
       return {
         id: "dep-1",
@@ -398,7 +391,7 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   await call(execute, { command: "echo hi", purpose: "Run test command" });
   await call(read, { action: "read", path: "a.txt" });
   await call(write, { action: "write", path: "out.txt", data: "xyz" });
-  await call(write, { action: "share", path: "out.txt", scope: "org" });
+  await call(write, { action: "share", id: "file-id", toScope: "org" });
 
   assert.deepEqual(
     emitted.map((e) => `${e.type}:${e.payload.tool}`),
@@ -416,7 +409,7 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   assert.equal(emitted[1]!.payload.code, 0);
   assert.equal(emitted[3]!.payload.found, true);
   assert.equal(emitted[5]!.payload.bytes, 3);
-  assert.equal(emitted[7]!.payload.shared[0].scope, "org:default-org");
+  assert.equal(emitted[7]!.payload.verb, "share");
   assert.equal(
     emitted.every((e) => e.scopeLabel === "personal:U1"),
     true,
@@ -3639,7 +3632,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
     ["files", { action: "read", path: "a" }, { action: "read", path: "a", data: "oops" }],
     [
       "files",
-      { action: "share", path: "a", scope: "org" },
+      { action: "share", id: "file-id", toScope: "org" },
       { action: "write", path: "a", data: "x", share: [{ scope: "org" }] },
     ],
     [
@@ -3670,7 +3663,6 @@ test("resource actions preserve sharing targets, transfer semantics and file con
     ...fakeToolContext(),
     async write(...args: Parameters<ToolContext["write"]>) {
       writes.push(args);
-      return { shared: [{ scope: "org:test", permission: "read" as const }] };
     },
     async setDeploymentPublic(id: string, isPublic: boolean) {
       publicChanges.push({ id, isPublic });
@@ -3684,12 +3676,13 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   const tools = createAgentTools({ current: tc }, { controlTools: true });
   const files = tools.find((tool) => tool.name === "files")!;
   await call(files, { action: "write", path: "notes", data: "" });
-  await call(files, { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" });
-  assert.deepEqual(writes, [
-    ["notes", "", undefined, undefined],
-    ["notes", undefined, [{ scope: "org", permission: undefined }], "sb1"],
-  ]);
+  const pathShare = { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" };
+  assert.ok(Check(files.parameters, pathShare));
+  const rejected = await call(files, pathShare);
+  assert.match(textOut(rejected), /put the file in Files first using POST \/v1\/files\/uploads/);
+  assert.deepEqual(writes, [["notes", "", undefined]]);
   for (const [name, type, action] of [
+    ["files", "file", "share"],
     ["apps", "deploy", "share"],
     ["apps", "deploy", "move"],
     ["skills", "skill", "share"],

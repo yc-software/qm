@@ -1,16 +1,9 @@
-import { readContextFile } from "../src/resolution/context-files.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { collectNamedOutbound, materializeInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
-import { createToolContext } from "../src/tools/primitives.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 
@@ -164,67 +157,4 @@ test("materializeInbound omits artifactId when registration fails or is absent",
   assert.equal(failed.metas.length, 1, "the file still reaches the inbox");
   assert.equal(failed.metas[0]!.artifactId, undefined, "no artifactId is fabricated on a store fault");
   assert.equal(errors.length, 1);
-});
-
-test("write+share registers an artifact keyed on the SAME (owner, path) as the grant", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "popshare-")));
-  const grantee = scopeId("personal", "U2");
-  const { sandbox } = memSandbox({ "redline.md": "v1 redline" });
-
-  const ctx = createToolContext({
-    sandbox,
-    provision: async () => HANDLE,
-    layers: [{ scopeId: owner, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace,
-    deploy: {} as never,
-    acl,
-    files: store,
-    createdBy: "U1",
-  });
-
-  const { artifactId } = await ctx.write("redline.md", undefined, [{ scope: grantee, permission: "read" }]);
-
-  const shared = (await store.get(artifactId!))!;
-  assert.equal(shared.name, "redline.md");
-  assert.equal(shared.path, "redline.md");
-  assert.equal((await acl.grantsFor(owner, "redline.md")).length, 1);
-  assert.deepEqual(await drain(store, shared.id), Buffer.from("v1 redline"));
-});
-
-test("each share stores a fresh snapshot row behind one stable grant, even after deletion", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "republish-")));
-  const grantee = scopeId("personal", "U2");
-  const { sandbox } = memSandbox();
-  const ctx = createToolContext({
-    sandbox,
-    provision: async () => HANDLE,
-    layers: [{ scopeId: owner, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace,
-    deploy: {} as never,
-    acl,
-    files: store,
-    createdBy: "U1",
-  });
-  const share = [{ scope: grantee, permission: "read" as const }];
-  const first = await ctx.write("report.txt", "first generation", share);
-  await store.delete(first.artifactId!);
-  const second = await ctx.write("report.txt", "new generation", share);
-  assert.notEqual(second.artifactId, first.artifactId);
-  assert.deepEqual(await drain(store, second.artifactId!), Buffer.from("new generation"));
-  assert.equal(await store.get(first.artifactId!, { includeDisabled: true }), null);
-  assert.equal((await store.get(second.artifactId!))!.path, "report.txt");
-  assert.equal((await acl.grantsFor(owner, "report.txt")).length, 1);
-  const read = await readContextFile("shared/report.txt", await acl.handlesFor([grantee]), workspace, store);
-  assert.ok(read && "bytes" in read);
-  assert.equal(read.bytes?.toString(), "new generation");
 });

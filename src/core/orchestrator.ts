@@ -137,7 +137,6 @@ import { createTranscriptSource } from "../harness/tape-projection.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
-  SHARED_DIR,
   TURN_FILES_DIR,
   environmentNote,
   fileEventPayload,
@@ -1114,7 +1113,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         memoryPolicy,
         useMemory,
         memory: deps.memory,
-        workspace: deps.workspace,
         files: deps.files,
         skills: deps.skills,
         auditLog: deps.auditLog,
@@ -1309,7 +1307,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
       const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
-      const turnSharedDir = `${turnFilesDir}/${SHARED_DIR}`;
 
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
@@ -2636,11 +2633,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           seed: input.runId ?? `${session.id}:${Date.now()}`,
           ...(fileGrantees.length
             ? {
-                onRegistered: async ({ ownerScopeId, path }) => {
+                onRegistered: async ({ ownerScopeId, id }) => {
                   for (const granteeScopeId of fileGrantees) {
                     await deps.acl.grant({
                       ownerScopeId,
-                      ref: path,
+                      ref: id,
                       granteeScopeId,
                       permission: "read",
                       grantedBy: actor.id,
@@ -2713,7 +2710,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (!fresh) readableHandles = handles;
           return handles.some(
-            (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.ownerPath === artifact.path,
+            (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.fileId === artifact.id,
           );
         };
         const provisionOutbound = (sandboxId?: string) =>
@@ -2780,7 +2777,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           authorizeCommand,
           grantedHandles: resolution.grantedHandles,
           context,
-          sharedMaterializeDir: turnSharedDir,
           workspace: deps.workspace,
           deploy: deps.deploy,
           acl: deps.acl,

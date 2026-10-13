@@ -1894,7 +1894,7 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
   );
   assert.notEqual(t.status, "error");
   const handles = await acl.handlesFor([scopeId("group", "G9")]);
-  const fileHandle = handles.find((h) => h.ownerPath.endsWith("/flag.png"));
+  const fileHandle = handles.find((h) => h.handlePath === "shared/flag.png");
   assert.ok(fileHandle, "the posted file is granted to the conversation scope");
   assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
 });
@@ -1925,7 +1925,7 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
   );
   assert.notEqual(t.status, "error");
   const handles = await acl.handlesFor([scopeId("group", "G9")]);
-  const fileHandle = handles.find((h) => h.ownerPath.endsWith("/flag.png"));
+  const fileHandle = handles.find((h) => h.handlePath === "shared/flag.png");
   assert.ok(fileHandle, "the posted file is granted to the conversation scope");
   assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
 });
@@ -1934,9 +1934,19 @@ test("a file shared with the session is LISTED in the cached system prompt — w
   const built = freshApp();
   const { app, acl } = built;
   const boxes = spyProvisioning(built.sandbox);
-  acl.grant({
+  await built.files.put({
+    id: "budget-file",
     ownerScopeId: scopeId("personal", "U2"),
-    ref: "budget.csv",
+    createdBy: "U2",
+    name: "budget.csv",
+    path: "budget.csv",
+    mimetype: "text/csv",
+    data: Buffer.from("amount\n10"),
+    direction: "out",
+  });
+  await acl.grant({
+    ownerScopeId: scopeId("personal", "U2"),
+    ref: "budget-file",
     granteeScopeId: scopeId("personal", "U1"),
     permission: "read",
     grantedBy: "U2",

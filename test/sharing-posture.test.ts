@@ -1,3 +1,4 @@
+import { readContextFile } from "../src/resolution/context-files.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { composeSharingPosture, parseSharingPosture, type SharingPosture } from "../src/resolution/sharing-posture.ts";
@@ -10,12 +11,8 @@ import {
 import { createMemoryConfigStore, type PersistedSharingPosture } from "../src/resolution/config-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { join } from "node:path";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 
 test("sharing posture is isolated by default and isolated wins composition", () => {
@@ -190,13 +187,9 @@ test("DM carry is recent, bounded, non-transitive, source-vetoed, and revoked by
 });
 
 test("carried file handles expose only selected source scopes read-only without mounting them", async () => {
-  const root = await mkdtemp(join(tmpdir(), "sharing-handles-"));
-  const workspace = createLocalWorkspaceStore(root);
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const personal = scopeId("personal", "U1");
   const teammate = scopeId("personal", "U2");
-  await workspace.write(personal, "notes/private.txt", "mine");
-  await workspace.write(teammate, "teammate-secret.txt", "theirs");
   await files.put({
     id: "1".repeat(32),
     ownerScopeId: personal,
@@ -207,13 +200,20 @@ test("carried file handles expose only selected source scopes read-only without 
     data: Buffer.from("artifact"),
     direction: "in",
   });
-  const handles = await carriedFileHandles([personal], workspace, files);
+  await files.put({
+    id: "3".repeat(32),
+    ownerScopeId: teammate,
+    createdBy: "U2",
+    name: "secret.txt",
+    path: "secret.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("theirs"),
+    direction: "in",
+  });
+  const handles = await carriedFileHandles([personal], files);
   assert.deepEqual(
-    handles.map((handle) => [handle.ownerScopeId, handle.ownerPath, handle.permission]),
-    [
-      [personal, "notes/private.txt", "read"],
-      [personal, `artifacts/${"1".repeat(32)}/artifact.txt`, "read"],
-    ],
+    handles.map((handle) => [handle.ownerScopeId, handle.fileId, handle.permission]),
+    [[personal, "1".repeat(32), "read"]],
   );
   assert.equal(
     handles.some((handle) => handle.ownerScopeId === teammate),
@@ -224,17 +224,21 @@ test("carried file handles expose only selected source scopes read-only without 
     id: secondArtifactId,
     ownerScopeId: personal,
     createdBy: "U1",
-    name: "second-artifact.txt",
-    path: `artifacts/${secondArtifactId}/second-artifact.txt`,
+    name: "artifact.txt",
+    path: `artifacts/${secondArtifactId}/artifact.txt`,
     mimetype: "text/plain",
     data: Buffer.from("second artifact"),
     direction: "in",
   });
-  const pagedHandles = await carriedFileHandles([personal], workspace, {
-    listOwnedByScopes: (scopes, opts) => files.listOwnedByScopes(scopes, { ...opts, limit: 1 }),
-  });
+  const handlesAgain = await carriedFileHandles([personal], files);
+  assert.equal(new Set(handlesAgain.map((handle) => handle.handlePath)).size, 2);
+  for (const handle of handlesAgain) {
+    const read = await readContextFile(handle.handlePath, handlesAgain, files);
+    assert.ok(read && "bytes" in read);
+    assert.equal(read.bytes?.toString(), handle.fileId === secondArtifactId ? "second artifact" : "artifact");
+  }
   assert.equal(
-    pagedHandles.some((handle) => handle.ownerPath === `artifacts/${secondArtifactId}/second-artifact.txt`),
+    handlesAgain.some((handle) => handle.fileId === secondArtifactId),
     true,
   );
 });
@@ -273,35 +277,22 @@ test("Open examines a bounded candidate window even when every membership is rev
   assert.equal(checks, 100);
 });
 
-test("Open file enumeration is globally capped and excludes the memory notebook", async () => {
-  const root = await mkdtemp(join(tmpdir(), "sharing-cap-"));
-  const workspace = createLocalWorkspaceStore(root);
-  const personal = scopeId("personal", "U1");
-  await workspace.write(personal, "memory/MEMORY.md", "PRIVATE_NOTE");
-  for (let i = 0; i < 210; i++) await workspace.write(personal, `file-${i}.txt`, "file");
+test("Open file enumeration is globally capped across selected scopes", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const handles = await carriedFileHandles([personal], workspace, files);
-  assert.ok(handles.length <= 200);
-  assert.equal(
-    handles.some((handle) => handle.ownerPath === "memory/MEMORY.md"),
-    false,
-  );
-  assert.ok((await workspace.list(personal, { limit: 3 })).length <= 3);
-});
-
-test("Open excludes memory notebook aliases with Windows separators", async () => {
-  const personal = scopeId("personal", "U1");
-  const root = await mkdtemp(join(tmpdir(), "sharing-memory-alias-"));
-  const workspace = createLocalWorkspaceStore(root);
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  await workspace.write(personal, "memory/MEMORY.md", "PRIVATE");
-  const handles = await carriedFileHandles(
-    [personal],
-    {
-      scopeDir: workspace.scopeDir,
-      list: async () => [join(workspace.scopeDir(personal), "memory\\MEMORY.md")],
-    },
-    files,
-  );
-  assert.deepEqual(handles, []);
+  const scopes = [scopeId("personal", "U1"), scopeId("channel", "C1")];
+  for (let i = 0; i < 210; i++) {
+    await files.put({
+      id: i.toString(16).padStart(32, "0"),
+      ownerScopeId: scopes[i % 2]!,
+      createdBy: "U1",
+      name: `file-${i}.txt`,
+      path: `file-${i}.txt`,
+      mimetype: "text/plain",
+      data: Buffer.from("file"),
+      direction: "in",
+    });
+  }
+  const handles = await carriedFileHandles(scopes, files);
+  assert.equal(handles.length, 200);
+  assert.equal(new Set(handles.map((handle) => handle.ownerScopeId)).size, 2);
 });
