@@ -67,9 +67,16 @@ export interface MemoryService {
   ): Promise<number>;
   query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<string[]>;
   read(scopeId: ScopeId): Promise<string>;
-  replace(scopeId: ScopeId, content: string, author?: string): Promise<void>;
+  /** `base` is the notebook the writer read; facts captured since then are kept, not overwritten. */
+  replace(scopeId: ScopeId, content: string, author?: string, base?: string): Promise<void>;
   readHead?(scopeId: ScopeId): Promise<MemoryHead>;
-  replaceIfRevision?(scopeId: ScopeId, content: string, revision: string, author?: string): Promise<boolean>;
+  replaceIfRevision?(
+    scopeId: ScopeId,
+    content: string,
+    revision: string,
+    author?: string,
+    base?: string,
+  ): Promise<boolean>;
   replaceRecordsIfRevision?(
     scopeId: ScopeId,
     records: MemoryRecords,
@@ -163,7 +170,18 @@ export function captureRecords(
   };
 }
 
-export function replaceRecords(scopeId: ScopeId, current: MemoryRecords, content: string): MemoryRecords {
+export function replaceRecords(
+  scopeId: ScopeId,
+  current: MemoryRecords,
+  content: string,
+  base?: string,
+): MemoryRecords {
+  if (base !== undefined) {
+    // A rewrite edits what the writer read: facts captured after that read were never seen, so they stay (#1680).
+    const seen = new Set([...bullets(base), ...bullets(content)].map(normalize));
+    const unseen = bullets(renderMemoryRecords(current)).filter((line) => !seen.has(normalize(line)));
+    if (unseen.length) content = `${content.replace(/\s+$/, "")}\n${unseen.join("\n")}`;
+  }
   return updateMemoryRecords(scopeId, current, normalizeReplace(content));
 }
 
@@ -221,10 +239,10 @@ export function createMemoryService(workspace: WorkspaceStore): MemoryService {
       return (await load(scopeId)).body;
     },
 
-    async replace(scopeId, content) {
+    async replace(scopeId, content, _author, base) {
       await perScope(scopeId, async () => {
         const head = await load(scopeId);
-        await save(scopeId, head.raw, replaceRecords(scopeId, head.records, content));
+        await save(scopeId, head.raw, replaceRecords(scopeId, head.records, content, base));
       });
     },
 
@@ -235,11 +253,11 @@ export function createMemoryService(workspace: WorkspaceStore): MemoryService {
       });
     },
 
-    async replaceIfRevision(scopeId, content, revision) {
+    async replaceIfRevision(scopeId, content, revision, _author, base) {
       return perScope(scopeId, async () => {
         const head = await load(scopeId);
         if (head.revision !== revision) return false;
-        await save(scopeId, head.raw, replaceRecords(scopeId, head.records, content));
+        await save(scopeId, head.raw, replaceRecords(scopeId, head.records, content, base));
         return true;
       });
     },

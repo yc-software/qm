@@ -116,10 +116,10 @@ export function createRoutedMemoryService(opts: {
       return manager ? manager.read(scopeId) : "";
     },
 
-    async replace(scopeId, content, author) {
+    async replace(scopeId, content, author, base) {
       const manager = managerFor(scopeId);
       if (!manager) throw new Error(`memory for ${scopeId} is not directly editable`);
-      await manager.replace(scopeId, content, author);
+      await manager.replace(scopeId, content, author, base);
     },
 
     async readHead(scopeId) {
@@ -129,10 +129,10 @@ export function createRoutedMemoryService(opts: {
       return { content: await manager.read(scopeId), revision: "" };
     },
 
-    async replaceIfRevision(scopeId, content, revision, author) {
+    async replaceIfRevision(scopeId, content, revision, author, base) {
       const manager = managerFor(scopeId);
       if (!manager?.replaceIfRevision) return false;
-      return manager.replaceIfRevision(scopeId, content, revision, author);
+      return manager.replaceIfRevision(scopeId, content, revision, author, base);
     },
 
     ...(opts.routes

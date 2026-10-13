@@ -100,9 +100,9 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
       return currentBody(scopeId);
     },
 
-    async replace(scopeId, content, author) {
+    async replace(scopeId, content, author, base) {
       await mutate(scopeId, "replace", Date.now(), author, undefined, async (current) =>
-        replaceRecords(scopeId, current, content),
+        replaceRecords(scopeId, current, content, base),
       );
     },
 
@@ -116,10 +116,10 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
       };
     },
 
-    async replaceIfRevision(scopeId, content, revision, author) {
+    async replaceIfRevision(scopeId, content, revision, author, base) {
       if (!/^\d+$/.test(revision)) return false;
       return mutate(scopeId, "replace", Date.now(), author, Number(revision), async (current) =>
-        replaceRecords(scopeId, current, content),
+        replaceRecords(scopeId, current, content, base),
       );
     },
 

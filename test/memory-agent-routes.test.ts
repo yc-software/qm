@@ -162,15 +162,35 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
 
   it("curates (rewrites) the writable notebook via PUT /v1/memory/self", async () => {
     const cap = await capFor("U1", { write: U1, read: [U1] });
+    const read = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
     const res = await put(
       "/v1/memory/self",
-      { content: "# Memory\n\n- (2026-06-10) curated." },
+      { content: "# Memory\n\n- (2026-06-10) curated.", base: read.content },
       { "x-agent-capability": cap },
     );
     assert.equal(res.status, 200);
     const self = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
     assert.match(self.content, /curated/);
     assert.doesNotMatch(self.content, /speaker attribution/);
+  });
+
+  it("a curate keeps facts captured after its read and still drops the ones it deleted (#1680)", async () => {
+    const cap = await capFor("U1", { write: U1, read: [U1] });
+    await built.memory.replace(U1, "# Memory\n\n- Keep me.\n- Delete me.");
+    const read = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
+    await built.memory.capture(U1, ["Captured mid-curate."], Date.now());
+    const res = await put(
+      "/v1/memory/self",
+      { content: "# Memory\n\n- Keep me.", base: read.content },
+      { "x-agent-capability": cap },
+    );
+    assert.equal(res.status, 200);
+    const after = await built.memory.read(U1);
+    assert.match(after, /Captured mid-curate/);
+    assert.match(after, /Keep me/);
+    assert.doesNotMatch(after, /Delete me/);
+    const blind = await put("/v1/memory/self", { content: "# Memory" }, { "x-agent-capability": cap });
+    assert.equal(blind.status, 400, "a rewrite must say what it read");
   });
 
   it('scope:"org" writes the org notebook when the token carries orgWrite (admin turn)', async () => {
@@ -191,7 +211,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     assert.match(self.content, /Quarterly planning/);
     const putRes = await put(
       "/v1/memory/self",
-      { content: "# Memory\n\n- org notebook curated.", scope: "org" },
+      { content: "# Memory\n\n- org notebook curated.", scope: "org", base: self.content },
       { "x-agent-capability": cap },
     );
     assert.equal(putRes.status, 200);

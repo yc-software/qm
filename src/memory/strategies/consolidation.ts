@@ -180,7 +180,7 @@ export function createConsolidatingMemory(
       if (added > 0) void perScope(s, () => consolidator.maybeMaintain(s)).catch(() => {});
       return added;
     },
-    replace: (s, content, author) => perScope(s, () => base.replace(s, content, author)),
+    replace: (s, content, author, read) => perScope(s, () => base.replace(s, content, author, read)),
   };
   return { memory, maintain: (s) => perScope(s, () => consolidator.maintain(s)) };
 }

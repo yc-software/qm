@@ -68,7 +68,8 @@ curl -fsS -X POST "$AGENT_API_URL/v1/memory/facts" \
   -d '{"scope":"org","facts":["..."]}'
 ```
 
-(`?scope=org` on `GET /v1/memory/self`, `"scope":"org"` on the PUT body to curate.)
+(`?scope=org` on `GET /v1/memory/self`, `"scope":"org"` on the PUT body to curate. The PUT body also carries
+`"base"`: the `content` that GET returned, so facts captured since you read are kept.)
 Those writes land in the notebook every conversation in the org recalls, so confirm the
 wording with the admin before writing and keep personal facts out of it. A `403 org
 memory writes require an org admin` means the user isn't one — say so rather than

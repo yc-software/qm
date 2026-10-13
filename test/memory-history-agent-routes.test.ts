@@ -93,8 +93,11 @@ describe("agent memory history and restore", () => {
   it("lists versions after writes and restores a prior version", async () => {
     const mine = scopeId("personal", "U1");
     const token = await capFor("U1", mine);
-    assert.equal((await put("/v1/memory/self", { content: "first version" }, token)).status, 200);
-    assert.equal((await put("/v1/memory/self", { content: "second version" }, token)).status, 200);
+    assert.equal((await put("/v1/memory/self", { content: "first version", base: "" }, token)).status, 200);
+    assert.equal(
+      (await put("/v1/memory/self", { content: "second version", base: "first version" }, token)).status,
+      200,
+    );
 
     const history = await get("/v1/memory/history", token);
     assert.equal(history.status, 200);
@@ -127,8 +130,15 @@ describe("agent memory history and restore", () => {
     const mine = scopeId("personal", "A1");
     const org = scopeId("org", "default-org");
     const token = await capFor("A1", mine, org);
-    assert.equal((await put("/v1/memory/self", { content: "first org version", scope: "org" }, token)).status, 200);
-    assert.equal((await put("/v1/memory/self", { content: "second org version", scope: "org" }, token)).status, 200);
+    assert.equal(
+      (await put("/v1/memory/self", { content: "first org version", scope: "org", base: "" }, token)).status,
+      200,
+    );
+    assert.equal(
+      (await put("/v1/memory/self", { content: "second org version", scope: "org", base: "first org version" }, token))
+        .status,
+      200,
+    );
 
     const history = await get("/v1/memory/history?scope=org", token);
     assert.equal(history.status, 200);

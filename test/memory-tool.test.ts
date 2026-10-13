@@ -190,6 +190,28 @@ test("the `memory` tool remember/read/rewrite round-trip through the durable ser
   assert.match(textOf(await call(memoryTool, { action: "rewrite" })), /\[error\]/);
 });
 
+test("the `memory` tool rewrite keeps facts captured after its read (#1680)", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-race-")));
+  const memory = createMemoryService(workspace);
+  const personal = scopeId("personal", "U1");
+  await workspace.ensureScope(personal);
+  await memory.capture(personal, ["Stale fact", "Kept fact"], at);
+  const ref: ToolContextRef = {
+    current: ctxFor({ scope: personal, workspace, memory }),
+    emit: () => {},
+    scopeLabel: personal,
+  };
+  const memoryTool = createAgentTools(ref).find((t) => t.name === "memory");
+  assert.match(textOf(await call(memoryTool, { action: "rewrite", content: "# Memory" })), /read the notebook first/);
+  await call(memoryTool, { action: "read" });
+  await memory.capture(personal, ["Captured by another conversation"], at);
+  await call(memoryTool, { action: "rewrite", content: "# Memory\n\n- (2026-01-01) Kept fact\n" });
+  const after = await memory.read(personal);
+  assert.match(after, /Captured by another conversation/);
+  assert.match(after, /Kept fact/);
+  assert.doesNotMatch(after, /Stale fact/);
+});
+
 test("a read-only wake keeps `memory` but refuses its write actions", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-ro-")));
   const memory = createMemoryService(workspace);

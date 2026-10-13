@@ -1478,6 +1478,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
           const ok = await tc.memoryRewrite(params.content);
           if (ok === null) return unavailable();
+          if (ok === "unread")
+            return recordResult(
+              callId,
+              { tool: "memory", action, error: "unread" },
+              text('[error] read the notebook first (action "read"), then rewrite it.'),
+              true,
+            );
           return recordResult(
             callId,
             { tool: "memory", action, rewritten: true },

@@ -164,21 +164,21 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
   }
   return {
     ...memory,
-    async replace(scope, content, author) {
+    async replace(scope, content, author, base) {
       const current = await editable(scope);
       if (memory.replaceIfRevision && current.revision) {
-        if (!(await memory.replaceIfRevision(scope, content, current.revision, author)))
+        if (!(await memory.replaceIfRevision(scope, content, current.revision, author, base)))
           throw new Error("Memory changed while editing; read it again before retrying.");
       } else {
         if (current.records) throw new MemoryDisclosureDenied();
-        await memory.replace(scope, content, author);
+        await memory.replace(scope, content, author, base);
       }
     },
     replaceRecordsIfRevision: undefined,
-    async replaceIfRevision(scope, content, revision, author) {
+    async replaceIfRevision(scope, content, revision, author, base) {
       const current = await editable(scope);
       if (current.revision !== revision) return false;
-      return (await memory.replaceIfRevision?.(scope, content, revision, author)) ?? false;
+      return (await memory.replaceIfRevision?.(scope, content, revision, author, base)) ?? false;
     },
     async restore(scope, revision, expectedRevision, author) {
       await editable(scope);

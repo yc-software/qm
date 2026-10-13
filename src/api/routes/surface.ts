@@ -781,10 +781,13 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { scopeId: write, content: await memory.read(write) });
   }
   if (method === "PUT" && pathname === "/v1/memory/self") {
-    const b = body as { content?: unknown };
-    if (typeof b.content !== "string")
-      return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    await memory.replace(write, b.content, capability.actorId);
+    const b = body as { content?: unknown; base?: unknown };
+    if (typeof b.content !== "string" || typeof b.base !== "string")
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "content (string) and base (the content GET returned) required",
+      });
+    await memory.replace(write, b.content, capability.actorId, b.base);
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.curate",

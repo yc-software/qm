@@ -237,7 +237,8 @@ export interface ToolContext extends SurfaceToolDeps {
   memorySearch(q: string, limit?: number): Promise<string[] | null>;
   memoryRead(): Promise<string | null>;
   memoryRemember(facts: string[]): Promise<number | null>;
-  memoryRewrite(content: string): Promise<true | null>;
+  /** "unread" until this turn has read the notebook: a rewrite must know what it is replacing. */
+  memoryRewrite(content: string): Promise<true | "unread" | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   mcpToolDefs(): McpToolDescriptor[];
@@ -643,6 +644,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
     }
   }
+
+  // The notebook as this turn last read or wrote it; a rewrite keeps facts captured after it (#1680).
+  let memoryBase: string | undefined;
 
   async function once<T>(produce: () => Promise<T>, shouldCache: (r: T) => boolean = () => true): Promise<T> {
     const index = ++callIndex;
@@ -1142,7 +1146,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryRead(): Promise<string | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
-      return timed("recall", () => memory!.read(write));
+      return (memoryBase = await timed("recall", () => memory!.read(write)));
     },
 
     async memoryRemember(facts: string[]): Promise<number | null> {
@@ -1160,12 +1164,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
-    async memoryRewrite(content: string): Promise<true | null> {
+    async memoryRewrite(content: string): Promise<true | "unread" | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
+      if (memoryBase === undefined) return "unread";
       return once(() =>
         timed("memory_write", async () => {
-          await memory!.replace(write, content, deps.createdBy);
+          await memory!.replace(write, content, deps.createdBy, memoryBase);
+          memoryBase = content;
           return true as const;
         }),
       );
