@@ -411,6 +411,7 @@ export function codexTurnInputText(
 
 export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
   const active = new Map<string, ActiveTurn>();
+  const spawnedRoots = new Map<string, string>();
   const configuredModel = opts.modelId;
   const judgeModelId = opts.judgeModelId ?? "gpt-5.4-mini";
   const resolveModelId = (scope?: ScopeId) =>
@@ -519,6 +520,21 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       binaryPath,
       cwd: jail,
       env: childEnv,
+      notificationQueue: (_method, params) => {
+        const p = (params ?? {}) as { threadId?: unknown; item?: CodexItem };
+        const threadId = typeof p.threadId === "string" ? p.threadId : "";
+        const root = active.get(threadId)?.threadId ?? spawnedRoots.get(threadId);
+        const item = p.item;
+        if (
+          root &&
+          item?.type === "collabAgentToolCall" &&
+          item.tool === "spawnAgent" &&
+          Array.isArray(item.receiverThreadIds)
+        )
+          for (const receiver of item.receiverThreadIds)
+            if (typeof receiver === "string") spawnedRoots.set(receiver, root);
+        return root ?? threadId;
+      },
       onNotification: async (method, params) => {
         const p = (params ?? {}) as Record<string, unknown>;
         const threadId = typeof p.threadId === "string" ? p.threadId : "";
@@ -1396,6 +1412,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       for (const [activeThreadId, activeState] of active) {
         if (activeState === state) active.delete(activeThreadId);
       }
+      for (const [child, root] of spawnedRoots) if (root === threadId) spawnedRoots.delete(child);
       try {
         await closeEphemeral();
       } catch (error) {
