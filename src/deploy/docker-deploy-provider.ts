@@ -3,10 +3,11 @@ import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { spawnDockerExec, type DockerExec } from "../sandbox/docker-exec.ts";
 import { errMessage } from "../util/errors.ts";
 import {
+  appBoot,
   appGone,
-  appLaunch,
   appLogs,
   appReporter,
+  recentAppChecks,
   waitAppReady,
   type AppErrorSink,
   type Exec,
@@ -14,7 +15,7 @@ import {
 
 const APP_PORT = 8080;
 const APP_READY_WINDOW_SEC = 60;
-const KEEP_ALIVE = "while :; do sleep 3600; done";
+const RUN_TIMEOUT_MS = 300_000;
 const LEGACY_NETWORK = "agent-deploynet";
 const DAEMON_PROBE_TIMEOUT_MS = 10_000;
 
@@ -72,6 +73,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     (d: Deployment): Exec =>
     (script, timeoutSec) =>
       dexec(["exec", name(d), "sh", "-c", script], timeoutSec * 1000);
+  const checked = recentAppChecks();
   const network = (d: Deployment) => `${name(d)}-net`;
   const ensureNetwork = async (net: string): Promise<string> => {
     if ((await dexec(["network", "inspect", net])).code !== 0) {
@@ -124,39 +126,40 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       await dexec(["rm", "-f", name(d)]);
       const hostPort = allocPort(name(d));
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-      const r = await dexec([
-        "run",
-        "-d",
-        "--restart",
-        "unless-stopped",
-        "--name",
-        name(d),
-        "--network",
-        net,
-        "--memory",
-        "512m",
-        "--cpus",
-        "1",
-        "--pids-limit",
-        "256",
-        "-p",
-        `127.0.0.1:${hostPort}:${APP_PORT}`,
-        "-v",
-        `${version.snapshotDir}:/app:ro`,
-        "-w",
-        "/app",
-        "-e",
-        `PORT=${APP_PORT}`,
-        ...envArgs,
-        image,
-        "sh",
-        "-c",
-        KEEP_ALIVE,
-      ]);
+      const r = await dexec(
+        [
+          "run",
+          "-d",
+          "--restart",
+          "unless-stopped",
+          "--name",
+          name(d),
+          "--network",
+          net,
+          "--memory",
+          "512m",
+          "--cpus",
+          "1",
+          "--pids-limit",
+          "256",
+          "-p",
+          `127.0.0.1:${hostPort}:${APP_PORT}`,
+          "-v",
+          `${version.snapshotDir}:/app:ro`,
+          "-w",
+          "/app",
+          "-e",
+          `PORT=${APP_PORT}`,
+          ...envArgs,
+          image,
+          "sh",
+          "-c",
+          appBoot(`cd /app; ${version.entrypoint}`, APP_PORT),
+        ],
+        RUN_TIMEOUT_MS,
+      );
       try {
         if (r.code !== 0) throw new Error(`deploy run failed: ${r.stderr.trim()}`);
-        const started = await execIn(d)(appLaunch(`cd /app; ${version.entrypoint}`, APP_PORT), 60);
-        if (started.code !== 0) throw new Error(`docker deploy app start failed: ${started.stderr.trim()}`);
         await waitAppReady(execIn(d), {
           appPort: APP_PORT,
           windowSec: APP_READY_WINDOW_SEC,
@@ -183,9 +186,12 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     },
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
+      if (checked.has(d.id)) return d.endpoint;
       if (!(await migrateTarget(name(d)))) return null;
       const report = appReporter(opts.onError, d, version.env);
-      return (await appGone(execIn(d), { appPort: APP_PORT, report })) ? null : d.endpoint;
+      if (await appGone(execIn(d), { appPort: APP_PORT, report })) return null;
+      checked.set(d.id, true);
+      return d.endpoint;
     },
   };
 }

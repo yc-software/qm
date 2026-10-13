@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
 import { errMessage, swallow } from "../util/errors.ts";
@@ -13,6 +14,7 @@ const REPORT_CONTEXT_LINES = 40;
 const READY_EXEC_GRACE_SEC = 30;
 const APP_PROBE_TIMEOUT_SEC = 5;
 const EXITED_MARK = "qm: entrypoint exited";
+const APP_CHECK_CACHE_MS = 15_000;
 export const APP_PID_PATH = "/tmp/qm-app.pid";
 const APP_LOG_PATH = "/tmp/qm-app.log";
 
@@ -40,7 +42,7 @@ export interface AppReadyOptions {
 }
 
 export const listeningOn = (port: number): string =>
-  `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; [ "$?" != "7" ]; }`;
+  `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; c=$?; [ "$c" != 7 ] && [ "$c" != 127 ]; }`;
 
 const EXITED = shq(`${APP_PID_PATH}.exited`);
 
@@ -56,11 +58,22 @@ function supervised(inner: string, appPort: number): string {
   ].join("; ");
 }
 
-/** Starts `inner` under the restart loop in its own process group, logging to the app log. */
 export function appLaunch(inner: string, appPort: number): string {
   const launch = `sh -c ${shq(supervised(inner, appPort))} < /dev/null > ${shq(APP_LOG_PATH)} 2>&1 & echo $! > ${shq(APP_PID_PATH)}`;
   return `if command -v setsid >/dev/null 2>&1; then setsid ${launch}; else ${launch}; fi`;
 }
+
+export function appBoot(inner: string, appPort: number, prep = "true"): string {
+  return [
+    `echo $$ > ${APP_PID_PATH}`,
+    `{ ${prep}; } || exit 1`,
+    appLaunch(inner, appPort),
+    `trap 'p=$(cat ${APP_PID_PATH}); kill -TERM -"$p" 2>/dev/null || kill -TERM "$p"; while kill -0 "$p" 2>/dev/null; do sleep 0.2; done; exit 0' INT TERM`,
+    "while :; do sleep 3600 & wait $!; done",
+  ].join("; ");
+}
+
+export const recentAppChecks = (): LRUCache<string, true> => new LRUCache({ max: 500, ttl: APP_CHECK_CACHE_MS });
 
 export async function appLogs(exec: Exec, tailLines: number): Promise<string> {
   const lines = Math.max(1, Math.min(2000, Math.floor(tailLines)));
@@ -107,9 +120,8 @@ export async function appGone(exec: Exec, opts: { appPort: number; report?: Repo
 
 export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<void> {
   const probe =
-    `pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true); died=0; ` +
-    `end=$(( $(date +%s) + ${opts.windowSec} )); ` +
-    `while [ "$(date +%s)" -lt "$end" ]; do ` +
+    `died=0; end=$(( $(date +%s) + ${opts.windowSec} )); ` +
+    `while [ "$(date +%s)" -lt "$end" ]; do pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true); ` +
     `code=$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:${opts.appPort}/); ` +
     `[ "$code" != 000 ] && [ "$code" -lt 500 ] && exit 0; ` +
     `{ kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${EXITED} ] || died=1; ` +

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { LRUCache } from "lru-cache";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { readTree } from "./deploy-fs.ts";
@@ -10,10 +9,11 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import {
+  appBoot,
   appGone,
-  appLaunch,
   appLogs,
   appReporter,
+  recentAppChecks,
   waitAppReady,
   type AppErrorSink,
   type Exec,
@@ -31,7 +31,6 @@ const MACHINE_START_TIMEOUT_MS = 90_000;
 const APP_READY_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 1_000;
 const API_TIMEOUT_MS = 30_000;
-const APP_CHECK_CACHE_MS = 15_000;
 const APP_ALREADY_TAKEN = /already\s+(exists|been\s+taken)|name\s+is\s+taken/i;
 
 interface FlyApp {
@@ -355,7 +354,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     (appName: string, machineId: string): Exec =>
     (script, timeoutSec) =>
       api.exec(appName, machineId, script, timeoutSec);
-  const checked = new LRUCache<string, true>({ max: 500, ttl: APP_CHECK_CACHE_MS });
+  const checked = recentAppChecks();
 
   function ensureConfigured(): void {
     if (
@@ -453,7 +452,11 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       exec: [
         "/bin/sh",
         "-lc",
-        `mkdir -p ${APP_DIR} && tar -xzf ${BUNDLE_GUEST_PATH} -C ${APP_DIR} && ${appLaunch(`cd ${APP_DIR}; ${version.entrypoint}`, APP_PORT)}; while :; do sleep 3600; done`,
+        appBoot(
+          `cd ${APP_DIR}; ${version.entrypoint}`,
+          APP_PORT,
+          `mkdir -p ${APP_DIR} && tar -xzf ${BUNDLE_GUEST_PATH} -C ${APP_DIR}`,
+        ),
       ],
     },
   });
@@ -531,7 +534,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     async logs(d, logOpts): Promise<string | null> {
       ensureConfigured();
       const machines = await deploymentMachines(d);
-      if (machines.length !== 1) return null;
+      if (machines.length !== 1 || machines[0]!.state !== "started") return null;
       return appLogs(execIn(appNameFor(d), machines[0]!.id), logOpts.tailLines);
     },
 
