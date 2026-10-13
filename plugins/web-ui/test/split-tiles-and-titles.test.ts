@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { dropAddsTile, MAX_PANES, MAX_TILES, serializedTileCount, v1PaneSeeds } from "../src/split-layout.ts";
+import { dropAddsTile, MAX_PANES, MAX_TILES, serializedTileCount } from "../src/split-layout.ts";
 
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
@@ -40,10 +40,6 @@ test("a revived canvas is bounded by both caps and cannot blow the stack", () =>
   let deep: object = leaf(["a"]);
   for (let i = 0; i < 50_000; i++) deep = branch(deep);
   assert.equal(serializedTileCount({ grid: { root: deep } }), Infinity, "a pathological tree is over the cap");
-
-  let v1deep: object = { kind: "leaf", id: "x", sessionId: "s", threadRef: "t" };
-  for (let i = 0; i < 50_000; i++) v1deep = { kind: "split", id: "s", a: v1deep, b: v1deep };
-  assert.equal(v1PaneSeeds({ active: true, root: v1deep }), null, "and so is a pathological v1 tree");
 });
 
 test("only the native drops that would add a tile are refused", () => {
