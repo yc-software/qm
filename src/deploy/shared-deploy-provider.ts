@@ -5,7 +5,7 @@ import { swallow } from "../util/errors.ts";
 const EXIT_APP_EXITED = 98;
 const EXIT_APP_GONE = 99;
 const READY_EXEC_GRACE_SEC = 30;
-const APP_PROBE_TIMEOUT_SEC = 15;
+const APP_PROBE_TIMEOUT_SEC = 5;
 const EXITED_MARK = "qm: entrypoint exited";
 
 type Exec = (script: string, timeoutSec: number) => Promise<Pick<ExecResult, "stdout" | "stderr" | "code">>;
@@ -20,7 +20,6 @@ export interface AppReadyOptions {
 export const listeningOn = (port: number): string =>
   `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; [ "$?" != "7" ]; }`;
 
-/** Runs `inner` forever, restarting it with backoff whenever it exits; killing the process group stops it. */
 export function supervised(inner: string, appPort: number): string {
   return [
     listeningOn(appPort),
@@ -31,7 +30,6 @@ export function supervised(inner: string, appPort: number): string {
   ].join("; ");
 }
 
-/** True only when nothing answers on the app port and no supervisor (or pre-supervisor app process) is alive to bring it back. */
 export async function appGone(exec: Exec, opts: { appPort: number; pidPath: string }): Promise<boolean> {
   const probe =
     `${listeningOn(opts.appPort)}; listening && exit 0; pid=$(cat ${shq(opts.pidPath)} 2>/dev/null || true); ` +
