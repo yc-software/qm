@@ -127,51 +127,33 @@ test("each principal has an independent cron and unavailable or invalid results 
   assert.deepEqual(await f.service.get("alice", []), { activities: [], pending: false });
 });
 
-test("busy users refresh four-hourly, cool down nightly, and can override or pause", async () => {
+test("opening a new session refreshes stale suggestions; fresh ones are served as-is", async () => {
   const f = fixture();
-  const scope = scopeId("personal", "alice");
-  const session = await f.sessions.getOrCreateByThread("active-chat", "dm", scope, undefined, "web");
-  await f.sessions.addParticipant(session.id, "alice");
-  const acquired = await f.sessions.acquireLease(session.id);
-  if (!acquired.lease) throw new Error("lease unavailable");
-  for (let i = 0; i < 10; i++)
-    await f.sessions.append(acquired.lease, {
-      type: "user",
-      scopeLabel: scope,
-      payload: { text: "Work on my project" },
-    });
-  await f.sessions.releaseLease(acquired.lease);
   await f.service.get("alice", []);
   await f.settle();
-  const id = (await f.crons.list())[0]!.id;
-  assert.match((await f.crons.get(id))!.schedule.cron!, /2,6,10,14,18,22/);
-  f.advance(25 * 60 * 60_000);
-  await f.service.maintain();
-  assert.match((await f.crons.get(id))!.schedule.cron!, /^\d+ 2 \* \* \*$/);
-  await f.crons.update(id, { schedule: { cron: "0 8 * * 1", timezone: "UTC" } });
-  f.advance(2 * 60 * 60_000);
-  await f.service.maintain();
-  assert.equal((await f.crons.get(id))!.schedule.cron, "0 8 * * 1");
-  await f.crons.setEnabled(id, false);
-  await f.service.get("alice", []);
-  assert.equal((await f.crons.get(id))!.enabled, false);
+  f.advance(60 * 60_000);
+  assert.deepEqual(await f.service.get("alice", []), { activities, pending: false });
+  assert.equal(f.calls.length, 1);
+  f.advance(4 * 60 * 60_000);
+  assert.deepEqual(await f.service.get("alice", []), { activities, pending: true });
+  await f.settle();
+  assert.equal(f.calls.length, 2);
 });
 
-test("global disable and prolonged inactivity pause only managed jobs", async () => {
+test("the nightly fire skips when no new session was opened since the last refresh or the feature is off", async () => {
   const f = fixture();
   await f.service.get("alice", []);
   await f.settle();
-  const id = (await f.crons.list())[0]!.id;
-  const disabled = createSuggestedActivityService({ ...f.deps, enabled: false });
-  await disabled.maintain();
-  assert.equal((await f.crons.get(id))!.enabled, false);
-  await disabled.get("bob", []);
-  assert.equal((await f.crons.list()).length, 1);
+  const cron = (await f.crons.list())[0]!;
+  assert.equal(await f.service.skipFire(cron), "no new sessions opened since the last refresh");
+  f.advance(60_000);
   await f.service.get("alice", []);
-  assert.equal((await f.crons.get(id))!.enabled, true);
-  f.advance(31 * 24 * 60 * 60_000);
-  await f.service.maintain();
-  assert.equal((await f.crons.get(id))!.enabled, false);
+  assert.equal(await f.service.skipFire(cron), undefined);
+  assert.equal(
+    await createSuggestedActivityService({ ...f.deps, enabled: false }).skipFire(cron),
+    "suggested activities are turned off",
+  );
+  assert.equal(await f.service.skipFire({ ...cron, id: "someone-elses" }), undefined);
 });
 
 test("invalid first results retry after cooldown without creating another cron", async () => {
@@ -195,30 +177,11 @@ test("guidance updates managed task text while preserving user edits", async () 
   await f.service.get("alice", []);
   await f.settle();
   const id = (await f.crons.list())[0]!.id;
-  const updated = createSuggestedActivityService({ ...f.deps, context: "Acme team guidance" });
-  await updated.maintain();
+  await createSuggestedActivityService({ ...f.deps, context: "Acme team guidance" }).get("alice", []);
   assert.match((await f.crons.get(id))!.action!, /Acme team guidance/);
   await f.crons.update(id, { action: "My custom research task" });
-  await createSuggestedActivityService({ ...f.deps, context: "Changed guidance" }).maintain();
+  await createSuggestedActivityService({ ...f.deps, context: "Changed guidance" }).get("alice", []);
   assert.equal((await f.crons.get(id))!.action, "My custom research task");
-});
-
-test("recent conversation activity prevents pausing users who do not open new chats", async () => {
-  const f = fixture();
-  await f.service.get("alice", []);
-  await f.settle();
-  const id = (await f.crons.list())[0]!.id;
-  await f.store.merge("alice", { lastSeenAt: Date.now() - 31 * 24 * 60 * 60_000, lastCadenceCheckAt: 0 });
-  const session = await f.sessions.getOrCreateByThread(
-    "existing-slack-dm",
-    "dm",
-    scopeId("personal", "alice"),
-    undefined,
-    "slack",
-  );
-  await f.sessions.addParticipant(session.id, "alice");
-  await f.service.maintain();
-  assert.equal((await f.crons.get(id))!.enabled, true);
 });
 
 test("old valid results are returned while a newer refresh is running", async () => {

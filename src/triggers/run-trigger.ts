@@ -7,7 +7,7 @@ import type {
   TurnRequest,
   TurnResult,
 } from "../types.ts";
-import { parseScopeId } from "../types.ts";
+import { parseScopeId, scopeActor } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
@@ -52,7 +52,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fa
   destination?: Destination;
   message?: string;
   threadRef?: string;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
+  runAs?: "owner" | "scope" | "scopeShared";
   ownerResourcesRequireOpen?: boolean;
   unattendedGrants?: string[];
   members?: Principal[];
@@ -180,20 +180,12 @@ export async function destinationVisible(
 
 export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
   await deps.identity.refresh();
-  const isScopeFloor = spec.runAs === "scopeFloor";
+  const runsAsScope = spec.runAs === "scope";
   const isScopeShared = spec.runAs === "scopeShared";
   const currentMembers = await deps.currentScopeMembers?.(spec.ownerScopeId);
   const members = currentMembers ?? spec.members ?? [];
-  let actorId = spec.owner;
-  if (isScopeFloor) {
-    const internalMembers = members.filter(
-      (m) => m.type === "internal" && deps.identity.classify(m.id).type === "internal",
-    );
-    if (internalMembers.length === 0) {
-      return { authzFailed: true, ran: false, note: "scopeFloor cron has no internal members left" };
-    }
-    if (!internalMembers.some((m) => samePerson(m.id, spec.owner))) actorId = internalMembers[0]!.id;
-  } else {
+  const actorId = runsAsScope ? scopeActor(spec.ownerScopeId) : spec.owner;
+  if (!runsAsScope) {
     const owner = deps.identity.classify(spec.owner);
     if (owner.type !== "internal") {
       return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
@@ -221,7 +213,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   }
 
   const audience =
-    (isScopeFloor || isScopeShared) && members.length
+    (runsAsScope || isScopeShared) && members.length
       ? members.map((m) => ({ externalId: m.id, ...(m.teamIds ? { teamIds: m.teamIds } : {}) }))
       : undefined;
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
@@ -241,7 +233,9 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   }
 
   let homeAccess: { ok: boolean; note?: string };
-  if (currentMembers !== undefined) {
+  if (runsAsScope) {
+    homeAccess = { ok: true };
+  } else if (currentMembers !== undefined) {
     homeAccess = currentMembers.some((member) => samePerson(member.id, actorId))
       ? { ok: true }
       : { ok: false, note: MEMBERSHIP_SKIP_NOTE };
@@ -329,9 +323,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         text: spec.input,
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
-        ...(!isScopeFloor && !isScopeShared && spec.unattendedGrants
-          ? { unattendedGrants: spec.unattendedGrants }
-          : {}),
+        ...(!runsAsScope && !isScopeShared && spec.unattendedGrants ? { unattendedGrants: spec.unattendedGrants } : {}),
         ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
         ...turnModelOptions({
           triggered: true,

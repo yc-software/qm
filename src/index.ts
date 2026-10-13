@@ -83,7 +83,6 @@ if (config.deployProvider === "docker") {
 
 if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   built.scheduler.start(1000);
-  built.platformCronMaintenance.start();
 } else if (!config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
@@ -133,7 +132,7 @@ if (built.backgroundOwnership) {
   let activationEpoch = 0;
   const stopPeriodic = () => {
     activationEpoch++;
-    periodicStop = Promise.all([built.scheduler.stopClaims(), built.platformCronMaintenance.stop()]).then(() => {});
+    periodicStop = built.scheduler.stopClaims();
     void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
     void built.runtime
       .stopBackgroundClaims()
@@ -153,7 +152,6 @@ if (built.backgroundOwnership) {
       built.scheduler.start(1000);
       await built.scheduler.ready();
       if (signal.aborted || epoch !== activationEpoch) return;
-      built.platformCronMaintenance.start();
       for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
         if (signal.aborted) return;
         runtime.start();
@@ -186,7 +184,6 @@ function shutdown(signal: string): void {
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-  built.platformCronMaintenance.stop();
   built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();

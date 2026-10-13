@@ -91,7 +91,7 @@ describe("runTrigger: scopeShared unions the owner's keychain into the scope run
       input: "x",
       fireKey: "f1",
       surface: "cron",
-      runAs: "scopeFloor",
+      runAs: "scope",
       members,
     });
     assert.equal(seen[0]!.ownerKeychainUnion, undefined);
@@ -211,7 +211,7 @@ describe("runTrigger: scopeShared unions the owner's keychain into the scope run
     }
   });
 
-  it("scopeFloor refreshes its audience and re-actors to a current member", async () => {
+  it("a scope run refreshes its audience and acts as the conversation", async () => {
     const { deps, seen } = captureDeps();
     const current = [{ id: "U3", type: "internal" as const }];
     deps.currentScopeMembers = async () => current;
@@ -221,11 +221,11 @@ describe("runTrigger: scopeShared unions the owner's keychain into the scope run
       input: "x",
       fireKey: "floor-refresh",
       surface: "cron",
-      runAs: "scopeFloor",
+      runAs: "scope",
       members,
     });
     assert.equal(out.ran, true);
-    assert.equal(seen[0]!.actor.externalId, "U3");
+    assert.equal(seen[0]!.actor.externalId, "system:channel:C-eng");
     assert.deepEqual(
       seen[0]!.conversation.audience?.map((member) => member.externalId),
       ["U3"],
@@ -386,7 +386,7 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
     assert.equal(a.enqueued.length, 0, "owner editing own cron → no notice");
     const b = fakeSink();
     await notifyOwnerOfCronEdit(b.sink, {
-      cron: cron({ runAs: "scopeFloor" }),
+      cron: cron({ runAs: "scope" }),
       editorId: "U-mate",
       changeSummary: ["title"],
     });

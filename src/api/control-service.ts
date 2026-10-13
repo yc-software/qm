@@ -41,7 +41,7 @@ export interface CronCreateRequest {
   participants?: string[];
   scope?: "personal";
   destinationKey?: string;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
+  runAs?: "owner" | "scope" | "scopeShared";
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
@@ -94,7 +94,7 @@ export interface CronPatchRequest {
   enabled?: boolean;
   archived?: boolean;
   unfurlLinks?: boolean;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
+  runAs?: "owner" | "scope" | "scopeShared";
   unattendedGrants?: string[];
   session?: boolean;
 }
@@ -196,7 +196,7 @@ export async function canAdministerCron(
 ): Promise<boolean> {
   if (await app.membershipControlsScope(cron.ownerScopeId)) return app.managesScope(actorId, cron.ownerScopeId);
   if (await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId))) return true;
-  const team = cron.runAs === "scopeFloor" || cron.runAs === "scopeShared";
+  const team = cron.runAs === "scope" || cron.runAs === "scopeShared";
   if (team && cron.ownerScopeId === callerScopeId) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
   if (team && (await app.isOpenScopeMember(actorId, cron.ownerScopeId))) return true;
   return app.managesScope(actorId, cron.ownerScopeId);
@@ -271,7 +271,7 @@ function cronPatchChanges(before: Cron, patch: CronPatch): boolean {
 export async function resolveRunAsChange(
   app: Pick<App, "samePerson" | "isOpenScopeMember">,
   before: Cron,
-  reqRunAs: "owner" | "scopeFloor" | "scopeShared" | undefined,
+  reqRunAs: "owner" | "scope" | "scopeShared" | undefined,
   capability: { actorId: string; scopeId: string; members?: Principal[]; privateScope?: boolean },
 ): Promise<
   | { ok: true; patch: Pick<CronPatch, "runAs" | "members" | "ownerResourcesRequireOpen"> }
@@ -283,7 +283,7 @@ export async function resolveRunAsChange(
     return {
       ok: false,
       code: "forbidden",
-      message: "only the cron's owner can change its mode (owner / scopeFloor / scopeShared)",
+      message: "only the cron's owner can change its mode (owner / scope / scopeShared)",
     };
   }
   if (reqRunAs === "owner") return { ok: true, patch: { runAs: "owner" } };
@@ -366,7 +366,7 @@ async function patchFromCronPatchRequest(
       ? { destination: withSlackUnfurlOption(before.destination, req.unfurlLinks) }
       : {}),
     ...(!changesMode &&
-    (before.runAs === "scopeFloor" || before.runAs === "scopeShared") &&
+    (before.runAs === "scope" || before.runAs === "scopeShared") &&
     capability.members &&
     capability.members.length > 0
       ? { members: capability.members }
@@ -430,11 +430,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           message: 'scope:"personal" runs at your own scope — it can\'t also take a destinationKey',
         };
       }
-      if (wantsPersonal && (req.runAs === "scopeFloor" || req.runAs === "scopeShared")) {
+      if (wantsPersonal && (req.runAs === "scope" || req.runAs === "scopeShared")) {
         return {
           ok: false,
           code: "bad_request",
-          message: "a personal cron is private to you — it can't run as a shared team cron (scopeFloor/scopeShared)",
+          message: "a personal cron is private to you — it can't run as a shared team cron (scope/scopeShared)",
         };
       }
 
@@ -521,11 +521,10 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         ownerScopeId === capability.scopeId && (await app.isOpenScopeMember(capability.actorId, ownerScopeId));
       const eligibleForShared =
         !ownerScopeId.startsWith("personal:") && (scopeIsMembershipControlled(ownerScopeId, capability) || openShared);
-      let runAs: "owner" | "scopeFloor" | "scopeShared" =
-        req.runAs === undefined && openShared ? "scopeShared" : "owner";
-      if (req.runAs === "scopeFloor") runAs = "scopeFloor";
+      let runAs: "owner" | "scope" | "scopeShared" = req.runAs === undefined && openShared ? "scopeShared" : "owner";
+      if (req.runAs === "scope") runAs = "scope";
       else if (req.runAs === "scopeShared") runAs = "scopeShared";
-      if ((runAs === "scopeFloor" || (runAs === "scopeShared" && !openShared)) && !haveMembers) {
+      if ((runAs === "scope" || (runAs === "scopeShared" && !openShared)) && !haveMembers) {
         return {
           ok: false,
           code: "members_unavailable",
@@ -579,7 +578,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         ...(consentRecipient
           ? { recipientConsent: { recipientId: consentRecipient, status: "pending" as const } }
           : {}),
-        ...(runAs === "scopeFloor" || runAs === "scopeShared" ? { runAs, members: capability.members } : {}),
+        ...(runAs === "scope" || runAs === "scopeShared" ? { runAs, members: capability.members } : {}),
         ...(runAs === "scopeShared" && openShared ? { ownerResourcesRequireOpen: true } : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
       };

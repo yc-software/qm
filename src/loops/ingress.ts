@@ -202,7 +202,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         throw new Error("Slack requires a signing secret, workspace ID, and selected channel IDs");
       if (
         input.kind === "gmail" &&
-        (loop.ownerScopeId !== `personal:${loop.owner}` || loop.runAs === "scopeShared" || loop.runAs === "scopeFloor")
+        (loop.ownerScopeId !== `personal:${loop.owner}` || loop.runAs === "scopeShared" || loop.runAs === "scope")
       )
         throw new Error("Gmail ingestion requires a personal Loop");
       return deps.lock.withLock(`loop-ingress-setup:${loop.id}`, async () => {

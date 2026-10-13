@@ -2315,8 +2315,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "scope shares, any member can edit it, and you're notified of every edit you didn't make. This is the " +
       "default for a shared scope and is usually what you want.\n" +
       '  • pass runAs="owner" to keep a channel cron editable only by you (still your access).\n' +
-      '  • pass runAs="scopeFloor" to run with ONLY what the whole scope shares, excluding your personal ' +
-      "keychain — for team crons that shouldn't touch your private access.\n" +
+      '  • pass runAs="scope" to run as the conversation itself, with everything granted to it and no ' +
+      "one's personal keychain — for team crons that shouldn't touch your private access.\n" +
       "The mode is editable later via action=patch (runAs=...), but only by the cron's owner.\n" +
       "action=list pages through your crons (and ones visible through shared scopes), 25 per page — enabled first, " +
       "newest first, long task text trimmed; when there's more, a footer line names the offset for the next page. " +
@@ -2405,7 +2405,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       scope: Type.Optional(
         Type.Literal("personal", {
           description:
-            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey or runAs=scopeFloor.",
+            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey or runAs=scope.",
         }),
       ),
       participants: Type.Optional(
@@ -2430,9 +2430,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }),
       ),
       runAs: Type.Optional(
-        Type.Union([Type.Literal("owner"), Type.Literal("scopeFloor"), Type.Literal("scopeShared")], {
+        Type.Union([Type.Literal("owner"), Type.Literal("scope"), Type.Literal("scopeShared")], {
           description:
-            'create or patch: the cron\'s mode. "scopeShared" (default in a channel/group) = your keychain + the scope\'s, any member edits, you\'re notified of others\' edits; "owner" = your access, only you edit (the default in a DM); "scopeFloor" = only what the whole scope shares, any member edits. On patch, only the owner may change the mode.',
+            'create or patch: the cron\'s mode. "scopeShared" (default in a channel/group) = your keychain + the scope\'s, any member edits, you\'re notified of others\' edits; "owner" = your access, only you edit (the default in a DM); "scope" = runs as the conversation itself with everything granted to it, any member edits. On patch, only the owner may change the mode.',
         }),
       ),
       note: Type.Optional(

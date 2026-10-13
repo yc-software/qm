@@ -429,7 +429,7 @@ test("only the leader instance fires due crons on tick (non-leader skips)", asyn
   assert.equal(calls.length, 1, "the leader fires the due cron");
 });
 
-test("a scopeFloor cron fires with the member snapshot as the turn audience (floor execution)", async () => {
+test("a scope cron fires as the conversation itself with the member snapshot as the turn audience", async () => {
   const { crons, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
@@ -437,15 +437,16 @@ test("a scopeFloor cron fires with the member snapshot as the turn audience (flo
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
+    runAs: "scope",
     members: [member("U1"), member("U2"), member("U3")],
   });
   await runNowSettled(scheduler, cron.id);
   const aud = (calls[0]?.conversation.audience ?? []).map((a) => a.externalId).sort();
   assert.deepEqual(aud, ["U1", "U2", "U3"]);
+  assert.equal(calls[0]?.actor.externalId, "system:channel:C1");
 });
 
-test("a scopeFloor cron survives the creator leaving — runs as a remaining internal member", async () => {
+test("a scope cron keeps running as the conversation after its creator leaves", async () => {
   const { crons, calls, scheduler, identity } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
@@ -453,31 +454,13 @@ test("a scopeFloor cron survives the creator leaving — runs as a remaining int
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
+    runAs: "scope",
     members: [member("U1"), member("U2")],
   });
   await identity.deactivate("U1");
   await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.actor.externalId, "U2");
+  assert.equal(calls[0]?.actor.externalId, "system:channel:C1");
   assert.equal((await crons.get(cron.id))?.enabled, true);
-});
-
-test("a scopeFloor cron with no internal members left fails closed (disabled, nothing runs)", async () => {
-  const { crons, calls, scheduler, identity } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
-    members: [member("U1")],
-  });
-  await identity.deactivate("U1");
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 0);
-  assert.equal((await crons.get(cron.id))?.enabled, false);
 });
 
 test("an owner cron still disables when its owner leaves (unchanged)", async () => {
@@ -908,38 +891,6 @@ test("a calendar cron uses the scheduled instant for a missed tick idempotency k
   const stored = await crons.get(cron.id);
   assert.equal(stored?.lastFiredAt, firedAt);
   assert.equal(stored?.nextFireAt, Date.parse("2026-06-19T16:00:00.000Z"));
-});
-
-test("a scopeFloor fallback actor is never a non-internal (Slack-Connect) member", async () => {
-  const { crons, calls, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
-    members: [{ id: "X1", type: "guest" }, member("U2")],
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.actor.externalId, "U2", "the Slack-Connect member must not be picked as the actor");
-});
-
-test("a scopeFloor cron whose only members are non-internal fails closed", async () => {
-  const { crons, calls, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
-    members: [{ id: "X1", type: "guest" }],
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 0);
-  assert.equal((await crons.get(cron.id))?.enabled, false);
 });
 
 test("a failing cron fire is logged, not swallowed", async (t) => {

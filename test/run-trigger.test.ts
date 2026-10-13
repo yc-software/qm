@@ -221,7 +221,7 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     await runTrigger(d, {
       ...base,
       fireKey: "cron:floor",
-      runAs: "scopeFloor",
+      runAs: "scope",
       members: [{ id: "U1", type: "internal" }],
     });
     await runTrigger(d, {

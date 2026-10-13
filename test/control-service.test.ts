@@ -74,7 +74,7 @@ test("unattended cron grants require a live org-admin owner and protect later pa
   assert.equal(unknown.ok ? "" : unknown.code, "bad_request");
 
   const shared = await control.createCron(
-    { ...request, runAs: "scopeFloor" },
+    { ...request, runAs: "scope" },
     claims("admin-alice", scopeId("channel", "C9"), {
       liveActor: true,
       members: [{ id: "admin-alice", type: "internal" }],
@@ -449,7 +449,7 @@ test('scope:"personal" can\'t be combined with an addressed target, a destinatio
   assert.equal(withKey.ok ? "" : withKey.code, "bad_request");
 
   const withFloor = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", runAs: "scopeFloor" },
+    { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", runAs: "scope" },
     claims("U1", scopeId("channel", "C9")),
   );
   assert.equal(withFloor.ok, false);
@@ -488,7 +488,7 @@ test("runAs=scopeFloor needs the conversation member list; with it, the cron is 
   const { control } = setup();
   const chanScope = scopeId("channel", "C9");
   const noMembers = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "team digest", runAs: "scopeFloor" },
+    { schedule: { everyMs: 3_600_000 }, action: "team digest", runAs: "scope" },
     claims("U1", chanScope),
   );
   assert.equal(noMembers.ok, false);
@@ -499,7 +499,7 @@ test("runAs=scopeFloor needs the conversation member list; with it, the cron is 
     { id: "U2", type: "internal" as const },
   ];
   const withMembers = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "team digest", runAs: "scopeFloor" },
+    { schedule: { everyMs: 3_600_000 }, action: "team digest", runAs: "scope" },
     claims("U1", chanScope, {
       members,
       privateScope: true,
@@ -509,7 +509,7 @@ test("runAs=scopeFloor needs the conversation member list; with it, the cron is 
     }),
   );
   assert.ok(withMembers.ok, JSON.stringify(withMembers));
-  assert.equal(withMembers.cron.runAs, "scopeFloor");
+  assert.equal(withMembers.cron.runAs, "scope");
   assert.equal(withMembers.cron.ownerScopeId, chanScope);
 });
 
@@ -717,10 +717,10 @@ test("Open shared crons retain their owner across collaborator edits and re-chec
   assert.equal(repeatedNotices.length, 3, "repeating a reverted edit must notify again");
 
   assert.ok((await control.getCron(id, claims("U1"))).ok);
-  const deniedMode = await control.patchCron(id, { runAs: "scopeFloor" }, roomClaims("U2"));
+  const deniedMode = await control.patchCron(id, { runAs: "scope" }, roomClaims("U2"));
   assert.equal(deniedMode.ok, false);
-  const floor = await control.patchCron(id, { runAs: "scopeFloor" }, roomClaims("U1"));
-  assert.ok(floor.ok && floor.cron.runAs === "scopeFloor");
+  const floor = await control.patchCron(id, { runAs: "scope" }, roomClaims("U1"));
+  assert.ok(floor.ok && floor.cron.runAs === "scope");
   const shared = await control.patchCron(id, { runAs: "scopeShared" }, roomClaims("U1"));
   assert.ok(shared.ok && shared.cron.runAs === "scopeShared");
   const noRoster = await control.createCron(
@@ -729,7 +729,7 @@ test("Open shared crons retain their owner across collaborator edits and re-chec
   );
   assert.ok(noRoster.ok && noRoster.cron.runAs === "scopeShared", JSON.stringify(noRoster));
   const noRosterFloor = await control.createCron(
-    { ...request, runAs: "scopeFloor" },
+    { ...request, runAs: "scope" },
     { ...roomClaims("U1"), members: undefined },
   );
   assert.equal(noRosterFloor.ok, false);
@@ -818,12 +818,12 @@ test("a cron's mode (runAs) is editable in place, but only by the owner", async 
   assert.ok(created.ok && created.cron.runAs === "scopeShared", JSON.stringify(created));
   const id = created.cron.id;
 
-  const memberMode = await control.patchCron(id, { runAs: "scopeFloor" }, chanClaims("U2"));
+  const memberMode = await control.patchCron(id, { runAs: "scope" }, chanClaims("U2"));
   assert.equal(memberMode.ok, false);
   assert.equal(memberMode.ok ? "" : memberMode.code, "forbidden");
 
-  const toFloor = await control.patchCron(id, { runAs: "scopeFloor" }, chanClaims("U1"));
-  assert.ok(toFloor.ok && toFloor.cron.runAs === "scopeFloor", JSON.stringify(toFloor));
+  const toFloor = await control.patchCron(id, { runAs: "scope" }, chanClaims("U1"));
+  assert.ok(toFloor.ok && toFloor.cron.runAs === "scope", JSON.stringify(toFloor));
   const back = await control.patchCron(id, { runAs: "scopeShared" }, chanClaims("U1"));
   assert.ok(back.ok && back.cron.runAs === "scopeShared", JSON.stringify(back));
 });

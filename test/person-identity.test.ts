@@ -165,7 +165,7 @@ describe("resolveRunAsChange: the owner gate is same-person, not raw id equality
       ownerScopeId: scopeId("channel", "C1"),
       schedule: { everyMs: 1 },
       createdAt: 0,
-      runAs: "scopeFloor",
+      runAs: "scope",
       members: [{ id: "jordan@acme.test", type: "internal" }],
       ...over,
     }) as Cron;

@@ -251,10 +251,10 @@ test("create stores runAs + member snapshot for a scopeFloor cron", async () => 
     ...base,
     ownerScopeId: scopeId("channel", "C"),
     schedule: { everyMs: 1000 },
-    runAs: "scopeFloor",
+    runAs: "scope",
     members,
   });
-  assert.equal(cron.runAs, "scopeFloor");
+  assert.equal(cron.runAs, "scope");
   assert.deepEqual(
     cron.members?.map((m) => m.id),
     ["U1", "U2"],
@@ -326,7 +326,7 @@ test("create dedups across schedule-field ordering (semantically identical reque
 test("create does NOT dedup when any keyed field differs (distinct requests stay distinct)", async () => {
   const store = createCronStore();
   const members = [{ id: "U1", type: "internal" as const }];
-  const chan = { ...base, ownerScopeId: scopeId("channel", "C"), runAs: "scopeFloor" as const };
+  const chan = { ...base, ownerScopeId: scopeId("channel", "C"), runAs: "scope" as const };
   const a = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 }, action: "x" });
   const diffAction = await store.create({
     ...base,

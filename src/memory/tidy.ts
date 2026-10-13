@@ -4,7 +4,7 @@ import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { reportFailure } from "../util/errors.ts";
-import { parseScopeId, type Cron, type CronSchedule, type Principal, type ScopeId } from "../types.ts";
+import { parseScopeId, scopeActor, type Cron, type ScopeId } from "../types.ts";
 import type { MemoryService } from "./memory-service.ts";
 
 export const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read it with the memory tool, then make one careful pass:
@@ -16,67 +16,37 @@ export const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read 
 Batch your edits and deletes into list calls; each call changes everything or nothing. If nothing needs changing, change nothing. Do not message anyone; end with finish_silently.`;
 
 export interface MemoryTidyProfile {
-  cronId?: string;
-  managedSchedule?: CronSchedule;
-  managedAction?: string;
+  cronId: string;
 }
 
 export function createMemoryTidyService(deps: {
   store: DurableMap<MemoryTidyProfile>;
-  memory: Pick<MemoryService, "metadata" | "facts">;
+  memory: Pick<MemoryService, "facts">;
   timezone: (principalId: string) => Promise<string | undefined>;
-  members: (scope: ScopeId) => Promise<Principal[] | undefined>;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged">;
 }) {
-  const same = (a: CronSchedule | undefined, b: CronSchedule | undefined) => JSON.stringify(a) === JSON.stringify(b);
-
-  const scheduleFor = async (scope: ScopeId, owner: string): Promise<CronSchedule> => ({
-    cron: `${createHash("sha256").update(scope).digest()[0]! % 60} 3 * * *`,
-    timezone: (await deps.timezone(owner)) ?? DEFAULT_CRON_TIMEZONE,
-  });
-
-  async function maintainOne(scope: ScopeId): Promise<void> {
-    const profile = await deps.store.get(scope);
-    if (!profile?.cronId) {
-      const { kind } = parseScopeId(scope);
+  return {
+    async ensure(scope: ScopeId): Promise<void> {
+      const { kind, ref } = parseScopeId(scope);
       if (kind !== "personal" && kind !== "channel" && kind !== "group") return;
-      const members = (await deps.members(scope))?.toSorted((a, b) => a.id.localeCompare(b.id));
-      const owner = members?.[0]?.id;
-      if (!owner) return;
-      const schedule = await scheduleFor(scope, owner);
+      if (await deps.store.get(scope)) return;
+      const owner = kind === "personal" ? ref : scopeActor(scope);
       const cron = await deps.crons.create({
         owner,
         createdBy: owner,
         ownerScopeId: scope,
         title: "Tidy memory",
-        schedule,
+        schedule: {
+          cron: `${createHash("sha256").update(scope).digest()[0]! % 60} 3 * * *`,
+          timezone: (kind === "personal" && (await deps.timezone(ref))) || DEFAULT_CRON_TIMEZONE,
+        },
         action: MEMORY_TIDY_TASK,
-        ...(kind === "personal" ? { runAs: "owner" } : { runAs: "scopeFloor", members }),
+        runAs: kind === "personal" ? "owner" : "scope",
       });
-      await deps.store.put(scope, { cronId: cron.id, managedSchedule: schedule, managedAction: MEMORY_TIDY_TASK });
-      deps.scheduler.notifyChanged(cron.id);
-      return;
-    }
-    const cron = await deps.crons.get(profile.cronId);
-    if (!cron || cron.ownerScopeId !== scope || cron.archived) return;
-    const schedule = await scheduleFor(scope, cron.owner);
-    if (cron.action === profile.managedAction && cron.action !== MEMORY_TIDY_TASK) {
-      await deps.crons.update(cron.id, { action: MEMORY_TIDY_TASK });
-      await deps.store.merge(scope, { managedAction: MEMORY_TIDY_TASK });
-    }
-    if (same(cron.schedule, profile.managedSchedule) && !same(cron.schedule, schedule)) {
-      await deps.crons.update(cron.id, { schedule });
-      await deps.store.merge(scope, { managedSchedule: schedule });
-      deps.scheduler.notifyChanged(cron.id);
-    }
-  }
-
-  return {
-    async maintain(): Promise<void> {
-      for (const scope of (await deps.memory.metadata?.())?.keys() ?? []) {
-        await maintainOne(scope).catch((e: unknown) => reportFailure(`memory tidy: maintain ${scope}`, e));
-      }
+      const stored = await deps.store.putIfAbsent(scope, { cronId: cron.id });
+      if (stored.cronId !== cron.id) await deps.crons.delete(cron.id);
+      else deps.scheduler.notifyChanged(cron.id);
     },
 
     async skipFire(cron: Cron): Promise<string | undefined> {
@@ -89,6 +59,20 @@ export function createMemoryTidyService(deps: {
       return changedAt > (tidied?.endedAt ?? tidied?.firedAt ?? 0)
         ? undefined
         : "notebook unchanged since the last tidy";
+    },
+  };
+}
+
+export function withMemoryTidy(memory: MemoryService, ensure: (scope: ScopeId) => Promise<void>): MemoryService {
+  return {
+    ...memory,
+    ...(memory.withDisclosure
+      ? { withDisclosure: (access) => withMemoryTidy(memory.withDisclosure!(access), ensure) }
+      : {}),
+    async capture(scope, ...rest) {
+      const added = await memory.capture(scope, ...rest);
+      if (added > 0) await ensure(scope).catch((e: unknown) => reportFailure(`memory tidy: ensure ${scope}`, e));
+      return added;
     },
   };
 }

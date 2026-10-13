@@ -72,7 +72,7 @@ export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingP
   if (await app.membershipControlsScope(loop.ownerScopeId)) {
     return app.managesScope(acting.actorId, loop.ownerScopeId);
   }
-  const team = loop.runAs === "scopeFloor" || loop.runAs === "scopeShared";
+  const team = loop.runAs === "scope" || loop.runAs === "scopeShared";
   if (!team && (await app.samePerson(loop.owner, acting.actorId))) return true;
   if (team && acting.scopeId !== undefined && loop.ownerScopeId === acting.scopeId) return true;
   return app.managesScope(acting.actorId, loop.ownerScopeId);
@@ -264,14 +264,14 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     const recipientId = consentRequiredRecipient({ owner: acting.actorId, standing: true, destination });
     if (recipientId) recipientConsent = { recipientId, status: "pending" as const };
   }
-  const runAs = b.runAs === "owner" || b.runAs === "scopeFloor" || b.runAs === "scopeShared" ? b.runAs : undefined;
-  if ((runAs === "scopeFloor" || runAs === "scopeShared") && acting.scopeId === undefined)
+  const runAs = b.runAs === "owner" || b.runAs === "scope" || b.runAs === "scopeShared" ? b.runAs : undefined;
+  if ((runAs === "scope" || runAs === "scopeShared") && acting.scopeId === undefined)
     return sendJson(ctx.res, 400, {
       error: "bad_request",
       message: "team loops must be created through an agent capability",
     });
   const ownerScopeId: ScopeId =
-    runAs === "scopeFloor" || runAs === "scopeShared" ? acting.scopeId! : scopeId("personal", acting.actorId);
+    runAs === "scope" || runAs === "scopeShared" ? acting.scopeId! : scopeId("personal", acting.actorId);
   const input: CreateLoopInput = {
     owner: acting.actorId,
     createdBy: acting.actorId,

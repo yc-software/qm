@@ -28,7 +28,7 @@ import { createLoopIngress, type LoopIngressService, type LoopIngress, type Ingr
 import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
-import { createMemoryTidyService, type MemoryTidyProfile } from "./memory/tidy.ts";
+import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import {
   createSessionSyscalls,
@@ -131,7 +131,6 @@ import type {
   LoopItem,
   LoopOutput,
   Monitor,
-  Principal,
   ShipGrant,
   PendingApprovalRecord,
   ScopeId,
@@ -139,7 +138,7 @@ import type {
   SurfaceContextRequest,
   Webhook,
 } from "./types.ts";
-import { parseScopeId, personalScope, scopeId } from "./types.ts";
+import { personalScope, scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
@@ -472,7 +471,6 @@ export function stopWithBackstop(
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
-  platformCronMaintenance: Sweeper;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   screenSecurity?: SecurityScreenProbe;
@@ -834,14 +832,17 @@ export function buildApp(
     : createMemoryService(workspace);
   // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
-  const baseMemory: MemoryService = createConfiguredMemoryService({
-    defaultMemory,
-    config: config.memoryProviderConfig,
-    sessionEntries: (sessionId) => {
-      if (!memorySessions.store) throw new Error("session store is not ready");
-      return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
-    },
-  });
+  const baseMemory: MemoryService = withMemoryTidy(
+    createConfiguredMemoryService({
+      defaultMemory,
+      config: config.memoryProviderConfig,
+      sessionEntries: (sessionId) => {
+        if (!memorySessions.store) throw new Error("session store is not ready");
+        return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
+      },
+    }),
+    (scope) => memoryTidy.ensure(scope),
+  );
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog());
   const sandboxOnError = (
@@ -1870,6 +1871,13 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/crons/0001-scope-run-mode",
+    statements: ["crons", "loops"].flatMap((table) => [
+      `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+      `UPDATE ${table} SET json = jsonb_set(json, '{runAs}', '"scope"') WHERE json ->> 'runAs' = 'scopeFloor'`,
+    ]),
+  });
   const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
@@ -2500,23 +2508,12 @@ export function buildApp(
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
     memory: baseMemory,
     timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
-    members: async (scope) => {
-      const { kind, ref } = parseScopeId(scope);
-      let ids: string[] | undefined = [ref];
-      if (kind === "group" && projects.recognizes(ref)) ids = await projects.members(ref);
-      else if (kind === "channel" || kind === "group")
-        ids = (await directory.conversationMembers(kind, ref))?.map((member) => member.principalId);
-      else if (kind !== "personal") return undefined;
-      return ids
-        ?.filter((id) => identity.classify(id).type === "internal")
-        .map((id): Principal => ({ id, type: "internal" }));
-    },
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
   const scheduler = createScheduler({
     admittedWork,
-    skipFire: (cron) => memoryTidy.skipFire(cron),
+    skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     lock: advisoryLock,
     crons,
@@ -2552,18 +2549,6 @@ export function buildApp(
     enabled: config.suggestedActivitiesEnabled === true,
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
-  const platformCronMaintenance = createSweeper(
-    async () => {
-      await leaderLease
-        .hold("suggested-activities:maintenance", () => suggestedActivities.maintain())
-        .catch(reportFailureAs("suggested activities: maintain", undefined));
-      await leaderLease
-        .hold("memory-tidy:maintenance", () => memoryTidy.maintain())
-        .catch(reportFailureAs("memory tidy: maintain", undefined));
-    },
-    60 * 60_000,
-    { label: "platform-crons", immediate: true },
-  );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
@@ -2956,7 +2941,6 @@ export function buildApp(
       ? { suggestedActivities }
       : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
-    platformCronMaintenance,
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
     sessionShares: artifactMap<SessionShare>("session_shares"),
     sessionShareBytes:

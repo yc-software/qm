@@ -150,7 +150,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       (
         await post(
           "/v1/crons",
-          { ...body, runAs: "scopeFloor" },
+          { ...body, runAs: "scope" },
           {
             "x-agent-capability": await capFor("admin-alice", scopeId("channel", "C"), {
               liveActor: true,
@@ -757,12 +757,12 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   it("creates a scopeFloor cron when the token carries a member snapshot", async () => {
     const res = await post(
       "/v1/crons",
-      { schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" }, action: "team standup", runAs: "scopeFloor" },
+      { schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" }, action: "team standup", runAs: "scope" },
       { "x-agent-capability": await capChannelMembers("U1") },
     );
     assert.equal(res.status, 200);
     const { cron } = (await res.json()) as any;
-    assert.equal(cron.runAs, "scopeFloor");
+    assert.equal(cron.runAs, "scope");
     assert.equal(cron.ownerScopeId, "channel:C");
     assert.deepEqual(cron.members.map((m: any) => m.id).sort(), ["U1", "U2"]);
   });
@@ -770,7 +770,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   it("a scopeFloor create with no signed members is rejected (400)", async () => {
     const res = await post(
       "/v1/crons",
-      { schedule: { everyMs: 60_000 }, action: "team standup", runAs: "scopeFloor" },
+      { schedule: { everyMs: 60_000 }, action: "team standup", runAs: "scope" },
       { "x-agent-capability": await capChannel("U1") },
     );
     assert.equal(res.status, 400);
@@ -781,7 +781,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const created = (await (
       await post(
         "/v1/crons",
-        { schedule: { everyMs: 60_000 }, action: "team standup", runAs: "scopeFloor" },
+        { schedule: { everyMs: 60_000 }, action: "team standup", runAs: "scope" },
         { "x-agent-capability": await capChannelMembers("U1") },
       )
     ).json()) as any;
@@ -807,7 +807,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const created = (await (
       await post(
         "/v1/crons",
-        { schedule: { everyMs: 60_000 }, action: "team standup", runAs: "scopeFloor" },
+        { schedule: { everyMs: 60_000 }, action: "team standup", runAs: "scope" },
         { "x-agent-capability": await capChannelMembers("U1") },
       )
     ).json()) as any;

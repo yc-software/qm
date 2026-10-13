@@ -636,7 +636,7 @@ test("bound loop stages reread grants after revocation", async () => {
   assert.deepEqual(s.turns.at(-1)?.unattendedGrants, []);
 });
 
-for (const runAs of ["scopeShared", "scopeFloor"] as const) {
+for (const runAs of ["scopeShared", "scope"] as const) {
   test(`bound loop preserves ${runAs} exclusions and member snapshot`, async () => {
     const s = service(HAPPY);
     const loop = await makeLoop(s.loops, { runAs, ownerScopeId: scopeId("channel", "C1") });
@@ -656,7 +656,7 @@ test("bound loops reject missing crons, foreign scheduler bindings, and authorit
   for (const over of [
     { owner: "mallory" },
     { ownerScopeId: scopeId("personal", "mallory") },
-    { runAs: "scopeFloor" as const },
+    { runAs: "scope" as const },
     { loopId: "another-loop" },
   ]) {
     const s = service(HAPPY);

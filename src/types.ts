@@ -33,6 +33,10 @@ export function personalScope(principalId: string): ScopeId {
   return scopeId("personal", principalId);
 }
 
+export function scopeActor(scope: ScopeId): string {
+  return `system:${scope}`;
+}
+
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };
@@ -289,7 +293,7 @@ export interface Cron extends TriggerBase {
   message?: string;
   loopId?: string;
   createdAt: number;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
+  runAs?: "owner" | "scope" | "scopeShared";
   ownerResourcesRequireOpen?: boolean;
   members?: Principal[];
   unattendedGrants?: string[];
@@ -394,7 +398,7 @@ export interface Loop extends TriggerBase {
   healthReason?: string;
   throttle?: boolean;
   cronId?: string;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
+  runAs?: "owner" | "scope" | "scopeShared";
   consecutiveFailedFires?: number;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;

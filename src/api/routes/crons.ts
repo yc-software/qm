@@ -107,7 +107,7 @@ function isCronPatch(b: unknown): b is {
   enabled?: boolean;
   archived?: boolean;
   unfurlLinks?: boolean;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
+  runAs?: "owner" | "scope" | "scopeShared";
   unattendedGrants?: string[];
   session?: boolean;
 } {
@@ -128,7 +128,7 @@ function isCronPatch(b: unknown): b is {
   if (hasEnabled && typeof b.enabled !== "boolean") return false;
   if (hasArchived && typeof b.archived !== "boolean") return false;
   if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
-  if (hasRunAs && b.runAs !== "owner" && b.runAs !== "scopeFloor" && b.runAs !== "scopeShared") return false;
+  if (hasRunAs && b.runAs !== "owner" && b.runAs !== "scope" && b.runAs !== "scopeShared") return false;
   if (
     hasUnattendedGrants &&
     (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
@@ -212,7 +212,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
           : {}),
         ...(b.scope === "personal" ? { scope: "personal" as const } : {}),
         ...(typeof b.destinationKey === "string" ? { destinationKey: b.destinationKey } : {}),
-        ...(b.runAs === "owner" || b.runAs === "scopeFloor" || b.runAs === "scopeShared" ? { runAs: b.runAs } : {}),
+        ...(b.runAs === "owner" || b.runAs === "scope" || b.runAs === "scopeShared" ? { runAs: b.runAs } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
         ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
@@ -354,7 +354,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), runAs (owner/scopeFloor/scopeShared), unattendedGrants (string[]), and/or session (boolean)";
+  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), runAs (owner/scope/scopeShared), unattendedGrants (string[]), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, pathname, method, body, capability } = ctx;

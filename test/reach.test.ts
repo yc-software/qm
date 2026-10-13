@@ -369,7 +369,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
       fireKey: "cron:team1:slot",
       surface: "cron",
       destination,
-      runAs: "scopeFloor",
+      runAs: "scope",
       members,
     });
     assert.equal(out.authzFailed, false);
