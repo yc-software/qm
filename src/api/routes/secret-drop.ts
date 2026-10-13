@@ -13,7 +13,7 @@ import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
-import { swallow } from "../../util/errors.ts";
+import { reportFailureAs, swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
 
@@ -105,7 +105,7 @@ function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: Capabi
       ...(claims?.liveActor ? { liveActor: true } : {}),
       ...(claims?.members ? { members: claims.members } : {}),
     })
-    .catch(() => false);
+    .catch(reportFailureAs("secret drop: conversation membership check", false));
 }
 
 async function dropLinkClaims(
