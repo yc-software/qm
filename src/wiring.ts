@@ -1175,18 +1175,8 @@ export function buildApp(
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,
     beforeRetire: async (record) => {
-      if (
-        (await processes?.liveByScope(record.ownerScopeId))?.some(
-          (process) => !process.sandboxId || process.sandboxId === record.id,
-        )
-      )
+      if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
         throw new Error("stop this sandbox's background jobs before retiring it");
-    },
-    beforeDefaultChange: async (scopeId) => {
-      if ((await processes?.liveByScope(scopeId))?.some((process) => !process.sandboxId))
-        throw new Error(
-          "legacy background work has no saved sandbox target; finish or stop it before changing the default",
-        );
     },
     provisionOptions: async (scopeId) => {
       const secret = config.capabilitySecret ?? config.signingSecret;

@@ -571,14 +571,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     await Promise.all([pruneSkills(handle), clearStaleTurnFiles(handle)]);
   };
-  const hasLiveProcesses = async (handle: SandboxHandle, fallbackScope: ScopeId): Promise<boolean> => {
-    if (!deps.processes) return false;
-    if (!handle.resourceId) return (await deps.processes.liveByScope(fallbackScope)).length > 0;
-    return (await deps.processes.listLive()).some(
-      (process) =>
-        process.sandboxId === handle.resourceId ||
-        (!process.sandboxId && process.scopeId === (handle.scopeId ?? fallbackScope)),
-    );
+  const hasLiveProcesses = async (handle: SandboxHandle): Promise<boolean> => {
+    if (!deps.processes || !handle.resourceId) return false;
+    return (await deps.processes.listLive()).some((process) => process.sandboxId === handle.resourceId);
   };
   const reclaimBox = async (): Promise<void> => {
     let ownerCleanupError: unknown;
@@ -586,14 +581,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (ownerAuthProvisionInFlight)
       await ownerAuthProvisionInFlight.catch(swallowAs("orchestrator: owner auth provision", undefined));
     ownerAuthProvisionInFlight = null;
-    const reachEntries = [...reachBoxes.entries()];
+    const reachHandles = [...reachBoxes.values()];
     reachBoxes.clear();
     await Promise.all(
-      reachEntries.map(async ([target, h]) => {
+      reachHandles.map(async (h) => {
         let keepReachWarm = await releaseHold(h).catch(swallowAs("orchestrator: reach hold release", true));
         if (!keepReachWarm && deps.processes && supportsProcessSessions(deps.sandbox)) {
           try {
-            keepReachWarm = await hasLiveProcesses(h, target);
+            keepReachWarm = await hasLiveProcesses(h);
           } catch (e) {
             swallow("orchestrator: reach live process check", e);
             keepReachWarm = false;
@@ -678,9 +673,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
             await deps.sandbox.teardown(handle, {
               keepWarm:
                 (await releaseHold(handle).catch(swallowAs("orchestrator: resource hold release", true))) ||
-                (await hasLiveProcesses(handle, memoryScopeId).catch(
-                  swallowAs("orchestrator: live process check", true),
-                )),
+                (await hasLiveProcesses(handle).catch(swallowAs("orchestrator: live process check", true))),
             });
           }
         })(),
@@ -705,7 +698,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     let keepWarm = await releaseHold(handle).catch(swallowAs("orchestrator: hold release", true));
     if (!keepWarm && deps.processes && supportsProcessSessions(deps.sandbox)) {
       try {
-        keepWarm = await hasLiveProcesses(handle, memoryScopeId);
+        keepWarm = await hasLiveProcesses(handle);
       } catch (e) {
         swallow("orchestrator: live process check", e);
         keepWarm = false;

@@ -110,12 +110,15 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     async handleFor(processId) {
       const rec = await deps.registry.get(processId);
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") throw new Error("no such background job");
-      if (!rec.sandboxId) return null;
+      if (!rec.sandboxId) throw new Error("this background job has no recorded computer and can no longer be reached");
       if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
       return deps.provisionSandbox(rec.sandboxId);
     },
     async start(handle, command, purpose, ttlMs, credentials): Promise<BackgroundStartResult> {
       if (!purpose?.trim()) throw new Error("background start requires a short purpose describing the job");
+      const sandboxId = handle.resourceId;
+      if (!sandboxId)
+        throw new Error("background jobs need a lasting computer; this computer is discarded when the turn ends");
       purpose = redactCommand(purpose.replace(/\s+/g, " ").trim(), handle.env);
       const ttl = Math.min(ttlMs ?? defaultTtlMs, maxTtlMs);
 
@@ -129,7 +132,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
                 r.kind === "background" &&
                 r.command === redacted &&
                 r.status === "running" &&
-                r.sandboxId === handle.resourceId,
+                r.sandboxId === sandboxId,
             )?.processId ?? null)
           : null;
 
@@ -176,7 +179,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           await deps.registry.register({
             processId: id,
             scopeId: deps.scopeId,
-            ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
+            sandboxId,
             kind: "background",
             command: redacted,
             purpose,
