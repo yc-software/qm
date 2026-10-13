@@ -7,7 +7,7 @@ import { reportFailure } from "../util/errors.ts";
 import { parseScopeId, scopeActor, type Cron, type ScopeId } from "../types.ts";
 import type { MemoryService } from "./memory-service.ts";
 
-export const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read it with the memory tool, then make one careful pass:
+const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read it with the memory tool, then make one careful pass:
 - Merge duplicates and near-duplicates: edit the oldest of them into the single best wording and delete the rest. Only merge facts that carry the same "(said in …)" tag, or none.
 - Delete facts that are stale, superseded by a newer fact, or one-off trivia. When a newer fact corrects an older one, keep one fact that states the current truth.
 - Never reword a directive or anything quoted in someone's own words, and keep every "(said in …)" tag exactly as written. Delete one only when it exactly duplicates another or a newer fact explicitly replaces it.
