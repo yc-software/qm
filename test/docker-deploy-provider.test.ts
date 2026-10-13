@@ -212,5 +212,6 @@ test("a Docker app that only answers 5xx fails publish, reports its output and l
     reported.map((e) => e.code),
     ["app_start_failed"],
   );
+  assert.match(reported[0]!.message, new RegExp(`\\(deployment ${d.id}\\)`), "the record names the deployment");
   assert.equal(calls.at(-2)!.join(" "), `rm -f agent-deploy-${d.id.slice(0, 12)}`);
 });

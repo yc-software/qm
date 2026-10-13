@@ -27,7 +27,7 @@ type Report = (code: string, detail: string) => Error;
 export function appReporter(onError: AppErrorSink | undefined, d: Deployment, env?: Record<string, string>): Report {
   const mask = createSecretValueMasker(env);
   return (code, detail) => {
-    const error = new Error(redactSecrets(mask(`app ${d.name ?? d.id} (deployment ${d.id}): ${detail}`)));
+    const error = new Error(`app ${d.name ?? d.id} (deployment ${d.id}): ${redactSecrets(mask(detail))}`);
     onError?.({ category: "deploy", code, message: error.message, scopeLabel: d.ownerScopeId }, error);
     return error;
   };
