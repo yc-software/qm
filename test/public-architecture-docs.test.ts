@@ -43,7 +43,7 @@ test("README names the frameworks the shipped surfaces use", () => {
   assert.ok(rootPackage.dependencies.fastify);
   assert.ok(rootPackage.dependencies["@slack/bolt"]);
   assert.ok(webPackage.devDependencies.vite);
-  assert.ok(webPackage.dependencies.lit);
+  assert.ok(webPackage.devDependencies.lit);
   assert.match(webPackage.scripts.build ?? "", /vite build/);
   for (const framework of ["Fastify", "Bolt", "Vite", "Lit"]) {
     assert.ok(readme.includes(framework), `README names ${framework}`);
