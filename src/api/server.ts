@@ -99,7 +99,7 @@ function unattendedAdminReadAllowed(method: string, pathname: string, claims: Ca
 }
 
 function isAdminContentRead(pathname: string): boolean {
-  if (pathname === "/v1/admin/memory") return true;
+  if (pathname === "/v1/admin/memory" || pathname === "/v1/admin/scopes") return true;
   if (pathname === "/v1/admin/keychain") return true;
   if (pathname === "/v1/admin/volumes") return true;
   if (pathname.startsWith("/v1/admin/scopes/")) return true;

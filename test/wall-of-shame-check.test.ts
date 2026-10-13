@@ -59,3 +59,12 @@ test("lenses triaged as not relevant need a reviewer and reason but no score", (
     ["Regex: reviewer missing.", "Regex: assessment missing."],
   );
 });
+
+test("always-reviewed lenses cannot be triaged as not relevant", () => {
+  const strict = spec.replace("### Overengineering (6 examples)", "### Overengineering (always reviewed, 6 examples)");
+  const skip = (lens: string) => `| ${lens} | Haiku triage | Not relevant |  | Small diff. |`;
+  assert.deepEqual(
+    wallOfShameProblems(strict, body(head, [skip("Overengineering"), skip("Regex"), skip("Honorable mentions")]), head),
+    ["Overengineering: always reviewed; triage cannot mark it Not relevant."],
+  );
+});

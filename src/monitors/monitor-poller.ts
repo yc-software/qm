@@ -278,19 +278,18 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           break;
         }
         const rec = await deps.processes.get(m.processId);
-        if (!rec) {
+        if (!rec?.sandboxId) {
           await reportLost(m);
           fires++;
           continue;
         }
-        const targetKey = rec.sandboxId ?? rec.scopeId;
+        const targetKey = rec.sandboxId;
         let handle = handles.get(targetKey);
         if (!handle) {
           try {
-            handle = await sandbox.provision(
-              [{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }],
-              rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
-            );
+            handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+              sandboxId: rec.sandboxId,
+            });
           } catch (e) {
             await deps.monitors.recordError(m.id, errMessage(e));
             continue;

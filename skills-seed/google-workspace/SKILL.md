@@ -31,14 +31,18 @@ For the `email-voice-profile` task, load that skill and run
 Use the bundled helper for every Gmail operation — it owns MIME construction, encoding,
 and reply threading so you only ever handle plain text:
 
+Run these commands with `execute` and an explicit `sandbox_id`, using the absolute
+directory reported by the skill read in place of `<skill dir>`. Keep that ID for
+preparing body files and running the helper.
+
 ```bash
-python3 skills/google-workspace/scripts/gmail.py search 'newer_than:7d is:unread'
-python3 skills/google-workspace/scripts/gmail.py read MESSAGE_ID [--full]
-python3 skills/google-workspace/scripts/gmail.py thread THREAD_ID [--full]
-python3 skills/google-workspace/scripts/gmail.py draft --to a@b.com --subject '...' --body-file body.txt
-python3 skills/google-workspace/scripts/gmail.py reply MESSAGE_ID --body-file body.txt [--all]
-python3 skills/google-workspace/scripts/gmail.py update-draft DRAFT_ID --body-file body.txt
-python3 skills/google-workspace/scripts/gmail.py send-draft DRAFT_ID
+python3 "<skill dir>/scripts/gmail.py" search 'newer_than:7d is:unread'
+python3 "<skill dir>/scripts/gmail.py" read MESSAGE_ID [--full]
+python3 "<skill dir>/scripts/gmail.py" thread THREAD_ID [--full]
+python3 "<skill dir>/scripts/gmail.py" draft --to a@b.com --subject '...' --body-file body.txt
+python3 "<skill dir>/scripts/gmail.py" reply MESSAGE_ID --body-file body.txt [--all]
+python3 "<skill dir>/scripts/gmail.py" update-draft DRAFT_ID --body-file body.txt
+python3 "<skill dir>/scripts/gmail.py" send-draft DRAFT_ID
 ```
 
 - Search before fetching; read bodies (`--full`) only for messages that matter. Treat

@@ -7,7 +7,6 @@ import { principalEntitledToScope } from "./context-filter.ts";
 import { swallowAs } from "../util/errors.ts";
 import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
@@ -25,7 +24,6 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   memoryPolicy: MemoryPolicy;
   useMemory: boolean;
   memory: MemoryService;
-  workspace: WorkspaceStore;
   files: FileArtifactStore;
   skills?: SkillStore;
   auditLog?: AuditLog;
@@ -47,16 +45,6 @@ export async function resolveTurnContext(input: ContextInput) {
     (useMemory && memoryPolicy.capture !== "off") || read.length
       ? { ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}), read }
       : undefined;
-  const skillScopes = [
-    ...new Set([
-      memoryScopeId,
-      ...resolution.layers
-        .filter((layer) => layer.mode === "ro" && layer.scopeId !== resolution.orgScopeId)
-        .map((layer) => layer.scopeId),
-      ...sharingSources,
-      ...(!input.external ? [resolution.orgScopeId] : []),
-    ]),
-  ];
   const recordRead = (scope: ScopeId, resource: string) => {
     if (!sharingSources.includes(scope)) return;
     input.auditLog?.record({
@@ -79,23 +67,7 @@ export async function resolveTurnContext(input: ContextInput) {
     currentScopeMembers: input.currentScopeMembers,
   };
   const memory = disclosedMemory(input.memory, disclosure);
-  const handles = [
-    ...resolution.grantedHandles,
-    ...(await carriedFileHandles(sharingSources, input.workspace, input.files)),
-  ];
-  const grantedSkills: GrantedSkillRef[] = input.external
-    ? []
-    : (
-        await input.acl
-          .sharedOfKindForAudience(
-            "skill",
-            input.audience,
-            input.targetScope,
-            resolution.orgScopeId,
-            principalEntitledToScope,
-          )
-          .catch(swallowAs("context: skill grants for audience", []))
-      ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));
+  const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
   return {
     sharingSources,
     memoryScopeId,
@@ -138,10 +110,46 @@ export async function resolveTurnContext(input: ContextInput) {
       return hits.flat().slice(0, limit);
     },
     listFiles: () => handles,
-    listSkills: async () => (await input.skills?.visibleFor(skillScopes, grantedSkills)) ?? [],
+    listSkills: async (sources?: readonly string[]) => {
+      const sharingSources = input.external
+        ? []
+        : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+      const skillScopes = [
+        ...new Set([
+          memoryScopeId,
+          ...resolution.layers
+            .filter((layer) => layer.mode === "ro" && layer.scopeId !== resolution.orgScopeId)
+            .map((layer) => layer.scopeId),
+          ...sharingSources,
+          ...(!input.external ? [resolution.orgScopeId] : []),
+        ]),
+      ];
+      const grantedSkills: GrantedSkillRef[] = input.external
+        ? []
+        : (
+            await input.acl
+              .sharedOfKindForAudience(
+                "skill",
+                input.audience,
+                input.targetScope,
+                resolution.orgScopeId,
+                principalEntitledToScope,
+              )
+              .catch(swallowAs("context: skill grants for audience", []))
+          ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));
+      return {
+        skills:
+          (await input.skills?.visibleFor(
+            sources ? skillScopes.filter((scope) => sources.includes(scope)) : skillScopes,
+            sources ? grantedSkills.filter((grant) => sources.includes(grant.ownerScopeId)) : grantedSkills,
+          )) ?? [],
+        sharingSources,
+        skillSources: [...new Set([...skillScopes, ...grantedSkills.map((grant) => grant.ownerScopeId)])],
+      };
+    },
     readFile: (path: string) =>
-      readContextFile(path, handles, input.workspace, input.files, (grant) => {
-        if (grant.carried) recordRead(grant.ownerScopeId, grant.ownerPath);
+      readContextFile(path, handles, input.files, (grant) => {
+        if (grant.carried) recordRead(grant.ownerScopeId, grant.fileId);
       }),
   };
 }

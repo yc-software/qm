@@ -29,7 +29,7 @@ export interface ProcessRecord {
 interface NewProcessRecord {
   processId: string;
   scopeId: string;
-  sandboxId?: string;
+  sandboxId: string;
   kind: ProcessKind;
   command: string;
   purpose?: string;
@@ -58,7 +58,7 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
   return {
     processId: rec.processId,
     scopeId: rec.scopeId,
-    ...(rec.sandboxId ? { sandboxId: rec.sandboxId } : {}),
+    sandboxId: rec.sandboxId,
     kind: rec.kind,
     command: rec.command,
     ...(rec.purpose ? { purpose: rec.purpose } : {}),
@@ -195,7 +195,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.status,
           row.sessionRef ?? null,
           row.runId ?? null,
-          row.sandboxId ?? null,
+          row.sandboxId,
           row.purpose ?? null,
           rec.credentialFiles ? JSON.stringify(rec.credentialFiles) : null,
         ],

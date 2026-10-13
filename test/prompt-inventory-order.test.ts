@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { renderComputerBlock } from "../src/core/environment-facts.ts";
 import { renderGatewayContext } from "../src/core/gateway-context.ts";
 import { sharedManifest } from "../src/core/attachments.ts";
-import { renderSharingPosturePrompt } from "../src/resolution/sharing-posture.ts";
 import {
   deliveryMenu,
   renderConversationRoster,
@@ -39,7 +38,7 @@ test("prompt inventories keep identical bytes across permutations, including cap
     ids.map((id) => ({
       handlePath: `shared/${id}`,
       ownerScopeId: "personal:U1",
-      ownerPath: `${id}.txt`,
+      fileId: id,
       permission: "read",
     })),
     sharedManifest,
@@ -73,9 +72,6 @@ test("environment and location facts are independent of discovery order", () => 
       { os: "Linux", runtimes: items, tools: items, notInstalled: items },
       { hasGlobal: false, teamCount: 0 },
     ),
-  );
-  checkOrder(["channel:C2" as const, "team:T1" as const, "personal:U1" as const, "channel:C1" as const], (items) =>
-    renderSharingPosturePrompt({ id: "U1", type: "internal" }, items),
   );
   checkOrder(
     [

@@ -151,7 +151,6 @@ export function createDecisionBackend(opts: {
   fetch?: typeof fetch;
 }): DecisionBackend {
   const fetchImpl = opts.fetch ?? fetch;
-  const credentials = new Map<string, ReturnType<typeof opts.credential>>();
   const endpoint = async (provider: DecisionProvider): Promise<{ base: string; auth: Record<string, string> }> => {
     if (!provider.baseUrl) {
       if (!opts.gateway) throw new Error(`decision provider ${provider.id}: no model gateway is configured`);
@@ -161,9 +160,7 @@ export function createDecisionBackend(opts: {
         auth: header ? { [header]: opts.gateway.apiKey } : { authorization: `Bearer ${opts.gateway.apiKey}` },
       };
     }
-    const slug = provider.credential!;
-    if (!credentials.has(slug)) credentials.set(slug, opts.credential(slug));
-    const rec = await credentials.get(slug);
+    const rec = await opts.credential(provider.credential!);
     if (!rec?.enabled)
       throw new Error(`decision provider ${provider.id}: credential ${provider.credential} is missing or disabled`);
     const url = new URL(provider.baseUrl);
@@ -175,19 +172,10 @@ export function createDecisionBackend(opts: {
   };
   return {
     async choose({ questions, state, model, signal }) {
-      const { provider, base, auth } = await new Promise<
-        Awaited<ReturnType<typeof endpoint>> & { provider: DecisionProvider }
-      >((resolve, reject) => {
-        signal.throwIfAborted();
-        signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
-        Promise.resolve(opts.providers())
-          .then(async (list) => {
-            const provider = list.find((p) => p.id === model.provider);
-            if (!provider) throw new Error(`decision provider ${model.provider} is not configured`);
-            return { provider, ...(await endpoint(provider)) };
-          })
-          .then(resolve, reject);
-      });
+      signal.throwIfAborted();
+      const provider = (await opts.providers()).find((p) => p.id === model.provider);
+      if (!provider) throw new Error(`decision provider ${model.provider} is not configured`);
+      const { base, auth } = await endpoint(provider);
       const keys = Object.keys(questions);
       const wire = PROTOCOLS[provider.protocol];
       const url = new URL(base);

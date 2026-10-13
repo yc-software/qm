@@ -31,7 +31,7 @@ async function setup() {
   });
   const read = `!execute ${JSON.stringify({
     command: 'cat "$HOME/.aws/sso/cache/session.json"',
-    credentials: [credentialHandle(credential.id)],
+    credentials: [credentialHandle(credential)],
   })}`;
   return { built, read };
 }

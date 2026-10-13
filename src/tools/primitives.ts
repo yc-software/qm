@@ -1,3 +1,6 @@
+import type { AdminToolAccess } from "./admin.ts";
+import { rankedSkills } from "../skills/materialize.ts";
+import type { SkillResolution } from "../skills/skill-store.ts";
 import {
   prepareExecutionFiles,
   processCredentialFiles,
@@ -10,8 +13,7 @@ import { withAbort, withTimeout } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
-import { randomUUID } from "node:crypto";
-import type { SandboxAccessPlan, SandboxResources } from "../sandbox/sandbox-resources.ts";
+import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { join } from "node:path";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -53,9 +55,9 @@ import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { mimeFromName } from "../core/attachments.ts";
-import { swallow, errMessage, withCleanup } from "../util/errors.ts";
-import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
+import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
+import { errMessage, withCleanup } from "../util/errors.ts";
+import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
 import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -89,6 +91,7 @@ export interface PublishInput {
   embedAncestors?: string[];
   public?: boolean;
   share?: Array<{ scope: ScopeId; permission: Permission }>;
+  sandboxId?: string;
 }
 
 export interface PublishAudienceDescriptor {
@@ -158,15 +161,6 @@ export interface SkillResult {
   packDir?: string;
 }
 
-interface ShareDirective {
-  scope: ScopeId | "org";
-  permission?: Permission;
-}
-
-interface WriteResult {
-  shared: Array<{ scope: ScopeId; permission: Permission }>;
-}
-
 interface ReachedProvenance {
   scopeId: ScopeId;
   label: string;
@@ -193,9 +187,10 @@ interface AttachedFileMeta {
 
 export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number } | { ok: false; message: string };
 
-export type AttachFiles = (files: readonly string[]) => Promise<AttachResult>;
+export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
+  admin?: AdminToolAccess;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
@@ -220,9 +215,22 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<unknown>;
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
   restartComputer(sandboxId?: string): Promise<void>;
-  read(path: string, signal?: AbortSignal): Promise<ReadResult>;
-  skill(name: string, opts?: { path?: string; sandboxId?: string; signal?: AbortSignal }): Promise<SkillResult>;
-  write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
+  read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult>;
+  listSkills(
+    query?: string,
+    offset?: number,
+    limit?: number,
+    source?: string,
+  ): Promise<{
+    sourceScopeId: ScopeId | null;
+    skills: Array<{ name: string; description: string; source?: string }>;
+    nextOffset?: number;
+  }>;
+  skill(
+    name: string,
+    opts?: { path?: string; sandboxId?: string; source?: string; signal?: AbortSignal },
+  ): Promise<SkillResult>;
+  write(path: string, data: string, sandboxId?: string): Promise<void>;
   publish(input: PublishInput): Promise<PublishResult>;
   setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
@@ -301,6 +309,12 @@ export interface ToolContext extends SurfaceToolDeps {
   webhookDisable(
     id: string,
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden"> | ControlUnavailable>;
+  webhookUpdate(
+    id: string,
+    action: string,
+  ): Promise<
+    ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
+  >;
   soulRead(): { effectiveSoul: string; soul: string | null; soulVersion: number } | ControlUnavailable;
   soulWrite(
     content: string,
@@ -409,8 +423,18 @@ type SurfaceStandingOrderResult =
   | { ok: false; message: string };
 
 export interface SurfaceToolDeps {
-  post(text: string, opts?: SurfacePostOpts, files?: readonly string[]): Promise<SurfacePostResult>;
-  reach(text: string, target: SurfaceReachTarget, files?: readonly string[]): Promise<SurfacePostResult>;
+  post(
+    text: string,
+    opts?: SurfacePostOpts,
+    files?: readonly OutboundFile[],
+    sandboxId?: string,
+  ): Promise<SurfacePostResult>;
+  reach(
+    text: string,
+    target: SurfaceReachTarget,
+    files?: readonly OutboundFile[],
+    sandboxId?: string,
+  ): Promise<SurfacePostResult>;
   react(input: SurfaceReactInput): Promise<SurfacePostResult>;
   edit(input: SurfaceEditInput): Promise<SurfacePostResult>;
   delete(input: SurfaceDeleteInput): Promise<SurfacePostResult>;
@@ -440,6 +464,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 };
 
 export interface ToolContextDeps {
+  admin?: AdminToolAccess;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
@@ -452,7 +477,8 @@ export interface ToolContextDeps {
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
   provisionOwnerAuth?: () => Promise<SandboxHandle>;
   ownerAuthCommand?: (command: string, env?: Record<string, string>) => string;
-  useSkill?: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>;
+  listSkills?: (source?: string) => Promise<SkillResolution[]>;
+  useSkill?: (name: string, path: string, sandboxId?: string, source?: string) => Promise<SkillResult>;
   reach?: {
     resolveChannel(query: string): Promise<ReachResolution>;
     provisionFor(scopeId: ScopeId): Promise<SandboxHandle>;
@@ -463,7 +489,6 @@ export interface ToolContextDeps {
   authorizeCommand: (command: string, approvalKey?: string, exactApprovalKey?: boolean) => boolean;
   grantedHandles: GrantedHandle[];
   context?: TurnContext;
-  sharedMaterializeDir?: string;
   sandboxResources?: SandboxResources;
   invalidateProvision?: () => void;
   workspace: WorkspaceStore;
@@ -503,7 +528,6 @@ export interface ToolContextDeps {
   attempt?: number;
   backgroundBroker?: BackgroundExecBroker;
   monitorBroker?: MonitorBroker;
-  persistWritesToStore?: { excludeDirs: readonly string[] };
   onGapWork?: (work: GapWork) => void;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
@@ -531,12 +555,37 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         })
       : undefined);
   const fallbackMounts = deps.layers.filter((l) => l.mode === "ro" && l.mountPath);
-  const persistExclude = deps.persistWritesToStore?.excludeDirs;
-  const orgScopeId = deps.layers.find((l) => l.mountPath === "global")?.scopeId ?? null;
+  const persistExclude = [...fallbackMounts.map((mount) => mount.mountPath!), TURN_FILES_DIR];
 
   const accessSandbox = async (id: string): Promise<SandboxAccessPlan> => {
     if (!deps.sandboxResources || !deps.accessSandboxResource) throw new Error("sandbox inventory unavailable");
+    if (!id.trim()) throw new Error("sandbox_id must name a sandbox; omit it to use the default");
     return deps.accessSandboxResource(id);
+  };
+
+  const machine = async (
+    id: string | undefined,
+  ): Promise<{
+    handle: SandboxHandle;
+    resource?: SandboxResource;
+    crossScope: boolean;
+    durableRef: (path: string) => string;
+  }> => {
+    if (id === undefined) {
+      const handle = await deps.provision();
+      const resource = handle.resourceId ? await deps.sandboxResources?.get(handle.resourceId) : undefined;
+      return { handle, ...(resource ? { resource } : {}), crossScope: false, durableRef: (path) => path };
+    }
+    let access = await accessSandbox(id);
+    if (!deps.provisionResource) throw new Error("sandbox inventory unavailable");
+    const handle = await deps.provisionResource(access, (current) => {
+      access = current;
+    });
+    const resource = access.resource;
+    const fallback = writableScopeId ? await deps.sandboxResources!.resolve(writableScopeId) : null;
+    const durableRef =
+      fallback?.id === resource.id ? (path: string) => path : (path: string) => `sandbox-files/${resource.id}/${path}`;
+    return { handle, resource, crossScope: access.crossScope, durableRef };
   };
 
   const authorizeExecution = (command: string, access?: SandboxAccessPlan, policy = deps.commandPolicy()): void => {
@@ -696,6 +745,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   return {
+    ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
       : {}),
@@ -756,7 +806,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           return { ...status, guestResponsive: false, probeError: errMessage(e) };
         }
       };
-      if (sandboxId) {
+      if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
         const access = await accessSandbox(sandboxId);
@@ -769,7 +819,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
     },
     async restartComputer(sandboxId?: string): Promise<void> {
-      if (sandboxId) {
+      if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
         await accessSandbox(sandboxId);
@@ -826,7 +876,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
         const executionPolicy = deps.commandPolicy;
         let handle;
-        if (execOpts?.sandboxId) {
+        if (execOpts?.sandboxId !== undefined) {
           if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
           const access = await accessSandbox(execOpts.sandboxId);
           handle = await deps.provisionResource(access, (current) => {
@@ -897,7 +947,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       });
     },
 
-    async read(path: string, signal?: AbortSignal): Promise<ReadResult> {
+    async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {
       signal?.throwIfAborted();
       if (path === MEMORY_FILE && memory && deps.memoryScopeId) {
         if (!deps.memoryAccess?.read.includes(deps.memoryScopeId)) {
@@ -908,43 +958,27 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       const sharedFile = deps.context
         ? await withAbort(() => deps.context!.readFile(path), signal)
-        : await withAbort(() => readContextFile(path, deps.grantedHandles, deps.workspace, deps.files), signal);
+        : await withAbort(() => readContextFile(path, deps.grantedHandles, deps.files), signal);
       if (sharedFile && "error" in sharedFile) return { content: sharedFile.error, sourceScopeId: null };
       if (sharedFile) {
         const { grant: granted, bytes } = sharedFile;
         if (bytes === null) return { content: null, sourceScopeId: granted.ownerScopeId };
         const asText = tryDecodeUtf8(bytes);
         if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId, shared: true };
-        if (granted.carried) {
-          return {
-            content:
-              "Binary files require an explicit share before they can be copied into this conversation's computer.",
-            sourceScopeId: granted.ownerScopeId,
-          };
-        }
-        const handle = await deps.provision();
-        const name = granted.handlePath.split(/[\\/]/).pop() ?? granted.handlePath;
-        const materializedPath = deps.sharedMaterializeDir
-          ? `${deps.sharedMaterializeDir}/${name}`
-          : granted.handlePath;
-        signal?.throwIfAborted();
-        await deps.sandbox.writeFileBytes(handle, materializedPath, bytes);
-        signal?.throwIfAborted();
         return {
-          content:
-            `[binary file materialized into the sandbox at ${materializedPath} (${bytes.length} bytes) — ` +
-            `to send it, attach it to a message: name \`${materializedPath}\` in the surface \`post\` action's \`files\`]`,
+          content: `[binary file ${granted.handlePath.split("/").pop()}, Files ID ${granted.fileId}; send it by ID]`,
           sourceScopeId: granted.ownerScopeId,
           shared: true,
         };
       }
       if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
       signal?.throwIfAborted();
-      const handle = await deps.provision();
+      const { handle, resource, crossScope } = await machine(sandboxId);
+      const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
       return timed("file_op", async () => {
         const direct = await withAbort(() => deps.sandbox.readFile(handle, path), signal);
-        if (direct !== null) return { content: direct, sourceScopeId: writableScopeId };
-        for (const mount of fallbackMounts) {
+        if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
+        for (const mount of mounts) {
           const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, path)), signal);
           if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
         }
@@ -963,91 +997,50 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
+    async listSkills(query = "", offset = 0, limit = 50, source?: string) {
+      const available = (await deps.listSkills?.(source)) ?? [];
+      const matches = rankedSkills(available, query, [], Boolean(query));
+      const start = Math.max(0, Math.floor(offset));
+      const selected = matches.slice(start, start + Math.max(1, Math.min(100, Math.floor(limit))));
+      const sourceScopeId = selected.length && source ? selected[0]!.skill!.scopeId : null;
+      const end = start + selected.length;
+      return {
+        sourceScopeId,
+        skills: selected.map(({ skill }) => ({
+          name: skill!.manifest.name,
+          description: skill!.manifest.description,
+          source: skill!.scopeId,
+        })),
+        ...(end < matches.length ? { nextOffset: end } : {}),
+      };
+    },
+
     async skill(
       name: string,
-      opts?: { path?: string; sandboxId?: string; signal?: AbortSignal },
+      opts?: { path?: string; sandboxId?: string; source?: string; signal?: AbortSignal },
     ): Promise<SkillResult> {
       opts?.signal?.throwIfAborted();
       if (!deps.useSkill) return { content: null, sourceScopeId: null };
-      if (opts?.sandboxId && (!deps.sandboxResources || !deps.provisionResource))
+      if (opts?.sandboxId !== undefined && (!deps.sandboxResources || !deps.provisionResource))
         throw new Error("named sandboxes are not available here");
-      return withAbort(() => deps.useSkill!(name, opts?.path ?? "SKILL.md", opts?.sandboxId), opts?.signal);
+      return withAbort(
+        () => deps.useSkill!(name, opts?.path ?? "SKILL.md", opts?.sandboxId, opts?.source),
+        opts?.signal,
+      );
     },
 
-    async write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
-      const wantShare = share !== undefined && share.length > 0;
-      if (data === undefined && !wantShare) {
-        throw new Error("write needs `data` to save content, `share` to grant access, or both");
+    async write(path: string, data: string, sandboxId?: string): Promise<void> {
+      if (deps.memory && deps.memoryScopeId && isUnderAnyDir(path, ["memory"])) {
+        throw new Error("your durable memory isn't a file — use the `memory` tool instead");
       }
-      if (data !== undefined && deps.memory && deps.memoryScopeId && isUnderAnyDir(path, ["memory"])) {
-        throw new Error(
-          `your durable memory isn't a file — use the \`memory\` tool instead (action "remember" to add facts, "rewrite" to curate the whole notebook)`,
-        );
-      }
-      const handle = await deps.provision();
-      return once(() =>
+      const { handle, resource, crossScope, durableRef } = await machine(sandboxId);
+      if (crossScope) throw new Error("files write needs a computer owned by this conversation");
+      const ownerScopeId = resource?.ownerScopeId ?? writableScopeId;
+      await once(() =>
         timed("file_op", async () => {
-          if (data !== undefined) {
-            await deps.sandbox.writeFile(handle, path, data);
-            if (writableScopeId && persistExclude && !isUnderAnyDir(path, persistExclude)) {
-              await deps.workspace.write(writableScopeId, path, data);
-            }
-          }
-          const shared: WriteResult["shared"] = [];
-          if (wantShare) {
-            if (!writableScopeId) throw new Error("share needs a writable scope that owns the file");
-            const bytes = await deps.sandbox.readFileBytes(handle, path);
-            if (bytes === null) throw new Error(`no such file to share: ${path}`);
-            await deps.workspace.write(writableScopeId, path, bytes);
-            const priorRows = deps.files
-              ? await deps.files.resolveByOwnerPaths([{ ownerScopeId: writableScopeId, path }])
-              : [];
-            const priorArtifact = priorRows.find((r) => r.direction === "out") ?? priorRows[0];
-            const priorAuthor = priorArtifact?.createdBy;
-            const author = data === undefined ? (priorAuthor ?? deps.createdBy) : deps.createdBy;
-            if (deps.files) {
-              try {
-                const name = path.split(/[\\/]/).pop() || path;
-                await deps.files.put({
-                  id: priorArtifact?.id ?? fileArtifactId(randomUUID(), "out", 0),
-                  reuseExistingPath: true,
-                  ownerScopeId: writableScopeId,
-                  createdBy: author,
-                  name,
-                  path,
-                  mimetype: mimeFromName(name),
-                  data: bytes,
-                  direction: "out",
-                  createdInScope: writableScopeId,
-                });
-              } catch (e) {
-                swallow("tools: persist of outbound file artifact failed", e);
-              }
-            }
-            for (const s of share!) {
-              const granteeScopeId = s.scope === "org" ? orgScopeId : s.scope;
-              if (!granteeScopeId) throw new Error('cannot resolve "org" — no org scope is mounted in this session');
-              if (parseScopeId(granteeScopeId).kind === null) {
-                throw new Error(
-                  `invalid share target "${s.scope}" — use a scope id like personal:<id>, channel:<id>, team:<id>, or org:<id> (or "org")`,
-                );
-              }
-              const permission: Permission = s.permission ?? "read";
-              await deps.acl.grant(
-                { ownerScopeId: writableScopeId, ref: path, granteeScopeId, permission, grantedBy: deps.createdBy },
-                author,
-              );
-              deps.auditLog?.record({
-                at: Date.now(),
-                principalId: deps.createdBy,
-                action: "file_share",
-                resource: path,
-                scopeLabel: granteeScopeId,
-              });
-              shared.push({ scope: granteeScopeId, permission });
-            }
-          }
-          return { shared };
+          await deps.sandbox.writeFile(handle, path, data);
+          if (ownerScopeId && !isUnderAnyDir(path, persistExclude))
+            await deps.workspace.write(ownerScopeId, durableRef(path), data);
         }),
       );
     },
@@ -1055,7 +1048,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async publish(input: PublishInput): Promise<PublishResult> {
       if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
       if (input.share !== undefined || input.public !== undefined)
-        throw new Error("publish is always private to the owner; use apps action share to grant access");
+        throw new Error("publish does not accept sharing options; use apps action share to change access");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
       const createdInScope: ScopeId = writableScopeId;
       let effectiveEntrypoint = input.entrypoint;
@@ -1072,9 +1065,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (effectiveEntrypoint && input.dir && hasParentPathSegment(input.dir)) {
         throw new Error("publish directory must stay inside the workspace — no .. path segments");
       }
-      const handle = await deps.provision();
+      if (!effectiveEntrypoint && input.sandboxId !== undefined) await accessSandbox(input.sandboxId);
       const files: DeployFile[] = effectiveEntrypoint
-        ? filesUnder(await collectTree(deps.sandbox, handle, input.dir), input.dir)
+        ? filesUnder(await collectTree(deps.sandbox, (await machine(input.sandboxId)).handle, input.dir), input.dir)
         : [];
       if (effectiveEntrypoint && files.length === 0) {
         throw new Error(`publish: no files found under ${input.dir ?? "."} - nothing to deploy`);
@@ -1216,7 +1209,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const requested = await selectCredentials(requestedCredentials, false);
       const policy = deps.commandPolicy;
       let handle: SandboxHandle;
-      if (opts?.sandboxId) {
+      if (opts?.sandboxId !== undefined) {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
         const access = await accessSandbox(opts.sandboxId);
         handle = await deps.provisionResource(access, (current) => {
@@ -1364,6 +1357,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         (c, cl) => c.disableWebhook(id, cl),
         (r) => r.ok,
       ),
+    webhookUpdate: (id, action) =>
+      controlOp(
+        (c, cl) => c.updateWebhook(id, { action }, cl),
+        (r) => r.ok,
+      ),
     soulRead() {
       if (!deps.control || !deps.controlClaims) return CONTROL_UNAVAILABLE;
       return deps.control.readSoul(deps.controlClaims);
@@ -1379,14 +1377,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         (r) => r.ok,
       ),
 
-    post: (text, opts, files) =>
+    post: (text, opts, files, sandboxId) =>
       surfaceOp(
-        (s) => s.post(text, opts, files),
+        (s) => s.post(text, opts, files, sandboxId),
         (r) => r.ok,
       ),
-    reach: (text, target, files) =>
+    reach: (text, target, files, sandboxId) =>
       surfaceOp(
-        (s) => s.reach(text, target, files),
+        (s) => s.reach(text, target, files, sandboxId),
         (r) => r.ok,
       ),
     react: (input) =>
@@ -1412,8 +1410,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),
-    attach: (files) =>
-      deps.attach ? deps.attach(files) : Promise.resolve({ ok: false as const, message: ATTACH_UNAVAILABLE_MESSAGE }),
+    attach: (files, sandboxId) =>
+      deps.attach
+        ? deps.attach(files, sandboxId)
+        : Promise.resolve({ ok: false as const, message: ATTACH_UNAVAILABLE_MESSAGE }),
   };
 }
 
@@ -1439,7 +1439,9 @@ function audienceFromGrantees(
   return {
     kind: "members",
     ...(origin.kind === "channel" ? { channelRef: origin.ref } : {}),
-    memberCount: granteeScopeIds.length,
+    ...(granteeScopeIds.every((g) => parseScopeId(g).kind === "personal")
+      ? { memberCount: granteeScopeIds.length }
+      : {}),
   };
 }
 

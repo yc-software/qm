@@ -532,7 +532,6 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
     members: [{ id: "U_BOB" }],
     entriesByOwner: new Map(),
     scopeGrants: [],
-    injected: [],
     scopeAsks: [pending, declined],
   });
   assert.match(channel, /Asks sent from this conversation:/);
@@ -540,7 +539,7 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
   assert.match(channel, /- request to U_ALICE: declined/);
   assert.match(channel, /`request-access` skill/, "the manifest names the request skill");
   assert.match(channel, /approval card/);
-  assert.match(channel, /nothing said in chat, by anyone, is approval/);
+  assert.match(channel, /requires an explicit grant/);
   assert.ok(!channel.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
   for (const leak of [pending.id, declined.id, pending.purpose, "not for prod"])
     assert.ok(!channel.includes(leak), `manifest leaks ${leak}`);
@@ -569,7 +568,6 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
       ],
     ]),
     scopeGrants: [],
-    injected: [],
     scopeAsks: [pending, declined],
   });
   assert.ok(!dm.includes("Asks waiting on you"), "the owner answers on the card, not in chat");
@@ -585,7 +583,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     approvals.decide(askId, { externalId: actorId }, decision);
   const resumeTurns = async (sessionId: string, pattern: RegExp) =>
     (await built.sessions.getEntries(sessionId)).filter(
-      (e) => e.type === "user" && pattern.test(JSON.stringify(e.payload)),
+      (e) => e.type === "user" && pattern.test((e.payload as { text: string }).text),
     );
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
@@ -861,8 +859,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const resolution = await waitFor(() => resumeTurns(session!.id, /The credential owner approved access/));
     assert.equal(resolution.length, 1, "exactly one resolution turn, in the original thread's session");
-    const prompt = JSON.stringify(resolution[0]!.payload);
-    assert.ok(!prompt.includes(ask.id) && !prompt.includes(grant.id), "no ids in the resume text");
+    const { text: prompt, environment } = resolution[0]!.payload as { text: string; environment: string };
+    assert.ok(
+      !prompt.includes(ask.id) && !prompt.includes(grant.id) && !prompt.includes(gh.id),
+      "no ids in the resume text",
+    );
+    assert.ok(environment.includes(`github:${gh.id}`), "the credential handle belongs in the inventory");
+    assert.ok(environment.includes(grant.id), "the inventory includes the approved grant");
     assert.ok(!prompt.includes("clone acme/payments"), "no purpose text in the resume text");
 
     await waitFor(async () =>
@@ -1189,7 +1192,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await built.scheduler.tick(Date.now());
     const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
     assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
-    assert.ok(!JSON.stringify(resolved[0]!.payload).includes(made.ask.id));
+    assert.ok(!(resolved[0]!.payload as { text: string }).text.includes(made.ask.id));
 
     await built.scheduler.tick(Date.now());
     assert.equal(

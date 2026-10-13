@@ -494,3 +494,8 @@ test("ordinary and hidden user events do not become steering markers", () => {
   };
   assert.deepEqual(buildTimeline(work), []);
 });
+
+test("detached execution uses process presentation rather than foreground output suppression", () => {
+  assert.equal(toolCategory({ tool: "execute", background: true }), "background");
+  assert.equal(toolCategory({ tool: "execute", background: false }), "execute");
+});

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
@@ -78,7 +79,27 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
     members = members.filter((m) => m !== id);
     await roster();
   };
-  return { ...built, turn, skill, remove };
+  const fileIds = new Map<string, string>();
+  const file = async (ownerScopeId: string, name: string, data: string | Buffer) => {
+    for (const existing of (await built.files.listOwnedByScopes([ownerScopeId])).files) {
+      if (existing.name === name) await built.files.setEnabled(existing.id, false);
+    }
+    const id = randomUUID();
+    fileIds.set(`${ownerScopeId}/${name}`, id);
+    await built.files.put({
+      id,
+      ownerScopeId,
+      createdBy: ownerScopeId === "channel:C1" ? "U1" : ownerScopeId.slice("personal:".length),
+      name,
+      path: name,
+      mimetype: "application/octet-stream",
+      data: Buffer.from(data),
+      direction: "out",
+    });
+  };
+  const filePath = (ownerScopeId: string, name: string) =>
+    `shared/open-${ownerScopeId.replace(":", "-")}/${fileIds.get(`${ownerScopeId}/${name}`)}/${name}`;
+  return { ...built, turn, skill, remove, file, filePath };
 }
 
 test("sharing e2e: personal files and memories follow the speaker, opt-out, and automation boundaries", async (t) => {
@@ -87,33 +108,35 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     ["U1", "ALICE_PAYLOAD"],
     ["U2", "BOB_PAYLOAD"],
   ]) {
-    await b.workspace.write(`personal:${id}`, "notes.txt", marker!);
+    await b.file(`personal:${id}`, "notes.txt", marker!);
     await b.memory.capture(`personal:${id}`, [`OWN_MEMORY_${id}`], Date.now(), id!);
   }
-  assert.equal(await b.turn("!read shared/open-personal-U1/notes.txt", true), "ALICE_PAYLOAD");
+  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "ALICE_PAYLOAD");
   assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
   assert.doesNotMatch(await b.turn("!sysprompt", true), /OWN_MEMORY_U2|open-personal-U2/);
-  assert.match(await b.turn("!read shared/open-personal-U1/notes.txt", true, "U2"), /no file/);
-  assert.equal(await b.turn("!read shared/open-personal-U2/notes.txt", true, "U2"), "BOB_PAYLOAD");
+  assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U2"), /no file/);
+  assert.equal(await b.turn(`!read ${b.filePath("personal:U2", "notes.txt")}`, true, "U2"), "BOB_PAYLOAD");
   assert.equal(
-    await b.turn("!read shared/open-personal-U2/notes.txt", true, "U2", { origin: { kind: "ambient", live: true } }),
+    await b.turn(`!read ${b.filePath("personal:U2", "notes.txt")}`, true, "U2", {
+      origin: { kind: "ambient", live: true },
+    }),
     "BOB_PAYLOAD",
   );
   await b.config.setSharingPosture("personal:U1", "isolated");
-  await b.workspace.write("personal:U1", "notes.txt", "NEW_PRIVATE_PAYLOAD");
-  assert.match(await b.turn("!read shared/open-personal-U1/notes.txt", true), /no file/);
+  await b.file("personal:U1", "notes.txt", "NEW_PRIVATE_PAYLOAD");
+  assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), /no file/);
   assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
   await b.config.clearSharingPosture("personal:U1");
-  assert.equal(await b.turn("!read shared/open-personal-U1/notes.txt", true), "NEW_PRIVATE_PAYLOAD");
+  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
   assert.match(
-    await b.turn("!read shared/open-personal-U1/notes.txt", true, "U1", { origin: { kind: "automation" } }),
+    await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", { origin: { kind: "automation" } }),
     /no file/,
   );
 });
 
 test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
-  await b.workspace.write("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
+  await b.file("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
   await b.turn("inspect my personal notes", true);
   const parent = await b.runs.latestForThread("C1:shared-test");
   assert.ok(parent);
@@ -162,7 +185,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
       await sleep(25);
     }
   };
-  const read = "!read shared/open-personal-U1/notes.txt";
+  const read = `!read ${b.filePath("personal:U1", "notes.txt")}`;
   assert.equal(await childTurn(read), "DELEGATED_PERSONAL_FILE");
   assert.equal(await childTurn("!run echo delegated"), "delegated");
   assert.ok(token);
@@ -179,18 +202,18 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
 
 test("sharing e2e: room file and memory access is revoked on the next DM turn", async (t) => {
   const b = await fixture(t);
-  await b.workspace.write("channel:C1", "plan.txt", "ROOM_FILE");
+  await b.file("channel:C1", "plan.txt", "ROOM_FILE");
   await b.memory.capture("channel:C1", ["ROOM_MEMORY"], Date.now(), "U1");
   await b.turn("hello", true);
-  assert.equal(await b.turn("!read shared/open-channel-C1/plan.txt"), "ROOM_FILE");
+  assert.equal(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), "ROOM_FILE");
   assert.match(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
   await b.config.setSharingPosture("channel:C1", "isolated");
-  assert.match(await b.turn("!read shared/open-channel-C1/plan.txt"), /no file/);
+  assert.match(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), /no file/);
   assert.doesNotMatch(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
   await b.config.clearSharingPosture("channel:C1");
-  assert.equal(await b.turn("!read shared/open-channel-C1/plan.txt"), "ROOM_FILE");
+  assert.equal(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), "ROOM_FILE");
   await b.remove("U1");
-  assert.match(await b.turn("!read shared/open-channel-C1/plan.txt"), /no file/);
+  assert.match(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), /no file/);
   assert.doesNotMatch(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
   assert.doesNotMatch(await b.turn("!sysprompt"), /ROOM_MEMORY|open-channel-C1/);
 });
@@ -198,7 +221,7 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
 test("sharing e2e: skill lazy assets execute, update, and disappear from the same computer after opt-out", async (t) => {
   const b = await fixture(t);
   const s = await b.skill("personal:U1", "carried-helper", "VERSION_ONE");
-  assert.match(await b.turn("!sysprompt", true), /carried-helper/);
+  assert.doesNotMatch(await b.turn("!sysprompt", true), /carried-helper/);
   assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_ONE");
   await b.skills.update(s.id, {
     ...s.manifest,
@@ -263,12 +286,12 @@ test("sharing e2e: local skill name wins, then exposes the carried fallback when
 
 test("sharing e2e: writes and memory capture remain local while reading carried context", async (t) => {
   const b = await fixture(t, { memoryCapture: "writable" });
-  await b.workspace.write("personal:U1", "notes.txt", "SOURCE_UNCHANGED");
+  await b.file("personal:U1", "notes.txt", "SOURCE_UNCHANGED");
   await b.memory.capture("personal:U1", ["PERSONAL_SOURCE_MEMORY"], Date.now(), "U1");
-  assert.equal(await b.turn("!read shared/open-personal-U1/notes.txt", true), "SOURCE_UNCHANGED");
+  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "SOURCE_UNCHANGED");
   assert.match(await b.turn("!write notes.txt ROOM_WRITE", true), /wrote/);
   assert.match(await b.turn("!memoryremember ROOM_CAPTURE_ONLY", true), /remembered 1/);
-  assert.equal(await b.workspace.read("personal:U1", "notes.txt"), "SOURCE_UNCHANGED");
+  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "SOURCE_UNCHANGED");
   assert.equal(await b.workspace.read("channel:C1", "notes.txt"), "ROOM_WRITE");
   assert.match(await b.memory.read("channel:C1"), /ROOM_CAPTURE_ONLY/);
   assert.doesNotMatch(await b.memory.read("personal:U1"), /ROOM_CAPTURE_ONLY/);
@@ -292,27 +315,39 @@ test("sharing e2e: binary carry never materializes bytes and text artifacts use 
     direction: "out",
   });
   await b.workspace.write("personal:U1", path, "STALE_WORKSPACE_SNAPSHOT");
-  assert.equal(await b.turn(`!read shared/open-personal-U1/${path}`, true), "CURRENT_ARTIFACT");
-  await b.workspace.write("personal:U1", "binary.dat", Buffer.from([0xff, 0xfe, 0, 1]));
+  assert.equal(await b.turn(`!read shared/open-personal-U1/${id}/report.txt`, true), "CURRENT_ARTIFACT");
+  await b.file("personal:U1", "binary.dat", Buffer.from([0xff, 0xfe, 0, 1]));
   assert.match(
-    await b.turn("!read shared/open-personal-U1/binary.dat", true),
-    /Binary files require an explicit share/,
+    await b.turn(`!read ${b.filePath("personal:U1", "binary.dat")}`, true),
+    /binary file binary.dat, Files ID .+; send it by ID/,
   );
   assert.equal(
-    await b.turn("!run python3 -c \"import os; print(os.path.exists('shared/open-personal-U1/binary.dat'))\"", true),
+    await b.turn(
+      `!run python3 -c "import os; print(os.path.exists('${b.filePath("personal:U1", "binary.dat")}'))"`,
+      true,
+    ),
     "False",
   );
   await b.config.setSharingPosture("personal:U1", "isolated");
-  assert.match(await b.turn(`!read shared/open-personal-U1/${path}`, true), /no file/);
+  assert.match(await b.turn(`!read shared/open-personal-U1/${id}/report.txt`, true), /no file/);
 });
 
 test("sharing e2e: explicit text-file grants survive Isolated and revoke without stale reads", async (t) => {
   const b = await fixture(t);
-  await b.workspace.write("personal:U2", "shared-note.txt", "EXPLICIT_TEXT");
+  await b.files.put({
+    id: "shared-note",
+    ownerScopeId: "personal:U2",
+    createdBy: "U2",
+    name: "shared-note.txt",
+    path: "shared-note.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("EXPLICIT_TEXT"),
+    direction: "out",
+  });
   await b.acl.grant(
     {
       ownerScopeId: "personal:U2",
-      ref: "shared-note.txt",
+      ref: "shared-note",
       granteeScopeId: "personal:U1",
       permission: "read",
       grantedBy: "U2",
@@ -322,7 +357,7 @@ test("sharing e2e: explicit text-file grants survive Isolated and revoke without
   await b.config.setSharingPosture("org:default-org", "isolated");
   assert.equal(await b.turn("!read shared/shared-note.txt"), "EXPLICIT_TEXT");
   assert.match(await b.turn("!read shared/shared-note.txt", true), /no file/);
-  await b.acl.revoke("personal:U2", "shared-note.txt", "personal:U1", "U2", "U2");
+  await b.acl.revoke("personal:U2", "shared-note", "personal:U1", "U2", "U2");
   assert.match(await b.turn("!read shared/shared-note.txt"), /no file/);
 });
 
@@ -337,12 +372,12 @@ test("sharing e2e: unavailable connector skills cannot be read or executed", asy
 for (const memoryRecall of ["off", "writable"] as const) {
   test(`sharing e2e: memory ${memoryRecall} does not disable carried files or skills`, async (t) => {
     const b = await fixture(t, { memoryRecall });
-    await b.workspace.write("personal:U1", "notes.txt", "FILE_WITH_MEMORY_RESTRICTED");
+    await b.file("personal:U1", "notes.txt", "FILE_WITH_MEMORY_RESTRICTED");
     await b.memory.capture("personal:U1", ["NO_CARRIED_MEMORY"], Date.now(), "U1");
     await b.skill("personal:U1", "independent-helper", "SKILL_WITH_MEMORY_RESTRICTED");
     assert.doesNotMatch(await b.turn("!sysprompt", true), /NO_CARRIED_MEMORY/);
     assert.doesNotMatch(await b.turn("!memorysearch NO_CARRIED_MEMORY", true), /NO_CARRIED_MEMORY/);
-    assert.equal(await b.turn("!read shared/open-personal-U1/notes.txt", true), "FILE_WITH_MEMORY_RESTRICTED");
+    assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "FILE_WITH_MEMORY_RESTRICTED");
     assert.equal(
       await b.turn("!skill-run independent-helper python3 {dir}/scripts/value.py", true),
       "SKILL_WITH_MEMORY_RESTRICTED",
@@ -436,21 +471,21 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
       service: "custom-cli",
       files: [{ path: ".custom-cli/auth", contentBase64: Buffer.from(`file_${id}`).toString("base64") }],
     });
-    handles.set(id, [credentialHandle(credential.id), credentialHandle(login.id)]);
+    handles.set(id, [credentialHandle(credential), credentialHandle(login)]);
     await b.keychain.setConnectorToken("gmail.googleapis.com", id, {
       accessToken: `gmail_${id}`,
       expiresAt: Date.now() + 3600000,
     });
   }
   const prompt = await b.turn("!sysprompt", true);
-  assert.match(prompt, /execute scope:"owner"/);
-  assert.match(prompt, /U1[^\n]*npm[^\n]*no grant needed/);
-  assert.match(prompt, /U2[^\n]*npm[^\n]*no grant for this conversation/);
+  assert.match(prompt, /execute scope `owner`/);
+  assert.match(prompt, /### U1\n(?:(?!###)[\s\S])*npm[^\n]*own; Open live turn only/);
+  assert.match(prompt, /### U2\n(?:(?!###)[\s\S])*npm[^\n]*no grant for this conversation/);
   assert.ok(!prompt.includes("npm_U1"));
   await b.workspace.write("channel:C1", "room-only.txt", "room_data");
   const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
   const selected = (id = "U1") =>
-    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [...handles.get(id)!, "connector_gmail_googleapis_com_default"] })}`;
+    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [...handles.get(id)!, "connector:gmail.googleapis.com:default"] })}`;
   assert.equal(await b.turn(selected(), true), "True|True|file_U1|unset|isolated");
   assert.equal(await b.turn(selected("U2"), true, "U2"), "True|True|file_U2|unset|isolated");
   for (const id of ["U1", "U2", "U1"]) {
@@ -460,8 +495,8 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     );
   }
   const ambientPrompt = await b.turn("!sysprompt", true, "U2", { origin: { kind: "ambient", live: true } });
-  assert.match(ambientPrompt, /U2[^\n]*npm[^\n]*no grant needed/);
-  assert.match(ambientPrompt, /U1[^\n]*npm[^\n]*no grant for this conversation/);
+  assert.match(ambientPrompt, /### U2\n(?:(?!###)[\s\S])*npm[^\n]*own; Open live turn only/);
+  assert.match(ambientPrompt, /### U1\n(?:(?!###)[\s\S])*npm[^\n]*no grant for this conversation/);
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
   await b.directory.replaceGroups([
     { groupId: "G1", principalId: "U1" },

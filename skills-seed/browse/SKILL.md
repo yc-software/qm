@@ -23,11 +23,15 @@ org credential delivered as sandbox env (admin UI → Service credentials → de
 env"), and it rides into every all-internal conversation — nothing here is deploy config. A
 person's own keychain key overrides the org one. Keys you may see today:
 
-- `KERNEL_API_KEY` → **Kernel** (onkernel.com). Read `skills/browse/providers/kernel.md`.
-- `ANCHOR_API_KEY` → **Anchor** (anchorbrowser.io). Read `skills/browse/providers/anchor.md`.
+Use the absolute directory reported by the skill read for all `providers/` paths below.
+Keep the same explicit `sandbox_id` for the skill read and every `execute` command
+in this flow, including the runner.
+
+- `KERNEL_API_KEY` → **Kernel** (onkernel.com). Read `providers/kernel.md`.
+- `ANCHOR_API_KEY` → **Anchor** (anchorbrowser.io). Read `providers/anchor.md`.
 - `BROWSERBASE_API_KEY` → **Browserbase** (browserbase.com). Read
-  `skills/browse/providers/browserbase.md`.
-- Another `*_API_KEY` alongside a `skills/browse/providers/<name>.md` doc → that provider;
+  `providers/browserbase.md`.
+- Another `*_API_KEY` alongside a `providers/<name>.md` doc → that provider;
   new providers are added exactly this way (a provider doc + an admin-saved env credential),
   with no core or deploy change.
 - Several set → the first in the order above, unless the person asks for another or the
@@ -76,7 +80,7 @@ becoming the default):
 so that key is already set in every shell — skip straight to the profile check below. A
 person's own provider key and their profile name never arrive in your env by default: find
 their handles in your keychain manifest and name them in `credentials` on every `execute`
-and background start that needs them. Never echo the values.
+(including `background:true`) that needs them. Never echo the values.
 
 **If the browser provider key is in neither your env nor your handles, don't dead-end on
 "no grant"** — the keychain has a path for every case, and a person-typed turn can use all
@@ -198,9 +202,9 @@ PY
 (The `tee` matters: the outcome JSON lands in `/tmp/browse-out.txt`, which is how a wall URL
 gets into later commands as data instead of being pasted into shell source.)
 
-For a task likely to run past a couple of minutes, launch it with the `background` tool and
-poll its output instead of blocking `execute`. Pass the same `credentials` handles to the
-background start: org-configured keys are already in every shell's env, but a run without
+For a task likely to run past a couple of minutes, launch it with `execute(background:true)` and
+use `background` action `poll` with its `process_id` instead of blocking `execute`. Pass the same `credentials` handles to the
+execute call: org-configured keys are already in every shell's env, but a run without
 its keychain keys fails every step with "Could not resolve authentication method", which
 looks exactly like the flaky-auth race but isn't.
 

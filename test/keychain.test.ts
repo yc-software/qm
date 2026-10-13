@@ -468,7 +468,6 @@ describe("connectors are grantable like any keychain record", () => {
       entriesByOwner: new Map(),
       connectorsByOwner,
       scopeGrants: [],
-      injected: [],
     });
     assert.match(md, /connected app gmail\.googleapis\.com/);
     assert.match(md, /credential id/);
@@ -816,12 +815,11 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     members: [{ id: "U1" }],
     entriesByOwner: new Map(),
     scopeGrants: [],
-    injected: [],
   });
-  assert.match(empty, /## Teammate keychains/);
-  assert.match(empty, /No keychain credentials registered yet/);
+  assert.match(empty, /## Credentials/);
+  assert.match(empty, /No credentials available/);
   assert.match(empty, /`request-access` skill/);
-  assert.match(empty, /approval card; nothing said in chat, by anyone, is approval/);
+  assert.doesNotMatch(empty, /Teammate keychains/);
   assert.ok(!empty.includes("/v1/keychain/grants"), "no chat-driven approval route");
 
   const detected = renderKeychainManifest({
@@ -831,11 +829,11 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
     entriesByOwner: new Map(),
     scopeGrants: [],
-    injected: [],
     detectedByOwner: new Map([["U1", ["GitHub", "AWS SSO"]]]),
   });
-  assert.match(detected, /Detected but NOT registered/);
-  assert.match(detected, /Alice \(U1\): AWS SSO, GitHub — signed in on their own computer/);
+  assert.match(detected, /NOT registered or grantable/);
+  assert.match(detected, /### Alice \(U1\)/);
+  assert.match(detected, /AWS SSO — detected/);
 
   const k = kc();
   const cred = await k.save(GH);
@@ -853,23 +851,22 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [{ grant, credential: cred }],
-    injected: [
+    execution: [
       {
         credentialId: cred.id,
         ownerId: "U1",
-        service: "github",
-        env: [{ key: "GITHUB_TOKEN", value: "x" }],
-        grantId: grant.id,
-        purpose: grant.purpose,
+        handle: credentialHandle(cred),
+        description: "github",
+        scope: "scoped",
       },
     ],
   });
-  assert.match(block, /## Teammate keychains/);
-  assert.match(block, /Alice \(U1\): github/);
-  assert.match(block, new RegExp(`credential id \`${cred.id}\``));
+  assert.match(block, /## Credentials/);
+  assert.match(block, /### Alice \(U1\)/);
+  assert.match(block, new RegExp(`github:${cred.id}`));
   assert.match(block, /STANDING grant .*gh for repo work here/);
-  assert.match(block, /kc_[a-f0-9]{12}.*GITHUB_TOKEN/);
-  assert.match(block, /execute tool.*credentials field/);
+  assert.match(block, /github:[a-f0-9]+.*GITHUB_TOKEN/);
+  assert.match(block, /select them in execute.credentials/);
   assert.ok(!block.includes("/v1/keychain/grants"));
 
   const login = renderKeychainManifest({
@@ -879,17 +876,13 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     members: [{ id: "U2" }],
     entriesByOwner: new Map(),
     scopeGrants: [],
-    injected: [
+    execution: [
       {
         credentialId: "c1",
         ownerId: "U1",
-        service: "doordash",
-        env: [
-          { key: "DOORDASH_EMAIL", value: "x" },
-          { key: "DOORDASH_PASSWORD", value: "y" },
-        ],
-        grantId: "g1",
-        purpose: "billing",
+        handle: "doordash:c1",
+        description: "provides `DOORDASH_EMAIL` + `DOORDASH_PASSWORD`",
+        scope: "scoped",
       },
     ],
   });
@@ -913,12 +906,11 @@ test("manifest: own credentials need no grant but require explicit execution req
     members: [{ id: "U1", displayName: "Alice" }],
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
-    injected: [],
   });
-  assert.match(own, /file-login.*execute.credentials needs no grant/);
-  assert.match(own, /their own — execute.credentials needs no grant/);
-  assert.match(own, /including background and scheduled turns/);
-  assert.match(own, /Request every credential, including saved CLI logins, explicitly using execute.credentials/);
+  assert.match(own, /file-login.*no grant needed/);
+  assert.match(own, /own; no grant needed/);
+  assert.match(own, /including background turns/);
+  assert.doesNotMatch(own, /Teammate keychains/);
   assert.ok(!own.includes("no grant for this conversation"));
   assert.match(
     own,
@@ -934,7 +926,6 @@ test("manifest: own credentials need no grant but require explicit execution req
     members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
-    injected: [],
   });
   assert.match(other, /no grant for this conversation/);
   assert.match(other, /EXPIRED — ask the owner to re-auth before requesting a grant/);
@@ -947,7 +938,6 @@ test("manifest: own credentials need no grant but require explicit execution req
     members: [{ id: "U1", displayName: "Alice" }],
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
-    injected: [],
   });
   assert.ok(
     !channel.includes("access is implied"),
@@ -1036,7 +1026,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(res.status, 200);
     const { credential } = (await res.json()) as any;
     assert.equal(credential.ownerId, "U1");
-    assert.equal(credential.credentialHandle, credentialHandle(credential.id));
+    assert.equal(credential.credentialHandle, credentialHandle(credential));
     assert.ok(!JSON.stringify(credential).includes("ghp_u1"));
 
     const mine = (await (await get("/v1/keychain/credentials", await capFor("U1"))).json()) as any;
@@ -1281,8 +1271,8 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   const audience = [{ externalId: "U_ASKER" }, { externalId: "U_OWNER", displayName: "Alice" }];
   const sys = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
   assert.equal(sys.status, "ok");
-  assert.match(sys.reply ?? "", /## Teammate keychains/);
-  assert.match(sys.reply ?? "", /Alice \(U_OWNER\): github/);
+  assert.match(sys.reply ?? "", /## Credentials/);
+  assert.match(sys.reply ?? "", /### Alice \(U_OWNER\)/);
   assert.match(sys.reply ?? "", /no grant for this conversation/);
   assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
   await selectDefaultSandbox(built, "U_ASKER", "channel:C1");
@@ -1298,14 +1288,16 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     mode: "standing",
     purpose: "use my gh here for repo work",
   });
+  const sys2 = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
+  assert.match(sys2.reply ?? "", /STANDING grant .*use my gh here for repo work/);
+  assert.match(sys2.reply ?? "", new RegExp(`github:${cred.id}`));
+
   mark = fakeSprites.execScripts().length;
   assert.equal((await built.app.turn(channelTurn("!run true", "U_ASKER", audience))).status, "ok");
   assert.ok(!execScriptsMention("export GITHUB_TOKEN=", mark), "standing grants are not ambient");
   assert.ok(!execScriptsMention("ghp_e2e", mark), "an unrequested command never receives the secret");
-
-  const sys2 = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
-  assert.match(sys2.reply ?? "", /STANDING grant .*use my gh here for repo work/);
-  assert.match(sys2.reply ?? "", new RegExp(`kc_${cred.id.slice(0, 12)}`));
+  const unchanged = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
+  assert.doesNotMatch(unchanged.reply ?? "", /STANDING grant|## Credentials/);
 
   await selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER");
   mark = fakeSprites.execScripts().length;
@@ -1320,7 +1312,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   assert.ok(!execScriptsMention("ghp_e2e", mark), "unrequested secrets are never materialized");
   const selected = await built.app.turn({
     ...dm,
-    text: `!execute ${JSON.stringify({ command: 'test "$GITHUB_TOKEN" = ghp_e2e && echo selected', credentials: [credentialHandle(cred.id)] })}`,
+    text: `!execute ${JSON.stringify({ command: 'test "$GITHUB_TOKEN" = ghp_e2e && echo selected', credentials: [credentialHandle(cred)] })}`,
   });
   assert.equal(selected.reply, "selected");
   assert.deepEqual(resolved, [cred.id]);
@@ -1441,7 +1433,6 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
         members: [{ id: "U1" }],
         entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
         scopeGrants: [],
-        injected: [],
         scopeAsks: await k.listAsks({ requesterScopeId: "channel:C1" }),
       },
       now,
@@ -1513,14 +1504,12 @@ test("manifest inventories are canonical across discovery order without mutating
     entriesByOwner: await k.listByOwners(["U2", "U1"]),
     connectorsByOwner: await k.listConnectorsByOwners(["U2", "U1"]),
     scopeGrants: [],
-    injected: ["z", "a"].map((id) => ({
+    execution: ["z", "a"].map((id) => ({
       credentialId: id,
       ownerId: "U1",
-      service: id,
-      env: [
-        { key: "Z", value: "z" },
-        { key: "A", value: "a" },
-      ],
+      handle: `${id}:${id}`,
+      description: id,
+      scope: "scoped",
     })),
     detectedByOwner: new Map([
       ["U1", ["zsh", "aws"]],
@@ -1532,8 +1521,7 @@ test("manifest inventories are canonical across discovery order without mutating
   const first = renderKeychainManifest(input, 1000);
   const reversed = structuredClone(input);
   reversed.members.reverse();
-  reversed.injected.reverse();
-  for (const entry of reversed.injected) entry.env.reverse();
+  reversed.execution!.reverse();
   for (const entries of reversed.entriesByOwner.values()) {
     entries.reverse();
     for (const entry of entries) {
@@ -1550,4 +1538,114 @@ test("manifest inventories are canonical across discovery order without mutating
   assert.ok(!first.includes("Asks waiting on you"));
   reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
   assert.notEqual(renderKeychainManifest(reversed, 1000), first);
+});
+
+test("manifest merges credential representations without conflating login identities or execution scopes", async () => {
+  const k = kc();
+  const ownerId = "ALICE@example.com";
+  await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "private-token", expiresAt: 5000 });
+  const connector = (await k.listConnectorsByOwners([ownerId])).get(ownerId)![0]!;
+  const credential = (await k.getCredential(connector.credentialId))!;
+  const grant = await k.createGrant({
+    ownerId,
+    credentialId: credential.id,
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "mail",
+  });
+  const first = await k.save({
+    ownerId,
+    service: "aws",
+    envKey: "AWS_TOKEN",
+    secret: "first-secret",
+    accountLabel: "work",
+    expiresAt: 900,
+  });
+  const second = await k.save({
+    ownerId,
+    service: "aws",
+    envKey: "OTHER_AWS_TOKEN",
+    secret: "second-secret",
+    accountLabel: "personal",
+    expiresAt: 5000,
+  });
+  const input: Parameters<typeof renderKeychainManifest>[0] = {
+    scopeId: "channel:C1",
+    conversationKind: "channel",
+    openSpeakerKeychain: true,
+    actorId: "alice@example.com",
+    members: [{ id: "alice@example.com", displayName: "Alice" }],
+    entriesByOwner: new Map([["alice@example.com", [first, second]]]),
+    connectorsByOwner: new Map([["alice@example.com", [{ ...connector, needsReconnect: true }]]]),
+    scopeGrants: [{ grant, credential }],
+    execution: [
+      {
+        handle: credentialHandle(credential),
+        ownerId,
+        credentialId: credential.id,
+        scope: "scoped",
+        description: "mail grant",
+      },
+      {
+        handle: "connector:gmail.googleapis.com:default",
+        ownerId,
+        credentialId: credential.id,
+        scope: "owner",
+        description: "own mail",
+      },
+      ...[first, second].map((c) => ({
+        handle: credentialHandle(c),
+        ownerId,
+        credentialId: c.id,
+        scope: "owner" as const,
+        description: "aws",
+      })),
+    ],
+  };
+  const rendered = renderKeychainManifest(input, 1000);
+  assert.equal(rendered.split("### ").length - 1, 1);
+  assert.equal(rendered.split("connected app gmail.googleapis.com").length - 1, 1);
+  assert.ok(rendered.includes(`\`${credentialHandle(credential)}\` (execute scope \`scoped\`)`));
+  assert.ok(rendered.includes("`connector:gmail.googleapis.com:default` (execute scope `owner`)"));
+  assert.match(rendered, /NEEDS RECONNECT/);
+  assert.match(rendered, /token expires at/);
+  assert.match(rendered, /account work, EXPIRED/);
+  assert.match(rendered, /account personal, expires at/);
+  assert.notEqual(credentialHandle(first), credentialHandle(second));
+  for (const secret of ["private-token", "first-secret", "second-secret"]) assert.ok(!rendered.includes(secret));
+  input.execution!.reverse();
+  assert.equal(renderKeychainManifest(input, 1000), rendered);
+});
+
+test("granted connector keeps account and refresh semantics when owner is absent from roster", async () => {
+  const k = kc(() => 1000);
+  await k.setConnectorToken("gmail.googleapis.com", "U_OWNER", {
+    accessToken: "old-token",
+    refreshToken: "refresh-token",
+    expiresAt: 900,
+    accountType: "company",
+  });
+  const connector = (await k.listConnectorsByOwners(["U_OWNER"])).get("U_OWNER")![0]!;
+  const credential = (await k.getCredential(connector.credentialId))!;
+  const grant = await k.createGrant({
+    ownerId: "U_OWNER",
+    credentialId: credential.id,
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "mail",
+  });
+  const rendered = renderKeychainManifest(
+    {
+      scopeId: "channel:C1",
+      conversationKind: "channel",
+      actorId: "U_ACTOR",
+      members: [{ id: "U_ACTOR" }],
+      entriesByOwner: new Map(),
+      scopeGrants: [{ grant, credential }],
+    },
+    1000,
+  );
+  assert.match(rendered, /connected app gmail\.googleapis\.com, account company/);
+  assert.match(rendered, /STANDING grant/);
+  assert.doesNotMatch(rendered, /EXPIRED|NEEDS RECONNECT|refresh-token|old-token/);
 });

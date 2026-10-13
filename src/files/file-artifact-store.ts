@@ -64,7 +64,7 @@ export interface ListOwnedOptions {
   nameQuery?: string;
 }
 
-export type FileArtifactRef = Pick<FileArtifact, "ownerScopeId" | "path">;
+export type FileArtifactRef = Pick<FileArtifact, "ownerScopeId" | "id">;
 export class FileArtifactDeletedError extends Error {
   constructor() {
     super("file was deleted");
@@ -88,7 +88,7 @@ export interface FileArtifactStore {
     opts?: ListOwnedOptions,
   ): Promise<FilePage>;
 
-  resolveByOwnerPaths(refs: readonly FileArtifactRef[]): Promise<FileArtifact[]>;
+  resolveByIds(refs: readonly FileArtifactRef[]): Promise<FileArtifact[]>;
 
   setEnabled(id: string, enabled: boolean): Promise<void>;
 
@@ -99,18 +99,8 @@ export function fileArtifactId(seed: string, direction: FileDirection, batchInde
   return createHash("sha256").update(`${seed}:${direction}:${batchIndex}`).digest("hex").slice(0, 32);
 }
 
-/**
- * The artifact store's own path namespace. Files that exist only as artifacts
- * (viewer uploads, inbound attachments) live at artifacts/<id>/<name>;
- * workspace-backed files never do. The namespace is what lets a shared-handle
- * read pick the right backing store without a precedence rule.
- */
 export function artifactPath(id: string, name: string): string {
   return `artifacts/${id}/${name}`;
-}
-
-export function isArtifactPath(path: string): boolean {
-  return /^artifacts\/[0-9a-f]{32}\//.test(path);
 }
 
 const DEFAULT_LIMIT = 50;
@@ -149,7 +139,7 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
     sharedRefs?: readonly FileArtifactRef[],
   ): Promise<FilePage> {
     const owners = new Set(scopes);
-    const shared = new Set(sharedRefs?.map((r) => JSON.stringify([r.ownerScopeId, r.path])));
+    const shared = new Set(sharedRefs?.map((r) => JSON.stringify([r.ownerScopeId, r.id])));
     const limit = clampLimit(opts?.limit);
     const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
     const nameQuery = opts?.nameQuery?.toLowerCase();
@@ -157,7 +147,7 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
       .filter(
         (r) =>
           (owners.has(r.ownerScopeId) && (opts?.includeDisabled || r.enabled)) ||
-          (r.enabled && shared.has(JSON.stringify([r.ownerScopeId, r.path]))),
+          (r.enabled && shared.has(JSON.stringify([r.ownerScopeId, r.id]))),
       )
       .filter((r) => opts?.createdInScope == null || r.createdInScope === opts.createdInScope)
       .filter((r) => nameQuery == null || r.name.toLowerCase().includes(nameQuery));
@@ -246,10 +236,10 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
 
     listDocuments: (scopes, sharedRefs, opts) => listFiles(scopes, opts, sharedRefs),
 
-    async resolveByOwnerPaths(refs) {
+    async resolveByIds(refs) {
       if (refs.length === 0) return [];
-      const want = new Set(refs.map((r) => `${r.ownerScopeId}\0${r.path}`));
-      return [...rows.values()].filter((r) => r.enabled && want.has(`${r.ownerScopeId}\0${r.path}`));
+      const want = new Set(refs.map((r) => `${r.ownerScopeId}\0${r.id}`));
+      return [...rows.values()].filter((r) => r.enabled && want.has(`${r.ownerScopeId}\0${r.id}`));
     },
 
     async setEnabled(id, enabled) {

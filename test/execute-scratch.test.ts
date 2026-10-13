@@ -88,6 +88,7 @@ test("flag OFF: the execute surface is exactly the legacy one (no scope/durable,
   const [execute] = createAgentTools({ current: tc });
   assert.deepEqual(schemaProps(execute!), [
     "command",
+    "background",
     "sandbox_id",
     "purpose",
     "timeout_seconds",
@@ -95,7 +96,7 @@ test("flag OFF: the execute surface is exactly the legacy one (no scope/durable,
     "retrySafe",
   ]);
   assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
-  await call(execute, { command: "echo hi" });
+  await call(execute, { command: "echo hi", purpose: "Run test command" });
   assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
 });
 
@@ -105,6 +106,7 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   const [execute] = createAgentTools(ref, { scratchExec: true });
   assert.deepEqual(schemaProps(execute!), [
     "command",
+    "background",
     "sandbox_id",
     "purpose",
     "timeout_seconds",
@@ -114,20 +116,26 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
     "retrySafe",
   ]);
 
-  await call(execute, { command: "echo hi" });
+  await call(execute, { command: "echo hi", purpose: "Run test command" });
   assert.deepEqual(
     seen.at(-1),
     { command: "echo hi", opts: undefined },
     "omitted scope = durable scoped (follow-ups must work)",
   );
 
-  await call(execute, { command: "echo hi", scope: "scratch" });
+  await call(execute, { command: "echo hi", scope: "scratch", purpose: "Run test command" });
   assert.deepEqual(seen.at(-1)!.opts, { scratch: true });
 
-  await call(execute, { command: "echo hi", scope: "scoped" });
+  await call(execute, { command: "echo hi", scope: "scoped", purpose: "Run test command" });
   assert.deepEqual(seen.at(-1)!.opts, undefined, "a scoped run carries no scratch opt (today's path)");
 
-  await call(execute, { command: "echo hi", scope: "scoped", durable: true, timeout_seconds: 9 });
+  await call(execute, {
+    command: "echo hi",
+    scope: "scoped",
+    durable: true,
+    timeout_seconds: 9,
+    purpose: "Run test command",
+  });
   assert.deepEqual(seen.at(-1)!.opts, { timeoutSeconds: 9 });
 });
 
@@ -135,10 +143,14 @@ test("flag ON: unsupported scope/durable pairings return a crisp [error] without
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc }, { scratchExec: true });
 
-  const e1 = textOf(await call(execute, { command: "echo hi", scope: "scratch", durable: true }));
+  const e1 = textOf(
+    await call(execute, { command: "echo hi", scope: "scratch", durable: true, purpose: "Run test command" }),
+  );
   assert.match(e1, /\[error\] a scratch box cannot be made durable yet/);
 
-  const e2 = textOf(await call(execute, { command: "echo hi", scope: "scoped", durable: false }));
+  const e2 = textOf(
+    await call(execute, { command: "echo hi", scope: "scoped", durable: false, purpose: "Run test command" }),
+  );
   assert.match(e2, /\[error\] the scoped computer is always durable today/);
 
   assert.equal(seen.length, 0, "invalid pairings never reach the sandbox");
@@ -155,8 +167,8 @@ test("flag ON: the tool_call/tool_result entries record which box ran the comman
     scopeLabel: scopeId("personal", "U1"),
   };
   const [execute] = createAgentTools(ref, { scratchExec: true });
-  await call(execute, { command: "echo hi", scope: "scratch" });
-  await call(execute, { command: "echo hi" });
+  await call(execute, { command: "echo hi", scope: "scratch", purpose: "Run test command" });
+  await call(execute, { command: "echo hi", purpose: "Run test command" });
   assert.deepEqual(
     emitted.map((e) => `${e.type}:${e.payload.scope}`),
     ["tool_call:scratch", "tool_result:scratch", "tool_call:scoped", "tool_result:scoped"],
@@ -302,6 +314,7 @@ test("execute schema lists exact command credential handles", async () => {
   const [execute] = createAgentTools({ current: tc }, { commandCredentialHandles: ["kc_github12345"] });
   assert.deepEqual(schemaProps(execute!), [
     "command",
+    "background",
     "sandbox_id",
     "purpose",
     "timeout_seconds",
@@ -309,7 +322,7 @@ test("execute schema lists exact command credential handles", async () => {
     "retrySafe",
   ]);
 
-  await call(execute, { command: "gh api user", credentials: ["kc_github12345"] });
+  await call(execute, { command: "gh api user", credentials: ["kc_github12345"], purpose: "Run test command" });
   assert.deepEqual(seen.at(-1)?.opts, { credentials: ["kc_github12345"] });
 });
 
@@ -339,7 +352,11 @@ test("execute masks credential output before model delivery, screening, and tran
     },
     { commandCredentialHandles: ["kc_test123456"] },
   );
-  const result = await call(execute, { command: "diagnose", credentials: ["kc_test123456"] });
+  const result = await call(execute, {
+    command: "diagnose",
+    credentials: ["kc_test123456"],
+    purpose: "Run test command",
+  });
   const all = JSON.stringify({ result, emitted, screened });
   assert.ok(!all.includes(secret));
   assert.ok(all.includes("useful diagnostics"));
@@ -410,7 +427,7 @@ test("execute records a safe provider-error result for native replay", async () 
       entries.push(entry);
     },
   });
-  const result = await call(execute, { command: "diagnose" });
+  const result = await call(execute, { command: "diagnose", purpose: "Run test command" });
   assert.match(textOf(result), /<redacted:credential>/);
   assert.ok(!JSON.stringify({ result, entries }).includes(secret));
   assert.ok(entries.some((entry) => (entry as { type?: string }).type === "tool_result"));

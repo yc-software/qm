@@ -10,6 +10,16 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
 import { swallow } from "../util/errors.ts";
+import {
+  APP_PID_PATH,
+  appGone,
+  appLaunch,
+  appLogs,
+  appReporter,
+  listeningOn,
+  waitAppReady,
+  type AppErrorSink,
+} from "./shared-deploy-provider.ts";
 
 const AGENT_PORT_DEFAULT = 8080;
 const APP_PORT_DEFAULT = 8081;
@@ -28,17 +38,10 @@ const DATA_CREDS_RETRY_MS = 60_000;
 const failureBackoffStamp = (): number => Date.now() - DATA_CREDS_REFRESH_MS + DATA_CREDS_RETRY_MS;
 const MAX_DATA_TAR_BYTES = 180 * 1024 * 1024;
 const READY_PATH = `${APP_DIR}/.qm-ready`;
-const PID_PATH = "/tmp/qm-app.pid";
-const LOG_PATH = "/tmp/qm-app.log";
 const APP_READY_WINDOW_SEC = 60;
-const APP_READY_EXEC_TIMEOUT_SEC = 90;
 const APP_PORT_RELEASE_TICKS = 40;
 const APP_START_EXEC_TIMEOUT_SEC = 60;
 const EXIT_APP_PORT_HELD = 97;
-const EXIT_APP_EXITED = 98;
-
-const LISTENING_ON_APP_PORT = (port: number): string =>
-  `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; [ "$?" != "7" ]; }`;
 
 const LIVE_REPLICATOR_PIDS = `ls_pids() { for p in /proc/[0-9]*; do c=$(tr '\\0' ' ' < "$p/cmdline" 2>/dev/null); case "\${c%% *}" in litestream|*/litestream) case "$c" in *${LITESTREAM_CONFIG}*) echo "\${p#/proc/}";; esac;; esac; done; }`;
 const ENDPOINT_PORT = 443;
@@ -86,6 +89,7 @@ export interface AwsDeployProviderOptions {
   fetchImpl?: typeof fetch;
   s3?: Pick<S3Client, "send">;
   sts?: Pick<STSClient, "send">;
+  onError?: AppErrorSink;
 }
 
 export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployProvider {
@@ -428,17 +432,17 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     for (const f of files) await writeAbs(id, endpoint, posixJoin(root, normalizeRelPath(f.path)), bytes(f.data));
   }
 
-  async function startApp(id: string, endpoint: string, version: DeploymentVersion): Promise<void> {
+  async function startApp(d: Deployment, id: string, endpoint: string, version: DeploymentVersion): Promise<void> {
     const envExports = Object.entries(version.env ?? {})
       .filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
       .map(([k, v]) => `export ${k}=${shq(v)}`)
       .join("; ");
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
     const script = [
-      LISTENING_ON_APP_PORT(appPort),
-      `old=$(cat ${shq(PID_PATH)} 2>/dev/null || true)`,
+      listeningOn(appPort),
+      `old=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true)`,
       `if [ -n "$old" ]; then kill -TERM "-$old" 2>/dev/null || true; sleep 0.5; kill -KILL "-$old" 2>/dev/null || true; fi`,
-      `rm -f ${shq(PID_PATH)}`,
+      `rm -f ${shq(APP_PID_PATH)}`,
       `for i in $(seq 1 ${APP_PORT_RELEASE_TICKS}); do listening || break; sleep 0.25; done`,
       `listening && exit ${EXIT_APP_PORT_HELD}`,
       ...(s3 ? [`mkdir -p ${shq(DATA_DIR)}`] : []),
@@ -446,7 +450,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       `export PORT=${appPort}`,
       ...(s3 ? [`export DATA_DIR=${shq(DATA_DIR)}`] : []),
       ...(envExports ? [envExports] : []),
-      `setsid sh -c ${shq(inner)} > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`,
+      appLaunch(inner, appPort),
     ].join("; ");
     const r = await execRaw(id, endpoint, script, APP_START_EXEC_TIMEOUT_SEC);
     if (r.code === EXIT_APP_PORT_HELD) {
@@ -455,27 +459,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       );
     }
     if (r.code !== 0) throw new Error(`aws deploy app start failed: ${r.stderr.slice(0, 300)}`);
-    await waitAppReady(id, endpoint);
-  }
-
-  async function waitAppReady(id: string, endpoint: string): Promise<void> {
-    const probe =
-      `pid=$(cat ${shq(PID_PATH)} 2>/dev/null || true); died=0; ` +
-      `end=$(( $(date +%s) + ${APP_READY_WINDOW_SEC} )); ` +
-      `while [ "$(date +%s)" -lt "$end" ]; do ` +
-      `curl -s --max-time 2 -o /dev/null http://127.0.0.1:${appPort}/ && exit 0; ` +
-      `kill -0 -"$pid" 2>/dev/null || died=1; ` +
-      `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; exit 1`;
-    const r = await execRaw(id, endpoint, probe, APP_READY_EXEC_TIMEOUT_SEC);
-    if (r.code === 0) return;
-    const log = await execRaw(id, endpoint, `tail -c 2000 ${shq(LOG_PATH)} 2>/dev/null || true`, 30)
-      .then((out) => `${out.stdout}${out.stderr}`.trim())
-      .catch(() => "");
-    const why =
-      r.code === EXIT_APP_EXITED
-        ? `the version's entrypoint exited without binding port ${appPort}`
-        : `app never listened on port ${appPort} within ${APP_READY_WINDOW_SEC}s`;
-    throw new Error(why + (log ? `; last output from the entrypoint:\n${log}` : "; the entrypoint produced no output"));
+    await waitAppReady((script, timeoutSec) => execRaw(id, endpoint, script, timeoutSec), {
+      appPort,
+      windowSec: APP_READY_WINDOW_SEC,
+      report: appReporter(opts.onError, d, version.env),
+    });
   }
 
   async function materialize(
@@ -528,7 +516,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         if (cur) await store.put(d.id, { ...cur, dataCredsAtMs: Date.now() });
       });
     }
-    await startApp(id, endpoint, version);
+    await startApp(d, id, endpoint, version);
   }
 
   async function endpointFor(d: Deployment, microvmId: string, endpoint: string): Promise<DeployEndpoint> {
@@ -546,7 +534,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     return result;
   }
 
-  const resolveLive = async (d: Deployment, genCurrent: () => boolean): Promise<DeployEndpoint | null> => {
+  const resolveLive = async (
+    d: Deployment,
+    version: DeploymentVersion,
+    genCurrent: () => boolean,
+  ): Promise<DeployEndpoint | null> => {
     const stored = await store.get(d.id);
     if (!stored) return null;
     try {
@@ -564,6 +556,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       )
         return null;
       await ensureRunning(stored.microvmId, stored.endpoint);
+      const exec = (script: string, timeoutSec: number) =>
+        execRaw(stored.microvmId, stored.endpoint, script, timeoutSec);
+      const report = appReporter(opts.onError, d, version.env);
+      if (await appGone(exec, { appPort, report })) return null;
     } catch (e) {
       if (!(e instanceof AwsApiError && (e.status >= 500 || e.status === 429))) throw e;
     }
@@ -631,14 +627,14 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
     reconcile: (d, version, input) => place(d, version, input),
 
-    async resolveEndpoint(d, _version): Promise<DeployEndpoint | null> {
+    async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       const cached = resolveCache.get(d.id);
       if (cached && Date.now() < cached.untilMs) return cached.endpoint;
       const inflight = inflightResolves.get(d.id);
       if (inflight) return inflight;
       const gen = resolveGens.get(d.id) ?? 0;
       const genCurrent = (): boolean => (resolveGens.get(d.id) ?? 0) === gen;
-      const resolve = resolveLive(d, genCurrent)
+      const resolve = resolveLive(d, version, genCurrent)
         .then((endpoint) => {
           if (endpoint && genCurrent()) {
             if (resolveCache.size > 500) {
@@ -660,14 +656,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       const stored = await store.get(d.id);
       if (!stored) return null;
       await ensureRunning(stored.microvmId, stored.endpoint);
-      const lines = Math.max(1, Math.min(2000, Math.floor(opts.tailLines)));
-      const r = await execRaw(
-        stored.microvmId,
-        stored.endpoint,
-        `tail -n ${lines} ${shq(LOG_PATH)} 2>/dev/null || true`,
-        30,
+      return appLogs(
+        (script, timeoutSec) => execRaw(stored.microvmId, stored.endpoint, script, timeoutSec),
+        opts.tailLines,
       );
-      return r.stdout;
     },
 
     async destroy(d): Promise<void> {

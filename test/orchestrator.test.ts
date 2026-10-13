@@ -244,7 +244,7 @@ test("a 1:1 names the authenticated human in the prompt so the agent never asks 
   const res = await app.turn(dm("hi", { actor: { externalId: "ada@acme.com", displayName: "Ada Lovelace" } }));
   assert.equal(res.status, "ok", res.reason);
   const sys = (await sessions.listLlmRequests(res.sessionId!)).at(-1)! as any;
-  assert.match(sys.promptEnvelope.system, /live, private 1:1 with Ada Lovelace \(ada@acme\.com\)/);
+  assert.match(sys.promptEnvelope.system, /live private 1:1 with Ada Lovelace \(ada@acme\.com\)/);
 });
 
 test("a channel turn gets no 1:1 identity block", async () => {
@@ -1178,7 +1178,7 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   const prompt = await app.turn(
     dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:tz-prompt" }, timezone: "America/New_York" }),
   );
-  assert.match(prompt.reply ?? "", /timezone America\/New_York/);
+  assert.match(prompt.reply ?? "", /\(America\/New_York\)/);
 
   captured = undefined;
   const invalid = await app.turn(
@@ -1453,7 +1453,6 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
 
   const userPrompt = await app.turn(dm("!sysprompt"));
   assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
-  assert.match(userPrompt.reply ?? "", /v1\/apis/, "every turn learns the discoverable self-API surface");
 });
 
 test("admin reach rides only live, all-internal turns — autonomous and guest-audience turns mint a powerless token", async () => {
@@ -1895,7 +1894,7 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
   );
   assert.notEqual(t.status, "error");
   const handles = await acl.handlesFor([scopeId("group", "G9")]);
-  const fileHandle = handles.find((h) => h.ownerPath.endsWith("/flag.png"));
+  const fileHandle = handles.find((h) => h.handlePath === "shared/flag.png");
   assert.ok(fileHandle, "the posted file is granted to the conversation scope");
   assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
 });
@@ -1926,7 +1925,7 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
   );
   assert.notEqual(t.status, "error");
   const handles = await acl.handlesFor([scopeId("group", "G9")]);
-  const fileHandle = handles.find((h) => h.ownerPath.endsWith("/flag.png"));
+  const fileHandle = handles.find((h) => h.handlePath === "shared/flag.png");
   assert.ok(fileHandle, "the posted file is granted to the conversation scope");
   assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
 });
@@ -1935,9 +1934,19 @@ test("a file shared with the session is LISTED in the cached system prompt — w
   const built = freshApp();
   const { app, acl } = built;
   const boxes = spyProvisioning(built.sandbox);
-  acl.grant({
+  await built.files.put({
+    id: "budget-file",
     ownerScopeId: scopeId("personal", "U2"),
-    ref: "budget.csv",
+    createdBy: "U2",
+    name: "budget.csv",
+    path: "budget.csv",
+    mimetype: "text/csv",
+    data: Buffer.from("amount\n10"),
+    direction: "out",
+  });
+  await acl.grant({
+    ownerScopeId: scopeId("personal", "U2"),
+    ref: "budget-file",
     granteeScopeId: scopeId("personal", "U1"),
     permission: "read",
     grantedBy: "U2",
@@ -2741,9 +2750,6 @@ test("Dangerous posture keeps predeclared command approvals and hard denials", a
     ],
   });
 
-  const prompt = await app.turn(dm("!sysprompt"));
-  assert.match(prompt.reply ?? "", /Security posture: Dangerous/);
-
   const gated = await app.turn(dm("!run printf dangerous-gated"));
   assert.equal(gated.status, "pending_approval");
   const pending = gated.pendingApprovals![0]!;
@@ -2828,11 +2834,6 @@ test("disabling a grant mode suspends existing grants until it is re-enabled", a
 test("Strict posture gates tool actions behind HiLO and honors a session grant", async () => {
   const built = freshApp();
   await built.config.setSecurityPosture(scopeId("org", "default-org"), "strict");
-
-  const prompt = await built.app.turn(dm("!sysprompt"));
-  assert.match(prompt.reply ?? "", /Security posture: Strict/);
-  assert.match(prompt.reply ?? "", /Every harness tool except the no-effect/);
-  assert.match(prompt.reply ?? "", /Direct capability-token HTTP mutations are blocked/);
 
   const first = await built.app.turn(dm("!write notes.md strict-hello"));
   assert.equal(first.status, "pending_approval", "a plain workspace write pauses under strict");
@@ -2962,8 +2963,6 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   const allowed = await benign.app.turn(dm("!run printf auto-ok", { surface: "webhook", triggered: true }));
   assert.equal(allowed.status, "ok");
   assert.match(allowed.reply ?? "", /auto-ok/);
-  const prompt = await benign.app.turn(dm("!sysprompt", { surface: "webhook", triggered: true }));
-  assert.match(prompt.reply ?? "", /Security: External-content screening/);
 });
 
 test("Concurrent flagged inputs get distinct approval requests that release independently", async () => {
@@ -4539,3 +4538,63 @@ for (const [securityPosture, securityScreen] of [
     assert.doesNotMatch(prompts, /NOT security-screened/);
   });
 }
+
+test("environment inventories are incremental across real turns with a durable full-snapshot anchor", async () => {
+  const { app, sessions } = freshApp();
+  const first = await app.turn(dm("first", { timezone: "America/Los_Angeles" }));
+  assert.equal(first.status, "ok");
+  assert.match(first.reply ?? "", /## Sandbox provider/);
+  const second = await app.turn(dm("second", { timezone: "America/Los_Angeles" }));
+  assert.equal(second.status, "ok");
+  assert.doesNotMatch(second.reply ?? "", /## Sandboxes|## Sandbox provider/);
+  assert.match(second.reply ?? "", /## The user's local time/);
+  const entries = await sessions.getEntries(first.sessionId!);
+  const users = entries.filter((entry) => entry.type === "user");
+  const firstSnapshot = (users[0]!.payload as { environmentSnapshot: { hashes: Record<string, string> } })
+    .environmentSnapshot;
+  assert.ok(Object.keys(firstSnapshot.hashes).some((key) => key.startsWith("Sandbox provider")));
+  const secondSnapshot = (users[1]!.payload as { environmentSnapshot: { anchorSeq: number } }).environmentSnapshot;
+  assert.equal(secondSnapshot.anchorSeq, users[0]!.seq);
+});
+
+test("an isolated channel environment does not disclose the actor's private sandbox", async () => {
+  const built = freshApp({ sharingPosture: "isolated" });
+  await built.directory.replace([
+    { principalId: "U1", displayName: "One", type: "internal" },
+    { principalId: "U2", displayName: "Two", type: "internal" },
+  ]);
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "team" }],
+    [
+      { channelId: "C1", principalId: "U1" },
+      { channelId: "C1", principalId: "U2" },
+    ],
+  );
+  const privateName = "PRIVATE-ACQUISITION-REVIEW";
+  const personal = await built.sandboxResources.create("U1", "personal:U1", "sprites", privateName);
+  await selectComputer(built, "U1", "channel:C1");
+  const inventory = await built.sandboxResources.list("U1", "channel:C1");
+  assert.ok(inventory.sandboxes.some((sandbox) => sandbox.id === personal.id));
+
+  const request: TurnRequest = {
+    surface: "test",
+    actor: internalActor,
+    conversation: {
+      kind: "channel",
+      threadRef: "ch:C1:private-sandbox-environment",
+      channelRef: "C1",
+      audience: [{ externalId: "U1" }, { externalId: "U2" }],
+    },
+    text: "hello",
+  };
+  const result = await built.app.turn(request);
+  assert.equal(result.status, "ok");
+  const session = await built.sessions.getByThread(request.conversation.threadRef);
+  const entries = await built.sessions.getEntries(session!.id);
+  const environment = (entries.find((entry) => entry.type === "user")!.payload as { environment: string }).environment;
+  assert.match(environment, /## Sandbox provider sprites/);
+  for (const content of [environment, result.reply ?? ""]) {
+    assert.ok(!content.includes(privateName), "the private sandbox name must not reach the shared turn");
+    assert.ok(!content.includes(personal.id), "the private sandbox ID must not reach the shared turn");
+  }
+});

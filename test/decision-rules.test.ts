@@ -383,17 +383,9 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
       [route(), { ...route(), id: "shadow", mode: "observe" as const }]
     ),
   } as never;
-  let providerReads = 0;
-  const decide = createDecisionHooks(
-    { ...(store as object), providers: async () => (providerReads++, PROVIDERS) } as never,
-    (providers) => ({
-      choose: async (input) => (await providers(), await providers(), fixed({ keep: 0.2, deep: 0.8 }).choose(input)),
-    }),
-    audit,
-  );
+  const decide = createDecisionHooks(store, fixed({ keep: 0.2, deep: 0.8 }), audit);
   const verdict = await decide("turn_start", "refactor the scheduler", { scopeLabel: "personal:a", sessionId: "s1" });
   assert.deepEqual(asked, ["turn_start"]);
-  assert.equal(providerReads, 1);
   assert.deepEqual(verdict?.runtime, { modelId: "m-deep" });
   assert.deepEqual(
     records.map((r) => [r.action, r.resource, r.status]),
@@ -403,7 +395,7 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
     ],
   );
   assert.equal(
-    await createDecisionHooks(undefined, () => fixed({}), audit)("turn_start", "x", {
+    await createDecisionHooks(undefined, fixed({}), audit)("turn_start", "x", {
       scopeLabel: "s",
       sessionId: "s",
     }),

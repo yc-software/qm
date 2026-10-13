@@ -28,7 +28,7 @@ Check `connections` before work that depends on an app. If the app is in the cat
 
 ## Backend API
 
-Use the authenticated QM API from the computer through the normal execute tool. The Composio project key stays in QM's backend. Do not request it from the keychain, install the Composio SDK, use old SDK scripts, or call Composio directly. Existing execute approval and command policies still apply.
+Use the authenticated QM API from the computer through `execute` with an explicit `sandbox_id`. The Composio project key stays in QM's backend. Do not request it from the keychain, install the Composio SDK, use old SDK scripts, or call Composio directly. Existing execute approval and command policies still apply.
 
 ```js
 const base = process.env.AGENT_API_URL;

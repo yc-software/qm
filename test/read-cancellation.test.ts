@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -66,70 +67,35 @@ test("already cancelled reads never start IO", async () => {
   assert.equal(reads(), 0);
 });
 
-test("cancel during a shared read does not materialize late binary data", async () => {
-  const pending = Promise.withResolvers<Uint8Array | null>();
+test("cancel during a shared artifact read settles without touching a sandbox", async () => {
+  const pending = Promise.withResolvers<Buffer>();
   const started = Promise.withResolvers<void>();
-  let writes = 0;
-  const { tc } = setup({
-    grantedHandles: [
-      {
-        handlePath: "shared/file.bin",
-        ownerPath: "file.bin",
-        ownerScopeId: scopeId("personal", "U2"),
-        permission: "read",
-      },
-    ],
-    workspace: {
-      readBytes: async () => {
-        started.resolve();
-        return pending.promise;
-      },
-    } as unknown as ToolContextDeps["workspace"],
-    sandbox: {
-      writeFileBytes: async () => {
-        writes++;
-      },
-    } as unknown as Sandbox,
+  const ownerScopeId = scopeId("personal", "U2");
+  const { tc, reads } = setup({
+    grantedHandles: [{ handlePath: "shared/file.bin", fileId: "file-id", ownerScopeId, permission: "read" }],
+    files: {
+      get: async () => ({ id: "file-id", name: "file.bin", ownerScopeId }),
+      open: async () => ({
+        artifact: { id: "file-id", name: "file.bin", ownerScopeId },
+        sizeBytes: 3,
+        stream: Readable.from(
+          (async function* () {
+            started.resolve();
+            yield await pending.promise;
+          })(),
+        ),
+      }),
+    } as unknown as ToolContextDeps["files"],
+    provision: async () => {
+      throw new Error("must not provision");
+    },
   });
   const controller = new AbortController();
   const result = tc.read("shared/file.bin", controller.signal);
   await started.promise;
   controller.abort();
   await assert.rejects(result, { name: "AbortError" });
-  pending.resolve(new Uint8Array([255, 254, 0]));
+  pending.resolve(Buffer.from([255, 254, 0]));
   await sleep(0);
-  assert.equal(writes, 0);
-});
-
-test("cancellation drains an in-flight materialization instead of abandoning writes", async () => {
-  const writing = Promise.withResolvers<void>();
-  const finish = Promise.withResolvers<void>();
-  const { tc } = setup({
-    grantedHandles: [
-      {
-        handlePath: "shared/file.bin",
-        ownerPath: "file.bin",
-        ownerScopeId: scopeId("personal", "U2"),
-        permission: "read",
-      },
-    ],
-    workspace: { readBytes: async () => new Uint8Array([255, 254, 0]) } as unknown as ToolContextDeps["workspace"],
-    sandbox: {
-      writeFileBytes: async () => {
-        writing.resolve();
-        await finish.promise;
-      },
-    } as unknown as Sandbox,
-  });
-  const controller = new AbortController();
-  let settled = false;
-  const result = tc.read("shared/file.bin", controller.signal).finally(() => {
-    settled = true;
-  });
-  await writing.promise;
-  controller.abort();
-  await sleep(10);
-  assert.equal(settled, false);
-  finish.resolve();
-  await assert.rejects(result, { name: "AbortError" });
+  assert.equal(reads(), 0);
 });

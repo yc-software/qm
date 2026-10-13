@@ -1,3 +1,4 @@
+import { retainedSnapshot } from "../harness/context-snapshot.ts";
 import type { SessionEntry } from "../types.ts";
 import { isMemoryBookkeeping } from "./notebook.ts";
 
@@ -58,17 +59,13 @@ export function memoryRecallDelta(
   history: readonly SessionEntry[],
   authorizedScopes: readonly string[] = [...body.matchAll(/^### ([^\s:]+:[^\n]+)$/gm)].map((match) => match[1]!),
 ): { text: string; record: RecallRecord } {
-  const previousEntry = history.findLast(
-    (entry) =>
-      entry.type === "user" &&
-      typeof (entry.payload as { memoryRecall?: RecallRecord } | null)?.memoryRecall?.body === "string",
+  const { previous, anchorSeq } = retainedSnapshot(
+    history,
+    (entry) => (entry.payload as { memoryRecall?: RecallRecord } | null)?.memoryRecall,
   );
-  const previous = (previousEntry?.payload as { memoryRecall?: RecallRecord } | undefined)?.memoryRecall;
-  const anchorSeq = previous?.anchorSeq ?? previousEntry?.seq;
-  const retained = anchorSeq !== undefined && history.some((entry) => entry.seq === anchorSeq);
-  const record = { body, ...(retained ? { anchorSeq } : {}) };
+  const record = { body, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
   const newFacts = facts(body);
-  if (!retained || !previous) return { text: render(newFacts.values()), record };
+  if (!previous) return { text: render(newFacts.values()), record };
   if (previous.body === body) return { text: "", record };
   const oldFacts = facts(previous.body);
   const added = [...newFacts].filter(([key]) => !oldFacts.has(key)).map(([, fact]) => fact);
