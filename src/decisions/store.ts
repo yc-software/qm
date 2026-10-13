@@ -62,6 +62,7 @@ const AGENT_LIMIT =
 export function createPostgresDecisionStore(connectionString: string): DecisionStore {
   const { q, pool } = createPgPool(connectionString, "decisions/0001", SCHEMA);
   const active = new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>();
+  let known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;
   const write = async (by: DecisionWriter, guard: string, id: string, fn: (db: PoolClient) => Promise<unknown>) => {
     await withPgTransaction(await pool(), async (db) => {
       await db.query("LOCK TABLE decision_rules IN SHARE ROW EXCLUSIVE MODE");
@@ -69,17 +70,23 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
       await fn(db);
     });
     active.clear();
+    known = undefined;
   };
   return {
     async providers(ids) {
-      const rows = ids
-        ? await q("SELECT * FROM decision_providers WHERE provider_id = ANY($1)", [ids])
-        : await q("SELECT * FROM decision_providers ORDER BY provider_id");
-      return rows.map((r) => ({
-        id: r.provider_id as string,
-        protocol: r.protocol as DecisionProvider["protocol"],
-        ...(r.base_url ? { baseUrl: r.base_url as string, credential: r.credential as string } : {}),
-      }));
+      if (!known || Date.now() - known.at >= CACHE_MS) {
+        const providers = q("SELECT * FROM decision_providers ORDER BY provider_id").then((rows) =>
+          rows.map((r) => ({
+            id: r.provider_id as string,
+            protocol: r.protocol as DecisionProvider["protocol"],
+            ...(r.base_url ? { baseUrl: r.base_url as string, credential: r.credential as string } : {}),
+          })),
+        );
+        known = { at: Date.now(), providers };
+        providers.catch(() => (known = undefined));
+      }
+      const all = await known.providers;
+      return ids ? all.filter((p) => ids.includes(p.id)) : all;
     },
     async rules(hook) {
       if (!hook) return (await q(`${RULES} ORDER BY rule_id`)).map(toRule);
