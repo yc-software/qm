@@ -11,7 +11,8 @@ const EXIT_APP_EXITED = 98;
 const EXIT_APP_GONE = 99;
 const REPORT_LOG_BYTES = 4000;
 const REPORT_CONTEXT_LINES = 40;
-const READY_EXEC_GRACE_SEC = 30;
+const READY_EXEC_WINDOW_SEC = 45;
+const READY_EXEC_GRACE_SEC = 15;
 const APP_PROBE_TIMEOUT_SEC = 5;
 const EXITED_MARK = "qm: entrypoint exited";
 const APP_CHECK_CACHE_MS = 15_000;
@@ -42,7 +43,14 @@ export interface AppReadyOptions {
 }
 
 export const listeningOn = (port: number): string =>
-  `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; c=$?; [ "$c" != 7 ] && [ "$c" != 127 ]; }`;
+  `listening() { grep -q ':${port.toString(16).toUpperCase().padStart(4, "0")} [0-9A-F]*:[0-9A-F]* 0A' /proc/net/tcp /proc/net/tcp6 2>/dev/null; }`;
+
+const statusOn = (port: number): string =>
+  `status() { if command -v curl >/dev/null 2>&1; then curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/; ` +
+  `elif command -v wget >/dev/null 2>&1; then wget -S -q -T 2 -O /dev/null http://127.0.0.1:${port}/ 2>&1 | awk '$1 ~ /^HTTP\\// { c = $2 } END { print c }'; fi; }`;
+
+const whole = (log: string): string =>
+  Buffer.byteLength(log) < REPORT_LOG_BYTES ? log : log.slice(log.indexOf("\n") + 1);
 
 const EXITED = shq(`${APP_PID_PATH}.exited`);
 const REPORTED = shq(`${APP_LOG_PATH}.reported`);
@@ -102,7 +110,7 @@ export async function appGone(exec: Exec, opts: { appPort: number; report?: Repo
     if (first === "down")
       opts.report?.(
         "app_down",
-        `app stopped and nothing restarted it; last output:\n${tail.join("\n").trim() || "(none)"}`,
+        `app stopped and nothing restarted it; last output:\n${whole(tail.join("\n")).trim() || "(none)"}`,
       );
     return true;
   }
@@ -111,25 +119,31 @@ export async function appGone(exec: Exec, opts: { appPort: number; report?: Repo
     const [count, ...rest] = out.split("\n");
     opts.report?.(
       "app_restarted",
-      `app exited ${count} time(s) and was restarted; output before exiting:\n${rest.join("\n")}`,
+      `app exited ${count} time(s) and was restarted; output before exiting:\n${whole(rest.join("\n"))}`,
     );
   }
   return false;
 }
 
 export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<void> {
-  const probe =
-    `died=0; end=$(( $(date +%s) + ${opts.windowSec} )); ` +
+  const probe = (windowSec: number): string =>
+    `${listeningOn(opts.appPort)}; ${statusOn(opts.appPort)}; ` +
+    `died=0; end=$(( $(date +%s) + ${windowSec} )); ` +
     `while [ "$(date +%s)" -lt "$end" ]; do pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true); ` +
-    `code=$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:${opts.appPort}/); ` +
-    `[ "$code" != 000 ] && [ "$code" -lt 500 ] && exit 0; ` +
+    `code=; listening && { code=$(status); case "$code" in ""|[1-4]??) exit 0 ;; esac; }; ` +
     `[ -z "$pid" ] || { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${EXITED} ] || died=1; ` +
     `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; ` +
     `[ "$code" -ge 500 ] 2>/dev/null && { echo "$code"; exit ${EXIT_APP_SERVER_ERROR}; }; exit 1`;
-  const r = await exec(probe, opts.windowSec + READY_EXEC_GRACE_SEC);
+  let left = opts.windowSec;
+  let r: Awaited<ReturnType<Exec>>;
+  do {
+    const windowSec = Math.min(READY_EXEC_WINDOW_SEC, left);
+    left -= windowSec;
+    r = await exec(probe(windowSec), windowSec + READY_EXEC_GRACE_SEC);
+  } while (r.code !== 0 && left > 0);
   if (r.code === 0) return;
   const log = await exec(`tail -c ${REPORT_LOG_BYTES} ${shq(APP_LOG_PATH)} 2>/dev/null || true`, 30)
-    .then((out) => `${out.stdout}${out.stderr}`.trim())
+    .then((out) => whole(`${out.stdout}${out.stderr}`).trim())
     .catch((e: unknown) => `(the app log could not be read: ${errMessage(e)})`);
   let why = `app never listened on port ${opts.appPort} within ${opts.windowSec}s`;
   if (r.code === EXIT_APP_EXITED) why = `the version's entrypoint exited without binding port ${opts.appPort}`;
