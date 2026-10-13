@@ -442,7 +442,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       `export PORT=${appPort}`,
       ...(s3 ? [`export DATA_DIR=${shq(DATA_DIR)}`] : []),
       ...(envExports ? [envExports] : []),
-      `setsid sh -c ${shq(supervised(inner, appPort))} > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`,
+      `setsid sh -c ${shq(supervised(inner, appPort, PID_PATH))} > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`,
     ].join("; ");
     const r = await execRaw(id, endpoint, script, APP_START_EXEC_TIMEOUT_SEC);
     if (r.code === EXIT_APP_PORT_HELD) {

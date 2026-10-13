@@ -6,7 +6,6 @@ const EXIT_APP_EXITED = 98;
 const EXIT_APP_GONE = 99;
 const READY_EXEC_GRACE_SEC = 30;
 const APP_PROBE_TIMEOUT_SEC = 5;
-const EXITED_MARK = "qm: entrypoint exited";
 
 type Exec = (script: string, timeoutSec: number) => Promise<Pick<ExecResult, "stdout" | "stderr" | "code">>;
 
@@ -20,11 +19,15 @@ export interface AppReadyOptions {
 export const listeningOn = (port: number): string =>
   `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; [ "$?" != "7" ]; }`;
 
-export function supervised(inner: string, appPort: number): string {
+const exitedPath = (pidPath: string): string => shq(`${pidPath}.exited`);
+
+export function supervised(inner: string, appPort: number, pidPath: string): string {
   return [
     listeningOn(appPort),
+    `rm -f ${exitedPath(pidPath)}`,
     "n=1",
-    `while :; do s=$(date +%s); sh -c ${shq(inner)}; echo "${EXITED_MARK} with status $?, restarting"`,
+    `while :; do s=$(date +%s); sh -c ${shq(inner)}; rc=$?; echo "$rc" > ${exitedPath(pidPath)}`,
+    'echo "qm: entrypoint exited with status $rc, restarting"',
     "while listening; do sleep 5; done",
     `[ $(( $(date +%s) - s )) -lt 60 ] || n=1; sleep "$n"; [ "$n" -ge 30 ] || n=$((n * 2)); done`,
   ].join("; ");
@@ -47,7 +50,7 @@ export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<v
     `end=$(( $(date +%s) + ${opts.windowSec} )); ` +
     `while [ "$(date +%s)" -lt "$end" ]; do ` +
     `curl -s --max-time 2 -o /dev/null http://127.0.0.1:${opts.appPort}/ && exit 0; ` +
-    `{ kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && ! grep -qF ${shq(EXITED_MARK)} ${shq(opts.logPath)} 2>/dev/null || died=1; ` +
+    `{ kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${exitedPath(opts.pidPath)} ] || died=1; ` +
     `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; exit 1`;
   const r = await exec(probe, opts.windowSec + READY_EXEC_GRACE_SEC);
   if (r.code === 0) return;

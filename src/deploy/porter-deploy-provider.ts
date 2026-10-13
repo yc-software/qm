@@ -147,7 +147,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
 
   async function startApp(sandboxId: string, version: DeploymentVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
-    const launch = `sh -c ${shq(supervised(inner, appPort))} < /dev/null > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`;
+    const launch = `sh -c ${shq(supervised(inner, appPort, PID_PATH))} < /dev/null > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`;
     const script = [
       `mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}`,
       `export HOME=${shq(HOME_DIR)} PORT=${appPort} DATA_DIR=${shq(DATA_DIR)}`,
