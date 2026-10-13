@@ -39,9 +39,10 @@ export function createMemoryTidyService(deps: {
   async function maintainOne(scope: ScopeId): Promise<void> {
     const profile = await deps.store.get(scope);
     if (!profile?.cronId) {
-      const { kind, ref } = parseScopeId(scope);
-      const personal = kind === "personal";
-      const owner = personal ? ref : (await deps.members(scope))?.find((member) => member.type === "internal")?.id;
+      const { kind } = parseScopeId(scope);
+      if (kind !== "personal" && kind !== "channel" && kind !== "group") return;
+      const members = (await deps.members(scope))?.toSorted((a, b) => a.id.localeCompare(b.id));
+      const owner = members?.[0]?.id;
       if (!owner) return;
       const schedule = await scheduleFor(scope, owner);
       const cron = await deps.crons.create({
@@ -50,8 +51,8 @@ export function createMemoryTidyService(deps: {
         ownerScopeId: scope,
         title: "Tidy memory",
         schedule,
-        runAs: personal ? "owner" : "scopeFloor",
         action: MEMORY_TIDY_TASK,
+        ...(kind === "personal" ? { runAs: "owner" } : { runAs: "scopeFloor", members }),
       });
       await deps.store.put(scope, { cronId: cron.id, managedSchedule: schedule, managedAction: MEMORY_TIDY_TASK });
       deps.scheduler.notifyChanged(cron.id);

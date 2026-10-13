@@ -33,7 +33,8 @@ function fixture() {
       facts: async (scope) => notebooks.get(scope) ?? [],
     },
     timezone: async (id) => timezones.get(id),
-    members: async (scope) => members.get(scope),
+    members: async (scope) =>
+      scope.startsWith("personal:") ? [{ id: scope.slice("personal:".length), type: "internal" }] : members.get(scope),
     crons,
     scheduler: { notifyChanged: () => {} },
   });
@@ -65,7 +66,12 @@ test("creates one nightly tidy cron per notebook, near 3 AM in the owner's timez
   f.notebooks.set(scopeId("personal", "bob"), [f.fact(1)]);
   f.notebooks.set(channel, [f.fact(1)]);
   f.notebooks.set(scopeId("channel", "C2"), [f.fact(1)]);
-  f.members.set(channel, [{ id: "carol", type: "internal" }]);
+  f.members.set(channel, [
+    { id: "dave", type: "internal" },
+    { id: "carol", type: "internal" },
+  ]);
+  f.notebooks.set(scopeId("team", "T1"), [f.fact(1)]);
+  f.members.set(scopeId("team", "T1"), [{ id: "carol", type: "internal" }]);
   f.timezones.set("alice", "Europe/London");
   await f.service.maintain();
   await f.service.maintain();
@@ -81,6 +87,10 @@ test("creates one nightly tidy cron per notebook, near 3 AM in the owner's timez
   assert.equal(shared.ownerScopeId, channel);
   assert.equal(shared.owner, "carol");
   assert.equal(shared.runAs, "scopeFloor");
+  assert.deepEqual(
+    shared.members?.map((member) => member.id),
+    ["carol", "dave"],
+  );
 });
 
 test("a scheduled fire runs the tidy only when the notebook changed since the last tidy", async () => {

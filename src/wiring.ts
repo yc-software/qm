@@ -131,6 +131,7 @@ import type {
   LoopItem,
   LoopOutput,
   Monitor,
+  Principal,
   ShipGrant,
   PendingApprovalRecord,
   ScopeId,
@@ -138,7 +139,7 @@ import type {
   SurfaceContextRequest,
   Webhook,
 } from "./types.ts";
-import { personalScope, scopeId } from "./types.ts";
+import { parseScopeId, personalScope, scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
@@ -2499,7 +2500,17 @@ export function buildApp(
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
     memory: baseMemory,
     timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
-    members: currentScopeMembers,
+    members: async (scope) => {
+      const { kind, ref } = parseScopeId(scope);
+      let ids: string[] | undefined = [ref];
+      if (kind === "group" && projects.recognizes(ref)) ids = await projects.members(ref);
+      else if (kind === "channel" || kind === "group")
+        ids = (await directory.conversationMembers(kind, ref))?.map((member) => member.principalId);
+      else if (kind !== "personal") return undefined;
+      return ids
+        ?.filter((id) => identity.classify(id).type === "internal")
+        .map((id): Principal => ({ id, type: "internal" }));
+    },
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
