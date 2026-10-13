@@ -1,4 +1,5 @@
 import "./instrument.ts";
+import { handleVoiceRoute } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { appEditSlug } from "../src/app-edit.ts";
@@ -446,6 +447,7 @@ interface Identity {
   user: string;
   name: string | null;
   impersonator: string | null;
+  portalVerified: boolean;
 }
 type Denial = "unauthenticated" | "not_allowed";
 
@@ -469,7 +471,9 @@ function authenticate(req: IncomingMessage): { identity: Identity } | { denied: 
   }
   if (!user) return { denied: "unauthenticated" };
   if (ALLOW.length > 0 && !ALLOW.includes(user)) return { denied: "not_allowed" };
-  return { identity: { user, name: name?.trim() || null, impersonator: impersonator ?? null } };
+  return {
+    identity: { user, name: name?.trim() || null, impersonator: impersonator ?? null, portalVerified: Boolean(claims) },
+  };
 }
 
 function resolveIdentity(req: IncomingMessage): Identity | null {
@@ -3309,6 +3313,15 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
+    if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
+      return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
+        core: CORE,
+        secret: CORE_SIGNING_SECRET,
+        org: ORG,
+        publicUrl: PUBLIC_URL,
+      });
+    }
+
     const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
     if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
