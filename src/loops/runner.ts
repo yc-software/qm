@@ -73,6 +73,42 @@ export function fireNeedsAttention(summary: FireSummary): boolean {
   );
 }
 
+/**
+ * Review headroom for a single fire. `maxOpenOutputs` used to be read once, at fire start; with items
+ * running beside each other that let one fire sail straight past the cap. Now every item in flight
+ * holds a slot while it runs and settles it for the outputs it actually left waiting for a person,
+ * so the cap holds continuously instead of only at the starting line.
+ */
+class ReviewBudget {
+  private inFlight = 0;
+  private readonly cap: number | undefined;
+  private open: number;
+
+  constructor(cap: number | undefined, open: number) {
+    this.cap = cap;
+    this.open = open;
+  }
+
+  get full(): boolean {
+    return this.cap !== undefined && this.open + this.inFlight >= this.cap;
+  }
+
+  admit(): boolean {
+    if (this.full) return false;
+    this.inFlight += 1;
+    return true;
+  }
+
+  release(opened: number): void {
+    this.inFlight -= 1;
+    this.open += opened;
+  }
+
+  reason(): string {
+    return `${this.open} outputs waiting for review`;
+  }
+}
+
 export async function runLoopFire(
   loop: Loop,
   stores: LoopStores,
@@ -83,9 +119,12 @@ export async function runLoopFire(
   if (!summary.ran) return summary;
   const effectiveMaxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
 
-  const openOutputs = (await stores.outputs.byLoop(loop.id)).filter(unresolvedOutput).length;
-  if (loop.caps?.maxOpenOutputs !== undefined && openOutputs >= loop.caps.maxOpenOutputs) {
-    summary.throttled = `${openOutputs} outputs waiting for review`;
+  const budget = new ReviewBudget(
+    loop.caps?.maxOpenOutputs,
+    (await stores.outputs.byLoop(loop.id)).filter(unresolvedOutput).length,
+  );
+  if (budget.full) {
+    summary.throttled = budget.reason();
     await stores.loops.recordFireOutcome(loop.id, false);
     return summary;
   }
@@ -107,17 +146,43 @@ export async function runLoopFire(
     loop.caps?.maxItemsPerFire,
   );
   const batch = loop.throttle ? queued.slice(0, Math.max(1, Math.floor(queued.length / 2))) : queued;
+  // A shared cursor rather than `for…of`: a worker that stops early must not close the iterator out
+  // from under the workers still pulling from it.
   const remaining = batch.values();
+  let capped = false;
+  let drained = false;
   const workers = await Promise.allSettled(
     Array.from({ length: Math.min(loop.caps?.maxConcurrentItems ?? 1, batch.length) }, async () => {
-      for (const queued of remaining) {
-        const item = await stores.items.claim(queued.id, undefined, loop.id);
-        if (!item) continue;
+      for (;;) {
+        if (!budget.admit()) {
+          capped = true;
+          break;
+        }
+        const next = remaining.next();
+        if (next.done) {
+          budget.release(0);
+          drained = true;
+          break;
+        }
+        const queued = next.value;
+        let item: LoopItem | null;
+        try {
+          item = await stores.items.claim(queued.id, undefined, loop.id);
+        } catch (error) {
+          budget.release(0);
+          throw error;
+        }
+        if (!item) {
+          budget.release(0);
+          continue;
+        }
         const claimToken = item.claimToken!;
         summary.worked += 1;
 
         let autoShippedCount = 0;
         let autoOutputCount = 0;
+        let openedOutputs = 0;
+        let promoted: LoopOutput[] = [];
         try {
           const { runId } = await effects.work({
             loop,
@@ -185,6 +250,8 @@ export async function runLoopFire(
             continue;
           }
           const ready = await stores.outputs.promoteAttempt(item.id, runId);
+          promoted = ready;
+          openedOutputs = ready.length;
           const autoShipped: string[] = [];
           autoOutputCount = ready.filter(
             (output) => decideShip(loop, outputCandidate(output), grants).outcome === "auto",
@@ -199,6 +266,7 @@ export async function runLoopFire(
               autoShippedCount += 1;
             }
           }
+          openedOutputs = ready.length - autoShipped.length;
           if (autoShipped.length === ready.length) {
             await stores.items.markShipped(item.id);
             summary.shipped.push(item.id);
@@ -206,6 +274,9 @@ export async function runLoopFire(
             summary.ready.push(item.id);
           }
         } catch (error) {
+          // whatever was promoted and not auto-shipped is still sitting in the review queue; everything
+          // else is about to be superseded, so it costs the loop no review headroom
+          openedOutputs = autoShippedCount > 0 ? Math.max(0, promoted.length - autoShippedCount) : 0;
           const reason = error instanceof Error ? error.message : String(error);
           summary.failures.push(`${item.sourceKey}: ${reason}`);
           if (autoShippedCount > 0) {
@@ -224,12 +295,16 @@ export async function runLoopFire(
             await stores.items.returnToWork(item.id, reason, claimToken);
             summary.continued.push(item.id);
           }
+        } finally {
+          budget.release(openedOutputs);
         }
       }
     }),
   );
   // the fire throws only once every worker has settled, so no work is still running when the caller sees it fail
   for (const worker of workers) if (worker.status === "rejected") throw worker.reason;
+  // read the headroom after everything has settled, so the reason names what is really waiting
+  if (capped && !drained) summary.throttled ??= budget.reason();
 
   await stores.loops.recordFireOutcome(loop.id, summary.failures.length > 0);
   return summary;

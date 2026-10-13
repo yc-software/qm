@@ -540,3 +540,57 @@ test("a failed claim does not reject the fire while a sibling item is still in f
   release.get(started[1]!)!();
   assert.equal(await outcome, "ledger unavailable");
 });
+
+test("concurrent items stop at the unreviewed-output cap instead of sailing past it", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxOpenOutputs: 2, maxConcurrentItems: 4 } });
+  const summary = await runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [{ sourceKey: "A" }, { sourceKey: "B" }, { sourceKey: "C" }, { sourceKey: "D" }],
+      captureOutputs: async ({ item }) => [
+        { shipAction: "open_pr", title: item.sourceKey, capturedBy: "ledger", externalRef: `pr-${item.sourceKey}` },
+      ],
+    }),
+  );
+  assert.equal(summary.worked, 2);
+  assert.equal((await s.outputs.awaitingReview(loop.id)).length, 2);
+  assert.equal(summary.throttled, "2 outputs waiting for review");
+  assert.equal((await s.items.queued(loop.id)).length, 2);
+});
+
+test("an item that leaves nothing for review hands its review slot straight back", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxOpenOutputs: 1, maxConcurrentItems: 3 } });
+  const summary = await runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [{ sourceKey: "A" }, { sourceKey: "B" }, { sourceKey: "C" }],
+      evaluate: async () => ({ outcome: "continue", reason: "not done yet", checks: [], judged: true }),
+    }),
+  );
+  assert.equal(summary.worked, 3);
+  assert.equal(summary.continued.length, 3);
+  assert.equal(summary.throttled, undefined);
+  assert.equal((await s.outputs.awaitingReview(loop.id)).length, 0);
+});
+
+test("with no output cap set, concurrency is limited only by the pool", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxConcurrentItems: 3 } });
+  const summary = await runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [{ sourceKey: "A" }, { sourceKey: "B" }, { sourceKey: "C" }],
+      captureOutputs: async ({ item }) => [
+        { shipAction: "open_pr", title: item.sourceKey, capturedBy: "ledger", externalRef: `pr-${item.sourceKey}` },
+      ],
+    }),
+  );
+  assert.equal(summary.worked, 3);
+  assert.equal(summary.throttled, undefined);
+  assert.equal((await s.outputs.awaitingReview(loop.id)).length, 3);
+});
