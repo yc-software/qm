@@ -3091,6 +3091,10 @@
         margin: 0;
         font-size: 12px;
       }
+      .memory-recall-mode small {
+        display: block;
+        color: var(--muted);
+      }
       .soul-revision small {
         display: block;
         color: var(--muted);
@@ -6539,6 +6543,7 @@
                 </div>
                 <template data-settings-card="card-base-model"></template>
                 <template data-settings-card="card-webui-models"></template>
+                <template data-settings-card="card-memory-recall"></template>
                 <template data-settings-card="card-branding"></template>
                 <template data-settings-card="card-feature-flags"></template>
                 <div class="governance-group" id="governance-credentials">
@@ -8054,6 +8059,7 @@
           governanceUI.settings.load(r.data, scope, "subagent-runtime");
           governanceUI.settings.load(r.data, scope, "fallback-runtime");
           governanceUI.settings.load(r.data, scope, "webui-models");
+          void governanceUI.settings.loadMemory(r.data, scope);
         }
         refreshModelChoices.push(() => governanceUI.settings.updateCatalog(r.data));
         if (requestedView === "customize") {
@@ -8382,6 +8388,7 @@
         return governanceUI.onboarding.load();
       }
 
+      governanceUI.settings.configureMemory({ api });
       governanceUI.settings.configureProviders({
         api,
         refresh: async () => {

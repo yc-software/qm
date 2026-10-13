@@ -279,6 +279,7 @@ const SETTINGS_RESOURCES = {
     "webuiModels",
     "interactiveFastMode",
     "individualModelAuth",
+    "memoryEmbeddingModel",
     "browseModel",
     "browseMaxSteps",
   ],

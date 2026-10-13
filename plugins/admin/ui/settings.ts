@@ -13,6 +13,8 @@ export {
 import { mountProviders } from "./settings-providers.ts";
 export { configureProviders, openProvider, loadProviders } from "./settings-providers.ts";
 import { mountFlags } from "./settings-flags.ts";
+import { mountMemory } from "./settings-memory.ts";
+export { configureMemory, loadMemory } from "./settings-memory.ts";
 export { configureFlags, loadFlags } from "./settings-flags.ts";
 import { brandingCard } from "./settings-branding.ts";
 import { html } from "lit";
@@ -347,6 +349,7 @@ function card(s: SettingsState) {
 export function mountCards() {
   mountFlags();
   mountProviders();
+  mountMemory();
   mountCredentials();
   const renderRuntimes = mountTemplate('template[data-settings-card="card-base-model"]', () =>
     runtimeKeys.map((key) => card(states.get(key)!)),
