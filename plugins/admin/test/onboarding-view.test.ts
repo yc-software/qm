@@ -331,3 +331,38 @@ test("saving another provider's key can keep the current base model", async () =
   assert.match(controller.providerMessage, /base model is unchanged/);
   dom.window.close();
 });
+
+test("a pending onboarding load keeps an explicit keep-current-base-model choice", async () => {
+  const { dom, controller } = fixture();
+  let complete: (response: unknown) => void = () => {};
+  controller.baseModel = "first-option";
+  controller.models = {
+    anthropic: ANTHROPIC_MODELS,
+    openai: [{ id: "gpt-test", name: "GPT test", provider: "openai" }],
+  };
+  controller.context.api = async (_method: string, path: string) => {
+    if (path === "/api/model-providers?catalog=cached")
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
+    if (path.includes("?view=onboarding")) return { ok: true, data: { baseModel: "first-option" } };
+    return { ok: true, data: {} };
+  };
+  const pending = controller.load();
+  const provider = dom.window.document.querySelector<HTMLSelectElement>("#onboarding-model-provider")!;
+  provider.value = "openai";
+  provider.dispatchEvent(new dom.window.Event("change"));
+  const model = dom.window.document.querySelector<HTMLSelectElement>("#onboarding-model-id")!;
+  model.value = "";
+  model.dispatchEvent(new dom.window.Event("change"));
+  complete({
+    ok: true,
+    data: {
+      providers: UNCONFIGURED_PROVIDERS,
+      models: [...ANTHROPIC_MODELS, { id: "gpt-test", name: "GPT test", provider: "openai" }],
+    },
+  });
+  await pending;
+  assert.equal(controller.model, "");
+  dom.window.close();
+});

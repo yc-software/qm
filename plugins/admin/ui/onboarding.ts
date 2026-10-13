@@ -37,6 +37,7 @@ export class Onboarding {
   registryProvider = "openai";
   registryKind = "chat";
   baseModel = "";
+  keepBaseModel = false;
   registryId = "";
   editing = false;
   providerLocked = false;
@@ -188,7 +189,7 @@ export class Onboarding {
     if (selection.provider === this.provider && selection.model === this.model && selection.apiKey === this.apiKey) {
       this.provider = provider || this.providers[0]?.provider || "anthropic";
       this.model = this.firstModel();
-    } else if (!this.model) this.model = this.firstModel();
+    } else if (!this.model && !this.keepBaseModel) this.model = this.firstModel();
     this.steps.slack = {
       text: slack.data.configured ? "Connected" : "Optional",
       tone: slack.data.configured ? "ok" : "muted",
@@ -489,6 +490,7 @@ export class Onboarding {
               @change=${(e: Event) => {
                 this.provider = (e.target as HTMLSelectElement).value;
                 this.model = this.firstModel();
+                this.keepBaseModel = false;
                 this.draw();
               }}
             >
@@ -502,6 +504,7 @@ export class Onboarding {
               ?disabled=${this.providerBusy}
               @change=${(e: Event) => {
                 this.model = (e.target as HTMLSelectElement).value;
+                this.keepBaseModel = !this.model;
                 this.draw();
               }}
             >
@@ -687,7 +690,7 @@ export class Onboarding {
           </p>
           <div class="setup-form" id="model-registry-advanced-fields">
             ${Object.keys(fieldLabels)
-              .filter((key) => !missing.includes(key))
+              .filter((key) => this.registryKind === "chat" && !missing.includes(key))
               .map((key) => this.field(key))}
             <p class="muted" id="model-registry-capabilities">
               ${template ? `Inherited: ${template.input.join(", ")} input; reasoning ${template.reasoning ? "yes" : "no"}.` : ""}
