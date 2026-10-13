@@ -577,7 +577,9 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   assert.equal(entries.filter((entry) => entry.type === "user").length, 1, "queued input is not model intake");
   writeFileSync(capturePath + ".release", "continue");
   await running;
-  assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+  const intake = entries.filter((entry) => entry.type === "user");
+  assert.equal(intake.length, 2);
+  assert.equal((intake[1]?.payload as { steered?: boolean }).steered, true);
   assert.equal((await signals.pending(turn.runId)).length, 0);
   const sent = readFileSync(capturePath, "utf8");
   assert.ok(sent.includes(pdf));
