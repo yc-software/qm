@@ -8,11 +8,12 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { MemoryFact } from "../src/memory/facts.ts";
-import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type Principal, type ScopeId, type TurnRequest } from "../src/types.ts";
 
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
   const timezones = new Map<string, string>();
+  const members = new Map<ScopeId, Principal[]>();
   const store = createMemoryMap<MemoryTidyProfile>();
   const crons = createCronStore();
   const calls: TurnRequest[] = [];
@@ -32,6 +33,7 @@ function fixture() {
       facts: async (scope) => notebooks.get(scope) ?? [],
     },
     timezone: async (id) => timezones.get(id),
+    members: async (scope) => members.get(scope),
     crons,
     scheduler: { notifyChanged: () => {} },
   });
@@ -46,32 +48,39 @@ function fixture() {
       return { status: "silent" };
     },
   });
-  const cronOf = async (id: string) => (await crons.get((await store.get(id))!.cronId!))!;
+  const cronOf = async (id: string) => (await crons.get((await store.get(scopeId("personal", id)))!.cronId!))!;
   const fireAt = async (id: string, at: number) => {
     const cron = await cronOf(id);
     await crons.update(cron.id, { schedule: { everyMs: 60_000 } });
     await scheduler.tick(at);
     await crons.update(cron.id, { schedule: cron.schedule });
   };
-  return { notebooks, timezones, store, crons, calls, service, scheduler, cronOf, fact, fireAt };
+  return { notebooks, timezones, members, store, crons, calls, service, scheduler, cronOf, fact, fireAt };
 }
 
-test("creates one nightly tidy cron per personal notebook, near 3 AM in the owner's timezone", async () => {
+test("creates one nightly tidy cron per notebook, near 3 AM in the owner's timezone", async () => {
   const f = fixture();
+  const channel = scopeId("channel", "C1");
   f.notebooks.set(scopeId("personal", "alice"), [f.fact(1)]);
   f.notebooks.set(scopeId("personal", "bob"), [f.fact(1)]);
-  f.notebooks.set(scopeId("channel", "C1"), [f.fact(1)]);
+  f.notebooks.set(channel, [f.fact(1)]);
+  f.notebooks.set(scopeId("channel", "C2"), [f.fact(1)]);
+  f.members.set(channel, [{ id: "carol", type: "internal" }]);
   f.timezones.set("alice", "Europe/London");
   await f.service.maintain();
   await f.service.maintain();
 
-  assert.equal((await f.crons.list()).length, 2);
+  assert.equal((await f.crons.list()).length, 3);
   const alice = await f.cronOf("alice");
   assert.match(alice.schedule.cron!, /^\d+ 3 \* \* \*$/);
   assert.equal(alice.schedule.timezone, "Europe/London");
   assert.equal(alice.ownerScopeId, scopeId("personal", "alice"));
-  assert.equal(alice.enabled, true);
+  assert.equal(alice.runAs, "owner");
   assert.equal((await f.cronOf("bob")).schedule.timezone, "America/Los_Angeles");
+  const shared = (await f.crons.get((await f.store.get(channel))!.cronId!))!;
+  assert.equal(shared.ownerScopeId, channel);
+  assert.equal(shared.owner, "carol");
+  assert.equal(shared.runAs, "scopeFloor");
 });
 
 test("a scheduled fire runs the tidy only when the notebook changed since the last tidy", async () => {
@@ -83,7 +92,7 @@ test("a scheduled fire runs the tidy only when the notebook changed since the la
 
   await f.fireAt("alice", Date.now() + 120_000);
   assert.equal(f.calls.length, 1);
-  assert.match(f.calls[0]!.text, /Tidy your memory notebook/);
+  assert.match(f.calls[0]!.text, /memory notebook/);
   assert.equal(f.calls[0]!.surface, "cron");
 
   await f.fireAt("alice", Date.now() + 240_000);
@@ -139,7 +148,7 @@ test("follows a newly learned timezone and task update while the platform still 
   await f.service.maintain();
   const id = (await f.cronOf("alice")).id;
   await f.crons.update(id, { action: "older platform task" });
-  await f.store.merge("alice", { managedAction: "older platform task" });
+  await f.store.merge(scopeId("personal", "alice"), { managedAction: "older platform task" });
   f.timezones.set("alice", "Asia/Tokyo");
   await f.service.maintain();
   const cron = (await f.crons.get(id))!;

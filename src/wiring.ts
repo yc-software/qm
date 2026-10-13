@@ -2499,6 +2499,7 @@ export function buildApp(
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
     memory: baseMemory,
     timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
+    members: currentScopeMembers,
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
