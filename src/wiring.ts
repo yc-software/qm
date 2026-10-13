@@ -841,13 +841,19 @@ export function buildApp(
   });
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog());
-  const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
-    errors.record({
-      category: e.category,
-      code: e.code,
-      message: e.message,
-      scopeLabel: (e.scopeLabel ?? "unknown") as ScopeId,
-    });
+  const sandboxOnError = (
+    e: { category: string; code: string; message: string; scopeLabel?: string },
+    error?: unknown,
+  ) =>
+    errors.record(
+      {
+        category: e.category,
+        code: e.code,
+        message: e.message,
+        scopeLabel: (e.scopeLabel ?? "unknown") as ScopeId,
+      },
+      error,
+    );
   const buildLocal = (): Sandbox =>
     createLocalSandbox(workspace, {
       ...config.localSandbox,
@@ -1668,6 +1674,7 @@ export function buildApp(
       ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
       advisoryLock,
       store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
+      onError: sandboxOnError,
     });
   if (config.deployProvider === "fly" && config.flyDeploy.sharedAppName && !config.flyDeploy.wireguardPeers)
     throw new Error("Fly shared apps require FLY_DEPLOY_WIREGUARD_PEERS for private connectivity");
@@ -1696,6 +1703,7 @@ export function buildApp(
         ...config.porterDeploy,
         advisoryLock,
         store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
+        onError: sandboxOnError,
       }),
   };
   if (
