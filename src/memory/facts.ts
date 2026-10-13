@@ -76,5 +76,6 @@ export function factLine(fact: Shown & Pick<MemoryFact, "id">): string {
 }
 
 export function parseFactId(value: string): string {
-  return value.trim().replace(/^#/, "");
+  const id = value.trim();
+  return id.startsWith("#") ? id.slice(1) : id;
 }

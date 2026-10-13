@@ -35,7 +35,9 @@ export async function setOnboardingStatus(
   version = ONBOARDING_VERSION,
 ): Promise<void> {
   const stale = ((await memory.facts?.(scope)) ?? [])
-    .filter((fact) => fact.text.startsWith("Onboarding: "))
+    .filter((fact) =>
+      ["completed", "dismissed", "pending"].some((s) => fact.text.startsWith(`Onboarding: ${s} ${version} `)),
+    )
     .map((fact) => fact.id);
   if (stale.length) await memory.delete?.(scope, stale, author);
   if (status === "not_started") return;

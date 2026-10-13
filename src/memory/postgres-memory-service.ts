@@ -20,7 +20,7 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS memory_facts_live ON memory_facts(scope_id, id) WHERE deleted_at IS NULL`,
   `DO $$
   BEGIN
-    IF to_regclass('memory_revisions') IS NULL THEN RETURN; END IF;
+    IF to_regclass('memory_revisions') IS NULL OR EXISTS (SELECT 1 FROM memory_facts) THEN RETURN; END IF;
     WITH head AS (
       SELECT DISTINCT ON (scope_id) scope_id, body, records, at
         FROM memory_revisions ORDER BY scope_id, seq DESC
