@@ -64,7 +64,7 @@ export function oversizeAttachmentNote(name: string): string {
   return `"${name}" is too large — files up to ~1 GB can be sent. It was left out.`;
 }
 
-export function emptyAttachmentNote(name: string): string {
+function emptyAttachmentNote(name: string): string {
   return `"${name}" is empty. It was left out.`;
 }
 
@@ -73,7 +73,7 @@ export function tooManyFilesNote(names: string[]): string {
   return `Skipped ${skipped} — too many files in one message (max ${MAX_FILES_PER_MESSAGE}).`;
 }
 
-export interface SkippedAttachment {
+interface SkippedAttachment {
   id?: string;
   name: string;
   note: string;
@@ -389,13 +389,6 @@ export async function regenerateTitle(id: string): Promise<{ title: string | nul
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
 }
 
-export async function adoptSession(id: string, parentSessionId: string): Promise<{ adopted: true }> {
-  return api<{ adopted: true }>(`/api/sessions/${encodeURIComponent(id)}/adopt`, {
-    method: "POST",
-    body: JSON.stringify({ parentSessionId }),
-  });
-}
-
 export async function detachSession(id: string): Promise<{ detached: true }> {
   return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
 }
@@ -599,7 +592,7 @@ export function continuableMessages(
   return { messages: kept.length ? kept : [resumeAnchor()], popped };
 }
 
-export const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
+const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
 export function isContinuable(s: Pick<CoreSession, "threadRef" | "scopeId">, user: string): boolean {
   if (s.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
@@ -719,7 +712,7 @@ export function setSigninRequiredHandler(fn: (detail: SigninRequired) => void): 
   onSigninRequired = fn;
 }
 
-export function reportSigninRequired(detail: SigninRequired): void {
+function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
@@ -1162,7 +1155,7 @@ export function mintSendKey(): string {
   return crypto.randomUUID();
 }
 
-export function sendKeyOf(message: unknown): string | undefined {
+function sendKeyOf(message: unknown): string | undefined {
   const key = (message as SendKeyed | null)?.idempotencyKey;
   return typeof key === "string" && key ? key : undefined;
 }
@@ -1762,7 +1755,7 @@ function xmlAttrUnescape(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
-export function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
+function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
   const text = (payload as { text?: unknown } | null)?.text;
   if (typeof text !== "string") return undefined;
   const m = SUBAGENT_MAIL_RE.exec(text);
