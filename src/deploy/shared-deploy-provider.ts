@@ -67,7 +67,7 @@ export function appLaunch(inner: string, appPort: number): string {
 export function appBoot(inner: string, appPort: number, prep = "true"): string {
   return [
     `echo $$ > ${APP_PID_PATH}`,
-    `if { ${prep}; } > ${shq(APP_LOG_PATH)} 2>&1; then ${appLaunch(inner, appPort)}; fi`,
+    `if { ${prep}; } > ${shq(APP_LOG_PATH)} 2>&1; then ${appLaunch(inner, appPort)}; else rm -f ${APP_PID_PATH}; fi`,
     `trap 'p=$(cat ${APP_PID_PATH}); kill -TERM -"$p" 2>/dev/null || kill -TERM "$p"; while kill -0 "$p" 2>/dev/null; do sleep 0.2; done; exit 0' INT TERM`,
     "while :; do sleep 3600 & wait $!; done",
   ].join("; ");
