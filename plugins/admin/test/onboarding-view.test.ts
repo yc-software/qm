@@ -257,3 +257,18 @@ test("pending onboarding reads preserve the provider associated with a newly ent
   assert.equal(key.value, "test-only-key");
   dom.window.close();
 });
+
+test("a base model served by a custom provider is ready without a built-in key (#669)", async () => {
+  const elements = await runLoadOnboarding(
+    {
+      providers: UNCONFIGURED_PROVIDERS,
+      models: [...ANTHROPIC_MODELS, { id: "acme-large", name: "Acme Large", provider: "acme-gateway" }],
+    },
+    { baseModel: "acme-large" },
+  );
+  assert.equal(elements["onboarding-model-badge"]!.textContent, "Ready");
+  assert.equal(
+    elements["onboarding-model-summary"]!.textContent,
+    "acme-large · served by the acme-gateway custom provider",
+  );
+});
