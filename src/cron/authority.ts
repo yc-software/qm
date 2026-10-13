@@ -14,7 +14,7 @@ export function cronTriggerAuthority(cron: TriggerAuthority): TriggerAuthority {
   return {
     owner: cron.owner,
     ownerScopeId: cron.ownerScopeId,
-    ...(cron.runAs ? { runAs: cron.runAs } : {}),
+    runAs: cron.runAs ?? "owner",
     ...(cron.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
     ...(cron.unattendedGrants ? { unattendedGrants: [...cron.unattendedGrants] } : {}),
     ...(cron.members ? { members: cron.members } : {}),

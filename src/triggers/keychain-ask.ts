@@ -55,7 +55,7 @@ export async function fireAskResolution(
   }
   const destination = cron ? cron.destination : ask.requesterDestination;
   const outcome = await runTrigger(deps, {
-    ...cronTriggerAuthority(cron ?? { owner: ask.requesterId, ownerScopeId: ask.requesterScopeId }),
+    ...(cron ? cronTriggerAuthority(cron) : { owner: ask.requesterId, ownerScopeId: ask.requesterScopeId }),
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",

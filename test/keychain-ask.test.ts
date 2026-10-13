@@ -499,9 +499,11 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     assert.ok(!prompt.includes(ask.purpose) && !prompt.includes("payments work"), "no purpose text");
   }
 
-  const ok = mkDeps(async () => ({ status: "ok", reply: "done" }) as TurnResult);
+  let resumed: TurnRequest | undefined;
+  const ok = mkDeps(async (req) => ((resumed = req), { status: "ok", reply: "done" }) as TurnResult);
   await fireAskResolution(ok, ask);
   assert.deepEqual(await texts(ok), ["done"], "just the turn's reply, no fallback");
+  assert.equal(resumed?.ownerKeychainUnion, undefined, "a channel ask without a cron does not borrow the keychain");
 });
 
 test("manifest: the requester-side ledger names no ask ids or purposes, and asks go through one route", async () => {

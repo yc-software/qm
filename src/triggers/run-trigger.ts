@@ -225,6 +225,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ? members.map((m) => ({ externalId: m.id, ...(m.teamIds ? { teamIds: m.teamIds } : {}) }))
       : undefined;
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
+  const ownerKeychain = isScopeShared || (spec.runAs === "owner" && ownerKind !== "personal");
   const threadRef = spec.threadRef ?? spec.fireKey;
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
   if (ownerKind === "channel" || ownerKind === "group") {
@@ -346,8 +347,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
-        ...(isScopeShared ? { ownerKeychainUnion: true } : {}),
-        ...(isScopeShared && spec.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
+        ...(ownerKeychain ? { ownerKeychainUnion: true } : {}),
+        ...(ownerKeychain && spec.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
         idempotencyKey: spec.fireKey,
       });
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
