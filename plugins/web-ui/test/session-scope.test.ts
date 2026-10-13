@@ -123,21 +123,3 @@ test("zero counts remain hidden in desktop and mobile tools", () => {
   render(sessionTopbarTpl({ crumb: null, title: "Test", onTool: () => {}, toolCount: () => 0 }), host);
   assert.equal(host.querySelectorAll(".session-tool-count").length, 0);
 });
-
-test("session status appears after the heading and before tools", () => {
-  const host = document.createElement("div");
-  render(
-    sessionTopbarTpl({
-      crumb: null,
-      title: "Release verification",
-      status: { emoji: "🚀", text: "Live in production" },
-      onTool: () => {},
-    }),
-    host,
-  );
-  const status = host.querySelector(".session-status")!;
-  assert.equal(status.textContent, "🚀");
-  assert.equal(status.getAttribute("aria-label"), "Live in production");
-  assert.ok(status.previousElementSibling?.classList.contains("session-heading"));
-  assert.ok(status.nextElementSibling?.classList.contains("session-tools"));
-});

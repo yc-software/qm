@@ -390,7 +390,7 @@ export interface App {
       archived?: boolean;
       pinned?: boolean;
       color?: string | null;
-      status?: Session["status"];
+      readAt?: number;
     },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;

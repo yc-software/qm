@@ -4,7 +4,6 @@ import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
-import { isSessionStatus } from "../sessions/session-status.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -837,23 +836,7 @@ export function createSessionMethods(
     async updateSession(sessionId, principalId, patch) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return null;
-      const { status, ...view } = patch;
-      if (status !== undefined) {
-        const participants = await deps.sessions.participantWindowsOf(sessionId);
-        if (!participants.some((p) => p.principalId === principalId && p.validTo === null)) return null;
-        if (!isSessionStatus(status)) throw new Error("invalid session status");
-        await deps.sessions.updateStatus(sessionId, status ? { emoji: status.emoji, text: status.text.trim() } : null);
-      }
-      await deps.sessions.updateParticipantView(sessionId, principalId, view);
-      if (status !== undefined) {
-        deps.sessionStateBus?.emit({
-          threadRef: session.threadRef,
-          sessionId,
-          participants: await deps.sessions.participantsOf(sessionId),
-          state: "metadata",
-          at: Date.now(),
-        });
-      }
+      await deps.sessions.updateParticipantView(sessionId, principalId, patch);
       return sessionForViewer(sessionId, principalId);
     },
 
