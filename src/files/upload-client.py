@@ -6,7 +6,6 @@ import mimetypes
 import os
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 import zlib
@@ -26,29 +25,30 @@ def quote(value):
 
 
 def request(method, url, data=None, headers=None):
+    config = [f"url = {quote(url)}", f"request = {quote(method)}", "silent", "show-error", "max-time = 180", 'write-out = "\\n%{http_code}"']
+    config += [f"header = {quote(f'{name}: {value}')}" for name, value in (headers or {}).items()]
+    if data is not None:
+        config.append('data-binary = "@-"')
     failure = ""
     for attempt in range(5):
-        with tempfile.TemporaryDirectory() as directory:
-            config = Path(directory, "request.conf")
-            body = Path(directory, "body")
-            lines = [f"url = {quote(url)}", f"request = {quote(method)}", f"output = {quote(body)}", "silent", "show-error", "max-time = 180", 'write-out = "%{http_code}"']
-            lines += [f"header = {quote(f'{name}: {value}')}" for name, value in (headers or {}).items()]
-            if data is not None:
-                lines.append('data-binary = "@-"')
-            fd = os.open(config, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "w") as output:
-                output.write("\n".join(lines) + "\n")
-            result = subprocess.run(["curl", "-K", str(config)], input=data or b"", capture_output=True)
-            content = body.read_bytes() if body.exists() else b""
-            if result.returncode == 0:
-                status = int(result.stdout.decode() or "0")
-                if 200 <= status < 300:
-                    return content
-                if status < 500 and status != 429:
-                    raise RequestError(status, f"request failed ({status}): {content[:4096].decode(errors='replace')}")
-                failure = f"HTTP {status}"
-            else:
-                failure = result.stderr.decode(errors="replace").strip() or f"curl exited {result.returncode}"
+        read_end, write_end = os.pipe()
+        with os.fdopen(write_end, "w") as pipe:
+            pipe.write("\n".join(config) + "\n")
+        with os.fdopen(read_end) as pipe:
+            try:
+                result = subprocess.run(["curl", "-K", f"/dev/fd/{pipe.fileno()}"], input=data or b"", capture_output=True, pass_fds=(pipe.fileno(),))
+            except FileNotFoundError:
+                raise RuntimeError("curl is required; install it and rerun") from None
+        content, _, status = result.stdout.rpartition(b"\n")
+        if result.returncode == 0:
+            status = int(status or b"0")
+            if 200 <= status < 300:
+                return content
+            if status < 500 and status != 429:
+                raise RequestError(status, f"request failed ({status}): {content[:4096].decode(errors='replace')}")
+            failure = f"HTTP {status}: {content[:200].decode(errors='replace')}"
+        else:
+            failure = result.stderr.decode(errors="replace").strip() or f"curl exited {result.returncode}"
         if attempt == 4:
             raise RuntimeError(f"transfer failed after retries ({failure}); rerun with the same state file")
         time.sleep(2 ** attempt)
