@@ -794,6 +794,12 @@ const FAMILIES: AgentApiFamily[] = [
       { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
       {
         method: "GET",
+        path: "/v1/admin/resources",
+        summary:
+          "discover editable admin configuration resources, request shapes, scope, and application timing; includes sandbox-settings for the live sandbox connection-pool limit",
+      },
+      {
+        method: "GET",
         path: "/v1/admin/scopes",
         summary: "every scope with labels and what lives there — find scope ids here, don't guess",
       },
@@ -807,7 +813,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/admin/scopes/:scopeId/:resource",
         summary:
-          "govern a scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime ({ harnessId, modelId }) | approved-harnesses ({ ids })",
+          "edit a configuration resource from GET /v1/admin/resources; sandbox-settings takes { connectionPoolMax: positive integer or null } at the organization scope",
       },
       {
         method: "GET|PUT",

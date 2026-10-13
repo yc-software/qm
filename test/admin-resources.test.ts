@@ -2,6 +2,10 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { putScopeConfig } from "../src/api/routes/admin/scope-config.ts";
+import { createControlService } from "../src/api/control-service.ts";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +56,104 @@ function start(harnessId = "pi", withLayer = true): { base: string; built: Built
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
+
+test("configuration writes preserve both the original and recovery failures", async () => {
+  const srv = start();
+  const primary = new Error("settings refresh failed");
+  const recovery = new Error("recovery refresh failed");
+  srv.built.config.setSandboxPoolMax = async () => {
+    throw primary;
+  };
+  srv.built.config.refreshScope = async () => {
+    throw recovery;
+  };
+  const req = new IncomingMessage(new Socket());
+  req.headers = ADMIN;
+  const pathname = "/v1/admin/scopes/org:default-org/sandbox-settings";
+  try {
+    await assert.rejects(
+      putScopeConfig({
+        req,
+        res: new ServerResponse(req),
+        app: srv.built.app,
+        deps: { config: srv.built.config, admin: srv.built.admin, control: createControlService(srv.built.app) },
+        secret: undefined,
+        auth: null,
+        allowUnsignedSourceAuth: true,
+        url: new URL(pathname, srv.base),
+        pathname,
+        method: "PUT",
+        params: { scope: "org:default-org", resource: "sandbox-settings" },
+        capability: null,
+        body: { connectionPoolMax: 4 },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.cause, primary);
+        assert.deepEqual(error.errors, [primary, recovery]);
+        return true;
+      },
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+test("sandbox settings are discoverable and editable only for the organization", async () => {
+  const srv = start();
+  const url = `${srv.base}/v1/admin/scopes/org:default-org/sandbox-settings`;
+  const read = async () =>
+    (
+      (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
+        sandboxSettings: { connectionPoolMax: number; defaultConnectionPoolMax: number; override: number | null };
+      }
+    ).sandboxSettings;
+  try {
+    assert.equal(
+      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ connectionPoolMax: 64 }) })).status,
+      200,
+    );
+    assert.deepEqual(await read(), { connectionPoolMax: 64, defaultConnectionPoolMax: 32, override: 64 });
+    assert.equal(
+      (
+        await fetch(url, {
+          method: "PUT",
+          headers: { ...ADMIN, "x-admin-actor": "nobody@default-org" },
+          body: JSON.stringify({ connectionPoolMax: 128 }),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await fetch(`${srv.base}/v1/admin/scopes/personal:alice/sandbox-settings`, {
+          method: "PUT",
+          headers: ADMIN,
+          body: JSON.stringify({ connectionPoolMax: 128 }),
+        })
+      ).status,
+      400,
+    );
+    for (const connectionPoolMax of [0, -1, 1.5, "64", Number.MAX_SAFE_INTEGER + 1]) {
+      assert.equal(
+        (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ connectionPoolMax }) })).status,
+        400,
+      );
+    }
+    assert.equal((await read()).connectionPoolMax, 64);
+    assert.equal(
+      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ connectionPoolMax: null }) })).status,
+      200,
+    );
+    assert.deepEqual(await read(), { connectionPoolMax: 32, defaultConnectionPoolMax: 32, override: null });
+    const manifest = (await (await fetch(`${srv.base}/v1/admin/resources`, { headers: ADMIN })).json()) as {
+      resources: { id: string; label: string }[];
+    };
+    assert.match(manifest.resources.find((r) => r.id === "sandbox-settings")?.label ?? "", /connectionPoolMax/);
+  } finally {
+    await srv.close();
+  }
+});
 
 test("security flags are visible and legacy session taint can be released by an org admin", async () => {
   const srv = start();

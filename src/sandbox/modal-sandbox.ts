@@ -754,18 +754,25 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const script = `${nonInteractiveShellPrefix()}cd ${handle.rootDir} 2>/dev/null; ${command}`;
       const signal = execOpts?.signal;
       if (!signal) return execRaw(handle.id, script, timeoutSec, handle.env);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("modal-sandbox: kill in-flight exec", undefined));
-      };
       signal.throwIfAborted();
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec, handle.env);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      await touchActivity(handle.id);
+      return withSession(handle.id, async (session) => {
+        signal.throwIfAborted();
+        const killUid = randomUUID();
+        let killing: Promise<unknown> | undefined;
+        const onAbort = () => {
+          killing = runTimed(session, killScript(killUid), 15).catch(
+            swallowAs("modal-sandbox: kill in-flight exec", undefined),
+          );
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        try {
+          return await runTimed(session, killableScript(script, killUid), timeoutSec, handle.env);
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+          await killing;
+        }
+      });
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

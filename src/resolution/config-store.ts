@@ -3,6 +3,7 @@ import { scopeId } from "../types.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { DEFAULT_SANDBOX_POOL_MAX, validateSandboxPoolMax } from "../persistence/pg-pool.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -146,6 +147,14 @@ interface AutoFlaggerConfig {
 export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
 }
+export interface PersistedSandboxSettings {
+  connectionPoolMax: number;
+}
+interface SandboxSettings {
+  connectionPoolMax: number;
+  defaultConnectionPoolMax: number;
+  override: number | null;
+}
 export interface PersistedTurnWallClock {
   scopeId: ScopeId;
   sec: number;
@@ -263,6 +272,8 @@ export interface ScopedConfigStore {
   setBrowseModel(id: ScopeId, modelId: string | null): void;
   getAutoFlaggerConfig(): AutoFlaggerConfig | null;
   setAutoFlaggerConfig(config: AutoFlaggerConfig | null): void;
+  getSandboxSettings(): Promise<SandboxSettings>;
+  setSandboxPoolMax(max: number | null): Promise<void>;
   getTurnWallClockSecDurable(id: ScopeId): Promise<number | null>;
   setTurnWallClockSec(id: ScopeId, sec: number | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
@@ -303,6 +314,9 @@ export function createMemoryConfigStore(
     browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
     browseModels?: DurableMap<PersistedBrowseModel>;
     autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
+    sandboxSettings?: DurableMap<PersistedSandboxSettings>;
+    defaultSandboxPoolMax?: number;
+    onSandboxSettingsChanged?: () => Promise<void>;
     turnWallClocks?: DurableMap<PersistedTurnWallClock>;
     deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
     connectorSecretKey?: Buffer | string;
@@ -360,6 +374,9 @@ export function createMemoryConfigStore(
   const browseMaxStepsStore = opts.browseMaxSteps ?? createMemoryMap<PersistedBrowseMaxSteps>();
   const browseModelStore = opts.browseModels ?? createMemoryMap<PersistedBrowseModel>();
   const autoFlaggerStore = opts.autoFlaggerConfigs ?? createMemoryMap<PersistedAutoFlaggerConfig>();
+  const sandboxSettingsStore = opts.sandboxSettings ?? createMemoryMap<PersistedSandboxSettings>();
+  const defaultSandboxPoolMax = opts.defaultSandboxPoolMax ?? DEFAULT_SANDBOX_POOL_MAX;
+  validateSandboxPoolMax(defaultSandboxPoolMax);
   const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
   const persistWarn = (what: string) => reportFailureAs(`config: persist ${what}`, undefined);
@@ -576,6 +593,7 @@ export function createMemoryConfigStore(
               }
             : null;
           for (const r of await turnWallClockStore.all()) turnWallClocks.set(r.scopeId, r.sec);
+          await opts.onSandboxSettingsChanged?.();
         })();
       }
       return hydrated;
@@ -1116,6 +1134,22 @@ export function createMemoryConfigStore(
           autoFlaggerStore.put(org, { scopeId: org, ...config }),
         );
       }
+    },
+    async getSandboxSettings() {
+      const override = (await sandboxSettingsStore.get(org))?.connectionPoolMax ?? null;
+      if (override !== null) validateSandboxPoolMax(override);
+      return {
+        connectionPoolMax: override ?? defaultSandboxPoolMax,
+        defaultConnectionPoolMax: defaultSandboxPoolMax,
+        override,
+      };
+    },
+    async setSandboxPoolMax(max) {
+      if (max !== null) validateSandboxPoolMax(max);
+      await writeQueue("sandboxSettings", () =>
+        max === null ? sandboxSettingsStore.delete(org) : sandboxSettingsStore.put(org, { connectionPoolMax: max }),
+      );
+      await opts.onSandboxSettingsChanged?.();
     },
     getTurnWallClockSecDurable: async (id) => (await turnWallClockStore.get(id))?.sec ?? null,
     async setTurnWallClockSec(id, sec) {

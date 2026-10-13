@@ -1,4 +1,5 @@
 import { parseScopeId } from "../../../types.ts";
+import { withCleanup } from "../../../util/errors.ts";
 import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
@@ -111,8 +112,12 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       }
       await deps.config!.flushScope(targetScope);
     } catch (err) {
-      await deps.config!.refreshScope(targetScope);
-      throw err;
+      return withCleanup(
+        async () => {
+          throw err;
+        },
+        () => deps.config!.refreshScope(targetScope),
+      );
     }
     audit(deps, { principalId: actor.id, action: `${resource}.update`, resource, scopeLabel: targetScope });
     return sendJson(res, 200, { ok: true, scopeId: targetScope, resource });

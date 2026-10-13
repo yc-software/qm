@@ -19,6 +19,7 @@ export async function swarmFixture(
     sessions?: SessionStore;
     runs?: RunStore;
     lock?: AdvisoryLock;
+    deliveryLock?: AdvisoryLock;
     backend?: Sandbox;
     runtime?: Pick<OrchestratorInput, "model" | "harness" | "thinkingLevel" | "fastMode">;
   } = {},
@@ -109,7 +110,15 @@ export async function swarmFixture(
       exp: Date.now() + 60_000,
     },
   };
-  const serviceOptions = { store, sessions, runs, sandboxes, lock, authorize: async () => state.allowed };
+  const serviceOptions = {
+    store,
+    sessions,
+    runs,
+    sandboxes,
+    lock,
+    deliveryLock: options.deliveryLock ?? lock,
+    authorize: async () => state.allowed,
+  };
   const service = createSwarmService(serviceOptions);
   const workerCaller = async (id: string): Promise<SwarmCaller> => {
     const swarm = (await store.get(root.id))!;

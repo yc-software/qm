@@ -293,13 +293,15 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     }
   }
 
-  async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
-    return withSession(name, async (session) => {
-      const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
-        timeoutMs: timeoutSec * 1000 + 30_000,
-      });
-      return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+  async function runTimed(session: E2bSession, script: string, timeoutSec: number): Promise<ExecResult> {
+    const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
+      timeoutMs: timeoutSec * 1000 + 30_000,
     });
+    return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+  }
+
+  async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
+    return withSession(name, (session) => runTimed(session, script, timeoutSec));
   }
 
   const profile: AgentComputerProfile = {
@@ -482,18 +484,24 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
       const signal = execOpts?.signal;
       if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("e2b-sandbox: kill in-flight exec", undefined));
-      };
       signal.throwIfAborted();
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      return withSession(handle.id, async (session) => {
+        signal.throwIfAborted();
+        const killUid = randomUUID();
+        let killing: Promise<unknown> | undefined;
+        const onAbort = () => {
+          killing = runTimed(session, killScript(killUid), 15).catch(
+            swallowAs("e2b-sandbox: kill in-flight exec", undefined),
+          );
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        try {
+          return await runTimed(session, killableScript(script, killUid), timeoutSec);
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+          await killing;
+        }
+      });
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

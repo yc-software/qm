@@ -21,6 +21,18 @@ const productionEnv = {
   SANDBOX_BACKEND: "local",
 } as const;
 
+test("sandbox connection capacity can be configured independently", () => {
+  const config = loadConfig({
+    DATABASE_SANDBOX_POOL_MAX: "256",
+    DATABASE_DIRECT_POOL_MAX: "12",
+    DATABASE_POOL_MAX: "8",
+  });
+  assert.equal(config.databaseSandboxPoolMax, 256);
+  assert.equal(config.databaseDirectPoolMax, 12);
+  assert.equal(config.databasePoolMax, 8);
+  assert.throws(() => loadConfig({ DATABASE_SANDBOX_POOL_MAX: "invalid" }), /DATABASE_SANDBOX_POOL_MAX/);
+});
+
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
   assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
   const config = loadConfig({

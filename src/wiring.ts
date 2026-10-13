@@ -103,6 +103,7 @@ import {
   type PersistedBrowseModel,
   type PersistedAutoFlaggerConfig,
   type PersistedTurnWallClock,
+  type PersistedSandboxSettings,
   type PersistedDeploymentIdentity,
 } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
@@ -116,7 +117,7 @@ import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPooling, setSandboxPoolMax } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -421,7 +422,7 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
 import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
-import { sleep, withTimeout } from "./util/async.ts";
+import { createKeyedQueue, sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
 export interface Runtime {
@@ -590,6 +591,7 @@ export function buildApp(
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
+    ...(config.databaseSandboxPoolMax !== undefined ? { sandboxMax: config.databaseSandboxPoolMax } : {}),
   });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
@@ -652,6 +654,9 @@ export function buildApp(
   const advisoryLock: AdvisoryLock = pgArtifactMap
     ? createPostgresAdvisoryLock(pgArtifactMap.pool)
     : createMemoryAdvisoryLock();
+  const sandboxAdvisoryLock: AdvisoryLock = pgArtifactMap
+    ? createPostgresAdvisoryLock(pgArtifactMap.pool, { pool: "sandbox" })
+    : createMemoryAdvisoryLock();
   const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
@@ -664,6 +669,15 @@ export function buildApp(
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
+  const sandboxSettingsEvents = config.databaseUrl
+    ? createPostgresNotifyBus<null>(config.databaseUrl, "sandbox_settings", "sandbox settings")
+    : createMemoryEventBus<null>("sandbox settings");
+  const sandboxSettingsQueue = createKeyedQueue();
+  const refreshSandboxSettings = () =>
+    sandboxSettingsQueue("refresh", async () => {
+      const settings = await configStore.getSandboxSettings();
+      if (config.databaseUrl) setSandboxPoolMax(config.databaseUrl, settings.connectionPoolMax);
+    });
   const configStore = createMemoryConfigStore(config.orgId, {
     connectorClients: artifactMap<StoredConnectorClient>("connector_clients"),
     souls: artifactMap<PersistedSoul>("soul_configs"),
@@ -690,6 +704,12 @@ export function buildApp(
     browseMaxSteps: artifactMap<PersistedBrowseMaxSteps>("browse_max_steps_configs"),
     browseModels: artifactMap<PersistedBrowseModel>("browse_model_configs"),
     autoFlaggerConfigs: artifactMap<PersistedAutoFlaggerConfig>("auto_flagger_configs"),
+    sandboxSettings: artifactMap<PersistedSandboxSettings>("sandbox_settings"),
+    ...(config.databaseSandboxPoolMax !== undefined ? { defaultSandboxPoolMax: config.databaseSandboxPoolMax } : {}),
+    onSandboxSettingsChanged: async () => {
+      await refreshSandboxSettings();
+      sandboxSettingsEvents.emit(null);
+    },
     turnWallClocks: artifactMap<PersistedTurnWallClock>("turn_wall_clock_configs"),
     deploymentIdentity: artifactMap<PersistedDeploymentIdentity>("deployment_identity"),
     defaultSecurityPosture: config.securityPosture,
@@ -697,6 +717,13 @@ export function buildApp(
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
   void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
+  const sandboxSettingsRefresh = createUntrackedSweeper(refreshSandboxSettings, 30_000, {
+    label: "sandbox settings refresh",
+  });
+  const onSandboxSettingsChanged = () => {
+    void refreshSandboxSettings().catch(reportFailureAs("sandbox settings refresh", undefined));
+  };
+  let stopSandboxSettingsSync: (() => void) | undefined;
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
     advisoryLock,
@@ -865,7 +892,7 @@ export function buildApp(
     return createSpritesSandbox(workspace, {
       ...sprites,
       initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
-      advisoryLock,
+      advisoryLock: sandboxAdvisoryLock,
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
         : {}),
@@ -894,7 +921,7 @@ export function buildApp(
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: smolmachinesBodies,
-      advisoryLock,
+      advisoryLock: sandboxAdvisoryLock,
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "smolmachines-home" }) }
         : {}),
@@ -908,7 +935,7 @@ export function buildApp(
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey) throw new Error("SANDBOX_BACKEND=e2b requires E2B_API_KEY");
     return createE2bSandbox(workspace, {
-      advisoryLock,
+      advisoryLock: sandboxAdvisoryLock,
       client: createSdkE2bClient({
         apiKey: e2b.apiKey,
         ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
@@ -979,7 +1006,7 @@ export function buildApp(
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox(workspace, {
-      advisoryLock,
+      advisoryLock: sandboxAdvisoryLock,
       client: createSdkModalClient({
         tokenId: modal.tokenId,
         tokenSecret: modal.tokenSecret,
@@ -1022,7 +1049,7 @@ export function buildApp(
   const buildAgent37 = (): Sandbox =>
     createAgent37Sandbox(workspace, {
       ...config.agent37Sandbox,
-      advisoryLock,
+      advisoryLock: sandboxAdvisoryLock,
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
@@ -1058,7 +1085,7 @@ export function buildApp(
     return createSuperserveSandbox(workspace, {
       configEpoch:
         ss.configGeneration ??
-        (pgArtifactMap ? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock) : 0),
+        (pgArtifactMap ? createConfigEpochResolver(superserveEpochs, generationKey, sandboxAdvisoryLock) : 0),
       client: createSdkSuperserveClient({
         apiKey: ss.apiKey,
         ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
@@ -1073,7 +1100,7 @@ export function buildApp(
       ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
       ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
       ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
-      advisoryLock,
+      advisoryLock: sandboxAdvisoryLock,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
@@ -1090,7 +1117,7 @@ export function buildApp(
     return createAwsSandbox(workspace, {
       ...config.awsSandbox,
       s3Bucket: config.awsSandbox.s3Bucket,
-      advisoryLock,
+      advisoryLock: sandboxAdvisoryLock,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
       blobTransfer,
@@ -1104,7 +1131,7 @@ export function buildApp(
   const buildPorter = (): Sandbox =>
     createPorterSandbox(workspace, {
       ...config.porterSandbox,
-      advisoryLock,
+      advisoryLock: sandboxAdvisoryLock,
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
@@ -1144,7 +1171,7 @@ export function buildApp(
         defaults: sandboxDefaults,
         marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
         routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
-        lock: advisoryLock,
+        lock: sandboxAdvisoryLock,
         legacyBackend: (scope) =>
           legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
         specFor: (backend) => sandboxBackends[backend]?.profile.spec,
@@ -1173,7 +1200,7 @@ export function buildApp(
       }),
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
-    lock: advisoryLock,
+    lock: sandboxAdvisoryLock,
     beforeRetire: async (record) => {
       if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
         throw new Error("stop this sandbox's background jobs before retiring it");
@@ -1565,7 +1592,8 @@ export function buildApp(
           sessions,
           runs,
           sandboxes: sandboxResources,
-          lock: advisoryLock,
+          lock: sandboxAdvisoryLock,
+          deliveryLock: advisoryLock,
           signals: runSignals,
           enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
           authorize: async (claims) => {
@@ -2783,6 +2811,10 @@ export function buildApp(
   }
   const runtime: Runtime = {
     start() {
+      stopSandboxSettingsSync ??= sandboxSettingsEvents.subscribe(onSandboxSettingsChanged, {
+        onResync: onSandboxSettingsChanged,
+      });
+      sandboxSettingsRefresh.start();
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
       drain.start();
@@ -2804,6 +2836,11 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      stopSandboxSettingsSync?.();
+      stopSandboxSettingsSync = undefined;
+      await sandboxSettingsRefresh.stop();
+      await sandboxSettingsQueue("refresh", async () => {});
+      await sandboxSettingsEvents.close?.();
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(

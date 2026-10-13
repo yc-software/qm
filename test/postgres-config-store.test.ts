@@ -14,6 +14,7 @@ import {
   type PersistedBrowseMaxSteps,
   type PersistedBrowseModel,
   type PersistedTurnWallClock,
+  type PersistedSandboxSettings,
   type PersistedDeploymentIdentity,
 } from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
@@ -45,6 +46,7 @@ const TABLES = [
   "browse_max_steps_configs",
   "browse_model_configs",
   "turn_wall_clock_configs",
+  "sandbox_settings",
   "deployment_identity",
 ];
 
@@ -70,7 +72,37 @@ const maps = (f: PostgresArtifactMaps) => ({
   browseMaxSteps: f.map<PersistedBrowseMaxSteps>("browse_max_steps_configs"),
   browseModels: f.map<PersistedBrowseModel>("browse_model_configs"),
   turnWallClocks: f.map<PersistedTurnWallClock>("turn_wall_clock_configs"),
+  sandboxSettings: f.map<PersistedSandboxSettings>("sandbox_settings"),
   deploymentIdentity: f.map<PersistedDeploymentIdentity>("deployment_identity"),
+});
+
+test("pg sandbox capacity overrides deployment defaults across readers and restarts", { skip }, async () => {
+  const f = createPostgresMapFactory(URL!);
+  try {
+    const first = createMemoryConfigStore("default-org", { ...maps(f), defaultSandboxPoolMax: 2 });
+    const second = createMemoryConfigStore("default-org", { ...maps(f), defaultSandboxPoolMax: 3 });
+    assert.equal((await first.getSandboxSettings()).connectionPoolMax, 2);
+    await first.setSandboxPoolMax(64);
+    assert.deepEqual(await second.getSandboxSettings(), {
+      connectionPoolMax: 64,
+      defaultConnectionPoolMax: 3,
+      override: 64,
+    });
+    await assert.rejects(first.setSandboxPoolMax(0), /positive safe integer/);
+    assert.equal((await second.getSandboxSettings()).connectionPoolMax, 64);
+    const restarted = createMemoryConfigStore("default-org", { ...maps(f), defaultSandboxPoolMax: 4 });
+    await restarted.hydrate?.();
+    assert.equal((await restarted.getSandboxSettings()).connectionPoolMax, 64);
+    await second.setSandboxPoolMax(null);
+    assert.equal((await first.getSandboxSettings()).connectionPoolMax, 2);
+    assert.deepEqual(await restarted.getSandboxSettings(), {
+      connectionPoolMax: 4,
+      defaultConnectionPoolMax: 4,
+      override: null,
+    });
+  } finally {
+    await f.pool.close();
+  }
 });
 
 test("turn wall-clock config hydrates after restart and a clear remains cleared", async () => {

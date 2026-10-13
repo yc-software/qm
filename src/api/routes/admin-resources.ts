@@ -2,6 +2,7 @@ import type { TeamChange } from "../../teams/teams.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
+import { validateSandboxPoolMax } from "../../persistence/pg-pool.ts";
 import type { ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
 import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
@@ -146,6 +147,38 @@ function channelContainer(scope: string): string | undefined {
 }
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
+  {
+    id: "sandbox-settings",
+    kind: "custom",
+    target: "org",
+    clearable: true,
+    label:
+      "Sandbox coordination connections per core process. PUT { connectionPoolMax: positive integer }; null restores the deployment default. Applies live across processes; decreases drain active operations. Process count multiplies database usage; query and general coordination pools remain separate.",
+    readKey: "sandboxSettings",
+    get: (deps) => deps.config!.getSandboxSettings(),
+    apply: generic<number | null>(
+      (body, { scope }) => {
+        const bad = orgOnly(scope, "sandbox settings are organization-wide");
+        if (bad) return bad;
+        if (
+          !body ||
+          typeof body !== "object" ||
+          Array.isArray(body) ||
+          Object.keys(body).some((key) => key !== "connectionPoolMax")
+        )
+          return { error: "sandbox-settings requires { connectionPoolMax: positive integer or null }" };
+        const max = (body as { connectionPoolMax?: unknown }).connectionPoolMax;
+        if (max === null) return { value: null };
+        try {
+          validateSandboxPoolMax(max);
+        } catch (error) {
+          return { error: errMessage(error) };
+        }
+        return { value: max };
+      },
+      (deps, _scope, max) => deps.config!.setSandboxPoolMax(max),
+    ),
+  },
   {
     id: "security-posture",
     kind: "enum",

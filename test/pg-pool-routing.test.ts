@@ -44,19 +44,24 @@ test("pooled query timeout rolls back without contaminating the next borrower", 
 
 test("session operations remain direct while ordinary queries use another backend", { skip }, async () => {
   const a = createPgPool(direct!);
-  const client = await (await a.sessionPool()).connect();
   try {
-    assert.equal(new URL((await a.pool()).options.connectionString!).port, new URL(pooled!).port);
-    const directPid = (await client.query("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
-    await client.query("LISTEN qm_pool_routing_test");
-    await client.query("SELECT pg_advisory_lock(827360194)");
-    const result = await a.q("SELECT pg_backend_pid() AS pid, pg_try_advisory_xact_lock(827360194) AS acquired");
-    assert.notEqual(result[0]!.pid, directPid);
-    assert.equal(result[0]!.acquired, false);
+    for (const kind of ["session", "sandbox"] as const) {
+      const client = await (await a.sessionPool(kind)).connect();
+      try {
+        assert.equal(new URL((await a.pool()).options.connectionString!).port, new URL(pooled!).port);
+        const directPid = (await client.query("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+        await client.query("LISTEN qm_pool_routing_test");
+        await client.query("SELECT pg_advisory_lock(827360194)");
+        const result = await a.q("SELECT pg_backend_pid() AS pid, pg_try_advisory_xact_lock(827360194) AS acquired");
+        assert.notEqual(result[0]!.pid, directPid);
+        assert.equal(result[0]!.acquired, false);
+      } finally {
+        await client.query("SELECT pg_advisory_unlock(827360194)");
+        await client.query("UNLISTEN qm_pool_routing_test");
+        client.release();
+      }
+    }
   } finally {
-    await client.query("SELECT pg_advisory_unlock(827360194)");
-    await client.query("UNLISTEN qm_pool_routing_test");
-    client.release();
     await a.close();
   }
 });

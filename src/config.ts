@@ -70,6 +70,7 @@ export interface Config {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
+  databaseSandboxPoolMax?: number;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
@@ -1517,6 +1518,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.DATABASE_POOL_MAX ? { databasePoolMax: numEnvStrict("DATABASE_POOL_MAX", env.DATABASE_POOL_MAX) } : {}),
     ...(env.DATABASE_DIRECT_POOL_MAX
       ? { databaseDirectPoolMax: numEnvStrict("DATABASE_DIRECT_POOL_MAX", env.DATABASE_DIRECT_POOL_MAX) }
+      : {}),
+    ...(env.DATABASE_SANDBOX_POOL_MAX
+      ? { databaseSandboxPoolMax: numEnvStrict("DATABASE_SANDBOX_POOL_MAX", env.DATABASE_SANDBOX_POOL_MAX) }
       : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),

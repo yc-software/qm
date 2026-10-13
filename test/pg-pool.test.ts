@@ -4,11 +4,23 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   createPgPool,
+  configurePgPooling,
   assertOneStatement,
   concurrentIndexName,
   definePgMigration,
   pgMigrationChecksum,
 } from "../src/persistence/pg-pool.ts";
+
+test("sandbox pool capacity accepts larger limits and rejects invalid sizes", () => {
+  try {
+    configurePgPooling({ sandboxMax: 256 });
+    for (const sandboxMax of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => configurePgPooling({ sandboxMax }), /DATABASE_SANDBOX_POOL_MAX/);
+    }
+  } finally {
+    configurePgPooling({});
+  }
+});
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
   const pg = createPgPool("postgres://does-not-exist:0/none", "test/lazy/0001", ["SELECT 1"]);

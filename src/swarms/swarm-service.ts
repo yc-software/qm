@@ -198,6 +198,7 @@ export function createSwarmService(deps: {
   runs: RunStore;
   sandboxes: SandboxResources;
   lock: AdvisoryLock;
+  deliveryLock: AdvisoryLock;
   authorize(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   enabled?(actorId: string): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
@@ -405,7 +406,8 @@ export function createSwarmService(deps: {
 
   async function reconcile(rootId: string, phase: "resources" | "delivery"): Promise<void> {
     const deadline = Date.now() + SWARM_LIMITS.reconcileMs;
-    const claim = deps.lock.tryWithLock?.bind(deps.lock) ?? deps.lock.withLock.bind(deps.lock);
+    const lock = phase === "resources" ? deps.lock : deps.deliveryLock;
+    const claim = lock.tryWithLock?.bind(lock) ?? lock.withLock.bind(lock);
     await claim(phase === "resources" ? `swarm-reconcile:${rootId}` : `swarm-delivery:${rootId}`, async () => {
       const pending = new Set<Promise<unknown>>();
       const step = <Result>(

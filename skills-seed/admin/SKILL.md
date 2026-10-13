@@ -129,14 +129,27 @@ GET /v1/admin/scopes        → every scope with display labels (#channel names,
 ## Read & govern a scope's config
 
 ```bash
+GET /v1/admin/resources                      → editable resources, scope restrictions, value shapes, and application timing
 GET /v1/admin/scopes/<scopeId>                → resolved config: commandPolicy, soul (+version), egress, flags, connectors, serviceCredentials
-PUT /v1/admin/scopes/<scopeId>/<resource>     → resource ∈ soul | command-policy | egress |
-                                                connectors | service-credentials |
-                                                base-model (org-wide LLM; body { modelId } — e.g. gpt-5.5; empty string clears)
+PUT /v1/admin/scopes/<scopeId>/<resource>      → use the resource and request shape from the manifest
 ```
 
 GET first, then PUT the corrected value (`soul` takes `{content}`, `egress` takes
-`{allowedHosts,deniedHosts}`, the toggles take `{on}`). Changes apply next turn.
+`{allowedHosts,deniedHosts}`, the toggles take `{on}`). Most changes apply next turn;
+check the resource's application timing.
+
+`sandbox-settings` is organization-wide. Read `sandboxSettings` from the org config
+for `connectionPoolMax`, `defaultConnectionPoolMax`, and the saved `override`. PUT
+`{"connectionPoolMax":64}` to change sandbox coordination capacity, or
+`{"connectionPoolMax":null}` to restore the deployment default. This is a limit on
+direct PostgreSQL connections **per core process**, not a count of computers. It is
+independent of query and general coordination pools. The saved setting survives
+restarts and reaches running processes through notifications, with periodic repair
+within 30 seconds when the database is reachable. Increases admit queued operations;
+decreases let active operations finish before retiring excess connections. Account
+for every process, rollout overlap, other database clients, and PostgreSQL's total
+connection budget before increasing it. This control uses the same live admin
+authorization and mutation confirmation as other org settings.
 
 ## Read & fix any scope's memory
 
