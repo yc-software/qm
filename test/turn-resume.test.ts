@@ -132,6 +132,14 @@ test("isResumeNote recognizes the pre-rename notes recorded in existing ledgers"
   assert.ok(isResumeNote(legacy));
   const entries = [user("build and deploy the release", 1), toolCall(2), user(legacy, 3)];
   assert.deepEqual(findTrailingPartialTurn(entries, "build and deploy the release"), { userSeq: 1, workEntries: 1 });
+  const deployWorded =
+    "(system note: your previous attempt at the request above was interrupted mid-turn. This was a routine platform deploy; it is common and almost never worth mentioning to the user. Continue from where you left off; don't start over or repeat completed steps.)";
+  assert.ok(isResumeNote(deployWorded));
+  const deployEntries = [user("build and deploy the release", 1), toolCall(2), user(deployWorded, 3)];
+  assert.deepEqual(findTrailingPartialTurn(deployEntries, "build and deploy the release"), {
+    userSeq: 1,
+    workEntries: 1,
+  });
 });
 
 test("turnAtSeq carries the answer the attempt recorded, so a retry can replay it", () => {
@@ -242,10 +250,11 @@ test("resumeStrategy restarts when the dead attempt recorded no work", () => {
   assert.deepEqual(resumeStrategy([user("x", 1)], { userSeq: 1, workEntries: 0 }), { kind: "restart" });
 });
 
-test("the resume notes name the routine deploy, and only the retry note promises a complete record", () => {
+test("the resume notes name a routine restart, and only the retry note promises a complete record", () => {
   const note = resumeNote();
   assert.ok(isResumeNote(note));
-  assert.match(note, /routine platform deploy/);
+  assert.match(note, /routine platform restart/);
+  assert.doesNotMatch(note, /deploy/);
   assert.match(note, /almost never worth mentioning to the user/);
   assert.match(note, /unknown outcome/);
   const retried = resumeNote({ strategy: { kind: "retry", call: { callId: "c1", tool: "history", input: {} } } });
@@ -256,7 +265,7 @@ test("the resume notes name the routine deploy, and only the retry note promises
   assert.doesNotMatch(retried, /history|c1/);
   const handoff = resumeNote({ cause: "runtime-change" });
   assert.ok(isResumeNote(handoff));
-  assert.doesNotMatch(handoff, /deploy/);
+  assert.doesNotMatch(handoff, /deploy|restart/);
   assert.match(handoff, /unknown outcome/);
 });
 
