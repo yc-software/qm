@@ -4,7 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifiedMemory } from "../src/memory/classification.ts";
-import { createMemoryService, ccCaptureToPersonal } from "../src/memory/memory-service.ts";
+import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -132,21 +132,17 @@ test("burst capture joins dependencies and preserves missing provenance from any
   }
 });
 
-test("automatic CC preserves trusted sources and sensitivity, opaque stores do not CC", async () => {
+test("automatic capture preserves sources and sensitivity only in the source notebook", async () => {
   const { memory, facts } = await fixture();
   const strategy = createPerTurnStrategy({
     memory,
     harness: { oneShot: async () => "SENSITIVITY: sensitive\n- Confidential fact" },
   });
   await strategy.onTurnEnd!({ ...turn, scopeId: "group:private", inheritedFacts: [] });
-  const fact = (await facts(scope)).find((f) => f.text.includes("Confidential"))!;
+  const fact = (await facts("group:private")).find((f) => f.text.includes("Confidential"))!;
   assert.equal(fact.sensitivity, "sensitive");
   assert.deepEqual(fact.sources, ["group:private"]);
-  assert.equal(
-    await ccCaptureToPersonal({ ...memory, facts: undefined }, "group:private", "bob", ["Not copied"], Date.now()),
-    0,
-  );
-  assert.equal(await memory.read("personal:bob"), "");
+  assert.equal(await memory.read(scope), "");
 });
 
 test("an edit is classified and folds the turn's exposure into the fact", async () => {

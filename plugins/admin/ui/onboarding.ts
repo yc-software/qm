@@ -133,7 +133,7 @@ export class Onboarding {
       return;
     }
     this.templates = response.data.templates || [];
-    this.entries = (response.data.models || []).filter((row: Data) => !row.disabled);
+    this.entries = (response.data.models || []).filter((row: Data) => !row.disabled && row.spec?.kind !== "embedding");
     this.draw();
   }
   async load() {

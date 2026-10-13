@@ -343,6 +343,7 @@ export interface ShipActionPolicy {
 
 export interface LoopCaps {
   maxItemsPerFire?: number;
+  maxConcurrentItems?: number;
   maxOpenOutputs?: number;
   maxItemAttempts?: number;
 }

@@ -1,10 +1,5 @@
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
-import {
-  type MemoryService,
-  type MemoryCaptureContext,
-  ccCaptureToPersonal,
-  isSystemActor,
-} from "../memory-service.ts";
+import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
@@ -66,7 +61,6 @@ interface Burst extends MemoryCaptureMetadata {
   scopeId: ScopeId;
   actorId?: string;
   conversationScopeId: ScopeId;
-  conversationLabel?: string;
   sessionId?: string;
   idempotencyKey?: string;
   turns: Array<{ input: string; reply: string }>;
@@ -80,7 +74,6 @@ type TurnEndCtx = MemoryCaptureMetadata & {
   actorId?: string;
   autonomous?: boolean;
   conversationScopeId?: ScopeId;
-  conversationLabel?: string;
   sessionId?: string;
   idempotencyKey?: string;
 };
@@ -99,7 +92,6 @@ function createBurstBuffer(
     actorId,
     autonomous,
     conversationScopeId,
-    conversationLabel,
     sessionId,
     idempotencyKey,
     inheritedFacts,
@@ -111,7 +103,6 @@ function createBurstBuffer(
       turns: [{ input, reply }],
       ...(inheritedFacts !== undefined ? { inheritedFacts: structuredClone(inheritedFacts) } : {}),
       ...(actorId !== undefined ? { actorId } : {}),
-      ...(conversationLabel !== undefined ? { conversationLabel } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     };
@@ -168,19 +159,6 @@ export function createPerTurnStrategy(deps: {
     if (!facts.length) return;
     const at = Date.now();
     await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, { ...burstCaptureContext(burst), sensitivity });
-    await ccCaptureToPersonal(
-      deps.memory,
-      burst.conversationScopeId,
-      burst.actorId,
-      facts,
-      at,
-      burst.conversationLabel,
-      {
-        ...burstCaptureContext(burst),
-        sensitivity,
-        ...(burst.idempotencyKey ? { idempotencyKey: `${burst.idempotencyKey}:personal` } : {}),
-      },
-    );
   }
 
   return {

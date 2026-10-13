@@ -128,7 +128,13 @@ test("only models present in both responses with valid chat capabilities are sel
   ]);
   f.listing(["vendor/new-model", "embed", "no-tools", "no-context", "bad-price", "bad-output"]);
   await f.catalog.refresh();
-  assert.deepEqual(Object.keys(f.catalog.transport.models), ["gateway/vendor/new-model"]);
+  assert.deepEqual(Object.keys(f.catalog.transport.models), ["gateway/vendor/new-model", "gateway/embed"]);
+  assert.deepEqual(
+    builtInModelCatalog()
+      .filter((m) => m.id.startsWith("gateway/"))
+      .map((m) => m.id),
+    ["gateway/vendor/new-model"],
+  );
 });
 
 test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {

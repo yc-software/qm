@@ -9,9 +9,7 @@ import type {
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
-import { parseScopeId } from "../../types.ts";
 import { turnOriginRequestFields } from "../turn-origin.ts";
-import type { DirectoryStore } from "../../directory/directory-store.ts";
 import { isOverheardEntry } from "../../sessions/session-store.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { collectBytes } from "../../util/bytes.ts";
@@ -211,20 +209,6 @@ function principalAssertion(p: Principal): ActorAssertion {
     ...(p.teamIds ? { teamIds: p.teamIds } : {}),
     ...(p.displayName ? { displayName: p.displayName } : {}),
   };
-}
-
-export async function conversationLabelFor(
-  directory: DirectoryStore | undefined,
-  conversationScope: ScopeId,
-  channelName: string | undefined,
-): Promise<string | undefined> {
-  if (channelName) return `#${channelName}`;
-  const { kind, ref } = parseScopeId(conversationScope);
-  if (kind !== "channel" || !directory) return undefined;
-  const resolved = await directory.resolveChannel(ref).catch(() => ({ kind: "none" as const }));
-  return resolved.kind === "one" && resolved.channel.channelId.toLowerCase() === ref.toLowerCase()
-    ? `#${resolved.channel.name}`
-    : undefined;
 }
 
 export function replayableRequest(input: OrchestratorInput): TurnRequest {

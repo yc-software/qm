@@ -37,7 +37,7 @@ async function fixture() {
     facts: async () => records,
     read: async () => records.map((record) => record.text).join("\n"),
     query: async () => [],
-    recall: async () => "",
+    recall: async () => [],
     capture: async () => 0,
   };
   await built.app.upsertGroups([

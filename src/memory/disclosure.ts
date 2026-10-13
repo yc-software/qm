@@ -4,7 +4,7 @@ import { samePerson } from "../directory/person.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { CurrentScopeMembers, IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
 import { MemoryFactsMissing, parseFactId, renderFacts, type MemoryFact, type MemoryProvenance } from "./facts.ts";
-import { queryFacts, recallBody, type MemoryService } from "./memory-service.ts";
+import { queryFacts, type MemoryService } from "./memory-service.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 
 export interface MemoryDisclosure {
@@ -115,7 +115,7 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
     const narrow = (scope: ScopeId) => memoryDisclosurePolicy(access).narrow(scope);
     return {
       ...memory,
-      recall: async (scope, context) => ((await narrow(scope)) ? memory.recall(scope, context) : ""),
+      recall: async (scope, context) => ((await narrow(scope)) ? memory.recall(scope, context) : []),
       query: async (scope, query, limit, context) =>
         (await narrow(scope)) ? memory.query(scope, query, limit, context) : [],
       read: async (scope) => ((await narrow(scope)) ? memory.read(scope) : ""),
@@ -148,7 +148,10 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       await memory.delete!(scope, ids, author);
     },
     read: async (scope) => renderFacts(await visible(scope)),
-    recall: async (scope) => recallBody(renderFacts(await visible(scope))),
+    async recall(scope, context) {
+      const shown = new Set((await visible(scope)).map((fact) => fact.id));
+      return (await memory.recall(scope, context)).filter((row) => row.id !== undefined && shown.has(row.id));
+    },
     query: async (scope, query, limit = 20) => queryFacts(await visible(scope), query, limit),
   };
 }

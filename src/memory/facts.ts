@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { dateStr } from "./notebook.ts";
 
@@ -69,6 +70,25 @@ type Shown = Pick<MemoryFact, "text" | "createdAt">;
 
 export function renderFacts(facts: readonly Shown[]): string {
   return facts.map((fact) => `- (${dateStr(fact.createdAt)}) ${fact.text}`).join("\n");
+}
+
+export function factHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+export interface MemoryCandidate {
+  id?: string;
+  text: string;
+  score: number;
+  at?: number;
+}
+
+export function recentCandidates(facts: readonly MemoryFact[]): MemoryCandidate[] {
+  return facts.map((fact) => factCandidate(fact, 0.2)).reverse();
+}
+
+export function factCandidate(fact: MemoryFact, score: number): MemoryCandidate {
+  return { id: fact.id, text: renderFacts([fact]), score, at: fact.createdAt };
 }
 
 export function factLine(fact: Shown & Pick<MemoryFact, "id">): string {

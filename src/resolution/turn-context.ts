@@ -1,6 +1,12 @@
+import { memoryRecallLabels } from "../memory/recall-labels.ts";
+import type { DirectoryStore } from "../directory/directory-store.ts";
+import type { ProjectStore } from "../projects/project-store.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { buildMemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
+import { readNotebook, recallAcrossScopes, searchNotebooks } from "../memory/cross-scope.ts";
+import { shownFacts } from "../memory/recall-delta.ts";
+import { RECALL_MAX_CHARS } from "../memory/notebook.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "./context-filter.ts";
@@ -9,7 +15,6 @@ import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
-import { renderFacts } from "../memory/facts.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
 import { parseScopeId, type Resolution, type ScopeId, type Principal } from "../types.ts";
@@ -29,6 +34,8 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   skills?: SkillStore;
   auditLog?: AuditLog;
   currentScopeMembers?: CurrentScopeMembers;
+  directory?: DirectoryStore;
+  projects?: Pick<ProjectStore, "recognizes" | "name">;
 };
 
 // A turn-local view, never a reusable capability or a cross-turn cache.
@@ -69,25 +76,19 @@ export async function resolveTurnContext(input: ContextInput) {
   };
   const memory = disclosedMemory(input.memory, disclosure);
   const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
+  const memoryLabels = await memoryRecallLabels(read, input.directory, input.projects);
   return {
     sharingSources,
     memoryScopeId,
     baseRecallScopes,
     memoryAccess,
     memory,
+    memoryLabels,
     memorySnapshot: async (auditReads = true) => {
-      const notebooks = await Promise.all(
-        read.map(async (scope) => {
-          const facts = await memory.facts?.(scope);
-          return { scope, facts, content: facts ? renderFacts(facts) : await memory.read(scope) };
-        }),
-      );
+      const notebooks = await Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) })));
       if (auditReads) for (const { scope } of notebooks) recordRead(scope, "memory");
       return {
-        recalled: notebooks
-          .filter(({ content }) => content.trim())
-          .map(({ scope, content }) => `### ${scope}\n${content.trim()}`)
-          .join("\n\n"),
+        held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
         facts: notebooks.flatMap(({ facts }) => facts ?? []),
         complete: notebooks.every(({ facts }) => !!facts),
         snapshot: buildMemoryContextSnapshot({
@@ -99,16 +100,18 @@ export async function resolveTurnContext(input: ContextInput) {
         }),
       };
     },
-    searchMemory: async (query: string, limit = 20): Promise<string[] | null> => {
-      if (!read.length) return null;
-      const hits = await Promise.all(
-        read.map(async (scope) => {
-          const facts = await memory.query(scope, query, limit, { actorId: input.actor.id });
-          recordRead(scope, "memory");
-          return facts.map((fact) => (read.length > 1 ? `[${scope}] ${fact}` : fact));
-        }),
-      );
-      return hits.flat().slice(0, limit);
+    recallMemory: (query: string) =>
+      recallAcrossScopes(memory, read, { query, actorId: input.actor.id, maxChars: RECALL_MAX_CHARS }, memoryLabels),
+    searchMemory: async (query: string, limit = 20, scope?: ScopeId): Promise<string[] | null> => {
+      const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id);
+      if (hits) for (const source of scope === undefined ? read : [scope]) recordRead(source, "memory");
+      return hits;
+    },
+    readMemory: async (scope: ScopeId): Promise<string | null> => {
+      if (!read.includes(scope)) return null;
+      const body = await readNotebook(memory, scope);
+      recordRead(scope, "memory");
+      return body;
     },
     listFiles: () => handles,
     listSkills: async (sources?: readonly string[]) => {

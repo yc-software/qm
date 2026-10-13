@@ -1,15 +1,17 @@
 import { createHmac, scrypt } from "node:crypto";
+import { reportFailure } from "../util/errors.ts";
 import { probeModel } from "../harness/pi-harness.ts";
 import { ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
-import { modelFromOverlay } from "./pi-models.ts";
-import type { ModelOverlay } from "./model-overlay.ts";
+import { embeddingModelFromDefinition, modelFromOverlay } from "./pi-models.ts";
+import { isEmbeddingModel, type RegisteredModel } from "./model-overlay.ts";
+import { createMemoryEmbedder } from "./embeddings.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
 import { GatewayModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 
 export class ModelVerificationError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
-    super(message);
+  constructor(code: string, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.code = code;
   }
 }
@@ -18,7 +20,7 @@ interface ModelVerificationContext {
   fingerprint: string;
   probe(signal: AbortSignal): Promise<void>;
 }
-export type ModelVerifier = (spec: ModelOverlay) => Promise<ModelVerificationContext>;
+export type ModelVerifier = (spec: RegisteredModel) => Promise<ModelVerificationContext>;
 
 const VERIFICATION_FAILURES: Record<string, string> = {
   timeout: "Verification timed out. Try again; the model was not enabled.",
@@ -49,7 +51,8 @@ export function verificationFailure(error: unknown): ModelVerificationError {
   if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) code = "timeout";
   else if (error instanceof GatewayModelUnavailableError) code = "model_unavailable";
   else if (error instanceof ProviderTurnError) code = VERIFICATION_CODES[error.code];
-  return new ModelVerificationError(code, VERIFICATION_FAILURES[code]!);
+  reportFailure("model verification", error);
+  return new ModelVerificationError(code, VERIFICATION_FAILURES[code]!, { cause: error });
 }
 
 export function createModelVerifier(input: {
@@ -57,13 +60,14 @@ export function createModelVerifier(input: {
   keyMaterial: string | Buffer;
   modelGateway?: ModelGatewayTransportConfig;
   probe?: typeof probeModel;
+  fetchImpl?: typeof fetch;
 }): ModelVerifier {
   const salt = createHmac("sha256", input.keyMaterial).update("qm:model-verification:credential:v2").digest();
   const credentialKeys = new Map<
-    ModelOverlay["provider"] | "gateway",
+    RegisteredModel["provider"] | "gateway",
     { material: string; derived: Promise<Buffer> }
   >();
-  function credentialKey(source: ModelOverlay["provider"] | "gateway", material: string): Promise<Buffer> {
+  function credentialKey(source: RegisteredModel["provider"] | "gateway", material: string): Promise<Buffer> {
     const cached = credentialKeys.get(source);
     if (cached?.material === material) return cached.derived;
     const derived = new Promise<Buffer>((resolve, reject) => {
@@ -79,13 +83,13 @@ export function createModelVerifier(input: {
     return derived;
   }
   return async (spec) => {
-    const model = modelFromOverlay(spec);
+    const model = isEmbeddingModel(spec) ? embeddingModelFromDefinition(spec) : modelFromOverlay(spec);
     if (!model)
       throw new ModelVerificationError(
         "invalid_template",
         "The model template is unavailable. Choose another template.",
       );
-    const gateway = input.modelGateway?.models[spec.id] ? input.modelGateway : undefined;
+    const gateway = !isEmbeddingModel(spec) && input.modelGateway?.models[spec.id] ? input.modelGateway : undefined;
     const key = gateway?.apiKey ?? (await input.credentials.resolve(spec.provider));
     if (!key)
       throw new ModelVerificationError(
@@ -111,9 +115,13 @@ export function createModelVerifier(input: {
     return {
       fingerprint,
       async probe(signal) {
+        if (isEmbeddingModel(model)) {
+          await createMemoryEmbedder(model, key, input.modelGateway, input.fetchImpl).embed(["verification"], signal);
+          return;
+        }
         const run = input.probe ?? probeModel;
         await run(model, { [spec.provider]: key }, signal, false, gateway);
-        if (spec.fastMode) await run(model, { [spec.provider]: key }, signal, true, gateway);
+        if (!isEmbeddingModel(spec) && spec.fastMode) await run(model, { [spec.provider]: key }, signal, true, gateway);
       },
     };
   };

@@ -19,7 +19,3 @@ export function bullets(body: string): string[] {
 export function dateStr(at: number): string {
   return new Date(at).toISOString().slice(0, 10);
 }
-
-export function capTail(text: string, maxChars: number): string {
-  return text.length > maxChars ? text.slice(text.length - maxChars) : text;
-}
