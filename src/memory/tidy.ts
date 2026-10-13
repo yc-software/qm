@@ -30,7 +30,7 @@ export function createMemoryTidyService(deps: {
     async ensure(scope: ScopeId): Promise<void> {
       const { kind, ref } = parseScopeId(scope);
       if (kind !== "personal" && kind !== "channel" && kind !== "group") return;
-      if (await deps.store.get(scope)) return;
+      if ((await deps.store.get(scope))?.cronId) return;
       const owner = kind === "personal" ? ref : scopeActor(scope);
       await claimManagedCron(
         deps,

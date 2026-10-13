@@ -83,7 +83,7 @@ describe("runTrigger: scopeShared unions the owner's keychain into the scope run
     assert.equal(seen.length, 0);
   });
 
-  it("a scope-run cron does NOT set the union flag (it runs at the scope floor, not the owner's creds)", async () => {
+  it("a scope-run cron does NOT set the union flag (it runs as the conversation, not with the owner's creds)", async () => {
     const { deps, seen } = captureDeps();
     await runTrigger(deps, {
       owner: "U-carol",

@@ -14,13 +14,16 @@ export async function claimManagedCron<T extends { cronId?: string }>(
   input: CreateCronInput,
   fields: (cron: Cron) => Partial<T> = () => ({}),
 ): Promise<T> {
-  const cron = await deps.crons.create(input);
+  const cron = await deps.crons.create({ ...input, enabled: false });
   await deps.store.putIfAbsent(key, initial);
   const stored = await deps.store.update?.(key, (value) =>
     value.cronId ? value : { ...value, cronId: cron.id, ...fields(cron) },
   );
   if (!stored) throw new Error("Managed crons require an atomic profile store");
-  if (stored.cronId === cron.id) deps.scheduler.notifyChanged(cron.id);
-  else await deps.crons.delete(cron.id);
+  if (stored.cronId !== cron.id) await deps.crons.delete(cron.id);
+  else {
+    await deps.crons.setEnabled(cron.id, true);
+    deps.scheduler.notifyChanged(cron.id);
+  }
   return stored;
 }
