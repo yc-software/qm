@@ -227,7 +227,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       });
       return { authzFailed: true };
     }
-    const skipped = scheduledAt !== undefined ? await deps.skipFire?.(current) : undefined;
+    const skipped =
+      scheduledAt !== undefined
+        ? await deps.skipFire?.(current).catch(reportFailureAs(`scheduler: skip check for cron ${cron.id}`, undefined))
+        : undefined;
     if (skipped) {
       await deps.crons.recordFire(cron.id, {
         fireKey,

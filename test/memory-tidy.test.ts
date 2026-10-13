@@ -89,14 +89,15 @@ test("a scheduled fire runs the tidy only when the notebook changed since the la
   await f.fireAt("alice", Date.now() + 240_000);
   assert.equal(f.calls.length, 1);
   const { runs } = await f.crons.listFires(id);
-  assert.equal(runs.at(-1)!.note, "notebook unchanged since the last tidy");
+  assert.equal(runs.at(-1)!.status, "silent");
+  assert.equal(runs.at(-1)!.sessionId, undefined);
 
   f.notebooks.set(scope, [f.fact(1), f.fact(Date.now() + 300_000)]);
   await f.fireAt("alice", Date.now() + 360_000);
   assert.equal(f.calls.length, 2);
 });
 
-test("a failed tidy does not count, and run-now always runs", async () => {
+test("a failed tidy does not count, an owner-rewritten task is never skipped, and run-now always runs", async () => {
   const f = fixture();
   f.notebooks.set(scopeId("personal", "alice"), [f.fact(1)]);
   await f.service.maintain();
@@ -106,22 +107,12 @@ test("a failed tidy does not count, and run-now always runs", async () => {
 
   await f.crons.recordFire(id, { fireKey: "k2", threadRef: "t2", firedAt: 7, endedAt: 8, status: "ok" });
   assert.ok(await f.service.skipFire(await f.cronOf("alice")));
+  await f.crons.update(id, { action: "Only merge exact duplicates." });
+  assert.equal(await f.service.skipFire(await f.cronOf("alice")), undefined);
   const result = await f.scheduler.runNow(id);
   assert.ok(result.started);
   await result.settled;
   assert.equal(f.calls.length, 1);
-});
-
-test("other crons are never skipped", async () => {
-  const f = fixture();
-  const other = await f.crons.create({
-    owner: "alice",
-    createdBy: "alice",
-    ownerScopeId: scopeId("personal", "alice"),
-    schedule: { everyMs: 60_000 },
-    action: "Summarize my inbox.",
-  });
-  assert.equal(await f.service.skipFire(other), undefined);
 });
 
 test("respects the owner's edits and deletions", async () => {
