@@ -47,10 +47,10 @@ export const listeningOn = (port: number): string =>
 
 const statusOn = (port: number): string =>
   `status() { if command -v curl >/dev/null 2>&1; then curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/; ` +
-  `elif command -v wget >/dev/null 2>&1; then wget -S -q -T 2 -O /dev/null http://127.0.0.1:${port}/ 2>&1 | awk '$1 ~ /^HTTP\\// { c = $2 } END { print c }'; fi; }`;
+  `elif command -v wget >/dev/null 2>&1; then wget -S -q -T 2 -t 1 -O /dev/null http://127.0.0.1:${port}/ 2>&1 | awk '$1 ~ /^HTTP\\// { c = $2 } END { print c ? c : "000" }'; fi; }`;
 
 const whole = (log: string): string =>
-  Buffer.byteLength(log) < REPORT_LOG_BYTES ? log : log.slice(log.indexOf("\n") + 1);
+  Buffer.byteLength(log) < REPORT_LOG_BYTES ? log : log.slice(log.indexOf("\n") + 1 || log.length);
 
 const EXITED = shq(`${APP_PID_PATH}.exited`);
 const REPORTED = shq(`${APP_LOG_PATH}.reported`);
@@ -106,7 +106,7 @@ export async function appGone(exec: Exec, opts: { appPort: number; report?: Repo
     return null;
   });
   if (r?.code === EXIT_APP_GONE) {
-    const [first, ...tail] = r.stdout.trim().split("\n");
+    const [first, ...tail] = r.stdout.split("\n");
     if (first === "down")
       opts.report?.(
         "app_down",
@@ -114,12 +114,12 @@ export async function appGone(exec: Exec, opts: { appPort: number; report?: Repo
       );
     return true;
   }
-  const out = r?.code === 0 ? r.stdout.trim() : "";
-  if (out) {
+  const out = r?.code === 0 ? r.stdout : "";
+  if (out.trim()) {
     const [count, ...rest] = out.split("\n");
     opts.report?.(
       "app_restarted",
-      `app exited ${count} time(s) and was restarted; output before exiting:\n${whole(rest.join("\n"))}`,
+      `app exited ${count} time(s) and was restarted; output before exiting:\n${whole(rest.join("\n")).trim()}`,
     );
   }
   return false;
