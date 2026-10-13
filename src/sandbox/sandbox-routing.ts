@@ -105,13 +105,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     profile: fallback.profile,
 
     async profileFor(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile> {
-      const resource = sandboxId ? await resources.get(sandboxId) : await resources.resolve(scopeId);
+      const resource = sandboxId !== undefined ? await resources.get(sandboxId) : await resources.resolve(scopeId);
       return resource ? backendFor(resource.backend).profile : fallback.profile;
     },
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scope = provOpts?.routeScopeId ?? writableScope(layers);
-      const resource = provOpts?.sandboxId ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
+      const resource =
+        provOpts?.sandboxId !== undefined ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
       const backend = resource?.backend ?? defaultBackend;
       const sandbox = backendFor(backend);
       const provision = async (targetLayers: WorkspaceLayer[]) => {

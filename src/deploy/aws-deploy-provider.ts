@@ -10,7 +10,14 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
 import { swallow } from "../util/errors.ts";
-import { appGone, listeningOn, supervised, waitAppReady } from "./shared-deploy-provider.ts";
+import {
+  appGone,
+  appReporter,
+  listeningOn,
+  supervised,
+  waitAppReady,
+  type AppErrorSink,
+} from "./shared-deploy-provider.ts";
 
 const AGENT_PORT_DEFAULT = 8080;
 const APP_PORT_DEFAULT = 8081;
@@ -82,6 +89,7 @@ export interface AwsDeployProviderOptions {
   fetchImpl?: typeof fetch;
   s3?: Pick<S3Client, "send">;
   sts?: Pick<STSClient, "send">;
+  onError?: AppErrorSink;
 }
 
 export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployProvider {
@@ -424,7 +432,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     for (const f of files) await writeAbs(id, endpoint, posixJoin(root, normalizeRelPath(f.path)), bytes(f.data));
   }
 
-  async function startApp(id: string, endpoint: string, version: DeploymentVersion): Promise<void> {
+  async function startApp(d: Deployment, id: string, endpoint: string, version: DeploymentVersion): Promise<void> {
     const envExports = Object.entries(version.env ?? {})
       .filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
       .map(([k, v]) => `export ${k}=${shq(v)}`)
@@ -456,6 +464,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       windowSec: APP_READY_WINDOW_SEC,
       pidPath: PID_PATH,
       logPath: LOG_PATH,
+      report: appReporter(opts.onError, d, version.env),
     });
   }
 
@@ -509,7 +518,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         if (cur) await store.put(d.id, { ...cur, dataCredsAtMs: Date.now() });
       });
     }
-    await startApp(id, endpoint, version);
+    await startApp(d, id, endpoint, version);
   }
 
   async function endpointFor(d: Deployment, microvmId: string, endpoint: string): Promise<DeployEndpoint> {
@@ -527,7 +536,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     return result;
   }
 
-  const resolveLive = async (d: Deployment, genCurrent: () => boolean): Promise<DeployEndpoint | null> => {
+  const resolveLive = async (
+    d: Deployment,
+    version: DeploymentVersion,
+    genCurrent: () => boolean,
+  ): Promise<DeployEndpoint | null> => {
     const stored = await store.get(d.id);
     if (!stored) return null;
     try {
@@ -547,7 +560,8 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       await ensureRunning(stored.microvmId, stored.endpoint);
       const exec = (script: string, timeoutSec: number) =>
         execRaw(stored.microvmId, stored.endpoint, script, timeoutSec);
-      if (await appGone(exec, { appPort, pidPath: PID_PATH })) return null;
+      const report = appReporter(opts.onError, d, version.env);
+      if (await appGone(exec, { appPort, pidPath: PID_PATH, logPath: LOG_PATH, report })) return null;
     } catch (e) {
       if (!(e instanceof AwsApiError && (e.status >= 500 || e.status === 429))) throw e;
     }
@@ -615,14 +629,14 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
     reconcile: (d, version, input) => place(d, version, input),
 
-    async resolveEndpoint(d, _version): Promise<DeployEndpoint | null> {
+    async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       const cached = resolveCache.get(d.id);
       if (cached && Date.now() < cached.untilMs) return cached.endpoint;
       const inflight = inflightResolves.get(d.id);
       if (inflight) return inflight;
       const gen = resolveGens.get(d.id) ?? 0;
       const genCurrent = (): boolean => (resolveGens.get(d.id) ?? 0) === gen;
-      const resolve = resolveLive(d, genCurrent)
+      const resolve = resolveLive(d, version, genCurrent)
         .then((endpoint) => {
           if (endpoint && genCurrent()) {
             if (resolveCache.size > 500) {

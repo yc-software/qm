@@ -3,7 +3,7 @@ import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
-import { appGone, supervised, waitAppReady } from "./shared-deploy-provider.ts";
+import { appGone, appReporter, supervised, waitAppReady, type AppErrorSink } from "./shared-deploy-provider.ts";
 import { normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import {
@@ -66,6 +66,7 @@ export interface PorterDeployProviderOptions {
   client?: PorterClientLike;
   store?: DurableMap<StoredPorterDeployBody>;
   advisoryLock?: AdvisoryLock;
+  onError?: AppErrorSink;
 }
 
 export function createPorterDeployProvider(opts: PorterDeployProviderOptions): DeployProvider {
@@ -145,7 +146,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     if (version.homeDir) await unpackTree(sandboxId, volumeId, HOME_DIR, version.homeDir);
   }
 
-  async function startApp(sandboxId: string, version: DeploymentVersion): Promise<void> {
+  async function startApp(d: Deployment, sandboxId: string, version: DeploymentVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
     const launch = `sh -c ${shq(supervised(inner, appPort, PID_PATH))} < /dev/null > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`;
     const script = [
@@ -160,6 +161,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       windowSec: readyWindowSec,
       pidPath: PID_PATH,
       logPath: LOG_PATH,
+      report: appReporter(opts.onError, d, version.env),
     });
   }
 
@@ -234,7 +236,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
           await waitPorterRunning(name, sb);
           const address = await addressOf(d, sb);
           await materialize(sb.id, volumeId, version);
-          await startApp(sb.id, version);
+          await startApp(d, sb.id, version);
           await store.put(d.id, { deploymentId: d.id, sandboxId: sb.id, name, ...address, createdAtMs: Date.now() });
           return endpointOf(address);
         } catch (e) {
@@ -243,7 +245,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         }
       }),
 
-    async resolveEndpoint(d): Promise<DeployEndpoint | null> {
+    async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       const cached = resolveCache.get(d.id);
       if (cached) return cached;
       const stored = await liveStored(d);
@@ -252,7 +254,8 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         return null;
       }
       const exec = (script: string, timeoutSec: number) => execRaw(stored.sandboxId, script, timeoutSec);
-      if (await appGone(exec, { appPort, pidPath: PID_PATH })) return null;
+      const report = appReporter(opts.onError, d, version.env);
+      if (await appGone(exec, { appPort, pidPath: PID_PATH, logPath: LOG_PATH, report })) return null;
       const endpoint = endpointOf(stored);
       if (resolveCacheMs > 0) resolveCache.set(d.id, endpoint);
       return endpoint;

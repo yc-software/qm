@@ -21,3 +21,7 @@ The core reports one transaction per sampled HTTP request except `/healthz` (`ht
 Browser timing uses `SENTRY_BROWSER_TRACES_SAMPLE_RATE` on the web server together with `SENTRY_BROWSER_DSN`; see the web-ui README.
 
 Browser Sentry ignores plain network `TypeError` failures (`Failed to fetch`, `NetworkError when attempting to fetch resource.`, `Load failed`) and `AbortError` cancellations; HTTP 4xx/5xx failures still report.
+
+## Published apps
+
+On the AWS and Porter app hosts, published-app failures become operator error records in the app owner's scope, so they reach the admin errors view and Sentry: `deploy:app_start_failed` (publish failed, including an app that only answered 5xx on `/` for the readiness window), `deploy:app_restarted` (the supervisor restarted the app since the last visit-time check), and `deploy:app_down` (the app and its supervisor are gone). Each record names the deployment and carries up to 4 KB of the app's recent output, with the app's env values and known secret patterns masked. Fly relies on its machine TCP check, so its readiness does not reject 5xx and its failures surface only as the publish error; Docker uses its restart policy and does not report.

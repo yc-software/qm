@@ -377,7 +377,7 @@ export function createSessionMethods(
       if (createdInScope !== ownerScopeId) {
         await deps.acl.grant({
           ownerScopeId,
-          ref: path,
+          ref: artifact.id,
           granteeScopeId: createdInScope,
           permission: "read",
           grantedBy: principalId,
@@ -399,7 +399,7 @@ export function createSessionMethods(
       const myScopes = await currentResourceScopesForViewer(principalId);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
-        const grants = await deps.acl.grantsFor(art.ownerScopeId, art.path);
+        const grants = await deps.acl.grantsFor(art.ownerScopeId, art.id);
         allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
       }
       if (!allowed) return null;
@@ -1139,7 +1139,7 @@ export function createSessionMethods(
       if (type === "file") {
         const f = await deps.files.get(idOrName);
         return f
-          ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.path)) }
+          ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.id)) }
           : null;
       }
       const d = (await deps.deploy.listDeployments()).find((x) => x.id === idOrName || x.name === idOrName);

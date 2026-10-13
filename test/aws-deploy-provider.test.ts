@@ -460,7 +460,7 @@ test("resolveEndpoint: destroy invalidates a hot resolve cache", async () => {
 
 test("resolveEndpoint: an app whose process and supervisor are both gone returns null, and the re-apply reuses the body", async () => {
   const { api, counts } = fakeApi();
-  const appGoneProbe = (cmd: string): boolean => cmd.includes("listening && exit 0") && cmd.includes("qm-app.pid");
+  const appGoneProbe = (cmd: string): boolean => cmd.includes("qm-app.pid") && cmd.includes("exit 99");
   const { fetchImpl, execs } = fakeDaemon({ execCode: (cmd) => (appGoneProbe(cmd) ? 99 : 0) });
   const p = provider(api, fetchImpl);
   const d = deployment(ID);

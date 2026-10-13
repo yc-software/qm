@@ -29,7 +29,7 @@ async function fixture() {
     sharingPosture: "open",
     grantedHandles: [],
   } as unknown as Resolution;
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const input: Parameters<typeof resolveTurnContext>[0] = {
     actor: { id: "alice", type: "internal" },
     audience: [{ id: "alice", type: "internal" }],
@@ -43,14 +43,22 @@ async function fixture() {
     resolution,
     memoryPolicy: { recall: "visible", capture: "writable" },
     useMemory: true,
-    workspace,
     memory,
     files,
     auditLog,
   };
   await memory.capture("personal:alice", ["LOCAL_FACT"], Date.now());
   await memory.capture("channel:eng", ["SHARED_FACT", "long fact ".repeat(1500), "LAST_FACT"], Date.now());
-  await workspace.write("channel:eng", "plan.txt", "PLAN_CONTENT");
+  await files.put({
+    id: "1".repeat(32),
+    ownerScopeId: "channel:eng",
+    createdBy: "alice",
+    name: "plan.txt",
+    path: "plan.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("PLAN_CONTENT"),
+    direction: "in",
+  });
   return {
     input,
     acl,
@@ -84,7 +92,7 @@ test("one context loads full source-labelled notebooks and shares authority with
   assert.equal(await context.readFile("shared/open-channel-other/plan.txt"), null);
   const events = await auditLog.events();
   assert.ok(events.some((e) => e.resource === "memory" && e.detail?.includes("channel:eng")));
-  assert.ok(events.some((e) => e.resource === "plan.txt" && e.detail?.includes("channel:eng")));
+  assert.ok(events.some((e) => e.resource === "1".repeat(32) && e.detail?.includes("channel:eng")));
 });
 
 for (const mode of [
@@ -160,8 +168,8 @@ test("skill discovery uses the same included scopes and audience-filtered explic
 test("ambiguous file aliases fail closed in the shared reader", async () => {
   const { input } = await fixture();
   input.resolution.grantedHandles = [
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", ownerPath: "one.txt", permission: "read" },
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", ownerPath: "two.txt", permission: "read" },
+    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "1".repeat(32), permission: "read" },
+    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "2".repeat(32), permission: "read" },
   ];
   const result = await (await resolveTurnContext(input)).readFile("shared/plan.txt");
   assert.ok(result && "error" in result);

@@ -6,7 +6,8 @@ description: Sign a cloud provider's CLI in (AWS, Google Cloud, Azure, or anothe
 # Cloud provider CLIs
 
 It adds NO new tool: a provider's CLI is a command on the agent computer and you drive it
-with the `execute` primitive. Logins are saved to the keychain with the `interactive-login`
+with `execute` and an explicit `sandbox_id`. Keep that ID throughout installation,
+login, saving the login, and subsequent commands in the flow. Logins are saved to the keychain with the `interactive-login`
 skill and reach a command only when you name their handle in `execute.credentials`.
 
 ## First: is the CLI even here?

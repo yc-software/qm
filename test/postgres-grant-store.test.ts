@@ -1,6 +1,8 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
@@ -182,13 +184,29 @@ test(
   "pg-backed AclStore: owner-only grant, dedup, permission-agnostic revoke, handle surfacing",
   { skip },
   async () => {
-    const acl = createAclStore(createPostgresGrantStore(URL!));
+    const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+    for (const [id, name] of [
+      ["owner-only", "owner-only.md"],
+      ["poster", "poster.png"],
+    ]) {
+      await files.put({
+        id: id!,
+        ownerScopeId: owner,
+        createdBy: "U1",
+        name: name!,
+        path: name!,
+        mimetype: "application/octet-stream",
+        data: Buffer.from("file"),
+        direction: "out",
+      });
+    }
+    const acl = createAclStore(createPostgresGrantStore(URL!), { resolveFiles: (refs) => files.resolveByIds(refs) });
 
-    await assert.rejects(acl.grant(grant({ ref: "owner-only.md", grantedBy: "U2" })), /only a manager/);
+    await assert.rejects(acl.grant(grant({ ref: "owner-only", grantedBy: "U2" })), /only a manager/);
 
-    await acl.grant(grant({ ref: "owner-only.md" }));
-    await acl.grant(grant({ ref: "owner-only.md" }));
-    assert.equal((await acl.grantsFor(owner, "owner-only.md")).length, 1);
+    await acl.grant(grant({ ref: "owner-only" }));
+    await acl.grant(grant({ ref: "owner-only" }));
+    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 1);
 
     const handles = await acl.handlesFor([carol]);
     assert.equal(
@@ -196,7 +214,7 @@ test(
       true,
     );
 
-    await acl.grant(grant({ ref: "poster.png", granteeScopeId: org }));
+    await acl.grant(grant({ ref: "poster", granteeScopeId: org }));
     const surfaced = await acl.handlesForAudience(
       [person("U1"), person("U2")],
       scopeId("channel", "C1"),
@@ -208,13 +226,9 @@ test(
       true,
     );
 
-    await acl.grant(grant({ ref: "owner-only.md", permission: "write" }));
-    assert.equal((await acl.grantsFor(owner, "owner-only.md")).length, 2);
-    await acl.revoke(owner, "owner-only.md", carol, "U1");
-    assert.equal(
-      (await acl.grantsFor(owner, "owner-only.md")).length,
-      0,
-      "revoke drops every permission for the triple",
-    );
+    await acl.grant(grant({ ref: "owner-only", permission: "write" }));
+    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 2);
+    await acl.revoke(owner, "owner-only", carol, "U1");
+    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 0, "revoke drops every permission for the triple");
   },
 );

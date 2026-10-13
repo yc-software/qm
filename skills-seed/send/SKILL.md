@@ -29,7 +29,9 @@ any issues that come up, and merge once CI is **fully** green.
    node <github-gitlab dir>/scripts/watch-ci.mjs --repo OWNER/REPO --pr NUMBER --head REVIEWED_HEAD_SHA
    ```
 
-   Run this in the background with authorized credentials and subscribe to completion.
+   Run this with `execute`, an explicit `sandbox_id`, `background:true`, and authorized
+   credentials; subscribe with `background` action `watch` and the returned `process_id`.
+   Keep that sandbox ID throughout the checkout, checks, and push.
    Keep one watcher per PR; hand off if another agent already owns it. The helper
    polls internally, retries recognized transport/server errors with bounded backoff,
    and has a 30-minute overall deadline. Set the background lifetime longer than that.

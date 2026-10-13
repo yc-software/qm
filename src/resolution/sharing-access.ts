@@ -1,10 +1,7 @@
-import { MEMORY_FILE } from "../memory/memory-service.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { GrantedHandle, Principal, ScopeId, TurnOrigin } from "../types.ts";
 import { parseScopeId, personalScope } from "../types.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { relative } from "node:path";
 import type { ScopedConfigStore } from "./config-store.ts";
 import type { IsCurrentSharedScopeMember } from "./scope-membership.ts";
 import type { SharingPosture } from "./sharing-posture.ts";
@@ -90,34 +87,20 @@ function handlePath(path: string): string {
 
 export async function carriedFileHandles(
   sourceScopes: readonly ScopeId[],
-  workspace: Pick<WorkspaceStore, "list" | "scopeDir">,
   files: Pick<FileArtifactStore, "listOwnedByScopes">,
 ): Promise<GrantedHandle[]> {
   const handles = new Map<string, GrantedHandle>();
   for (const sourceScope of sourceScopes) {
     const remaining = MAX_OPEN_FILES - handles.size;
     if (remaining <= 0) break;
-    const [workspacePaths, page] = await Promise.all([
-      workspace.list(sourceScope, { limit: remaining }),
-      files.listOwnedByScopes([sourceScope], { limit: remaining }),
-    ]);
-    const artifacts = page.files.map((file) => file.path);
-    const workspaceBase = workspace.scopeDir(sourceScope);
-    const ownedPaths = workspacePaths.map((path) => {
-      const rel = relative(workspaceBase, path);
-      return rel.startsWith("..") ? "" : rel;
-    });
-    for (const ownerPath of [...ownedPaths, ...artifacts]) {
+    const page = await files.listOwnedByScopes([sourceScope], { limit: remaining });
+    for (const file of page.files) {
       if (handles.size >= MAX_OPEN_FILES) break;
-      const relative = handlePath(ownerPath);
-      if (relative === MEMORY_FILE) continue;
-      if (!relative) continue;
-      const key = `${sourceScope}\0${ownerPath}`;
-      handles.set(key, {
+      handles.set(file.id, {
         carried: true,
-        handlePath: `shared/open-${handleSource(sourceScope)}/${relative}`,
+        handlePath: `shared/open-${handleSource(sourceScope)}/${file.id}/${handlePath(file.name)}`,
         ownerScopeId: sourceScope,
-        ownerPath,
+        fileId: file.id,
         permission: "read",
       });
     }

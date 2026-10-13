@@ -48,8 +48,8 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
             deps.files.listOwnedByScopes(scopes, { limit: 200 }),
             deps.acl.handlesFor(scopes),
           ]);
-          const shared = await deps.files.resolveByOwnerPaths(
-            handles.map((h) => ({ ownerScopeId: h.ownerScopeId, path: h.ownerPath })),
+          const shared = await deps.files.resolveByIds(
+            handles.map((h) => ({ ownerScopeId: h.ownerScopeId, id: h.fileId })),
           );
           return [
             ...owned.files,

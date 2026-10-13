@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import { basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
@@ -9,9 +10,13 @@ import type {
   SessionEntry,
 } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
-import { MAX_BLOB_BYTES, collectBlob, type BlobTransferStore } from "../persistence/blob-transfer.ts";
+import {
+  MAX_BLOB_BYTES,
+  BlobTooLargeError,
+  collectBlob,
+  type BlobTransferStore,
+} from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
-import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
@@ -210,7 +215,7 @@ export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, u
       (m) =>
         `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}${
           unstaged?.has(m.name)
-            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); if you need it on disk, select or create a sandbox with set_default, then download GET $AGENT_API_URL/v1/files/${m.artifactId}/content (header x-agent-capability: $AGENT_API_TOKEN) to a path you choose`
+            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); send it directly with {file_id: "${m.artifactId}"}; if you need it on disk, choose a sandbox_id for execute and download GET $AGENT_API_URL/v1/files/${m.artifactId}/content (header x-agent-capability: $AGENT_API_TOKEN) to a path you choose`
             : ""
         }`,
     )
@@ -262,15 +267,10 @@ export function inboundIssueList(opts: {
   return issues;
 }
 
-function isFileHandle(h: GrantedHandle): boolean {
-  return parseRef(h.ownerPath).kind === "file";
-}
-
 export function sharedManifest(handles: readonly GrantedHandle[]): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const h of handles) {
-    if (!isFileHandle(h)) continue;
     if (seen.has(h.handlePath)) continue;
     seen.add(h.handlePath);
     lines.push(`- ${h.handlePath}${h.permission === "write" ? " (writable)" : ""}`);
@@ -283,10 +283,7 @@ export function sharedManifest(handles: readonly GrantedHandle[]): string {
     shown.push(`…and ${omitted} more (read shared/<name> to fetch)`);
   }
   const noun = total === 1 ? "file" : "files";
-  return (
-    `${total} ${noun} shared with you — read a path below to fetch that file on demand, ` +
-    `then attach it to a message to pass it on (name its path in the surface \`post\` action's \`files\`):\n${shown.join("\n")}`
-  );
+  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${shown.join("\n")}`;
 }
 
 export function sharedFilesSystemSection(handles: readonly GrantedHandle[]): string {
@@ -418,13 +415,50 @@ export function legacyDeliveryNoteManifest(text: string): string | null {
   return m ? m[1]! : null;
 }
 
+export type OutboundFile = string | { file_id: string };
+
+export type OpenStoredFile = (id: string) => Promise<{
+  name: string;
+  mimetype: string;
+  sizeBytes: number;
+  stream: Readable;
+} | null>;
+
+export function parseOutboundFiles(
+  value: unknown,
+): { ok: true; files: OutboundFile[] } | { ok: false; message: string } {
+  if (value === undefined) return { ok: true, files: [] };
+  if (
+    !Array.isArray(value) ||
+    value.some((file) =>
+      typeof file === "string"
+        ? !file.trim()
+        : !file ||
+          typeof file !== "object" ||
+          Array.isArray(file) ||
+          Object.keys(file).length !== 1 ||
+          typeof file.file_id !== "string" ||
+          !file.file_id.trim(),
+    )
+  )
+    return { ok: false, message: 'files must be workspace path strings or {file_id: "stored Files ID"} objects' };
+  if (value.length > MAX_OUTBOUND_FILES) return { ok: false, message: `too many files (max ${MAX_OUTBOUND_FILES})` };
+  if (value.some((file) => typeof file === "string" && hasParentPathSegment(file)))
+    return { ok: false, message: "files must stay inside the workspace — no .. path segments" };
+  return {
+    ok: true,
+    files: value.map((file) => (typeof file === "string" ? file.trim() : { file_id: file.file_id.trim() })),
+  };
+}
+
 export async function collectNamedOutbound(
-  sandbox: Sandbox,
-  handle: SandboxHandle,
-  paths: readonly string[],
+  sandbox: Sandbox | undefined,
+  handle: SandboxHandle | (() => Promise<SandboxHandle>),
+  paths: readonly OutboundFile[],
   transfer: BlobTransferStore,
   register?: ArtifactRegistration,
   reservedNames: readonly string[] = [],
+  openStored?: OpenStoredFile,
 ): Promise<{
   attachments: OutgoingAttachment[];
   missing: string[];
@@ -432,9 +466,8 @@ export async function collectNamedOutbound(
   oversized: string[];
   createdArtifactIds: Set<string>;
 }> {
-  const invalid = paths.filter(hasParentPathSegment);
-  if (invalid.length)
-    return { attachments: [], missing: invalid, empty: [], oversized: [], createdArtifactIds: new Set() };
+  const parsed = parseOutboundFiles(paths);
+  if (!parsed.ok) throw new Error(parsed.message);
   const attachments: OutgoingAttachment[] = [];
   const missing: string[] = [];
   const empty: string[] = [];
@@ -442,56 +475,70 @@ export async function collectNamedOutbound(
   const usedNames = new Set<string>(reservedNames);
   const doomed = () => missing.length > 0 || empty.length > 0 || oversized.length > 0;
   const createdArtifactIds = new Set<string>();
-  let i = 0;
-  for (const p of paths) {
-    const bytes = await sandbox.readFileBytes(handle, p);
-    if (bytes === null) {
-      missing.push(p);
-      continue;
-    }
-    const name = uniqueName(safeAttachmentName(basename(p)), usedNames);
-    usedNames.add(name);
-    if (bytes.length === 0) {
-      empty.push(p);
-      continue;
-    }
-    if (bytes.length > MAX_ATTACHMENT_BYTES) {
-      oversized.push(p);
-      continue;
-    }
-    if (doomed()) continue;
-    const mimetype = mimeFromName(name);
-    const { blobId } = await transfer.put(bytes);
-    const artifact = register ? await registerArtifact(register, "out", i, name, mimetype, bytes) : undefined;
-    if (artifact?.created) createdArtifactIds.add(artifact.id);
-    i += 1;
-    attachments.push({
-      name,
-      mimetype,
-      sizeBytes: bytes.length,
-      blobId,
-      ...(artifact ? { artifactId: artifact.id, artifactViewerId: register!.createdBy } : {}),
-    });
-  }
-  if (doomed() && attachments.length) {
-    await Promise.all(
-      attachments.map(async (a) => {
-        await transfer.delete(a.blobId).catch(swallowAs("attachments: rollback blob delete", undefined));
-        if (register && a.artifactId && createdArtifactIds.has(a.artifactId)) {
-          await register.store.delete(a.artifactId).catch((e) => {
-            try {
-              register.onError?.(e);
-            } catch (err) {
-              swallowAs("attachments: rollback onError", undefined)(err);
-            }
-          });
-        }
-      }),
-    );
+  const rollback = async () => {
+    await Promise.all(attachments.map((a) => discardOutbound(a, transfer, register, createdArtifactIds)));
     attachments.length = 0;
     createdArtifactIds.clear();
+  };
+  let target: SandboxHandle | undefined;
+  try {
+    for (const [i, file] of parsed.files.entries()) {
+      const storedId = typeof file === "string" ? undefined : file.file_id;
+      const label = typeof file === "string" ? file : file.file_id;
+      let bytes: Uint8Array | undefined;
+      let stored: Awaited<ReturnType<OpenStoredFile>> = null;
+      if (typeof file === "string") {
+        if (!sandbox) throw new Error("sandbox file access is not available");
+        target ??= typeof handle === "function" ? await handle() : handle;
+        bytes = (await sandbox.readFileBytes(target, file)) ?? undefined;
+      } else {
+        stored = (await openStored?.(file.file_id)) ?? null;
+      }
+      if (!bytes && !stored) {
+        missing.push(label);
+        continue;
+      }
+      const sizeBytes = stored?.sizeBytes ?? bytes!.length;
+      if (sizeBytes === 0) empty.push(label);
+      if (sizeBytes > MAX_ATTACHMENT_BYTES) oversized.push(label);
+      if (doomed()) {
+        stored?.stream.destroy();
+        continue;
+      }
+      const name = uniqueName(safeAttachmentName(stored?.name ?? label), usedNames);
+      usedNames.add(name);
+      const mimetype = stored?.mimetype || mimeFromName(name);
+      let blob;
+      try {
+        blob = await transfer.put(stored?.stream ?? bytes!, { maxBytes: MAX_ATTACHMENT_BYTES });
+      } catch (error) {
+        if (!(error instanceof BlobTooLargeError)) throw error;
+        oversized.push(label);
+        continue;
+      } finally {
+        stored?.stream.destroy();
+      }
+      const attachment: OutgoingAttachment = { name, mimetype, sizeBytes: blob.sizeBytes, blobId: blob.blobId };
+      attachments.push(attachment);
+      if (blob.sizeBytes === 0) {
+        empty.push(label);
+        continue;
+      }
+      let artifact;
+      if (storedId) artifact = { id: storedId, created: false };
+      else if (register) artifact = await registerArtifact(register, "out", i, name, mimetype, bytes!);
+      if (artifact?.created) createdArtifactIds.add(artifact.id);
+      if (artifact) {
+        attachment.artifactId = artifact.id;
+        if (register) attachment.artifactViewerId = register.createdBy;
+      }
+    }
+    if (doomed()) await rollback();
+    return { attachments, missing, empty, oversized, createdArtifactIds };
+  } catch (error) {
+    await rollback();
+    throw error;
   }
-  return { attachments, missing, empty, oversized, createdArtifactIds };
 }
 
 export async function discardOutbound(

@@ -182,7 +182,7 @@ export interface GrantedHandle {
   carried?: true;
   handlePath: string;
   ownerScopeId: ScopeId;
-  ownerPath: string;
+  fileId: string;
   permission: Permission;
 }
 

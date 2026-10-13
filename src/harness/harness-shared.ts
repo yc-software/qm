@@ -161,9 +161,7 @@ export function nativeChildToolAllowed(name: string, args?: unknown): boolean {
   const action = args && typeof args === "object" ? (args as Record<string, unknown>).action : undefined;
   if (name === "apps") return action === "publish";
   if (action === "read" || action === "write") return true;
-  return (
-    action === "share" && typeof (args as Record<string, unknown>).path === "string" && !("id" in (args as object))
-  );
+  return false;
 }
 
 export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {

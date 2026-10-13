@@ -8,7 +8,8 @@ description: Log a CLI in with a browser/device-code flow (aws sso, gh, glab, gc
 Nothing captures logins for you. Every login runs in a fresh temporary home and is saved
 to the keychain with the script shipped with this skill. Never log in against the real
 `$HOME`, and never treat a token or config already in `$HOME` as a usable login: only a
-keychain handle is.
+keychain handle is. Use the same explicit `sandbox_id` for the skill read, login,
+and save-login commands so the temporary home and save script stay on one computer.
 
 1. Make a fresh directory and start the login with `execute(background:true)` with every config
    location pointed into it. Copy in any config the CLI needs first (for AWS, the
@@ -28,7 +29,8 @@ keychain handle is.
    completes on the same machine.
 
 2. Relay the verification URL and code from the job output. Answer any prompt with
-   send_input. Watch the job; never stop it while the person is approving.
+   `background` action `send_input`. Use its `watch` or `poll` action with the returned
+   `process_id`; never stop the job while the person is approving.
 
 3. When it exits successfully, save the directory with the script under the absolute
    directory the skill read reported:

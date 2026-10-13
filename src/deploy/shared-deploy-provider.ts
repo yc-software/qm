@@ -1,19 +1,42 @@
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
+import { redactSecrets } from "../harness/redact-secrets.ts";
+import { createSecretValueMasker } from "../security/secret-masking.ts";
+import type { Deployment } from "./deploy-store.ts";
 
+const EXIT_APP_SERVER_ERROR = 96;
 const EXIT_APP_EXITED = 98;
 const EXIT_APP_GONE = 99;
+const REPORT_LOG_BYTES = 4000;
+const REPORT_CONTEXT_LINES = 40;
 const READY_EXEC_GRACE_SEC = 30;
 const APP_PROBE_TIMEOUT_SEC = 5;
+const EXITED_MARK = "qm: entrypoint exited";
 
 type Exec = (script: string, timeoutSec: number) => Promise<Pick<ExecResult, "stdout" | "stderr" | "code">>;
+
+export type AppErrorSink = (
+  e: { category: string; code: string; message: string; scopeLabel: string },
+  error?: unknown,
+) => void;
+type Report = (code: string, detail: string) => Error;
+
+export function appReporter(onError: AppErrorSink | undefined, d: Deployment, env?: Record<string, string>): Report {
+  const mask = createSecretValueMasker(env);
+  return (code, detail) => {
+    const error = new Error(redactSecrets(mask(`app ${d.name ?? d.id} (deployment ${d.id}): ${detail}`)));
+    onError?.({ category: "deploy", code, message: error.message, scopeLabel: d.ownerScopeId }, error);
+    return error;
+  };
+}
 
 export interface AppReadyOptions {
   appPort: number;
   windowSec: number;
   pidPath: string;
   logPath: string;
+  report?: Report | undefined;
 }
 
 export const listeningOn = (port: number): string =>
@@ -33,15 +56,45 @@ export function supervised(inner: string, appPort: number, pidPath: string): str
   ].join("; ");
 }
 
-export async function appGone(exec: Exec, opts: { appPort: number; pidPath: string }): Promise<boolean> {
-  const probe =
-    `${listeningOn(opts.appPort)}; listening && exit 0; pid=$(cat ${shq(opts.pidPath)} 2>/dev/null || true); ` +
-    `[ -n "$pid" ] && { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && exit 0; exit ${EXIT_APP_GONE}`;
+export async function appGone(
+  exec: Exec,
+  opts: { appPort: number; pidPath: string; logPath: string; report?: Report | undefined },
+): Promise<boolean> {
+  const log = shq(opts.logPath);
+  const seen = shq(`${opts.logPath}.reported`);
+  const probe = [
+    listeningOn(opts.appPort),
+    `pid=$(cat ${shq(opts.pidPath)} 2>/dev/null || true)`,
+    `s=$(cat ${seen} 2>/dev/null || true)`,
+    `if ! listening && ! { [ -n "$pid" ] && { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; }; }; then ` +
+      `[ -n "$pid" ] && [ "$s" != "down $pid" ] && { echo "down $pid" > ${seen}; echo down; tail -c ${REPORT_LOG_BYTES} ${log} 2>/dev/null; }; exit ${EXIT_APP_GONE}; fi`,
+    `n=$(wc -l < ${exitedPath(opts.pidPath)} 2>/dev/null || echo 0); r=0`,
+    `[ "\${s% *}" = "$pid" ] && r=\${s#* }`,
+    `[ "$n" -gt "$r" ] || exit 0`,
+    `echo "$pid $n" > ${seen}; echo $((n - r)); grep -F -B ${REPORT_CONTEXT_LINES} ${shq(EXITED_MARK)} ${log} | tail -c ${REPORT_LOG_BYTES}`,
+  ].join("; ");
   const r = await exec(probe, APP_PROBE_TIMEOUT_SEC).catch((e) => {
     swallow("deploy: app liveness probe", e);
     return null;
   });
-  return r?.code === EXIT_APP_GONE;
+  if (r?.code === EXIT_APP_GONE) {
+    const [first, ...tail] = r.stdout.trim().split("\n");
+    if (first === "down")
+      opts.report?.(
+        "app_down",
+        `app stopped and nothing restarted it; last output:\n${tail.join("\n").trim() || "(none)"}`,
+      );
+    return true;
+  }
+  const out = r?.code === 0 ? r.stdout.trim() : "";
+  if (out) {
+    const [count, ...rest] = out.split("\n");
+    opts.report?.(
+      "app_restarted",
+      `app exited ${count} time(s) and was restarted; output before exiting:\n${rest.join("\n")}`,
+    );
+  }
+  return false;
 }
 
 export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<void> {
@@ -49,17 +102,20 @@ export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<v
     `pid=$(cat ${shq(opts.pidPath)} 2>/dev/null || true); died=0; ` +
     `end=$(( $(date +%s) + ${opts.windowSec} )); ` +
     `while [ "$(date +%s)" -lt "$end" ]; do ` +
-    `curl -s --max-time 2 -o /dev/null http://127.0.0.1:${opts.appPort}/ && exit 0; ` +
+    `code=$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:${opts.appPort}/); ` +
+    `[ "$code" != 000 ] && [ "$code" -lt 500 ] && exit 0; ` +
     `{ kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${exitedPath(opts.pidPath)} ] || died=1; ` +
-    `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; exit 1`;
+    `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; ` +
+    `[ "$code" -ge 500 ] 2>/dev/null && { echo "$code"; exit ${EXIT_APP_SERVER_ERROR}; }; exit 1`;
   const r = await exec(probe, opts.windowSec + READY_EXEC_GRACE_SEC);
   if (r.code === 0) return;
-  const log = await exec(`tail -c 2000 ${shq(opts.logPath)} 2>/dev/null || true`, 30)
+  const log = await exec(`tail -c ${REPORT_LOG_BYTES} ${shq(opts.logPath)} 2>/dev/null || true`, 30)
     .then((out) => `${out.stdout}${out.stderr}`.trim())
-    .catch(() => "");
-  const why =
-    r.code === EXIT_APP_EXITED
-      ? `the version's entrypoint exited without binding port ${opts.appPort}`
-      : `app never listened on port ${opts.appPort} within ${opts.windowSec}s`;
-  throw new Error(why + (log ? `; last output from the entrypoint:\n${log}` : "; the entrypoint produced no output"));
+    .catch((e: unknown) => `(the app log could not be read: ${errMessage(e)})`);
+  let why = `app never listened on port ${opts.appPort} within ${opts.windowSec}s`;
+  if (r.code === EXIT_APP_EXITED) why = `the version's entrypoint exited without binding port ${opts.appPort}`;
+  if (r.code === EXIT_APP_SERVER_ERROR)
+    why = `app answered HTTP ${r.stdout.trim()} on / for the whole ${opts.windowSec}s readiness window`;
+  const message = why + (log ? `; last output from the entrypoint:\n${log}` : "; the entrypoint produced no output");
+  throw opts.report?.("app_start_failed", message) ?? new Error(message);
 }

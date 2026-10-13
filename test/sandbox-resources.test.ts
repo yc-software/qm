@@ -136,6 +136,11 @@ test("explicit sandbox profiles follow selected storage rather than the parent's
   const worker = await resources.create("alice", "personal:alice", "modal", "Worker");
   assert.equal((await router.profileFor!("personal:alice")).backend, "local");
   assert.equal((await router.profileFor!("personal:alice", worker.id)).backend, "modal");
+  await assert.rejects(router.profileFor!("personal:alice", ""), /sandbox not found/);
+  await assert.rejects(
+    router.provision([{ scopeId: "personal:alice", mode: "rw", mountPath: "" }], { sandboxId: "" }),
+    /sandbox not found/,
+  );
   assert.equal((await router.profileFor!("personal:alice")).backend, "local");
 });
 

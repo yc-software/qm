@@ -1,4 +1,5 @@
 import { adminOperations } from "../tools/admin.ts";
+import { MAX_OUTBOUND_FILES, type OutboundFile } from "../core/attachments.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -658,12 +659,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       command: params.command,
       purpose: params.purpose,
       ...scopeNote,
-      ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
+      ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
     });
     try {
       if (params.sandbox_id === null) throw new Error("a command requires a sandbox ID; null only clears the default");
       const execOpts = {
-        ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
+        ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
         ...(route?.ownerAuth ? { ownerAuth: true } : {}),
@@ -728,8 +729,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     '[error] a scratch box cannot be made durable yet — use scope:"scoped" for work that must survive future turns, or drop `durable`.';
   const SCOPED_EPHEMERAL_ERROR =
     '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for disposable local working files.';
+  const outboundFilesSchema = Type.Array(
+    Type.Union([
+      Type.String({ minLength: 1 }),
+      Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+    ]),
+    { maxItems: MAX_OUTBOUND_FILES, description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+  );
+  const outboundSandboxSchema = Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Sandbox for workspace paths; omit for the default. Ignored for stored file IDs.",
+    }),
+  );
+  const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
   const FILE_SEND_GUIDANCE =
-    "The files and apps tools use the default sandbox; execute can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
+    "execute, files, skills, and apps take an optional sandbox_id; omit it for the default. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
     "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn; owner is invocation-only. Publish durable code to git and artifacts to Files.";
 
@@ -1066,7 +1081,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
         ...(p.path ? { path: p.path } : {}),
         ...(p.source ? { source: p.source } : {}),
-        ...(p.sandbox_id ? { sandboxId: p.sandbox_id } : {}),
+        ...(p.sandbox_id !== undefined ? { sandboxId: p.sandbox_id } : {}),
         ...(signal ? { signal } : {}),
       });
       signal?.throwIfAborted();
@@ -1100,14 +1115,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description: "Read a file from the workspace (scope, then global). Returns its contents.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
+      sandbox_id: sandboxSelector("Sandbox to read from; omit for the default. Shared files ignore it."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "files", action: "read", path: params.path });
+      await recordCall(callId, {
+        tool: "files",
+        action: "read",
+        path: params.path,
+        ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
+      });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
-      const { content, sourceScopeId, shared } = await tc.read(params.path, signal);
+      const { content, sourceScopeId, shared } = await tc.read(params.path, signal, params.sandbox_id);
       signal?.throwIfAborted();
       return recordResult(
         callId,
@@ -1132,20 +1153,28 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "write",
     label: "write",
     description:
-      "Save file contents in the writable workspace scope, durable across sessions. Use files action share to grant access separately.",
+      "Save file contents in the writable workspace scope. To share it, upload it to Files with POST /v1/files/uploads, then use files action share with the returned ID.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
       data: Type.String({ description: "File contents, including an empty string to empty the file." }),
+      sandbox_id: sandboxSelector("Sandbox to write on; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "files", action: "write", path: params.path, bytes: params.data.length });
+      const sandboxNote = params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {};
+      await recordCall(callId, {
+        tool: "files",
+        action: "write",
+        path: params.path,
+        bytes: params.data.length,
+        ...sandboxNote,
+      });
       try {
-        await tc.write(params.path, params.data);
+        await tc.write(params.path, params.data, params.sandbox_id);
         return recordResult(
           callId,
-          { tool: "files", action: "write", path: params.path, bytes: params.data.length },
+          { tool: "files", action: "write", path: params.path, bytes: params.data.length, ...sandboxNote },
           text(`wrote ${params.path} (${params.data.length} bytes)`),
         );
       } catch (e) {
@@ -1226,6 +1255,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "Sites allowed to embed the app in an iframe, as https origins (https://tools.example.com, or https://*.example.com for any subdomain). Every frame between the app and the browser tab must be listed, so a panel inside another site needs both. [] forbids embedding again. Omitted = leave the current setting alone.",
         }),
       ),
+      sandbox_id: sandboxSelector("Sandbox holding `dir`; omit for the default. The app's owner is unchanged."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1236,9 +1266,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         dir: params.dir,
         entrypoint: params.entrypoint,
         name: params.name,
+        ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
       });
       try {
-        const r = await tc.publish(params as PublishInput);
+        const { sandbox_id: sandboxId, ...input } = params;
+        const r = await tc.publish({ ...(input as PublishInput), ...(sandboxId !== undefined ? { sandboxId } : {}) });
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
@@ -3080,73 +3112,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const fileShare = defineTool({
-    name: "share",
-    label: "share",
-    description:
-      "Grant access to an existing workspace file without changing its contents. The file stays in its current home; recipients see it under shared/.",
-    parameters: Type.Object(
-      {
-        path: Type.Optional(Type.String({ description: "Workspace file path; pair with scope." })),
-        id: Type.Optional(Type.String({ description: "Existing file artifact ID; pair with toScope." })),
-        toScope: Type.Optional(Type.String({ description: "Destination scope or teammate name for an artifact ID." })),
-        scope: Type.Optional(
-          Type.String({ description: 'Destination: "org", personal:<userId>, channel:<id>, or team:<id>.' }),
-        ),
-        permission: Type.Optional(
-          Type.Union([Type.Literal("read"), Type.Literal("write")], {
-            description: "read = view (default); write = view/manage.",
-          }),
-        ),
-      },
-      {
-        anyOf: [
-          { required: ["path", "scope"], properties: { id: false, toScope: false } },
-          { required: ["id", "toScope"], properties: { path: false, scope: false } },
-        ],
-      },
-    ),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc) return text("[error] no active tool context");
-      if (params.id !== undefined && params.toScope !== undefined) {
-        if (!controlTools) return unavailable(callId, "files");
-        return sharingTool("file").execute(
-          callId,
-          { id: params.id, toScope: params.toScope, permission: params.permission },
-          undefined,
-          undefined,
-          undefined as never,
-        );
-      }
-      await recordCall(callId, { tool: "files", action: "share", ...params });
-      try {
-        const result = await tc.write(params.path!, undefined, [
-          { scope: params.scope!, permission: params.permission },
-        ]);
-        return recordResult(
-          callId,
-          { tool: "files", action: "share", path: params.path, shared: result.shared },
-          text(
-            result.shared.map((grant) => `shared ${params.path} with ${grant.scope} (${grant.permission})`).join("; "),
-          ),
-        );
-      } catch (e) {
-        return recordResult(
-          callId,
-          { tool: "files", action: "share", path: params.path, error: errMessage(e) },
-          text(`[share failed] ${errMessage(e)}`),
-          true,
-        );
-      }
-    },
-  });
-
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
     let description =
       "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
+    if (type === "file")
+      description =
+        "Share an existing Files record by ID. A sandbox path cannot be shared; upload it with POST /v1/files/uploads first.";
     if (move)
       description =
         "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
@@ -3293,14 +3266,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             `${actions.join("/")}: ${operation.description} Required fields: ${((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action").join(", ") || "none"}.`,
         )
         .join("\n\n"),
-      parameters: Type.Object(properties, { additionalProperties: false }),
+      parameters: Type.Object(properties, { additionalProperties: true }),
       async execute(callId, params, signal, onUpdate, ctx) {
         const index = groups.findIndex((group) => group.actions.includes(String(params.action)));
         if (index < 0 || !Check(variants[index]!, params)) {
           return recordResult(
             callId,
             { tool: name, action: params.action, error: "invalid_arguments" },
-            text(`[error] Invalid arguments for ${name} action ${String(params.action)}.`),
+            text(
+              `[error] Invalid arguments for ${name} action ${String(params.action)}. ${groups[index]?.operation.description ?? ""}`,
+            ),
             true,
           );
         }
@@ -3424,12 +3399,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
         }),
       ),
-      files: Type.Optional(
-        Type.Array(Type.String(), {
-          description:
-            'post/reach: workspace-relative file paths to upload WITH your message — images, PDFs, code snippets, whatever. Write the file to an ordinary workspace path (e.g. "work/cover.png") and list that path here; it\'s attached to the message at its destination, like a person attaching a file. Short code can just go in `text` as a ``` block; use a file for anything downloadable.',
-        }),
-      ),
+      sandbox_id: outboundSandboxSchema,
+      files: Type.Optional(outboundFilesSchema),
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
       ref: Type.Optional(
         Type.String({
@@ -3502,7 +3473,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             text: capText(params.text),
             ...(params.files?.length ? { files: params.files } : {}),
           });
-          const r = await tc.post(params.text, opts, params.files);
+          const r = await tc.post(params.text, opts, params.files, params.sandbox_id);
           return recordResult(
             callId,
             {
@@ -3545,7 +3516,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             bytes: params.text.length,
             ...(params.files?.length ? { files: params.files.length } : {}),
           });
-          const r = await tc.reach(params.text, target, params.files);
+          const r = await tc.reach(params.text, target, params.files, params.sandbox_id);
           return recordResult(
             callId,
             {
@@ -3806,22 +3777,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "attach",
     label: "Attach",
     description:
-      "Send file(s) along with this turn's reply. Name workspace-relative paths of files you have " +
-      "already written; they ride out with the reply as real uploads. Call it again to add more — " +
-      "re-naming the same path replaces it. The result lists exactly what will be delivered; if a " +
-      "path is wrong nothing is staged and the result says so, so never claim you sent a file you " +
-      "have not seen confirmed here.",
+      "Send files with this turn's reply, using workspace paths or stored Files IDs. " +
+      "Repeated sources replace their staged copy. Any invalid file stages nothing; the result lists what will be delivered.",
     parameters: Type.Object({
-      files: Type.Array(Type.String(), {
-        description: 'Workspace-relative paths of files to deliver with this reply, e.g. ["report.md"].',
-      }),
+      files: outboundFilesSchema,
+      sandbox_id: outboundSandboxSchema,
     }),
-    async execute(callId, params: { files?: string[] }) {
+    async execute(callId, params: { files?: OutboundFile[]; sandbox_id?: string }) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      const files = (params.files ?? []).map((f) => String(f ?? "").trim()).filter(Boolean);
-      await recordCall(callId, { tool: "attach", files });
-      const r = await tc.attach(files);
+      const files = params.files ?? [];
+      await recordCall(callId, { tool: "attach", files, sandbox_id: params.sandbox_id });
+      const r = await tc.attach(files, params.sandbox_id);
       if (!r.ok) return recordResult(callId, { tool: "attach", ok: false }, text(`[not attached] ${r.message}`), true);
       const list = r.files.map((f) => `${f.name} (${f.sizeBytes} bytes, ${f.mimetype})`).join("; ");
       const total = r.staged > r.files.length ? ` ${r.staged} file(s) are now staged for this reply.` : "";
@@ -3882,11 +3849,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     tc: typeof ref.current,
     paths: readonly string[] | undefined,
     signal?: AbortSignal,
+    sandboxId?: string,
   ): Promise<string[]> {
     const out: string[] = [];
     for (const path of (paths ?? []).slice(0, GOAL_EVIDENCE_FILES)) {
       const content = tc
-        ? await tc.read(path, signal).then(
+        ? await tc.read(path, signal, sandboxId).then(
             (r) => r.content,
             () => null,
           )
@@ -4012,9 +3980,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description: "Workspace paths of the deliverables; the governor reads them directly.",
         }),
       ),
+      sandbox_id: sandboxSelector("Sandbox holding `files`; omit for the default."),
     }),
     async execute(callId, params) {
-      const p = params as { status?: "complete" | "resume"; note: string; files?: string[] };
+      const p = params as { status?: "complete" | "resume"; note: string; files?: string[]; sandbox_id?: string };
       const status = p.status === "resume" ? "resume" : "complete";
       await recordCall(callId, {
         tool: "goal",
@@ -4078,7 +4047,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
       }
-      const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal))].join("\n");
+      const evidence = [
+        p.note ?? "",
+        ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id)),
+      ].join("\n");
       const verdict = ref.governGoal
         ? await ref
             .governGoal({
@@ -4288,7 +4260,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
-    resourceTool("files", { read, write, share: fileShare }),
+    resourceTool("files", { read, write, ...(controlTools ? { share: sharingTool("file") } : {}) }),
     resourceTool("apps", {
       publish,
       ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),

@@ -114,6 +114,7 @@ test("published source follows scope shadowing and preserves sandbox-authored wo
 
 test("a body read avoids sandbox work and a file request materializes that skill under the skills root", async () => {
   const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
+  const { SandboxAccessError } = await import("../src/sandbox/sandbox-resources.ts");
   type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
   type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
   const files = new Map<string, string>();
@@ -141,12 +142,17 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const turn = createTurnSandboxes({
     deps: {
       skills: { recordUse: async () => {} },
-      sandboxResources: { access: async () => ({ id: "resource-1", ownerScopeId: "personal:U1" }) },
+      sandboxResources: {
+        access: async (_actor: string, id: string) => {
+          if (id !== "resource-1" && id !== "box") throw new SandboxAccessError("sandbox not found");
+          return { id, ownerScopeId: "personal:U1" };
+        },
+      },
       sandbox: {
         provision: async (_layers: unknown, options?: { sandboxId?: string }) => {
           sandboxIds.push(options?.sandboxId);
           provisions++;
-          return handle;
+          return { ...handle, id: options?.sandboxId ?? handle.id };
         },
         listDir: async () => [],
         removeDir: async () => {},
@@ -176,6 +182,9 @@ test("a body read avoids sandbox work and a file request materializes that skill
   delete bodyOnly.skill!.pack;
   visible.push(bodyOnly);
   assert.deepEqual(await turn.useSkill("body-only", "SKILL.md"), { content: "BODY", sourceScopeId: "personal:U1" });
+  await assert.rejects(turn.useSkill("source-helper", "SKILL.md", ""), /non-empty/);
+  await assert.rejects(turn.useSkill("source-helper", "SKILL.md", "missing"), /sandbox not found/);
+  assert.equal(provisions, 0);
   await turn.provision();
   assert.equal(provisions, 1);
   assert.equal(files.size, 0);
@@ -191,6 +200,8 @@ test("a body read avoids sandbox work and a file request materializes that skill
   files.set(`${root}/source-helper/references/example.txt`, "local edit");
   assert.equal((await turn.useSkill("source-helper", "SKILL.md")).dir, loaded.dir);
   assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
+  await turn.useSkill("source-helper", "SKILL.md", "box");
+  assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
   resolution.skill!.pack = { packId: "pack", commit: "c", upstreamName: "source-helper" };
   resolution.screenedBundles = [
     { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
@@ -201,7 +212,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const onResource = await turn.useSkill("source-helper", "SKILL.md", "resource-1");
   assert.equal(onResource.dir, loaded.dir);
   assert.equal(onResource.packDir, `/workspace/${root}/.packs/pack`);
-  assert.deepEqual(sandboxIds, [undefined, "resource-1"]);
+  assert.deepEqual(sandboxIds, [undefined, "box", "resource-1"]);
   assert.equal(files.get(`${root}/.packs/pack/lib.txt`), "PACK_RESOURCE");
   assert.equal(
     [...files.keys()].some((path) => path.includes("/unrelated/")),
