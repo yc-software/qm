@@ -308,10 +308,9 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
   }
   const attestation = linkClaims === true ? undefined : linkClaims;
   if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
-    await deps.secretDrops.redeem(params.id!).catch(() => null);
     return sendJson(res, 409, {
       error: "scope_changed",
-      message: "conversation membership changed — ask the agent for a fresh link",
+      message: "couldn't confirm you're still in this conversation — try again, or ask the agent for a fresh link",
     });
   }
   const dropFieldDefs = peeked.rec.fields;
