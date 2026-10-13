@@ -84,7 +84,11 @@ export interface MemoryService {
 
 export function recallBody(body: string): string {
   const trimmed = body.trim();
-  return trimmed ? capTail(trimmed, RECALL_MAX_CHARS) : "";
+  if (trimmed.length <= RECALL_MAX_CHARS) return trimmed;
+  const tail = capTail(trimmed, RECALL_MAX_CHARS);
+  const lineStart = tail.indexOf("\n");
+  const kept = lineStart >= 0 ? tail.slice(lineStart + 1) : tail;
+  return `(${trimmed.length - kept.length} earlier characters of this notebook are not shown here; read the full notebook to see them.)\n${kept}`;
 }
 
 export function foldCapture(
