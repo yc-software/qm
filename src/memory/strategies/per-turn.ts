@@ -34,31 +34,52 @@ export const MEMORY_EXTRACTION_PROMPT = [
   "When the user's own message states an instruction, rule, or directive to the assistant about",
   "how future work should be done, record it VERBATIM as a quoted fact",
   '(e.g. `- Directive (user\'s words): "always run the linter before pushing"`), not a paraphrase.',
+  "Tag every fact as [personal] or [project], right after the fact text on the same line.",
+  "[personal] means the fact is durably about the person and still true in any other conversation:",
+  "a preference, identifier, or how they like to work (e.g. `- Prefers terse replies [personal]`).",
+  "[project] means the fact only describes the state of the project, task, or channel this",
+  "conversation happened in — a decision, config value, owner, or deadline that would mean nothing",
+  "outside that context (e.g. `- Repro Alpha ships in Q4 [project]`). When unsure, use [project].",
   "If nothing is worth remembering, output exactly: NONE",
   SENSITIVITY_PROMPT,
   "Prepend exactly SENSITIVITY: <label> on its own first line, classifying the entire extracted list.",
 ].join("\n");
 
-export function parseFacts(out: string): string[] {
+const FACT_TAG = /\s*\[(personal|project)\]\s*$/i;
+
+function parseTaggedFacts(out: string): Array<{ text: string; personal: boolean }> {
   const trimmed = out.trim();
   if (!trimmed || /^none$/i.test(trimmed)) return [];
-  return bullets(trimmed).filter(Boolean);
+  return bullets(trimmed).flatMap((line) => {
+    const text = line.replace(FACT_TAG, "");
+    return text ? [{ text, personal: FACT_TAG.exec(line)?.[1]?.toLowerCase() === "personal" }] : [];
+  });
+}
+
+export function parseFacts(out: string): string[] {
+  return parseTaggedFacts(out).map((fact) => fact.text);
 }
 
 export async function extractFacts(
   harness: HarnessModelUtilities,
   turns: Array<{ input: string; reply: string }>,
-): Promise<{ facts: string[]; sensitivity: NonNullable<MemoryCaptureMetadata["sensitivity"]> }> {
-  if (!harness.oneShot) return { facts: [], sensitivity: "unknown" };
+): Promise<{
+  facts: string[];
+  personalFacts: string[];
+  sensitivity: NonNullable<MemoryCaptureMetadata["sensitivity"]>;
+}> {
+  if (!harness.oneShot) return { facts: [], personalFacts: [], sensitivity: "unknown" };
   try {
     const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
     const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
+    const tagged = parseTaggedFacts(out ?? "");
     return {
-      facts: parseFacts(out ?? ""),
+      facts: tagged.map((fact) => fact.text),
+      personalFacts: tagged.filter((fact) => fact.personal).map((fact) => fact.text),
       sensitivity: parseSensitivity(/^SENSITIVITY: (ordinary|unknown|sensitive|restricted)\n/.exec(out ?? "")?.[1]),
     };
   } catch {
-    return { facts: [], sensitivity: "unknown" };
+    return { facts: [], personalFacts: [], sensitivity: "unknown" };
   }
 }
 
@@ -163,7 +184,7 @@ export function createPerTurnStrategy(deps: {
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
 }): MemoryStrategy {
   async function flush(burst: Burst): Promise<void> {
-    const { facts, sensitivity } = await extractFacts(deps.harness, burst.turns);
+    const { facts, personalFacts, sensitivity } = await extractFacts(deps.harness, burst.turns);
     if (!facts.length) return;
     const at = Date.now();
     await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, { ...burstCaptureContext(burst), sensitivity });
@@ -171,7 +192,7 @@ export function createPerTurnStrategy(deps: {
       deps.memory,
       burst.conversationScopeId,
       burst.actorId,
-      facts,
+      personalFacts,
       at,
       burst.conversationLabel,
       {

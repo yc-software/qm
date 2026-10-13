@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService, readMemory } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy, parseMemoryStrategyKind } from "../src/memory/strategy.ts";
-import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts } from "../src/memory/strategies/per-turn.ts";
+import {
+  createPerTurnStrategy,
+  MEMORY_EXTRACTION_PROMPT,
+  parseFacts,
+  extractFacts,
+} from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import type { HarnessModelUtilities } from "../src/harness/harness.ts";
 
@@ -61,6 +66,26 @@ test("parseFacts: bullets in, NONE/empty/prose out", () => {
   assert.deepEqual(parseFacts("none"), []);
   assert.deepEqual(parseFacts(""), []);
   assert.deepEqual(parseFacts("-"), []);
+});
+
+test("parseFacts: [personal]/[project] tags are stripped from the fact text", () => {
+  assert.deepEqual(parseFacts("- Prefers terse replies [personal]\n- Ships in Q4 [project]"), [
+    "Prefers terse replies",
+    "Ships in Q4",
+  ]);
+});
+
+test("extractFacts: personalFacts come from the same parsed bullet as their text, and fail closed", async () => {
+  const harness: HarnessModelUtilities = {
+    oneShot: () =>
+      Promise.resolve(
+        "SENSITIVITY: sensitive\n- [personal]\n- Ships in Q4 [project]\n- Owns the billing service\n- Prefers terse replies [personal]",
+      ),
+  };
+  const result = await extractFacts(harness, [{ input: "hi", reply: "hello" }]);
+  assert.deepEqual(result.facts, ["Ships in Q4", "Owns the billing service", "Prefers terse replies"]);
+  assert.deepEqual(result.personalFacts, ["Prefers terse replies"]);
+  assert.equal(result.sensitivity, "sensitive");
 });
 
 test("per-turn swallows extraction failures and captures nothing", async () => {

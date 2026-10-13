@@ -90,7 +90,7 @@ test("cc gates on the conversation scope, not the (environment-redirected) write
 
 test("the cc'd copy is tagged with where it was said; the channel's own copy stays clean", async () => {
   const harness: HarnessModelUtilities = {
-    oneShot: () => Promise.resolve("- Prefers all lowercase replies"),
+    oneShot: () => Promise.resolve("- Prefers all lowercase replies [personal]"),
   };
   const { workspace, memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness, memory });
@@ -288,4 +288,62 @@ test("an autonomous (triggered) channel turn captures nothing, even for a human 
 
   assert.equal(await readMemory(workspace, CHANNEL), null, "origin scope receives nothing on a triggered wake");
   assert.equal(await readMemory(workspace, PERSONAL), null, "no cc into the owner's drawer on a triggered wake");
+});
+
+test("a [project]-tagged fact stays in the channel but is not cc'd; a [personal]-tagged fact is", async () => {
+  const harness: HarnessModelUtilities = {
+    oneShot: () => Promise.resolve("- Repro Alpha ships in Q4 [project]\n- Prefers terse replies [personal]"),
+  };
+  const { workspace, memory } = freshMemory();
+  const strategy = createPerTurnStrategy({ harness, memory });
+  await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR });
+
+  const channelBody = (await readMemory(workspace, CHANNEL)) ?? "";
+  const personalBody = (await readMemory(workspace, PERSONAL)) ?? "";
+  assert.match(channelBody, /Repro Alpha ships in Q4/, "project fact still lands in its own channel");
+  assert.match(channelBody, /Prefers terse replies/, "personal fact still lands in its own channel too");
+  assert.doesNotMatch(personalBody, /Repro Alpha ships in Q4/, "project-state fact is not mirrored into personal");
+  assert.match(personalBody, /Prefers terse replies \(said in a channel\)/, "personal fact is still cc'd");
+});
+
+test("a burst of only [project] facts captures the channel but skips the cc entirely", async () => {
+  const harness: HarnessModelUtilities = {
+    oneShot: () => Promise.resolve("- Repro Alpha ships in Q4 [project]\n- Uses feature flag PAY_V2 [project]"),
+  };
+  const { workspace, memory } = freshMemory();
+  const strategy = createPerTurnStrategy({ harness, memory });
+  await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR });
+
+  assert.match((await readMemory(workspace, CHANNEL)) ?? "", /Repro Alpha ships in Q4/);
+  assert.equal(await readMemory(workspace, PERSONAL), null, "nothing cc'd — no personal-tagged facts in the burst");
+});
+
+test("a tag-only bullet cannot shift classification onto the next fact", async () => {
+  const harness: HarnessModelUtilities = {
+    oneShot: () =>
+      Promise.resolve("- [personal]\n- Owns billing service [project]\n- Prefers terse replies [personal]"),
+  };
+  const { workspace, memory } = freshMemory();
+  const strategy = createPerTurnStrategy({ harness, memory });
+  await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR });
+
+  const personalBody = (await readMemory(workspace, PERSONAL)) ?? "";
+  assert.match((await readMemory(workspace, CHANNEL)) ?? "", /Owns billing service/);
+  assert.doesNotMatch(personalBody, /Owns billing service/);
+  assert.match(personalBody, /Prefers terse replies \(said in a channel\)/);
+});
+
+test("untagged or malformed classification is captured to the channel but never cc'd", async () => {
+  const harness: HarnessModelUtilities = {
+    oneShot: () => Promise.resolve("- Uses flag PAY_V2\n- Ships in Q4 [persnal]\n- Owner is Priya [personal] later"),
+  };
+  const { workspace, memory } = freshMemory();
+  const strategy = createPerTurnStrategy({ harness, memory });
+  await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR });
+
+  const channelBody = (await readMemory(workspace, CHANNEL)) ?? "";
+  assert.match(channelBody, /Uses flag PAY_V2/);
+  assert.match(channelBody, /Ships in Q4/);
+  assert.match(channelBody, /Owner is Priya/);
+  assert.equal(await readMemory(workspace, PERSONAL), null);
 });
