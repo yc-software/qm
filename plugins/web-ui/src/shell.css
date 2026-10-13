@@ -13325,3 +13325,22 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   white-space: pre-wrap;
   min-width: 80px;
 }
+
+.split-dock[data-chrome] [data-chrome-active="false"] .composer-wrap {
+  display: none;
+}
+
+.split-dock[data-chrome] .dv-groupview.dv-active-group .dv-tabs-and-actions-container {
+  --split-strip-line: var(--border);
+}
+
+.split-dock[data-chrome="quiet"] .dv-groupview:not(.dv-active-group) .dv-right-actions-container,
+.split-dock[data-chrome="quiet"] .dv-groupview:not(.dv-active-group) .split-tab-actions,
+.split-dock[data-chrome="quiet"] .dv-groupview:not(.dv-active-group) .split-pane-crumb,
+.split-dock[data-chrome="quiet"] .dv-groupview:not(.dv-active-group) .split-pane-crumb-sep {
+  display: none;
+}
+
+.split-dock[data-chrome="focus"] .dv-groupview:not(.dv-active-group) > .dv-tabs-and-actions-container {
+  display: none;
+}

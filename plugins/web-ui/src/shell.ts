@@ -162,6 +162,8 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
   const seq = messageLinkSeq(location.search);
   if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
+  const chrome = new URLSearchParams(location.search).get("chrome");
+  if (chrome === "focus" || chrome === "quiet") next += `${next.includes("?") ? "&" : "?"}chrome=${chrome}`;
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }
 
