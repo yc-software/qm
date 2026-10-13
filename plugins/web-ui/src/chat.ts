@@ -198,6 +198,7 @@ import {
   type SubagentRow,
 } from "./subagent-activity";
 import { createSwarmStrip } from "./swarm-strip.ts";
+import { createBtw } from "./btw";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
@@ -1537,8 +1538,8 @@ export function createChatSurface(
         status: liveWorkStatus(agent),
         busy: agent.state.isStreaming,
         showPrompts: !messages.length,
-        toolbar: html`${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
-        ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()}`,
+        toolbar: html`${btwUi.view(chatState.sessionId)} ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)}
+        ${subagentStrip()} ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()}`,
         composer: ctx.composer.composerForm(agent),
         onPrompt: (prompt) => ctx.composer.fillSuggestedPrompt(prompt, agent),
         onDragEnter: (event) => ctx.composer.onDragEnter(event),
@@ -1583,7 +1584,7 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
+            ${btwUi.view(chatState.sessionId)} ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
             ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
             ${ctx.pane ? nothing : suggestions}
           </div>
@@ -2474,6 +2475,10 @@ export function createChatSurface(
   }
 
   const swarmUi = createSwarmStrip(() => drawActiveChat());
+  const btwUi = createBtw(
+    () => chatState.agent && drawActiveChat(),
+    (session) => void sessionOpener(session),
+  );
   const SUBAGENT_ACK_KEY = "qm.subagentAck";
   const subagentUi = {
     expanded: false,
@@ -3416,6 +3421,10 @@ export function createChatSurface(
     stopLiveRun,
     isStopping: () => runSlot.stopGeneration === runSlot.generation,
     currentTurnOptions,
+    askBtw: (question: string) => {
+      if (chatState.sessionId && chatState.agent)
+        void btwUi.ask(chatState.sessionId, question, chatState.agent, currentTurnOptions);
+    },
     newChat,
     teardown: teardownActiveChat,
     resetChatState,

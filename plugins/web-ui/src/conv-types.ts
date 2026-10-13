@@ -74,6 +74,7 @@ export interface ChatSurface {
   stopLiveRun(): Promise<void>;
   isStopping(): boolean;
   currentTurnOptions(): TurnOptions;
+  askBtw(question: string): void;
   newChat(context?: { scopeId: string; name: string | null }): string;
   teardown(): void;
   resetChatState(): void;

@@ -1124,7 +1124,7 @@ export function makeOpenerStreamFn(
   return fn as unknown as StreamFn;
 }
 
-function turnRequestBody(
+export function turnRequestBody(
   threadRef: string,
   text: string,
   model: Model<Api>,

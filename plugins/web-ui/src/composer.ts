@@ -71,6 +71,7 @@ import {
 } from "./composer-loadout";
 
 import { createModelPicker } from "./model-picker";
+import { BTW_COMMAND_ITEM, parseBtw } from "./btw-command";
 
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
@@ -1117,7 +1118,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const query = slashQuery(composerState.draft);
     if (query === null || composerState.slashDismissed) return { open: false, loading: false, matches: [] };
     const loading = skillsLoading;
-    const matches = skillsCache ? matchSkills(query, skillsCache) : [];
+    const matches = matchSkills(query, [...(options.prepareSubmit ? [] : [BTW_COMMAND_ITEM]), ...(skillsCache ?? [])]);
     return { open: loading || matches.length > 0, loading, matches };
   }
 
@@ -1516,6 +1517,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   async function sendPrompt(agent: Agent): Promise<void> {
     if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
+    const btw = options.prepareSubmit ? null : parseBtw(composerState.draft);
+    if (btw !== null) {
+      composerState.error = btw && ctx.chat.state.sessionId ? "" : "Use /btw <question> in a chat that has started.";
+      if (!composerState.error) {
+        clearActiveDraft();
+        composerState.draft = "";
+        clearComposerDom(agent);
+        ctx.chat.askBtw(btw);
+      }
+      ctx.chat.drawActiveChat(agent);
+      return;
+    }
     if (agent.state.isStreaming) return queueDraft(agent);
     const text = composerState.draft.trim();
     if (!text && composerState.attachments.length === 0) return;
