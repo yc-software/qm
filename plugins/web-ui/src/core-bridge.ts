@@ -265,7 +265,8 @@ export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): 
   if (!workspaceUrl) return null;
   const m = threadRef.match(/^(?:dm|ch):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
   if (!m) return null;
-  return `${workspaceUrl}/archives/${m[1]}${m[2] ? `/p${m[2]}${m[3]}` : ""}`;
+  if (!m[2]) return `${workspaceUrl}/archives/${m[1]}`;
+  return `${workspaceUrl}/archives/${m[1]}/p${m[2]}${m[3]}?thread_ts=${m[2]}.${m[3]}&cid=${m[1]}`;
 }
 
 export function sharedContextLabel(scopeId: string | null, name: string | null): string | null {
