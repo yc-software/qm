@@ -45,11 +45,12 @@ export const listeningOn = (port: number): string =>
   `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; c=$?; [ "$c" != 7 ] && [ "$c" != 127 ]; }`;
 
 const EXITED = shq(`${APP_PID_PATH}.exited`);
+const REPORTED = shq(`${APP_LOG_PATH}.reported`);
 
 function supervised(inner: string, appPort: number): string {
   return [
     listeningOn(appPort),
-    `rm -f ${EXITED}`,
+    `rm -f ${EXITED} ${REPORTED}`,
     "n=1",
     `while :; do s=$(date +%s); sh -c ${shq(inner)}; rc=$?; echo "$rc" >> ${EXITED}`,
     'echo "qm: entrypoint exited with status $rc, restarting"',
@@ -66,8 +67,7 @@ export function appLaunch(inner: string, appPort: number): string {
 export function appBoot(inner: string, appPort: number, prep = "true"): string {
   return [
     `echo $$ > ${APP_PID_PATH}`,
-    `{ ${prep}; } || exit 1`,
-    appLaunch(inner, appPort),
+    `if { ${prep}; } > ${shq(APP_LOG_PATH)} 2>&1; then ${appLaunch(inner, appPort)}; fi`,
     `trap 'p=$(cat ${APP_PID_PATH}); kill -TERM -"$p" 2>/dev/null || kill -TERM "$p"; while kill -0 "$p" 2>/dev/null; do sleep 0.2; done; exit 0' INT TERM`,
     "while :; do sleep 3600 & wait $!; done",
   ].join("; ");
@@ -82,17 +82,16 @@ export async function appLogs(exec: Exec, tailLines: number): Promise<string> {
 
 export async function appGone(exec: Exec, opts: { appPort: number; report?: Report | undefined }): Promise<boolean> {
   const log = shq(APP_LOG_PATH);
-  const seen = shq(`${APP_LOG_PATH}.reported`);
   const probe = [
     listeningOn(opts.appPort),
     `pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true)`,
-    `s=$(cat ${seen} 2>/dev/null || true)`,
+    `s=$(cat ${REPORTED} 2>/dev/null || true)`,
     `if ! listening && ! { [ -n "$pid" ] && { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; }; }; then ` +
-      `[ -n "$pid" ] && [ "$s" != "down $pid" ] && { echo "down $pid" > ${seen}; echo down; tail -c ${REPORT_LOG_BYTES} ${log} 2>/dev/null; }; exit ${EXIT_APP_GONE}; fi`,
+      `[ -n "$pid" ] && [ "$s" != "down $pid" ] && { echo "down $pid" > ${REPORTED}; echo down; tail -c ${REPORT_LOG_BYTES} ${log} 2>/dev/null; }; exit ${EXIT_APP_GONE}; fi`,
     `n=$(wc -l < ${EXITED} 2>/dev/null || echo 0); r=0`,
     `[ "\${s% *}" = "$pid" ] && r=\${s#* }`,
     `[ "$n" -gt "$r" ] || exit 0`,
-    `echo "$pid $n" > ${seen}; echo $((n - r)); grep -F -B ${REPORT_CONTEXT_LINES} ${shq(EXITED_MARK)} ${log} | tail -c ${REPORT_LOG_BYTES}`,
+    `echo "$pid $n" > ${REPORTED}; echo $((n - r)); grep -F -B ${REPORT_CONTEXT_LINES} ${shq(EXITED_MARK)} ${log} | tail -c ${REPORT_LOG_BYTES}`,
   ].join("; ");
   const r = await exec(probe, APP_PROBE_TIMEOUT_SEC).catch((e) => {
     swallow("deploy: app liveness probe", e);
@@ -124,7 +123,7 @@ export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<v
     `while [ "$(date +%s)" -lt "$end" ]; do pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true); ` +
     `code=$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:${opts.appPort}/); ` +
     `[ "$code" != 000 ] && [ "$code" -lt 500 ] && exit 0; ` +
-    `{ kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${EXITED} ] || died=1; ` +
+    `[ -z "$pid" ] || { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${EXITED} ] || died=1; ` +
     `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; ` +
     `[ "$code" -ge 500 ] 2>/dev/null && { echo "$code"; exit ${EXIT_APP_SERVER_ERROR}; }; exit 1`;
   const r = await exec(probe, opts.windowSec + READY_EXEC_GRACE_SEC);
