@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import { createGzip, gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts";
+import { json, readBody, cookie, gzipAccepted, pipeBody } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
@@ -104,16 +104,6 @@ const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 function portalIdentityHeader(): Record<string, string> {
   const t = portalTokenStore.getStore();
   return t ? { [PORTAL_IDENTITY_HEADER]: t } : {};
-}
-
-function pipeBody(res: ServerResponse, body: Response["body"]): void {
-  if (!body) return void res.end();
-  const stream = Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
-  stream.on("error", () => res.destroy());
-  res.on("close", () => {
-    if (!res.writableFinished) stream.destroy();
-  });
-  return void stream.pipe(res);
 }
 
 async function forward(
@@ -308,7 +298,7 @@ const WRITES = new Map<string, string[]>([
   ["slack-installation", ["POST", "PUT", "DELETE"]],
   ["model-providers", ["PUT", "DELETE"]],
   ["model-registry", ["POST", "PUT", "DELETE"]],
-  ["custom-providers", ["PUT", "DELETE"]],
+  ["custom-providers", ["POST", "PUT", "DELETE"]],
 ]);
 
 const READS = [

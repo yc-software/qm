@@ -217,25 +217,19 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return endpoint;
   };
 
-  const markVersionRunning = async (id: string, version: number, endpoint: DeployEndpoint): Promise<void> => {
-    await deps.deployStore.setEndpoint(id, endpoint);
-    await deps.deployStore.setStatus(id, "running");
-    await deps.deployStore.setAppliedVersion(id, version);
-  };
+  const markVersionRunning = (id: string, version: number, endpoint: DeployEndpoint): Promise<void> =>
+    deps.deployStore.markRunning(id, version, endpoint);
 
-  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
-    if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
-    const version = currentVersionOf(d);
-    if (!version) return d.endpoint;
-    const resolved = await deps.provider.resolveEndpoint(d, version);
-    if (resolved) {
-      if (!endpointsEqual(resolved, d.endpoint)) await deps.deployStore.setEndpoint(d.id, resolved);
-      return resolved;
-    }
-    return withDeployLock(d.id, async () => {
+  const lastGoodVersionOf = (d: Deployment): DeploymentVersion | undefined =>
+    (d.appliedVersion === undefined ? undefined : d.versions.find((x) => x.version === d.appliedVersion)) ??
+    currentVersionOf(d);
+
+  const reapplyLastGood = (d: Deployment): Promise<DeployEndpoint> =>
+    withDeployLock(d.id, async () => {
       const cur = (await deps.deployStore.get(d.id)) ?? d;
-      const v = currentVersionOf(cur) ?? version;
-      const again = await deps.provider.resolveEndpoint!(cur, v);
+      const v = lastGoodVersionOf(cur);
+      if (!v) throw new Error(`deployment ${cur.id} has no version to run`);
+      const again = cur.endpoint != null ? await deps.provider.resolveEndpoint?.(cur, v) : null;
       if (again) {
         if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
         return again;
@@ -244,6 +238,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       await markVersionRunning(cur.id, v.version, fresh);
       return fresh;
     });
+
+  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
+    if (d.endpoint == null) return reapplyLastGood(d);
+    if (!deps.provider.resolveEndpoint) return d.endpoint;
+    const version = lastGoodVersionOf(d);
+    if (!version) return d.endpoint;
+    const resolved = await deps.provider.resolveEndpoint(d, version);
+    if (resolved) {
+      if (!endpointsEqual(resolved, d.endpoint)) await deps.deployStore.setEndpoint(d.id, resolved);
+      return resolved;
+    }
+    return reapplyLastGood(d);
   };
 
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
@@ -405,8 +411,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const d = await deps.deployStore.get(id);
         if (!d) return;
         await deps.provider.destroy(d);
-        await deps.deployStore.setStatus(id, "archived");
-        await deps.deployStore.setEndpoint(id, null);
+        await deps.deployStore.markStopped(id, "archived");
       });
     },
 
@@ -426,11 +431,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             .destroy(d)
             .catch((cleanupError) => swallow("deploy restore runtime cleanup", cleanupError));
           await deps.deployStore
-            .setStatus(id, "archived")
+            .markStopped(id, "archived")
             .catch((cleanupError) => swallow("deploy restore status cleanup", cleanupError));
-          await deps.deployStore
-            .setEndpoint(id, null)
-            .catch((cleanupError) => swallow("deploy restore endpoint cleanup", cleanupError));
           throw error;
         }
         deps.auditLog.record({
@@ -554,7 +556,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      if (!d || d.status !== "running" || d.endpoint == null) return { status: "not_found" };
+      if (!d || d.status !== "running") return { status: "not_found" };
       if (!opts.bypassAcl && !(await reachAllowed(d, principalId))) return { status: "denied" };
       const endpoint = await liveEndpoint(d);
       await deps.deployStore.touch(d.id, Date.now()).catch((e) => swallow("deploy reach touch", e));
@@ -624,8 +626,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             const cur = await deps.deployStore.get(d.id);
             if (!cur || cur.status !== "running" || cur.alwaysOn) return;
             await deps.provider.destroy(cur);
-            await deps.deployStore.setStatus(d.id, "stopped");
-            await deps.deployStore.setEndpoint(d.id, null);
+            await deps.deployStore.markStopped(d.id, "stopped");
             stopped++;
           });
         }

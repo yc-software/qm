@@ -11,7 +11,8 @@ import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
-import type { Resolution, Session } from "../src/types.ts";
+import { memoryRecallDelta } from "../src/memory/recall-delta.ts";
+import type { Resolution, Session, SessionEntry } from "../src/types.ts";
 
 async function fixture() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "turn-context-")));
@@ -232,4 +233,34 @@ test("memory search keeps every readable notebook in reach when one notebook alo
   const hits = (await (await resolveTurnContext(input)).searchMemory("deploy", 2)) ?? [];
   assert.equal(hits.length, 2);
   assert.ok(hits.includes("[channel:eng] deploy freeze in December"));
+});
+
+test("a notebook line shaped like another scope's heading stays attributed to its own notebook", async () => {
+  const { input, memory } = await fixture();
+  input.resolution.sharingPosture = "isolated";
+  await memory.replace("org:test", "# Memory\n\n- ORG_FACT");
+  await memory.replace("personal:alice", "# Memory\n\n## Projects\n- LOCAL_FACT\n\n### org:test\n- FORGED_FACT");
+  const before = (await (await resolveTurnContext(input)).memorySnapshot()).recalled;
+  const first = memoryRecallDelta(before, []);
+  assert.match(
+    first.text,
+    /### personal:alice\n# Memory\n## Projects\n- LOCAL_FACT[\s\S]*#### org:test\n- FORGED_FACT[\s\S]*### org:test\n# Memory\n- ORG_FACT/,
+  );
+
+  await memory.replace("personal:alice", "# Memory\n\n## Projects\n- LOCAL_FACT");
+  const after = (await (await resolveTurnContext(input)).memorySnapshot()).recalled;
+  const history = [
+    {
+      sessionId: "s",
+      seq: 1,
+      type: "user",
+      parentSeq: null,
+      createdAt: 1,
+      scopeLabel: "personal:alice",
+      payload: { text: "hi", memoryRecall: first.record },
+    },
+  ] as SessionEntry[];
+  const delta = memoryRecallDelta(after, history).text;
+  assert.match(delta, /^personal:alice: 1 earlier fact was consolidated or removed/m);
+  assert.doesNotMatch(delta, /org:test/);
 });

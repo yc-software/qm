@@ -161,11 +161,11 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
   assert.equal((await deployStore.get(d.id))!.appliedVersion, 2);
 });
 
-test("applied version is marked only after endpoint metadata is persisted", async () => {
+test("a failed running-state write leaves no applied version", async () => {
   const baseStore = createDeployStore();
   const deployStore: DeployStore = {
     ...baseStore,
-    setEndpoint: async () => {
+    markRunning: async () => {
       throw new Error("endpoint write failed");
     },
   };

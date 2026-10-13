@@ -12,31 +12,39 @@ async function actor(ctx: ApiCtx) {
   return authorizeAdmin(ctx, scope);
 }
 
-/**
- * Key validation against the registered endpoint, protocol-appropriate.
- * A gateway may not implement a models listing, so callers can skip
- * with {"validate": false} — the registration is admin-only either way.
- */
+type KeyCheck =
+  | { ok: true }
+  | { ok: false; error: "endpoint_unreachable" | "invalid_api_key" | "validation_failed"; message: string };
+
 async function validateKey(
   ctx: ApiCtx,
   protocol: CustomProviderProtocol,
   baseUrl: string,
   apiKey: string,
-): Promise<boolean> {
+): Promise<KeyCheck> {
   const url = protocol === "anthropic" ? `${baseUrl}/v1/models` : `${baseUrl}/models`;
   const headers: Record<string, string> =
     protocol === "anthropic"
       ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
       : { authorization: `Bearer ${apiKey}` };
+  let response: Response;
   try {
-    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(url, {
-      headers,
-      signal: AbortSignal.timeout(5_000),
-    });
-    return response.ok;
+    response = await (ctx.deps.modelCredentialFetch ?? fetch)(url, { headers, signal: AbortSignal.timeout(5_000) });
   } catch {
-    return false;
+    return {
+      ok: false,
+      error: "endpoint_unreachable",
+      message: `Couldn't reach ${url}. Check the base URL, or that the endpoint is up. Turn off key validation to save anyway.`,
+    };
   }
+  if (response.ok) return { ok: true };
+  if (response.status === 401 || response.status === 403)
+    return { ok: false, error: "invalid_api_key", message: `${baseUrl} rejected this API key.` };
+  return {
+    ok: false,
+    error: "validation_failed",
+    message: `${url} answered HTTP ${response.status}, so the key couldn't be checked. If this endpoint has no models listing, turn off key validation to save anyway.`,
+  };
 }
 
 export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
@@ -52,12 +60,21 @@ export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { providers: await ctx.deps.customProviders.statuses() });
 }
 
-export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
+export function putCustomProvider(ctx: ApiCtx): Promise<void> {
+  return saveCustomProvider(ctx, ctx.params.provider, "upsert");
+}
+
+export function createCustomProvider(ctx: ApiCtx): Promise<void> {
+  const id = (ctx.body as { id?: unknown } | undefined)?.id;
+  return saveCustomProvider(ctx, typeof id === "string" ? id : undefined, "create");
+}
+
+async function saveCustomProvider(ctx: ApiCtx, id: string | undefined, mode: "upsert" | "create"): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
   if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
-  const id = ctx.params.provider;
-  if (!id) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!id)
+    return sendJson(ctx.res, mode === "create" ? 400 : 404, { error: mode === "create" ? "bad_request" : "not_found" });
   if (rejectNonObjectBody(ctx)) return;
   const body = ctx.body as {
     name?: unknown;
@@ -85,14 +102,15 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   };
   const apiKey = typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : undefined;
   const shouldValidate = body.validate !== false && apiKey !== undefined;
-  if (shouldValidate && !(await validateKey(ctx, spec.protocol, spec.baseUrl, apiKey!))) {
-    return sendJson(ctx.res, 400, {
-      error: "invalid_api_key",
-      message: `${spec.baseUrl} rejected this API key (pass "validate": false to skip for endpoints without a models listing)`,
-    });
-  }
+  const check = shouldValidate ? await validateKey(ctx, spec.protocol, spec.baseUrl, apiKey!) : { ok: true as const };
+  if (!check.ok) return sendJson(ctx.res, 400, { error: check.error, message: check.message });
   try {
-    await ctx.deps.customProviders.upsert(spec, apiKey, authorized.id);
+    if (mode === "upsert") await ctx.deps.customProviders.upsert(spec, apiKey, authorized.id);
+    else if (!(await ctx.deps.customProviders.create(spec, apiKey, authorized.id)))
+      return sendJson(ctx.res, 409, {
+        error: "provider_exists",
+        message: `A provider with the id "${id}" already exists. Choose another id, or edit that provider instead.`,
+      });
   } catch (e) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: (e as Error).message });
   }

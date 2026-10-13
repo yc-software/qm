@@ -12,7 +12,7 @@ import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandb
 import { MAX_BLOB_BYTES, collectBlob, type BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { swallowAs } from "../util/errors.ts";
+import { reportFailure, swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
@@ -283,10 +283,7 @@ export function sharedManifest(handles: readonly GrantedHandle[]): string {
     shown.push(`…and ${omitted} more (read shared/<name> to fetch)`);
   }
   const noun = total === 1 ? "file" : "files";
-  return (
-    `${total} ${noun} shared with you — read a path below to fetch that file on demand, ` +
-    `then attach it to a message to pass it on (name its path in the surface \`post\` action's \`files\`):\n${shown.join("\n")}`
-  );
+  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${shown.join("\n")}`;
 }
 
 export function sharedFilesSystemSection(handles: readonly GrantedHandle[]): string {
@@ -363,12 +360,21 @@ export async function materializeInbound(
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);
     }
-    const box = await computer();
-    if (box) await sandbox.writeFileBytes(box, `${inboxDir}/${name}`, bytes);
     const registered = register
       ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
       : undefined;
-    if (!box) {
+    let staged = false;
+    try {
+      const box = await computer();
+      if (box) {
+        await sandbox.writeFileBytes(box, `${inboxDir}/${name}`, bytes);
+        staged = true;
+      }
+    } catch (err) {
+      if (!registered) throw err;
+      reportFailure(`attachments: stage inbound ${name}`, err);
+    }
+    if (!staged) {
       if (!registered) {
         unavailable.push(name);
         continue;

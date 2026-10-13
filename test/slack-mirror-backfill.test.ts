@@ -181,3 +181,35 @@ test("the bot joining a channel backfills it once, and a failed pull never block
   assert.deepEqual(pulled, ["C1", "C2"]);
   assert.equal(synced, 3);
 });
+
+test("a rate-limited DM backfill keeps its inline warning without inventing channel memory", async () => {
+  const cache = createMemorySurfaceCache();
+  await cache.ingest([{ container: "D1", ts: "1.0", text: "hello", authorId: "U1", kind: "dm" }]);
+  const captured: string[] = [];
+  const core = createSlackCoreClient({
+    surfaceCache: cache,
+    memory: {
+      capture: async (scope: string) => {
+        captured.push(scope);
+        return 1;
+      },
+    },
+    app: { readSurfaceMessages: cache.readMessages },
+    runs: { onTerminal() {} },
+  } as any);
+  const readHistory = createSlackHistoryReader({
+    core,
+    ids,
+    source: "mirror",
+    historyClient: {
+      conversations: {
+        history: async () => {
+          throw Object.assign(new Error("rate limited"), { code: "slack_webapi_rate_limited_error" });
+        },
+      },
+    } as any,
+  });
+  const result = await readHistory({}, "D1");
+  assert.match(result.note!, /limiting history/);
+  assert.deepEqual(captured, []);
+});

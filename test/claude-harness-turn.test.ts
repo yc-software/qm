@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
@@ -11,11 +12,16 @@ import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
 
-const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
+const toolHandlers = new Map<string, (args: unknown, extra?: unknown) => Promise<unknown>>();
 
 let capturedOptions: Record<string, unknown> = {};
 
 let currentScript: Script = async function* () {};
+let currentInit: () => Promise<unknown> = async () => ({});
+let currentInterrupt: (() => Promise<void>) | null = null;
+let currentCapabilities = ["msg_lifecycle_v1"];
+let currentCloseError: Error | null = null;
+let closedQueries = 0;
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
@@ -27,23 +33,57 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
       options: Record<string, unknown>;
     }) => {
       capturedOptions = options;
-      const generator = currentScript(prompt);
+      const pulled: string[] = [];
+      const tracked: AsyncIterable<{ message: { content: unknown } }> = {
+        [Symbol.asyncIterator]() {
+          const source = prompt[Symbol.asyncIterator]();
+          return {
+            async next() {
+              const step = await source.next();
+              const uuid = (step.value as { uuid?: string } | undefined)?.uuid;
+              if (!step.done && uuid) pulled.push(uuid);
+              return step;
+            },
+          };
+        },
+      };
+      const generator = (async function* (script: AsyncGenerator<FakeSdkMessage>, capabilities: string[]) {
+        yield { type: "system", subtype: "init", capabilities };
+        for await (const message of script) {
+          if (message.type !== "result") {
+            yield message;
+            continue;
+          }
+          const [own, ...folded] = pulled.splice(0);
+          for (const uuid of folded) yield { type: "command_lifecycle", command_uuid: uuid, state: "completed" };
+          yield message;
+          if (own) yield { type: "command_lifecycle", command_uuid: own, state: "completed" };
+        }
+      })(currentScript(tracked), currentCapabilities);
       return {
         async initializationResult() {
-          return {};
+          return await currentInit();
         },
         async interrupt() {
+          if (currentInterrupt) return await currentInterrupt();
           await generator.return?.(undefined as never);
         },
         close() {
+          closedQueries++;
           void generator.return?.(undefined as never);
+          if (currentCloseError) throw currentCloseError;
         },
         [Symbol.asyncIterator]() {
           return generator;
         },
       };
     },
-    tool: (name: string, description: string, schema: unknown, handler: (args: unknown) => Promise<unknown>) => {
+    tool: (
+      name: string,
+      description: string,
+      schema: unknown,
+      handler: (args: unknown, extra?: unknown) => Promise<unknown>,
+    ) => {
       toolHandlers.set(name, handler);
       return { name, description, schema, handler };
     },
@@ -52,6 +92,17 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
 });
 
 const { createClaudeHarness } = await import("../src/harness/claude-harness.ts");
+
+function resetSdkMock(): void {
+  currentCapabilities = ["msg_lifecycle_v1"];
+  currentCloseError = null;
+  currentInit = async () => ({});
+  currentInterrupt = null;
+}
+
+function abortedProvider(): AbortSignal {
+  return (capturedOptions.abortController as AbortController).signal;
+}
 
 function assistantMessage(id: string, text: string, usage: Record<string, number>): FakeSdkMessage {
   return {
@@ -834,3 +885,328 @@ for (const shutdown of [false, true]) {
     }
   });
 }
+
+test(
+  "a cancelled turn aborts the provider even when the SDK never acknowledges the interrupt",
+  { timeout: 5_000 },
+  async (t) => {
+    t.after(resetSdkMock);
+    currentInterrupt = () => new Promise<void>(() => {});
+    const cancel = new AbortController();
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      cancel.abort();
+      await new Promise((resolve) => abortedProvider().addEventListener("abort", resolve, { once: true }));
+      yield resultMessage("", { subtype: "error_during_execution", errors: ["aborted"], is_error: true });
+    };
+    const logged = t.mock.method(console, "error", () => {});
+    const harness = createClaudeHarness({ interruptAckMs: 20 });
+    const result = await harness.turns.runTurn(harnessTurn({ cancel: cancel.signal }).turn);
+    assert.equal(abortedProvider().aborted, true);
+    assert.equal(result.stopped, true);
+    assert.ok(
+      logged.mock.calls.some((call) =>
+        /claude: interrupt acknowledgment.*Claude interrupt acknowledgment/.test(String(call.arguments[0])),
+      ),
+    );
+  },
+);
+
+test("a Claude Code executable without command lifecycle is refused", async (t) => {
+  t.after(resetSdkMock);
+  currentCapabilities = [];
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("answered by an old CLI");
+  };
+  await assert.rejects(createClaudeHarness({}).turns.runTurn(harnessTurn().turn), /msg_lifecycle_v1/);
+});
+
+test("a failed SDK close after a finished turn keeps the reply and still removes the control jail", async (t) => {
+  t.after(resetSdkMock);
+  currentCloseError = new Error("close exploded");
+  const logged = t.mock.method(console, "error", () => {});
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("Done.");
+  };
+  const result = await createClaudeHarness({}).turns.runTurn(harnessTurn().turn);
+  assert.equal(result.reply, "Done.");
+  assert.equal(existsSync(capturedOptions.cwd as string), false);
+  assert.ok(logged.mock.calls.some((call) => /claude: close query.*close exploded/.test(String(call.arguments[0]))));
+});
+
+test("the turn wall clock covers SDK initialization", { timeout: 5_000 }, async (t) => {
+  t.after(resetSdkMock);
+  currentInit = () => new Promise(() => {});
+  currentScript = async function* () {
+    yield resultMessage("never reached");
+  };
+  const harness = createClaudeHarness({});
+  await assert.rejects(harness.turns.runTurn(harnessTurn({ turnWallClockMs: 30 }).turn), /wall clock/);
+  assert.equal(abortedProvider().aborted, true);
+});
+
+test("bridged tool calls and results carry the native tool_use id", async () => {
+  currentScript = async function* () {
+    await toolHandlers.get("finish_silently")!({}, { _meta: { "claudecode/toolUseId": "toolu_native" } });
+    yield resultMessage("");
+  };
+  const { turn, entries } = harnessTurn({ pollFire: true });
+  await createClaudeHarness().turns.runTurn(turn);
+  assert.deepEqual(
+    entries
+      .filter((entry) => entry.type === "tool_call" || entry.type === "tool_result")
+      .map((entry) => [entry.type, (entry.payload as { callId: string }).callId]),
+    [
+      ["tool_call", "toolu_native"],
+      ["tool_result", "toolu_native"],
+    ],
+  );
+});
+
+test("SDK setup that finishes after the wall clock writes nothing to the tape", { timeout: 5_000 }, async (t) => {
+  t.after(resetSdkMock);
+  const initialized = Promise.withResolvers<void>();
+  currentInit = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    initialized.resolve();
+    return {};
+  };
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("late");
+  };
+  const taped: unknown[] = [];
+  const harness = createClaudeHarness({});
+  await assert.rejects(
+    harness.turns.runTurn(harnessTurn({ turnWallClockMs: 30, tape: async (entry) => void taped.push(entry) }).turn),
+    /wall clock/,
+  );
+  await initialized.promise;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(taped, []);
+});
+
+test("a task that cannot be closed at turn end does not stop the rest of cleanup", { timeout: 5_000 }, async () => {
+  const transitioned: string[] = [];
+  const tasks = {
+    create: async (input: { id: string }) => ({ id: input.id }),
+    transitionStatus: async (id: string) => {
+      if (id === "task-moved") throw new Error("task moved by another process");
+      transitioned.push(id);
+      return { id };
+    },
+  } as unknown as NonNullable<Parameters<typeof createClaudeHarness>[0]>["tasks"];
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    for (const taskId of ["task-moved", "task-open"])
+      yield { type: "system", subtype: "task_started", task_id: taskId, description: taskId, skip_transcript: true };
+    yield resultMessage("done");
+  };
+  const before = closedQueries;
+  const harness = createClaudeHarness({ tasks });
+  const result = await harness.turns.runTurn(harnessTurn().turn);
+  assert.equal(result.reply, "done");
+  assert.deepEqual(transitioned, ["task-open"]);
+  assert.equal(closedQueries, before + 1);
+  assert.equal(existsSync(capturedOptions.cwd as string), false);
+});
+
+test(
+  "a steer folded into the running turn ends the turn on the SDK command lifecycle",
+  { timeout: 5_000 },
+  async () => {
+    const signals = createMemoryRunSignalStore();
+    const runId = "run-folded-steer";
+    currentScript = async function* (prompts) {
+      const iterator = prompts[Symbol.asyncIterator]();
+      yield { type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] };
+      const first = (await iterator.next()).value as unknown as { uuid: string };
+      yield first as unknown as FakeSdkMessage;
+      await signals.send(runId, { kind: "steer", text: "also this", ts: "fold.1" });
+      const folded = (await iterator.next()).value as unknown as { uuid: string };
+      yield folded as unknown as FakeSdkMessage;
+      yield resultMessage("Both handled.");
+      await iterator.next();
+    };
+    const harness = createClaudeHarness({ signals });
+    const result = await harness.turns.runTurn(harnessTurn({ runId, turnWallClockMs: 3_000 }).turn);
+    assert.equal(result.reply, "Both handled.");
+    assert.equal(result.stopped, undefined);
+  },
+);
+
+test("a steer queued behind the last reply still gets its own lifecycle-tracked turn", { timeout: 5_000 }, async () => {
+  const signals = createMemoryRunSignalStore();
+  const runId = "run-queued-steer";
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    yield { type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] };
+    const first = (await iterator.next()).value as unknown as { uuid: string };
+    yield first as unknown as FakeSdkMessage;
+    await signals.send(runId, { kind: "steer", text: "one more", ts: "queued.1" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    yield resultMessage("First.");
+    const second = (await iterator.next()).value as unknown as { uuid: string };
+    yield second as unknown as FakeSdkMessage;
+    yield resultMessage("Second.");
+    await iterator.next();
+  };
+  const harness = createClaudeHarness({ signals });
+  const { turn, entries } = harnessTurn({ runId, turnWallClockMs: 3_000 });
+  const result = await harness.turns.runTurn(turn);
+  assert.equal(result.reply, "Second.");
+  assert.deepEqual(
+    entries.filter((entry) => entry.type === "assistant").map((entry) => (entry.payload as { text: string }).text),
+    ["First.", "Second."],
+  );
+});
+
+for (const folded of [false, true]) {
+  test(`a cancel after the ${folded ? "folded" : "fresh"} final reply is committed returns that reply`, async () => {
+    const signals = createMemoryRunSignalStore();
+    const runId = `run-committed-${folded}`;
+    const checkpointing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    currentScript = async function* (prompts) {
+      const iterator = prompts[Symbol.asyncIterator]();
+      await iterator.next();
+      if (folded) {
+        await signals.send(runId, { kind: "steer", text: "also this", ts: "fold.2" });
+        await iterator.next();
+      }
+      yield resultMessage("Final committed answer");
+    };
+    const { turn, entries } = harnessTurn({ runId, cancel: cancel.signal, turnWallClockMs: 3_000 });
+    turn.tape = async (entry) => {
+      if (entry.kind !== "annotation") return;
+      checkpointing.resolve();
+      await release.promise;
+    };
+    const running = createClaudeHarness({ signals }).turns.runTurn(turn);
+    await checkpointing.promise;
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.reply, "Final committed answer");
+    assert.deepEqual(
+      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+      [{ text: "Final committed answer" }],
+    );
+  });
+}
+
+function liveTasks(...tasks: Array<{ id: string; ambient?: boolean }>): FakeSdkMessage {
+  return {
+    type: "system",
+    subtype: "background_tasks_changed",
+    tasks: tasks.map(({ id, ambient }) => ({ task_id: id, task_type: "local_agent", description: id, ambient })),
+  };
+}
+
+async function inputEnded(prompts: AsyncIterator<unknown>): Promise<boolean> {
+  const next = prompts.next().then((step) => step.done === true);
+  return await Promise.race([next, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20))]);
+}
+
+test("a running background agent keeps tools available after the root result until the task level empties", async () => {
+  let toolOutput = "";
+  let endedAtResult = true;
+  currentScript = async function* (prompts) {
+    const input = prompts[Symbol.asyncIterator]();
+    await input.next();
+    yield liveTasks({ id: "worker" });
+    yield resultMessage("Root answer");
+    endedAtResult = await inputEnded(input);
+    toolOutput = JSON.stringify(await toolHandlers.get("memory")!({ action: "read" }));
+    yield liveTasks();
+  };
+  const { turn } = harnessTurn({
+    readOnly: false,
+    tools: { memoryRead: async () => "still reachable" } as unknown as HarnessTurnInput["tools"],
+  });
+  const result = await createClaudeHarness({}).turns.runTurn(turn);
+  assert.equal(endedAtResult, false);
+  assert.match(toolOutput, /still reachable/);
+  assert.equal(result.reply, "Root answer");
+});
+
+test("a task level that is already empty at the root result ends the turn there", async () => {
+  let ended = false;
+  currentScript = async function* (prompts) {
+    const input = prompts[Symbol.asyncIterator]();
+    await input.next();
+    yield liveTasks({ id: "worker" });
+    yield liveTasks();
+    yield resultMessage("Done");
+    ended = await inputEnded(input);
+  };
+  const { turn } = harnessTurn();
+  const result = await createClaudeHarness({}).turns.runTurn(turn);
+  assert.equal(ended, true);
+  assert.equal(result.reply, "Done");
+});
+
+test("an ambient background task does not hold the turn open", async () => {
+  let ended = false;
+  currentScript = async function* (prompts) {
+    const input = prompts[Symbol.asyncIterator]();
+    await input.next();
+    yield liveTasks({ id: "watcher", ambient: true });
+    yield resultMessage("Done");
+    ended = await inputEnded(input);
+  };
+  const { turn } = harnessTurn();
+  const result = await createClaudeHarness({}).turns.runTurn(turn);
+  assert.equal(ended, true);
+  assert.equal(result.reply, "Done");
+});
+
+test("cancelling while a background agent runs ends the turn", { timeout: 5_000 }, async () => {
+  const cancel = new AbortController();
+  const waiting = Promise.withResolvers<void>();
+  currentScript = async function* (prompts) {
+    const input = prompts[Symbol.asyncIterator]();
+    await input.next();
+    yield liveTasks({ id: "worker" });
+    yield resultMessage("Root answer");
+    waiting.resolve();
+    await input.next();
+  };
+  const { turn } = harnessTurn({ cancel: cancel.signal });
+  const running = createClaudeHarness({}).turns.runTurn(turn);
+  await waiting.promise;
+  cancel.abort();
+  await running;
+});
+
+test("a Stop during a CLI follow-up command after the committed reply stops that follow-up", async () => {
+  const followUp = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const cancel = new AbortController();
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("First reply");
+    yield { type: "command_lifecycle", command_uuid: "cli-follow-up", state: "started" };
+    yield {
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text: "Follow-up partial" } },
+    };
+    followUp.resolve();
+    await release.promise;
+    yield resultMessage("Follow-up after stop");
+  };
+  const { turn, entries } = harnessTurn({ cancel: cancel.signal, turnWallClockMs: 3_000 });
+  const running = createClaudeHarness({}).turns.runTurn(turn);
+  await followUp.promise;
+  cancel.abort();
+  release.resolve();
+  const result = await running;
+  assert.equal(result.stopped, true);
+  assert.deepEqual(
+    entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+    [{ text: "First reply" }, { text: "Follow-up partial", stopped: true }],
+  );
+});

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createGoalRecord, latestGoalRecord, rehydrateOpenGoal } from "../src/harness/goal.ts";
+import {
+  createGoalRecord,
+  goalFloorMeter,
+  latestGoalRecord,
+  meterGoalCall,
+  rehydrateOpenGoal,
+} from "../src/harness/goal.ts";
+import { createGrindMeter, grindState, meterGrindCall } from "../src/harness/grind.ts";
+import type { LlmCallUsage } from "../src/sessions/session-store.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
@@ -231,3 +239,56 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
     assert.equal(rehydrateOpenGoal(emitted)?.status, "paused");
   });
 }
+
+test("a non-enforcing harness meters its goal from recorded usage exactly as Pi does", async () => {
+  const usage: LlmCallUsage = {
+    input: 1_000,
+    output: 500,
+    cacheRead: 2_000,
+    cacheWrite: 100,
+    totalTokens: 3_600,
+    costUsd: 0.006,
+  };
+  const prior = { ...createGoalRecord({ objective: "spend a cent", floor: { minUsd: 0.01 } }), createdAt: 1 };
+  const emitted: SessionEntry[] = [];
+  const firstRound: Array<{ usd: number; tokensUsed: number }> = [];
+  const { harness, calls } = fakeAdapter(async (turn, round) => {
+    await turn.recordLlmRequest!({ turnSeq: 0, step: 0, model: "m", truncated: false, usage });
+    const goal = turn.goal!;
+    if (round === 0) firstRound.push({ usd: turn.goalMeter!.usd, tokensUsed: goal.tokensUsed });
+    if (grindState(goal.floor!, goalFloorMeter(goal, turn.goalMeter ?? createGrindMeter())).met) {
+      goal.status = "complete";
+      await turn.emit({
+        type: "tool_result",
+        payload: { tool: "goal", action: "update", goal: { ...goal }, callId: `c${round}` },
+        scopeLabel: scope,
+      });
+    }
+    return round >= 3 ? { reply: "", stopped: true } : { reply: `round ${round}` };
+  });
+  const recorded: Array<LlmCallUsage | null | undefined> = [];
+  await router(harness).turns.runTurn(
+    stubTurn(emitted, {
+      turnWallClockMs: 600_000,
+      history: [
+        {
+          type: "system",
+          payload: { kind: "goal", goal: prior },
+          sessionId: "s1",
+          seq: 0,
+          parentSeq: null,
+          createdAt: 1,
+        },
+      ] as SessionEntry[],
+      recordLlmRequest: (rec: { usage?: LlmCallUsage | null }) => void recorded.push(rec.usage),
+    }),
+  );
+  const pi = createGrindMeter();
+  const piGoal = createGoalRecord({ objective: "spend a cent" });
+  meterGrindCall(pi, usage);
+  meterGoalCall(piGoal, usage);
+  assert.deepEqual(firstRound, [{ usd: pi.usd, tokensUsed: piGoal.tokensUsed }]);
+  assert.equal(piGoal.tokensUsed, 3_600);
+  assert.equal(calls.length, 2, "the goal completes once two $0.006 calls clear the $0.01 floor");
+  assert.equal(recorded.length, 2, "usage still reaches core's request log");
+});

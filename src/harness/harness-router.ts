@@ -15,12 +15,13 @@ import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from
 import { withTapedEntryMirrors } from "./harness-shared.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import { createGrindMeter } from "./grind.ts";
+import { createGrindMeter, meterGrindUsage } from "./grind.ts";
 import {
   bankGoalTurn,
   enforceGoal,
   goalSnapshotPayload,
   latestGoalRecord,
+  meterGoalCall,
   rehydrateOpenGoal,
   governGoal,
   goalWorkFromEntries,
@@ -35,35 +36,39 @@ function turnCompleted(result: HarnessTurnResult): boolean {
   return !result.stopped && !result.runtimeHandoff && !result.pausedOnApproval && !result.pendingApprovals?.length;
 }
 
-function inputTokens(result: HarnessTurnResult): number {
-  const usage = result.cacheUsage;
-  return usage ? usage.cacheRead + usage.cacheWrite + usage.uncachedInput : 0;
-}
-
 async function runTurnEnforcingGoal(
   adapter: Harness,
   input: HarnessTurnInput,
   harnessId: HarnessId,
 ): Promise<HarnessTurnResult> {
   const emitted: SessionEntry[] = [];
+  const startedAt = Date.now();
+  const meter = createGrindMeter(startedAt);
+  let current: GoalRecord | null = input.goal ?? rehydrateOpenGoal(input.history);
   const dispatched: HarnessTurnInput = {
     ...input,
+    ...(current ? { goal: current } : {}),
+    goalMeter: meter,
     emit: async (entry) => {
       const stored = await input.emit(entry);
       emitted.push(stored);
+      const recorded = latestGoalRecord([stored]);
+      if (recorded && current && recorded.createdAt === current.createdAt)
+        Object.assign(current, recorded, { tokensUsed: Math.max(current.tokensUsed, recorded.tokensUsed) });
+      else if (recorded) current = recorded;
       return stored;
     },
+    recordLlmRequest: async (rec, signal) => {
+      meterGrindUsage(meter, rec.usage);
+      if (current?.status === "active") meterGoalCall(current, rec.usage);
+      await input.recordLlmRequest?.(rec, signal);
+    },
   };
-  const startedAt = Date.now();
-  const meter = createGrindMeter(startedAt);
   let result = await adapter.turns.runTurn(dispatched);
-  const goal: GoalRecord | null = latestGoalRecord(emitted) ?? rehydrateOpenGoal(input.history);
+  const goal = current;
   if (!goal) return result;
   const account = () => {
     meter.turns += result.modelCalls ?? 1;
-    const tokens = inputTokens(result);
-    meter.tokens += tokens;
-    if (goal.status !== "paused") goal.tokensUsed += tokens;
   };
   account();
   const remainingWallMs = () =>

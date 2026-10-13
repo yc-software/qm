@@ -696,6 +696,7 @@ for (const abort of ["shutdown", "stop"] as const) {
         (row) => row.kind === "message" && (row.payload as { role?: string }).role === "toolResult",
       );
       assert.ok(tapedResult);
+      assert.equal(tapedResult.entrySeq, result.seq, "the taped result names its tool_result entry");
       assert.equal(
         (tapedResult.payload as { interrupted?: unknown }).interrupted,
         abort === "shutdown" ? true : undefined,

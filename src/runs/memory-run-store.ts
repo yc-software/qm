@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
-import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
+import { crashClaims, isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 
@@ -70,6 +70,7 @@ export function createMemoryRunStore(opts?: {
         turnUserSeq: null,
         dedupKey: dedupKey ?? null,
         attempts: 0,
+        handbacks: 0,
         errorAttempts: 0,
         maxAttempts,
         leaseToken: null,
@@ -117,6 +118,7 @@ export function createMemoryRunStore(opts?: {
       run.leaseToken = null;
       run.leaseExpiresAt = null;
       run.workerId = null;
+      run.handbacks += 1;
       return true;
     },
 
@@ -176,7 +178,9 @@ export function createMemoryRunStore(opts?: {
           .reverse()
           .filter(
             (run) =>
-              run.sessionId === threadRef && !(opts?.excludePrivateMessages && run.request.privateSessionMessage),
+              run.sessionId === threadRef &&
+              !(opts?.excludePrivateMessages && run.request.privateSessionMessage) &&
+              !(opts?.webHumanOnly && (run.request.surface !== "web" || run.request.origin?.kind !== "human")),
           )
           .sort((a, b) => b.createdAt - a.createdAt)
           .at(0) ?? null
@@ -394,7 +398,7 @@ export function createMemoryRunStore(opts?: {
     run.leaseExpiresAt = null;
     run.workerId = null;
     if (opts?.countsAsError) run.errorAttempts += 1;
-    const overClaimed = run.attempts >= maxClaims;
+    const overClaimed = crashClaims(run) >= maxClaims;
     if (retry && run.errorAttempts < run.maxAttempts && !overClaimed) {
       run.status = "pending";
       retryAfter.set(run.id, Date.now() + Math.max(0, opts?.retryAfterMs ?? 0));
@@ -403,9 +407,14 @@ export function createMemoryRunStore(opts?: {
     run.status = "failed";
     const reason =
       !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
-        ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
+        ? `run parked after ${crashClaims(run)} claims without completing (suspected crash loop)`
         : error;
-    run.result = { status: "failed", sessionId: run.sessionId, reason };
+    run.result = {
+      status: "failed",
+      sessionId: run.sessionId,
+      reason,
+      ...(opts?.countsAsError ? { failureMessage: error } : {}),
+    };
     run.finishedAt = Date.now();
     settle(run);
     return { requeued: false, applied: true };

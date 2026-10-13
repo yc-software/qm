@@ -279,10 +279,10 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
-  const ownerSkipNotice = async () => {
+  const ownerSkipNotice = async (skipNote: string) => {
     await deps.deliveries.enqueue({
       destination: principalDestination(spec.owner, spec.owner),
-      text: `Scheduled delivery skipped: ${consentNote}`,
+      text: `Scheduled delivery skipped: ${skipNote}`,
       idempotencyKey: `${spec.fireKey}:err`,
       provenance: deliveryProvenance(spec, threadRef),
       ...(spec.shadow ? { shadow: true } : {}),
@@ -298,12 +298,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         if (!consented) {
           status = "refused";
           note = consentNote;
-          await ownerSkipNotice();
+          await ownerSkipNotice(consentNote);
           return;
         }
         if (!deliverable) {
           status = "refused";
           note = notVisibleNote;
+          await ownerSkipNotice(notVisibleNote);
           return;
         }
         const attributeAs = await relayAttribution(deps, spec);
@@ -354,6 +355,10 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       status = res.status;
       reply = res.reply;
       sessionId = res.sessionId;
+      if (res.stopped) {
+        note = "stopped on request";
+        return;
+      }
       if (res.status === "silent") return;
       if (res.status === "pending_approval") {
         note = "hit a require_approval command — failed closed (no human at fire/event time)";
@@ -366,12 +371,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         if (!consented) {
           status = "refused";
           note = consentNote;
-          await ownerSkipNotice();
+          await ownerSkipNotice(consentNote);
           return;
         }
         if (!deliverable) {
           status = "refused";
           note = notVisibleNote;
+          await ownerSkipNotice(notVisibleNote);
           return;
         }
         await reachEnqueue({

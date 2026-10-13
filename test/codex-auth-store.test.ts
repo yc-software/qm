@@ -11,6 +11,7 @@ import {
   fileCodexAuthStore,
   keychainCodexAuthStore,
 } from "../src/harness/codex-auth-store.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../src/credentials/keychain.ts";
 
 function jwt(payload: Record<string, unknown>, header: Record<string, unknown> = { alg: "RS256" }): string {
@@ -160,6 +161,42 @@ test("keychain store refreshes a stale access token centrally and persists rotat
     Buffer.from(state.saves[0]!.files![0]!.contentBase64, "base64").toString("utf8"),
   ) as Record<string, unknown>;
   assert.equal((persisted.tokens as Record<string, unknown>).refresh_token, "refresh-2");
+});
+
+test("two replicas refreshing one stale login present its single-use refresh token once", async () => {
+  const state: FakeKeychainState = {
+    meta: META,
+    files: credFiles(authJson("acct", STALE_EXP, "refresh-1")),
+    saves: [],
+  };
+  const presented: unknown[] = [];
+  const issued = new Set<unknown>(["refresh-1"]);
+  const fetchImpl = (async (_url: string, init: { body: string }) => {
+    const token = (JSON.parse(init.body) as Record<string, unknown>).refresh_token;
+    presented.push(token);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    if (!issued.delete(token)) return { ok: false, status: 400, json: async () => ({ error: "refresh_token_reused" }) };
+    const next = `refresh-${presented.length + 1}`;
+    issued.add(next);
+    return {
+      ok: true,
+      json: async () => ({
+        access_token: accessToken("acct", FRESH_EXP, next),
+        id_token: idToken("acct"),
+        refresh_token: next,
+      }),
+    };
+  }) as unknown as typeof fetch;
+  const lock = createMemoryAdvisoryLock();
+  const replica = () =>
+    keychainCodexAuthStore({ keychain: fakeKeychain(state), credentialId: "cred-1", now: () => NOW, fetchImpl, lock });
+  const loaded = await Promise.all([replica().load(), replica().load()]);
+  assert.deepEqual(presented, ["refresh-1"]);
+  assert.deepEqual(
+    loaded.map((auth) => (auth!.tokens as Record<string, unknown>).refresh_token),
+    ["refresh-2", "refresh-2"],
+  );
+  assert.equal(state.saves.length, 1);
 });
 
 test("keychain store refuses a refresh that switches accounts", async () => {

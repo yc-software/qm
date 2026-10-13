@@ -33,6 +33,7 @@ export interface CustomProviderStore {
   /** Plaintext key for one provider, or null when absent/disabled. */
   resolveKey(id: string): Promise<string | null>;
   upsert(spec: CustomProviderSpec, apiKey: string | undefined, updatedBy: string): Promise<void>;
+  create(spec: CustomProviderSpec, apiKey: string | undefined, updatedBy: string): Promise<boolean>;
   delete(id: string, updatedBy: string): Promise<boolean>;
 }
 
@@ -53,6 +54,26 @@ export function createCustomProviderStore(input: {
 }): CustomProviderStore {
   const write = input.write ?? (<T>(fn: () => Promise<T>) => fn());
   const key = deriveConnectorKey(input.keyMaterial, "custom-model-providers");
+
+  async function save(
+    spec: CustomProviderSpec,
+    apiKey: string | undefined,
+    updatedBy: string,
+    existing: StoredCustomProvider | null | undefined,
+  ): Promise<void> {
+    validateCustomProviderSpec(spec);
+    const actor = updatedBy.trim();
+    if (!actor) throw new Error("updatedBy is required");
+    const trimmedKey = apiKey?.trim();
+    const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
+    await input.backing.put(spec.id, {
+      ...spec,
+      ...(apiKeyEnc ? { apiKeyEnc } : {}),
+      disabled: false,
+      updatedAt: Date.now(),
+      updatedBy: actor,
+    });
+  }
 
   return {
     async enabled() {
@@ -81,19 +102,16 @@ export function createCustomProviderStore(input: {
 
     async upsert(spec, apiKey, updatedBy) {
       return write(async () => {
-        validateCustomProviderSpec(spec);
-        const actor = updatedBy.trim();
-        if (!actor) throw new Error("updatedBy is required");
+        await save(spec, apiKey, updatedBy, await input.backing.get(spec.id));
+      });
+    },
+
+    async create(spec, apiKey, updatedBy) {
+      return write(async () => {
         const existing = await input.backing.get(spec.id);
-        const trimmedKey = apiKey?.trim();
-        const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
-        await input.backing.put(spec.id, {
-          ...spec,
-          ...(apiKeyEnc ? { apiKeyEnc } : {}),
-          disabled: false,
-          updatedAt: Date.now(),
-          updatedBy: actor,
-        });
+        if (existing && !existing.disabled) return false;
+        await save(spec, apiKey, updatedBy, undefined);
+        return true;
       });
     },
 

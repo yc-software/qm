@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { retryDelay } from "../src/runs/retry-delay.ts";
 import { processRun } from "../src/runs/worker.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError } from "../src/core/turn-error.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 
 const request: OrchestratorInput = {
@@ -67,5 +67,32 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
       assert.ok(await runs.claimById(run.id, "other", 60_000));
       await runs.fail(run.id, (await runs.get(run.id))!.leaseToken!, "done", { retry: false });
     }
+  }
+});
+
+test("a provider-requested delay holds the retry until it passes, up to ten minutes", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.method(Math, "random", () => 0);
+  const { runs } = createMemoryRunStore();
+  for (const [retryAfterMs, heldMs] of [
+    [120_000, 120_000],
+    [1_000, 15_000],
+    [3_600_000, 600_000],
+  ] as const) {
+    const { run } = await runs.enqueue({ sessionId: `provider-${retryAfterMs}`, request });
+    const lease = await runs.claimById(run.id, "worker", 60_000);
+    assert.ok(lease);
+    const error = new ProviderTurnError("slow down", { code: "rate_limit", retryable: true, retryAfterMs, raw: "" });
+    const orchestrator = {
+      handleTurn: async () => {
+        throw error;
+      },
+    } as unknown as Orchestrator;
+    await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, lease), error);
+    t.mock.timers.tick(heldMs - 1);
+    assert.equal(await runs.claimById(run.id, "other", 60_000), null);
+    t.mock.timers.tick(1);
+    assert.ok(await runs.claimById(run.id, "other", 60_000));
+    await runs.fail(run.id, (await runs.get(run.id))!.leaseToken!, "done", { retry: false });
   }
 });

@@ -1,0 +1,173 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index 158acc8..ff687de 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -1,4 +1,5 @@
+ import { extractProviderError } from "../utils/error-body.js";
++import { idleAbort, idleTimeoutFetch } from "../utils/idle-timeout.js";
+ import Anthropic from "@anthropic-ai/sdk";
+ import { calculateCost } from "../models.js";
+ import { splitDeferredTools } from "../utils/deferred-tools.js";
+@@ -366,12 +367,14 @@ export const stream = (model, context, options) => {
+             if (nextParams !== undefined) {
+                 params = nextParams;
+             }
++            const idle = idleAbort(options?.signal);
+             const requestOptions = {
+-                ...(options?.signal ? { signal: options.signal } : {}),
++                signal: idle.signal,
+                 ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+                 maxRetries: 0,
+             };
+-            const response = await retryProviderRequest(() => client.messages.create({ ...params, stream: true }, requestOptions).asResponse(), {
++            const idleClient = client.withOptions({ fetch: idleTimeoutFetch(options?.timeoutMs, idle.controller, client.fetch) });
++            const response = await retryProviderRequest(() => idleClient.messages.create({ ...params, stream: true }, requestOptions).asResponse(), {
+                 maxRetries: options?.maxRetries,
+                 maxRetryDelayMs: options?.maxRetryDelayMs,
+                 signal: options?.signal,
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index ad2800a..1ba8f44 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -5,6 +5,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { shortHash } from "../utils/hash.js";
+ import { headersToRecord } from "../utils/headers.js";
+ import { parseStreamingJson } from "../utils/json-parse.js";
++import { idleAbort, idleTimeoutFetch } from "../utils/idle-timeout.js";
+ import { getProviderEnvValue } from "../utils/provider-env.js";
+ import { retryProviderRequest } from "../utils/provider-retry.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+@@ -131,12 +132,14 @@ export const stream = (model, context, options) => {
+             if (nextParams !== undefined) {
+                 params = nextParams;
+             }
++            const idle = idleAbort(options?.signal);
+             const requestOptions = {
+-                ...(options?.signal ? { signal: options.signal } : {}),
++                signal: idle.signal,
+                 ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+                 maxRetries: 0,
+             };
+-            const { data: openaiStream, response } = await retryProviderRequest(() => client.chat.completions.create(params, requestOptions).withResponse(), {
++            const idleClient = client.withOptions({ fetch: idleTimeoutFetch(options?.timeoutMs, idle.controller, client.fetch) });
++            const { data: openaiStream, response } = await retryProviderRequest(() => idleClient.chat.completions.create(params, requestOptions).withResponse(), {
+                 maxRetries: options?.maxRetries,
+                 maxRetryDelayMs: options?.maxRetryDelayMs,
+                 signal: options?.signal,
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index 07558fa..f583a46 100644
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -4,6 +4,7 @@ import { splitDeferredTools } from "../utils/deferred-tools.js";
+ import { formatProviderError, normalizeProviderError, extractProviderError } from "../utils/error-body.js";
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { headersToRecord } from "../utils/headers.js";
++import { idleAbort, idleTimeoutFetch } from "../utils/idle-timeout.js";
+ import { getProviderEnvValue } from "../utils/provider-env.js";
+ import { retryProviderRequest } from "../utils/provider-retry.js";
+ import { createGrammarToolInputProperties } from "./constrained-sampling.js";
+@@ -101,12 +102,14 @@ export const stream = (model, context, options) => {
+             if (nextParams !== undefined) {
+                 params = nextParams;
+             }
++            const idle = idleAbort(options?.signal);
+             const requestOptions = {
+-                ...(options?.signal ? { signal: options.signal } : {}),
++                signal: idle.signal,
+                 ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+                 maxRetries: 0,
+             };
+-            const { data: openaiStream, response } = await retryProviderRequest(() => client.responses.create(params, requestOptions).withResponse(), {
++            const idleClient = client.withOptions({ fetch: idleTimeoutFetch(options?.timeoutMs, idle.controller, client.fetch) });
++            const { data: openaiStream, response } = await retryProviderRequest(() => idleClient.responses.create(params, requestOptions).withResponse(), {
+                 maxRetries: options?.maxRetries,
+                 maxRetryDelayMs: options?.maxRetryDelayMs,
+                 signal: options?.signal,
+diff --git a/dist/utils/error-body.js b/dist/utils/error-body.js
+index 317cd97..66e8540 100644
+--- a/dist/utils/error-body.js
++++ b/dist/utils/error-body.js
+@@ -1,3 +1,4 @@
++import { StreamIdleTimeoutError } from "./idle-timeout.js";
+ // Shared normalization for provider HTTP error objects.
+ //
+ // Endpoints behind a proxy / gateway may return a non-2xx response whose body
+@@ -37,6 +38,8 @@ export function normalizeProviderError(error) {
+ export function extractProviderError(error) {
+     if (!(error instanceof Error))
+         return undefined;
++    if (error instanceof StreamIdleTimeoutError)
++        return { type: "stream_idle_timeout" };
+     const sdkError = error;
+     const status = extractStatus(sdkError);
+     const body = pickBodyValue(sdkError);
+diff --git a/dist/utils/idle-timeout.d.ts b/dist/utils/idle-timeout.d.ts
+new file mode 100644
+index 0000000..7eeff2d
+--- /dev/null
++++ b/dist/utils/idle-timeout.d.ts
+@@ -0,0 +1,9 @@
++export declare class StreamIdleTimeoutError extends Error {
++    readonly idleMs: number;
++    constructor(idleMs: number);
++}
++export declare function idleAbort(signal?: AbortSignal): {
++    controller: AbortController;
++    signal: AbortSignal;
++};
++export declare function idleTimeoutFetch(idleMs: number | undefined, controller: AbortController, baseFetch: typeof fetch): typeof fetch;
+diff --git a/dist/utils/idle-timeout.js b/dist/utils/idle-timeout.js
+new file mode 100644
+index 0000000..e36b79f
+--- /dev/null
++++ b/dist/utils/idle-timeout.js
+@@ -0,0 +1,49 @@
++export class StreamIdleTimeoutError extends Error {
++    constructor(idleMs) {
++        super(`Provider stream sent nothing for ${idleMs} ms`);
++        this.name = "StreamIdleTimeoutError";
++        this.idleMs = idleMs;
++    }
++}
++export function idleAbort(signal) {
++    const controller = new AbortController();
++    return { controller, signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal };
++}
++export function idleTimeoutFetch(idleMs, controller, baseFetch) {
++    return async (url, init) => {
++        const response = await baseFetch(url, init);
++        if (!(idleMs > 0) || !response.body)
++            return response;
++        const reader = response.body.getReader();
++        let timer;
++        const body = new ReadableStream({
++            async pull(stream) {
++                const idle = new Promise((_, reject) => {
++                    timer = setTimeout(() => reject(new StreamIdleTimeoutError(idleMs)), idleMs);
++                });
++                try {
++                    const next = await Promise.race([reader.read(), idle]);
++                    if (next.done)
++                        stream.close();
++                    else
++                        stream.enqueue(next.value);
++                }
++                catch (error) {
++                    if (error instanceof StreamIdleTimeoutError) {
++                        controller.abort(error);
++                        reader.cancel(error).catch(() => { });
++                    }
++                    stream.error(error);
++                }
++                finally {
++                    clearTimeout(timer);
++                }
++            },
++            cancel(reason) {
++                clearTimeout(timer);
++                return reader.cancel(reason);
++            },
++        }, { highWaterMark: 0 });
++        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
++    };
++}

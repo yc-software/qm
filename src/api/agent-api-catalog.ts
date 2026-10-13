@@ -809,7 +809,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET|PUT",
         path: "/v1/admin/memory?scope=",
         summary:
-          "read or rewrite any scope's memory notebook (e.g. fix poisoned memory; non-org reads: DM or effective Open sharing)",
+          "read or rewrite any scope's memory notebook; PUT { content, revision } with the revision from GET (e.g. fix poisoned memory; non-org reads: DM or effective Open sharing)",
       },
       {
         method: "GET",

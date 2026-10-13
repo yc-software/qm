@@ -185,8 +185,10 @@ test("without the resume signal a context ending at a tool result is prompted no
 
 test("endsAtRecordedToolResult accepts only a real trailing tool result", () => {
   const result = { role: "toolResult", content: [{ type: "text", text: "ok" }] };
-  const healed = { role: "toolResult", content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }] };
+  const healed = { role: "toolResult", content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }], interrupted: true };
+  const lookalike = { role: "toolResult", content: [{ type: "text", text: "[interrupted — quoted from a log]" }] };
   assert.equal(endsAtRecordedToolResult([{ role: "user" }, result]), true);
+  assert.equal(endsAtRecordedToolResult([{ role: "user" }, lookalike]), true);
   assert.equal(endsAtRecordedToolResult([{ role: "user" }, healed]), false);
   assert.equal(endsAtRecordedToolResult([{ role: "user" }, { role: "assistant" }]), false);
   assert.equal(endsAtRecordedToolResult([{ role: "user" }]), false);

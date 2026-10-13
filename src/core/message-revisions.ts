@@ -17,6 +17,7 @@ export interface MessageRevisionPayload {
   text?: string;
   name?: string;
   sourceRole?: "agent";
+  overheard?: true;
 }
 
 interface MessageRevisionSource {
@@ -47,6 +48,7 @@ export function renderMessageRevision(p: MessageRevisionPayload): string {
   const attrs = [
     `id="${xmlAttrEscape(p.ts)}"`,
     ...(p.sourceRole ? [`from="${p.sourceRole}"`] : []),
+    ...(p.overheard ? [`overheard="true"`] : []),
     ...(p.name?.trim() ? [`author="${xmlAttrEscape(p.name.trim())}"`] : []),
     ...(isoFromTs(p.ts) ? [`sent-at="${isoFromTs(p.ts)}"`] : []),
   ].join(" ");
@@ -67,6 +69,7 @@ interface OriginalMessage {
   text: string;
   name?: string;
   sourceRole?: "agent";
+  overheard?: true;
 }
 
 function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMessage | null {
@@ -78,6 +81,7 @@ function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMes
       text?: unknown;
       name?: unknown;
       sourceRole?: unknown;
+      overheard?: unknown;
       hidden?: unknown;
       securityTainted?: unknown;
     } | null;
@@ -86,6 +90,7 @@ function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMes
     found = {
       text: typeof p.text === "string" ? p.text : "",
       ...(p.sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
+      ...(p.overheard === true ? { overheard: true as const } : {}),
       ...(typeof p.name === "string" && p.name.trim() ? { name: p.name.trim() } : {}),
     };
   }
@@ -106,6 +111,7 @@ function revisionToRecord(
   const named = {
     ...(original.name ? { name: original.name } : {}),
     ...(original.sourceRole ? { sourceRole: original.sourceRole } : {}),
+    ...(original.overheard ? { overheard: true as const } : {}),
   };
   if (source.deleted) {
     if (last?.action === "deleted") return null;

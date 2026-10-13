@@ -5,7 +5,14 @@ import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { NonRetryableTurnError, ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
-import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
+import { calculateCost } from "@earendil-works/pi-ai";
+import {
+  DEFAULT_CODEX_MODEL_ID,
+  FAST_COST_MULTIPLIER,
+  modelSupportedByHarness,
+  resolveModel,
+  scaleCost,
+} from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
@@ -159,6 +166,9 @@ type ActiveTurn = {
   pendingSteers: Array<{ prompt: string; inputText: string; intake: SteerIntake }>;
   interrupt?: () => Promise<void>;
   stopped: boolean;
+  terminated: boolean;
+  billedUsd: boolean;
+  fast: boolean;
 };
 
 type Runtime = {
@@ -220,16 +230,55 @@ function usageNumber(value: unknown, ...names: string[]): number {
   return 0;
 }
 
-export function codexUsageTotals(params: unknown): LlmCallUsage | null {
+function codexUsageBreakdown(params: unknown, key: "total" | "last"): LlmCallUsage | null {
   if (!params || typeof params !== "object") return null;
   const tokenUsage = (params as Record<string, unknown>).tokenUsage;
   if (!tokenUsage || typeof tokenUsage !== "object") return null;
-  const total = (tokenUsage as Record<string, unknown>).total;
+  const total = (tokenUsage as Record<string, unknown>)[key];
   if (!total || typeof total !== "object") return null;
   const input = usageNumber(total, "inputTokens", "input_tokens");
   const output = usageNumber(total, "outputTokens", "output_tokens");
   const cacheRead = usageNumber(total, "cachedInputTokens", "cached_input_tokens");
-  return { input, output, cacheRead, cacheWrite: 0, totalTokens: input + output, costUsd: 0 };
+  return {
+    input: Math.max(0, input - cacheRead),
+    output,
+    cacheRead,
+    cacheWrite: 0,
+    totalTokens: input + output,
+    costUsd: 0,
+  };
+}
+
+export function codexUsageTotals(params: unknown): LlmCallUsage | null {
+  return codexUsageBreakdown(params, "total");
+}
+
+function usageDelta(after: LlmCallUsage, before: LlmCallUsage | undefined): LlmCallUsage {
+  const minus = (key: "input" | "output" | "cacheRead" | "totalTokens") =>
+    Math.max(0, after[key] - (before?.[key] ?? 0));
+  return {
+    input: minus("input"),
+    output: minus("output"),
+    cacheRead: minus("cacheRead"),
+    cacheWrite: 0,
+    totalTokens: minus("totalTokens"),
+    costUsd: 0,
+  };
+}
+
+export function priceCodexUsage(usage: LlmCallUsage, modelId: string, fast: boolean): LlmCallUsage {
+  const model = resolveModel(modelId);
+  if (!model?.cost) return usage;
+  const card = fast ? { ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } : model;
+  const cost = calculateCost(card, {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    totalTokens: usage.totalTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+  return { ...usage, costUsd: cost.total };
 }
 
 function sumUsage(byThread: ReadonlyMap<string, LlmCallUsage>): LlmCallUsage | null {
@@ -240,6 +289,7 @@ function sumUsage(byThread: ReadonlyMap<string, LlmCallUsage>): LlmCallUsage | n
     total.output += usage.output;
     total.cacheRead += usage.cacheRead;
     total.totalTokens += usage.totalTokens;
+    total.costUsd += usage.costUsd;
   }
   return total;
 }
@@ -526,8 +576,14 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (!state || state.server !== server) return;
         if (method === "thread/tokenUsage/updated") {
           const totals = codexUsageTotals(p);
-          if (totals) state.usageByThread.set(threadId, totals);
           const usage = codexTokenUsageUpdate(p, state.usageInputTotals.get(threadId));
+          if (totals) {
+            const prior = state.usageByThread.get(threadId);
+            const call =
+              usage && state.billedUsd ? (codexUsageBreakdown(p, "last") ?? usageDelta(totals, prior)) : null;
+            const callCost = call ? priceCodexUsage(call, state.model, state.fast).costUsd : 0;
+            state.usageByThread.set(threadId, { ...totals, costUsd: (prior?.costUsd ?? 0) + callCost });
+          }
           if (!usage) return;
           state.usageInputTotals.set(threadId, usage.totalInputTokens);
           state.modelCalls++;
@@ -538,7 +594,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           });
         }
         if (method === "item/agentMessage/delta" && threadId === state.threadId && typeof p.delta === "string") {
-          if (state.stopped) return;
+          if (state.stopped || state.terminated) return;
           const id = typeof p.itemId === "string" ? p.itemId : "";
           const item = state.publicMessages.get(id) ?? { type: "agentMessage" };
           item.text = (typeof item.text === "string" ? item.text : "") + p.delta;
@@ -549,7 +605,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if ((method === "item/started" || method === "item/completed") && p.item && typeof p.item === "object") {
           const item = p.item as CodexItem;
           if (threadId === state.threadId && item.type === "agentMessage") {
-            if (state.stopped) return;
+            if (state.stopped || state.terminated) return;
             const id = typeof item.id === "string" ? item.id : "";
             state.publicMessages.set(id, {
               ...item,
@@ -644,6 +700,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           const result = await tool.execute(callId, p.arguments ?? {});
           const output = bridgedToolText(result);
           state.responseItems.push({ type: "function_call_output", call_id: callId, output });
+          if (result.terminate && threadId === state.threadId) state.terminated = true;
           if (result.terminate || state.turn.cancel?.aborted)
             setImmediate(() => {
               const requestingTurnId = String(p.turnId ?? "");
@@ -1121,6 +1178,9 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         firstOutputAt: null,
         fallbackInputTokens: countTokens(JSON.stringify({ replay, input })),
         stopped: false,
+        terminated: false,
+        billedUsd: !ephemeral && !oauthConfigured && Boolean(sourceEnv.OPENAI_API_KEY),
+        fast: turn.runtime?.fastMode === true,
       };
       if (turn.tape) {
         await turn.tape({
@@ -1406,7 +1466,14 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     }
     if (cleanupErrors.length) throw cleanupErrors[0];
     if (!turnResult) throw new Error("Codex turn did not produce a result");
-    return { ...turnResult, ...(stoppedByUser ? { stoppedByUser: true as const } : {}) };
+    const usage = sumUsage(state.usageByThread);
+    return {
+      ...turnResult,
+      ...(stoppedByUser ? { stoppedByUser: true as const } : {}),
+      ...(usage
+        ? { cacheUsage: { cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, uncachedInput: usage.input } }
+        : {}),
+    };
   };
 
   const single = oneShotRunner((turn) => runPrompt(turn, false));

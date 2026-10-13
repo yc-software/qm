@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzip } from "node:zlib";
+import { Readable } from "node:stream";
 
 const COMPRESS_MIN_BYTES = 1024;
 
@@ -102,4 +103,14 @@ export function serveFavicon(res: ServerResponse, icon: { svg?: string; emoji: s
     "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
   });
   res.end(faviconSvg(icon));
+}
+
+export function pipeBody(res: ServerResponse, body: Response["body"]): void {
+  if (!body) return void res.end();
+  const stream = Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
+  stream.on("error", () => res.destroy());
+  res.on("close", () => {
+    if (!res.writableFinished) stream.destroy();
+  });
+  stream.pipe(res);
 }

@@ -52,7 +52,7 @@ export const adminOperations = {
   memory: operation("Read a notebook.", "GET", "/memory", scope),
   replace_memory: operation("Replace a notebook after reading it and confirming the full change.", "PUT", "/memory", {
     ...scope,
-    value: Type.Object({ content: string }, { additionalProperties: false }),
+    value: Type.Object({ content: string, revision: string }, { additionalProperties: false }),
   }),
   sessions: operation("List conversations using the returned cursor for the next page.", "GET", "/sessions", {
     ...scope,

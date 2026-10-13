@@ -45,6 +45,9 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
   };
 }
 
+const revisionOf = async (user: string): Promise<string> =>
+  ((await (await fetch(`${webBase}/api/memory`, asUser(user))).json()) as { revision: string }).revision;
+
 test("a signed-in user reads, edits, and re-reads their own memory; identity is the cookie", async () => {
   const empty = await fetch(`${webBase}/api/memory`, asUser("alice"));
   assert.equal(empty.status, 200);
@@ -52,7 +55,10 @@ test("a signed-in user reads, edits, and re-reads their own memory; identity is 
 
   const put = await fetch(
     `${webBase}/api/memory`,
-    asUser("alice", { method: "PUT", body: JSON.stringify({ content: "# Memory\n\n- Calls me Al\n" }) }),
+    asUser("alice", {
+      method: "PUT",
+      body: JSON.stringify({ content: "# Memory\n\n- Calls me Al\n", revision: await revisionOf("alice") }),
+    }),
   );
   assert.equal(put.status, 200);
 
@@ -66,7 +72,10 @@ test("a signed-in user reads, edits, and re-reads their own memory; identity is 
 
   await fetch(
     `${webBase}/api/memory`,
-    asUser("bob", { method: "PUT", body: JSON.stringify({ principalId: "alice", content: "bob was here" }) }),
+    asUser("bob", {
+      method: "PUT",
+      body: JSON.stringify({ principalId: "alice", content: "bob was here", revision: await revisionOf("bob") }),
+    }),
   );
   assert.equal(
     await readMemory(built.workspace, "personal:alice"),
@@ -97,11 +106,14 @@ test("memory routes require a signed-in principal", async () => {
 test("a non-string content is REJECTED, not coerced to a wipe; an empty string still clears", async () => {
   await fetch(
     `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: "# Memory\n\n- keep me\n" }) }),
+    asUser("carol", {
+      method: "PUT",
+      body: JSON.stringify({ content: "# Memory\n\n- keep me\n", revision: await revisionOf("carol") }),
+    }),
   );
   const bad = await fetch(
     `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: 42 }) }),
+    asUser("carol", { method: "PUT", body: JSON.stringify({ content: 42, revision: await revisionOf("carol") }) }),
   );
   assert.equal(bad.status, 400, "non-string content is rejected");
   assert.equal(
@@ -112,7 +124,7 @@ test("a non-string content is REJECTED, not coerced to a wipe; an empty string s
 
   const clear = await fetch(
     `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: "" }) }),
+    asUser("carol", { method: "PUT", body: JSON.stringify({ content: "", revision: await revisionOf("carol") }) }),
   );
   assert.equal(clear.status, 200);
   assert.equal(

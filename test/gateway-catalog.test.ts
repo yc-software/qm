@@ -10,6 +10,7 @@ import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import {
   modelIdReserved,
+  modelProviderAvailabilityFor,
   modelUnavailableReason,
   modelServiceable,
   modelSupportedByHarness,
@@ -103,8 +104,13 @@ test("discovers unknown tool models through the company key without leaking tran
   assert.equal(validateWebTurnModelOptions({ model: id }, null, availability), null);
   assert.match(validateWebTurnModelOptions({ model: id }, [], availability) ?? "", /not enabled/);
 
-  assert.equal(modelSupportedByHarness(id, "pi"), true);
-  for (const harness of ["opencode", "claude", "codex"]) assert.equal(modelSupportedByHarness(id, harness), false);
+  for (const harness of ["pi", "opencode"]) assert.equal(modelSupportedByHarness(id, harness), true);
+  for (const harness of ["claude", "codex"]) assert.equal(modelSupportedByHarness(id, harness), false);
+  assert.deepEqual(
+    modelProviderAvailabilityFor("opencode", { anthropic: false, openai: false, openrouter: false }, availability)
+      .modelIds,
+    new Set([id]),
+  );
   assert.equal(modelServiceable(id, { anthropic: true, openai: true, openrouter: true }), false);
   assert.equal(
     modelServiceable(id, { anthropic: false, openai: false, openrouter: false, modelIds: new Set([id]) }),

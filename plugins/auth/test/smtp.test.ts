@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type Socket } from "node:net";
-import { dotStuff, smtpDeliver, takeReply } from "../src/smtp.ts";
+import { readConfig } from "../src/config.ts";
+import { mailerFor, type Mailer } from "../src/email.ts";
+import { testEnv } from "./helpers.ts";
 
 interface FakeSmtp {
   port: number;
@@ -70,74 +72,91 @@ async function fakeSmtp(
   };
 }
 
-const options = (port: number, over: Record<string, unknown> = {}) => ({
-  host: "127.0.0.1",
-  port,
-  username: "apikey",
-  password: "s3cret",
-  tls: "none" as const,
-  timeoutMs: 4000,
-  ...over,
-});
+function smtpMailer(port: number, env: Record<string, string> = {}): Mailer {
+  return mailerFor(
+    readConfig(
+      testEnv({
+        AUTH_EMAIL_TRANSPORT: "smtp",
+        SMTP_HOST: "127.0.0.1",
+        SMTP_PORT: String(port),
+        SMTP_USERNAME: "apikey",
+        SMTP_PASSWORD: "s3cret",
+        SMTP_TLS: "none",
+        ...env,
+      }),
+    ),
+  )!;
+}
 
-test("takeReply reassembles a multi-line reply and leaves the remainder", () => {
-  const reply = takeReply("250-one\r\n250 two\r\n334 next\r\n");
-  assert.deepEqual(reply, { code: 250, text: "one\ntwo", rest: "334 next\r\n" });
-  assert.equal(takeReply("250-partial\r\n"), null);
-  assert.equal(takeReply("garbage\r\n"), null);
-});
+const message = {
+  to: "admin@example.com",
+  subject: "Se connecter à qm",
+  text: "plain\n.leading dot",
+  html: "<p>rich</p>",
+};
 
-test("dotStuff escapes a leading dot and normalises line endings", () => {
-  assert.equal(dotStuff("a\n.b\nc"), "a\r\n..b\r\nc");
-  assert.equal(dotStuff("a\r\n.\r\nb"), "a\r\n..\r\nb");
-});
+function decodedParts(raw: string): string[] {
+  return [...raw.matchAll(/Content-Transfer-Encoding: (base64|quoted-printable|7bit)\n\n([\s\S]*?)\n(?:--|$)/g)].map(
+    ([, encoding, body]) =>
+      encoding === "base64"
+        ? Buffer.from(body!.replace(/\n/g, ""), "base64").toString("utf8")
+        : body!
+            .replace(/=\n/g, "")
+            .replace(/=([0-9A-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))),
+  );
+}
 
-test("a message is delivered over the full SMTP conversation", async (t) => {
+test("a message is delivered over the full SMTP conversation as multipart/alternative", async (t) => {
   const server = await fakeSmtp();
   t.after(() => server.close());
-  const receipt = await smtpDeliver(options(server.port), {
-    from: "no-reply@example.com",
-    to: "admin@example.com",
-    data: "Subject: hi\r\n\r\n.leading dot survives",
-  });
+  const receipt = await smtpMailer(server.port).send(message);
   assert.match(receipt, /queued as FAKE1/);
   assert.deepEqual(
-    server.transcript.map((line) => line.split(" ")[0]),
-    ["EHLO", "AUTH", "MAIL", "RCPT", "DATA", "QUIT"],
+    server.transcript.map((line) => line.split(" ")[0]).filter((verb) => verb !== "QUIT"),
+    ["EHLO", "AUTH", "MAIL", "RCPT", "DATA"],
   );
-  assert.match(server.transcript[1]!, /^AUTH PLAIN /);
   assert.equal(
     Buffer.from(server.transcript[1]!.slice("AUTH PLAIN ".length), "base64").toString("utf8"),
     "\0apikey\0s3cret",
   );
-  assert.match(server.messages[0]!, /^\.leading dot survives$/m);
+  const raw = server.messages[0]!;
+  assert.match(raw, /^Content-Type: multipart\/alternative;/m);
+  assert.match(raw, /^Auto-Submitted: auto-generated$/m);
+  assert.match(raw, /^Subject: =\?UTF-8\?/m);
+  assert.deepEqual(decodedParts(raw), ["plain\n.leading dot", "<p>rich</p>"]);
+});
+
+test("header injection through the subject or recipient is neutralised", async (t) => {
+  const server = await fakeSmtp();
+  t.after(() => server.close());
+  await smtpMailer(server.port)
+    .send({
+      ...message,
+      to: "admin@example.com\r\nBcc: attacker@evil.test",
+      subject: "Sign in\r\nBcc: attacker@evil.test",
+    })
+    .catch(() => undefined);
+  assert.ok(server.transcript.every((line) => !line.includes("attacker@evil.test") || !line.startsWith("RCPT")));
+  assert.ok(server.messages.every((raw) => !/^Bcc:/im.test(raw)));
 });
 
 test("a rejected recipient and rejected credentials both surface as errors", async (t) => {
   const rejecting = await fakeSmtp({ rejectRecipient: true });
   t.after(() => rejecting.close());
-  await assert.rejects(
-    () =>
-      smtpDeliver(options(rejecting.port), {
-        from: "no-reply@example.com",
-        to: "nobody@example.com",
-        data: "Subject: hi\r\n\r\nbody",
-      }),
-    /SMTP RCPT rejected: 550/,
-  );
+  await assert.rejects(() => smtpMailer(rejecting.port).send(message), /550/);
 
   const unauthorized = await fakeSmtp({ rejectAuth: true });
   t.after(() => unauthorized.close());
-  await assert.rejects(() => smtpDeliver(options(unauthorized.port), null), /SMTP AUTH rejected: 535/);
+  await assert.rejects(() => smtpMailer(unauthorized.port).verify(), /535/);
 });
 
 test("verification authenticates without sending a message", async (t) => {
   const server = await fakeSmtp();
   t.after(() => server.close());
-  assert.equal(await smtpDeliver(options(server.port), null), "authenticated");
+  assert.match(await smtpMailer(server.port).verify(), /authenticated/);
   assert.deepEqual(
-    server.transcript.map((line) => line.split(" ")[0]),
-    ["EHLO", "AUTH", "QUIT"],
+    server.transcript.map((line) => line.split(" ")[0]).filter((verb) => verb !== "QUIT"),
+    ["EHLO", "AUTH"],
   );
   assert.equal(server.messages.length, 0);
 });
@@ -145,9 +164,10 @@ test("verification authenticates without sending a message", async (t) => {
 test("STARTTLS mode refuses a server that does not advertise STARTTLS", async (t) => {
   const server = await fakeSmtp({ offerStartTls: false });
   t.after(() => server.close());
-  await assert.rejects(() => smtpDeliver(options(server.port, { tls: "starttls" }), null), /does not offer STARTTLS/);
+  await assert.rejects(() => smtpMailer(server.port, { SMTP_TLS: "starttls" }).verify());
+  assert.ok(server.transcript.every((line) => !line.startsWith("AUTH")));
 });
 
 test("a connection refusal is reported rather than hanging", async () => {
-  await assert.rejects(() => smtpDeliver(options(1, { timeoutMs: 2000 }), null));
+  await assert.rejects(() => smtpMailer(1).verify());
 });

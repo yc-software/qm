@@ -13,6 +13,7 @@ export interface TaskAckState {
   previous: string[];
   finished: boolean;
   synced?: boolean;
+  accountId?: string;
 }
 
 interface ReactionClient {
@@ -33,12 +34,24 @@ export function createTaskAcknowledgements(
   const change = (
     client: ReactionClient,
     runId: string,
-    next?: { channel: string; ts: string; pick?: () => Promise<string | undefined>; existing?: boolean },
+    next?: {
+      channel: string;
+      ts: string;
+      pick?: () => Promise<string | undefined>;
+      existing?: boolean;
+      accountId?: string;
+    },
   ) => queue(runId, () => apply(client, runId, next));
   async function apply(
     client: ReactionClient,
     runId: string,
-    next?: { channel: string; ts: string; pick?: () => Promise<string | undefined>; existing?: boolean },
+    next?: {
+      channel: string;
+      ts: string;
+      pick?: () => Promise<string | undefined>;
+      existing?: boolean;
+      accountId?: string;
+    },
   ) {
     const started = Date.now();
     while (Date.now() - started < 15_000) {
@@ -60,6 +73,7 @@ export function createTaskAcknowledgements(
             target: next?.ts ?? "",
             previous: [],
             finished: !next,
+            ...(next?.accountId ? { accountId: next.accountId } : {}),
           });
         }
         if (leaseLost) return false;
@@ -124,8 +138,10 @@ export function createTaskAcknowledgements(
     throw new Error("Task acknowledgement lock timed out");
   }
   return {
-    reconcile: async (client: ReactionClient) => {
+    reconcile: async (clientFor: (accountId: string) => ReactionClient | undefined) => {
       for (const [runId, state] of await store.entries()) {
+        const client = clientFor(state.accountId ?? "default");
+        if (!client) continue;
         if (!state.finished && recovery) {
           const run = await recovery.runs.get(runId);
           if (run && isTerminal(run.status) && !runResultDelivery(run)) {
@@ -153,7 +169,8 @@ export function createTaskAcknowledgements(
       channel: string,
       ts: string,
       pick?: () => Promise<string | undefined>,
-    ) => change(client, runId, { channel, ts, pick }),
+      accountId?: string,
+    ) => change(client, runId, { channel, ts, ...(pick ? { pick } : {}), ...(accountId ? { accountId } : {}) }),
     finish: (client: ReactionClient, runId: string) => change(client, runId),
   };
 }

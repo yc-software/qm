@@ -141,8 +141,8 @@ GET first, then PUT the corrected value (`soul` takes `{content}`, `egress` take
 ## Read & fix any scope's memory
 
 ```bash
-GET /v1/admin/memory?scope=<scopeId>          → that scope's whole notebook
-PUT /v1/admin/memory?scope=<scopeId>          {"content":"…full replacement…"}
+GET /v1/admin/memory?scope=<scopeId>          → {content, revision}
+PUT /v1/admin/memory?scope=<scopeId>          {"content":"…full replacement…","revision":"<from GET>"}  (409: changed since read — GET again)
 ```
 
 (For "remember this org-wide" you don't need the admin plane at all — `"scope":"org"`

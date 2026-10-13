@@ -225,13 +225,27 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
     assert.equal(truncated, true, "the view marks a user entry whose model-only context it left out");
     assert.equal((shown.payload as { environment?: unknown }).environment, undefined);
     assert.equal((shown.payload as { memoryRecall?: unknown }).memoryRecall, undefined);
+    assert.equal((shown.payload as { stateSnapshot?: unknown }).stateSnapshot, undefined);
     assert.equal(typeof (oneBody.entry.payload as { environment?: unknown }).environment, "string");
     assert.deepEqual(
       {
         ...oneBody.entry,
-        payload: { ...(oneBody.entry.payload as object), environment: undefined, environmentSnapshot: undefined },
+        payload: {
+          ...(oneBody.entry.payload as object),
+          environment: undefined,
+          environmentSnapshot: undefined,
+          stateSnapshot: undefined,
+        },
       },
-      { ...shown, payload: { ...(shown.payload as object), environment: undefined, environmentSnapshot: undefined } },
+      {
+        ...shown,
+        payload: {
+          ...(shown.payload as object),
+          environment: undefined,
+          environmentSnapshot: undefined,
+          stateSnapshot: undefined,
+        },
+      },
       "the whole entry, exactly as stored, is one fetch away",
     );
 

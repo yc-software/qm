@@ -15,10 +15,12 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/nodemailer": "8.0.2",
     "typescript": "^5.8.2"
   },
   "dependencies": {
     "@sentry/node": "10.75.0",
-    "jose": "^6.2.3"
+    "jose": "^6.2.3",
+    "nodemailer": "10.0.13"
   }
 }

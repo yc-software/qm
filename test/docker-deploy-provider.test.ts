@@ -64,8 +64,11 @@ test("Docker provider migrates running deployments off the legacy shared network
       return {
         code: 0,
         stdout: JSON.stringify({
-          ...(legacyAttached ? { "agent-deploynet": {} } : {}),
-          ...(targetAttached ? { [`${containerName}-net`]: {} } : {}),
+          running: true,
+          networks: {
+            ...(legacyAttached ? { "agent-deploynet": {} } : {}),
+            ...(targetAttached ? { [`${containerName}-net`]: {} } : {}),
+          },
         }),
         stderr: "",
       };
@@ -187,4 +190,22 @@ test("the daemon probe reports a hung daemon as a timeout", async () => {
   const dockerExec: DockerExec = async () => ({ code: -1, stdout: "", stderr: "" });
 
   assert.equal(await dockerDaemonFailure({ dockerExec }), "no response within 10s");
+});
+
+test("an exited container resolves to no endpoint so callers relaunch it", async () => {
+  const dockerExec: DockerExec = async (args) => {
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify({ running: false, networks: {} }), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/exited",
+  });
+  await store.setEndpoint(deployment.id, { host: "127.0.0.1", port: 9201 });
+  const running = (await store.get(deployment.id))!;
+  const provider = createDockerDeployProvider({ dockerExec });
+  assert.equal(await provider.resolveEndpoint!(running, running.versions[0]!), null);
 });

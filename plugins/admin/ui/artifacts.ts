@@ -369,6 +369,7 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
       title: c.orgWide ? "Org-wide" : c.shortName(c.scope),
     });
   let baseline = d.content || "";
+  let revision = typeof d.revision === "string" ? d.revision : "";
   let draft = c.memoryDraft() ?? baseline;
   let saving = false,
     message = draft !== baseline ? "Unsaved changes" : "",
@@ -379,15 +380,21 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
     const submitted = draft;
     draw();
     try {
-      const response = await c.api("PUT", "/api/memory?scope=" + encodeURIComponent(c.scope), { content: submitted });
+      const response = await c.api("PUT", "/api/memory?scope=" + encodeURIComponent(c.scope), {
+        content: submitted,
+        revision,
+      });
       if (response.ok) {
         baseline = submitted;
+        revision = response.data?.revision ?? revision;
         c.setMemoryDraft(draft === submitted ? null : draft);
         message = draft === submitted ? "Saved ✓" : "Unsaved changes";
         tone = draft === submitted ? "ok" : "";
       } else {
-        message =
-          response.status === 403 ? "You don't administer this scope." : response.data?.message || "Save failed.";
+        const conflict =
+          "Memory changed since you opened it. Your draft is still here; copy it, then reload to edit the latest version.";
+        message = response.status === 409 ? conflict : response.data?.message || "Save failed.";
+        if (response.status === 403) message = "You don't administer this scope.";
         tone = "err";
       }
     } catch {

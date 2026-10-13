@@ -32,7 +32,8 @@ import {
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId } from "../types.ts";
-import { swallow } from "../util/errors.ts";
+import { reportFailure, swallow } from "../util/errors.ts";
+import { withTimeout } from "../util/async.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "./pi-harness.ts";
@@ -59,6 +60,7 @@ import {
   seedPriorTurns,
   zeroUsage,
   type PiReplayMessage,
+  withoutStaleSnapshots,
 } from "./replay.ts";
 
 export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
@@ -68,6 +70,7 @@ export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
   binaryPath?: string;
   env?: NodeJS.ProcessEnv;
   turnWallClockMs?: number;
+  interruptAckMs?: number;
   /**
    * Custodian of subscription auth (e.g. a keychain-held CLAUDE_CODE_OAUTH_TOKEN).
    * Resolved fresh per session start; merged over static env so the secret
@@ -236,7 +239,9 @@ export function claudeReplayTranscript(messages: readonly PiReplayMessage[]): st
 }
 
 function promptText(turn: HarnessTurnInput): string {
-  const replay = claudeReplayTranscript(reconstructMessagesFromHistory(turn.history));
+  const replay = claudeReplayTranscript(
+    withoutStaleSnapshots(reconstructMessagesFromHistory(turn.history), turn.history, turn.runId),
+  );
   const prior = turn.history.length
     ? ""
     : seedPriorTurns(turn.priorTurns ?? [])
@@ -316,6 +321,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       DEFAULT_AGENT_MODEL_ID,
     ].find((id): id is string => modelSupportedByHarness(id, "claude"))!;
   const defaultTurnWallClockMs = opts.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
+  const interruptAckMs = opts.interruptAckMs ?? 5_000;
   const active = new Set<Query>();
 
   const runPrompt = async (turn: HarnessTurnInput, toolsEnabled = true): Promise<HarnessTurnResult> => {
@@ -362,9 +368,9 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const definitions = bridged.map((definition) => {
       const schema = fromJSONSchema(definition.parameters as Parameters<typeof fromJSONSchema>[0]) as ZodObject;
       return tool(definition.name, definition.description, schema.shape, async (args, extra) => {
-        const callId = String(
-          (extra as { toolUseId?: string } | undefined)?.toolUseId ?? randomBytes(8).toString("hex"),
-        );
+        const nativeId = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta?.["claudecode/toolUseId"];
+        const callId = typeof nativeId === "string" ? nativeId : randomBytes(8).toString("hex");
+        if (callId !== nativeId) console.error(`claude harness: ${definition.name} call has no native tool_use id`);
         try {
           const result = await definition.execute(callId, args);
           if (result.terminate || ref.pausedOnApproval || ref.silentRequested) setImmediate(terminateProvider);
@@ -395,7 +401,9 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     if (turn.documents?.length && Array.isArray(initial.message.content)) {
       initial.message.content.push(...(preparedDocuments as unknown as typeof initial.message.content));
     }
-    let pendingPrompts = 1;
+    const openCommands = new Set<string>([initial.uuid!]);
+    let liveBackgroundTasks = 0;
+    const idle = () => openCommands.size === 0 && liveBackgroundTasks === 0;
     let stopped = false;
     let interrupted = false;
     let result: SDKResultMessage | null = null;
@@ -509,7 +517,9 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       stopped ||= fromUser;
       interrupted = true;
       queue.close();
-      await sdkQuery.interrupt().catch(() => undefined);
+      await withTimeout(() => sdkQuery.interrupt(), interruptAckMs, "Claude interrupt acknowledgment").catch(
+        (error: unknown) => reportFailure("claude: interrupt acknowledgment", error),
+      );
       controller.abort();
     };
     terminateProvider = () => {
@@ -551,7 +561,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                   message: baseMessage,
                   intake: { text: steer, ts, attachments: prepared?.attachments, acknowledge },
                 });
-                pendingPrompts++;
+                if (message.uuid) openCommands.add(message.uuid);
+                replyCommitted = false;
                 queue.push(message);
                 return false;
               },
@@ -613,13 +624,46 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         swallow("claude: llm request record", error);
       }
     };
+    const deadline =
+      wallMs > 0
+        ? new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              void interrupt(false);
+              reject(new NonRetryableTurnError(`Claude turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
+            }, wallMs);
+          })
+        : null;
+    deadline?.catch(() => undefined);
+    let replyCommitted = false;
+    const finishPrompts = async () => {
+      if (!signalsStopped) {
+        await stopSignals?.();
+        signalsStopped = true;
+      }
+      if (idle()) queue.close();
+    };
     try {
-      await sdkQuery.initializationResult();
-      await appendTape(stripClaudeImageBytes(userMessage(text, turn.images)), true);
-      queue.push(initial);
       const consume = (async () => {
+        await sdkQuery.initializationResult();
+        if (settled || interrupted) return;
+        await appendTape(stripClaudeImageBytes(userMessage(text, turn.images)), true);
+        queue.push(initial);
         for await (const message of sdkQuery) {
           if (settled || interrupted) break;
+          const frame = message as unknown as { type: string; subtype?: string; capabilities?: string[] };
+          if (frame.type === "system" && frame.subtype === "init" && !frame.capabilities?.includes("msg_lifecycle_v1"))
+            throw new NonRetryableTurnError(
+              "This Claude Code executable does not report command completion (msg_lifecycle_v1)",
+            );
+          if (frame.type === "command_lifecycle") {
+            const { command_uuid: uuid, state } = message as unknown as { command_uuid?: string; state?: string };
+            if (uuid && state === "started" && !openCommands.has(uuid)) replyCommitted = false;
+            if (uuid && (state === "completed" || state === "cancelled")) {
+              openCommands.delete(uuid);
+              if (result && idle()) await finishPrompts();
+            }
+            continue;
+          }
           if (message.type === "assistant") {
             const usage = message.message.usage;
             const seen = {
@@ -679,6 +723,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               }
             }
             await appendTape(stripClaudeImageBytes(tapeMessage), false, stamp);
+          }
+          if (message.type === "system" && message.subtype === "background_tasks_changed") {
+            liveBackgroundTasks = message.tasks.filter((task) => !task.ambient).length;
+            if (result && idle()) await finishPrompts();
           }
           if (message.type === "system" && message.subtype === "task_started") {
             const callId = message.tool_use_id ?? message.task_id;
@@ -756,30 +804,16 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
             const finalEntry = await turn.emit({ type: "assistant", payload: { text }, scopeLabel: turn.scopeLabel });
+            replyCommitted = openCommands.size <= 1;
             await tapeReplyCheckpoint(turn, finalEntry);
-          }
+          } else replyCommitted = openCommands.size <= 1;
           streamedText = "";
-          pendingPrompts = Math.max(0, pendingPrompts - 1);
-          if (pendingPrompts > 0) continue;
-          if (!signalsStopped) {
-            await stopSignals?.();
-            signalsStopped = true;
-          }
-          if (pendingPrompts === 0) queue.close();
+          if (!idle()) continue;
+          await finishPrompts();
         }
       })();
       try {
-        await (wallMs > 0
-          ? Promise.race([
-              consume,
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(() => {
-                  void interrupt(false);
-                  reject(new NonRetryableTurnError(`Claude turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
-                }, wallMs);
-              }),
-            ])
-          : consume);
+        await (deadline ? Promise.race([consume, deadline]) : consume);
       } catch (error) {
         if ((!interrupted && !controller.signal.aborted) || error instanceof NonRetryableTurnError) throw error;
       }
@@ -803,7 +837,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           modelCalls: Math.max(1, callUsage.size),
         };
       };
-      if (interrupted && (pendingPrompts > 0 || finalResult?.subtype !== "success")) return stoppedPartial();
+      if (interrupted && (!replyCommitted || finalResult?.subtype !== "success")) return stoppedPartial();
       if (!finalResult) {
         if (controller.signal.aborted) return stoppedPartial();
         throw new Error("Claude Agent SDK ended without a result");
@@ -873,16 +907,31 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         }
       }
       queue.close();
-      if (!signalsStopped) await stopSignals?.();
-      turn.cancel?.removeEventListener("abort", onCancel);
-      for (const [taskId, task] of taskStates) {
-        if (task.status === "pending" || task.status === "in_progress") {
-          await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id);
+      try {
+        if (!signalsStopped && stopSignals)
+          await withTimeout(stopSignals, 5_000, "Claude signal poll teardown").catch((error: unknown) =>
+            swallow("claude: signal poll teardown", error),
+          );
+        turn.cancel?.removeEventListener("abort", onCancel);
+        for (const [taskId, task] of taskStates) {
+          if (task.status !== "pending" && task.status !== "in_progress") continue;
+          await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id).catch(
+            (error: unknown) => swallow("claude: close open task", error),
+          );
+        }
+      } finally {
+        active.delete(sdkQuery);
+        try {
+          sdkQuery.close();
+        } catch (error) {
+          reportFailure("claude: close query", error);
+        }
+        try {
+          rmSync(jail, { recursive: true, force: true });
+        } catch (error) {
+          reportFailure("claude: remove control jail", error);
         }
       }
-      active.delete(sdkQuery);
-      sdkQuery.close();
-      rmSync(jail, { recursive: true, force: true });
     }
   };
 

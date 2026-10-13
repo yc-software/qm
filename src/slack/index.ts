@@ -186,6 +186,7 @@ export async function startSlackPlugin(
   };
   const app = new App({
     token: BOT_TOKEN,
+    deferInitialization: true,
     ignoreSelf: false,
     receiver: receiver(),
     logLevel: parseLogLevel(cfg.logLevel),
@@ -231,6 +232,7 @@ export async function startSlackPlugin(
     core,
     ids,
     coreSingleton: CORE_SINGLETON && !cfg.externalAccess,
+    accountId: ACCOUNT_LABEL,
     internalOverrides,
     ...(cfg.userSnapshotTtlMs ? { userSnapshotTtlMs: cfg.userSnapshotTtlMs } : {}),
     ...(cfg.channelMembersTtlMs ? { channelMembersTtlMs: cfg.channelMembersTtlMs } : {}),
@@ -457,6 +459,7 @@ export async function startSlackPlugin(
 
   let auth: AuthTestResponse;
   try {
+    await app.init();
     auth = await app.client.auth.test();
     ids.ownTeamId = auth.team_id ?? "";
     ids.botUserId = auth.user_id ?? "";

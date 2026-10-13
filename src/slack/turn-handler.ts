@@ -364,6 +364,7 @@ export function createTurnHandler(deps: {
             ? () =>
                 ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), { channel: inc.channel, ts: inc.ts })
             : undefined,
+          deps.accountId,
         )
         .catch(swallowAs("slack: task ack move", undefined));
     };
@@ -389,7 +390,7 @@ export function createTurnHandler(deps: {
       (ack ??= createAckPresenter({
         taskManaged,
         postAck: async (text) => {
-          const rendered = toSlackMrkdwn(text);
+          const rendered = toSlackMrkdwn(text, deps.accountId);
           if (await taskList?.addLead(rendered)) return;
           const ts = await postReply(rendered, undefined, statusKey());
           if (ts) {
@@ -697,7 +698,7 @@ export function createTurnHandler(deps: {
       const { text: replyBody, reactions } = cleanAgentReplyForSlack(result.reply ?? "");
       const hasNonText = !!(result.attachments?.length || reactions.length || result.pendingApprovals?.length);
       let reply = result.stopped ? "Stopped." : "(no response)";
-      if (replyBody) reply = toSlackMrkdwn(replyBody);
+      if (replyBody) reply = toSlackMrkdwn(replyBody, deps.accountId);
       else if (hasNonText) reply = "";
       const postText = reply;
       const tDeliverStart = performance.now();

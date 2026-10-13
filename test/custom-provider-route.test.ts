@@ -147,3 +147,67 @@ test("bad specs are refused with a reason", async () => {
     await srv.close();
   }
 });
+
+test("a failed key check says whether the endpoint, the key or the listing was the problem", async () => {
+  for (const [fetchImpl, error, message] of [
+    [
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      "endpoint_unreachable",
+      /^Couldn't reach https:\/\/llm\.acme\.internal\/v1\/models\./,
+    ],
+    [async () => new Response(null, { status: 403 }), "invalid_api_key", /rejected this API key\.$/],
+    [async () => new Response(null, { status: 404 }), "validation_failed", /answered HTTP 404/],
+  ] as const) {
+    const srv = start(fetchImpl as typeof fetch);
+    try {
+      const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify(BODY),
+      });
+      assert.equal(put.status, 400);
+      const body = (await put.json()) as { error: string; message: string };
+      assert.equal(body.error, error);
+      assert.match(body.message, message);
+      assert.doesNotMatch(body.message, /"validate": false/);
+    } finally {
+      await srv.close();
+    }
+  }
+});
+
+test("creating a provider refuses an existing id without touching it, while edits still replace it", async () => {
+  const srv = start();
+  try {
+    const create = (body: Record<string, unknown>) =>
+      fetch(`${srv.base}/v1/admin/custom-providers`, { method: "POST", headers: ADMIN, body: JSON.stringify(body) });
+    assert.equal((await create({ ...BODY, id: "acme-gateway" })).status, 200);
+    const duplicate = await create({
+      ...BODY,
+      id: "acme-gateway",
+      name: "Impostor",
+      baseUrl: "https://evil.example/v1",
+    });
+    assert.equal(duplicate.status, 409);
+    assert.equal(((await duplicate.json()) as { error: string }).error, "provider_exists");
+    const list = (await (await fetch(`${srv.base}/v1/admin/custom-providers`, { headers: ADMIN })).json()) as {
+      providers: Array<{ id: string; name: string; baseUrl: string }>;
+    };
+    assert.deepEqual(
+      list.providers.map((p) => [p.id, p.name, p.baseUrl]),
+      [["acme-gateway", "Acme Gateway", "https://llm.acme.internal/v1"]],
+    );
+    const edit = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ ...BODY, name: "Acme Renamed" }),
+    });
+    assert.equal(edit.status, 200);
+    await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, { method: "DELETE", headers: ADMIN });
+    assert.equal((await create({ ...BODY, id: "acme-gateway" })).status, 200, "a removed id can be added again");
+  } finally {
+    await srv.close();
+  }
+});

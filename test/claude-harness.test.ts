@@ -10,6 +10,35 @@ import {
   stripClaudeImageBytes,
 } from "../src/harness/claude-harness.ts";
 import { zeroUsage, type PiReplayMessage } from "../src/harness/replay.ts";
+import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+
+test("the Claude SDK hands a tools/call tool_use id to handlers only under _meta", async () => {
+  let extra: unknown;
+  const server = createSdkMcpServer({
+    name: "qm",
+    version: "1",
+    tools: [
+      tool("probe", "probe", {}, async (_args, received) => {
+        extra = received;
+        return { content: [] };
+      }),
+    ],
+  });
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  await server.instance.connect(serverSide);
+  const client = new Client({ name: "probe", version: "1" });
+  await client.connect(clientSide);
+  await client.request(
+    { method: "tools/call", params: { name: "probe", arguments: {}, _meta: { "claudecode/toolUseId": "toolu_1" } } },
+    CallToolResultSchema,
+  );
+  await client.close();
+  assert.equal((extra as { toolUseId?: unknown }).toolUseId, undefined);
+  assert.equal((extra as { _meta?: Record<string, unknown> })._meta?.["claudecode/toolUseId"], "toolu_1");
+});
 
 test("Claude replay preserves paired tool calls and results as untrusted history", () => {
   const messages: PiReplayMessage[] = [

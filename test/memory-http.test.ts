@@ -44,7 +44,7 @@ test("a user reads and curates their OWN personal memory (personal-scoped, bound
     const put = await fetch(`${s.base}/v1/memory`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1", content: "# Memory\n\n- I work in PT\n" }),
+      body: JSON.stringify({ principalId: "U1", revision: seeded.revision, content: "# Memory\n\n- I work in PT\n" }),
     });
     assert.equal(put.status, 200);
     assert.equal(
@@ -116,16 +116,29 @@ test("revisioned saves reject stale editors without losing a newer capture", asy
   }
 });
 
-test("an empty revision falls back to the backward-compatible save path", async () => {
+test("a stale editor must send its read revision and cannot overwrite a newer save", async () => {
   const s = start();
   try {
-    const saved = await fetch(`${s.base}/v1/memory`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1", revision: "", content: "# Memory\n\n- first edit\n" }),
-    });
-    assert.equal(saved.status, 200);
-    assert.match(await s.built.memory.read(scopeId("personal", "U1")), /first edit/);
+    const put = (body: object) =>
+      fetch(`${s.base}/v1/memory`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ principalId: "U1", ...body }),
+      });
+    const r1 = (await json(await fetch(`${s.base}/v1/memory?principalId=U1`))).revision;
+    const byB = await put({ revision: r1, content: "# Memory\n\n- B's edit\n" });
+    assert.equal(byB.status, 200);
+    const r2 = (await json(byB)).revision;
+
+    assert.equal((await put({ content: "# Memory\n\n- A's stale edit\n" })).status, 428);
+    assert.equal((await put({ revision: "", content: "# Memory\n\n- A's stale edit\n" })).status, 409);
+    const conflict = await put({ revision: r1, content: "# Memory\n\n- A's stale edit\n" });
+    assert.equal(conflict.status, 409);
+    assert.match((await json(conflict)).content, /B's edit/);
+    assert.equal(await s.built.memory.read(scopeId("personal", "U1")), "# Memory\n\n- B's edit\n");
+
+    assert.equal((await put({ revision: r2, content: "# Memory\n\n- A's merged edit\n" })).status, 200);
+    assert.equal(await s.built.memory.read(scopeId("personal", "U1")), "# Memory\n\n- A's merged edit\n");
   } finally {
     await s.close();
   }
@@ -143,22 +156,24 @@ test("an admin views and curates any scope's memory; the write replaces the note
     assert.equal(d.scopeId, scope);
     assert.match(d.content, /standup is at 10am/);
 
-    const put = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, {
-      method: "PUT",
-      headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-      body: JSON.stringify({ content: "# Memory\n\n- Standup moved to 9:30\n" }),
-    });
+    const adminPut = (body: object) =>
+      fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, {
+        method: "PUT",
+        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await adminPut({ content: "# Memory\n\n- Standup moved to 9:30\n" })).status, 428);
+    const put = await adminPut({ content: "# Memory\n\n- Standup moved to 9:30\n", revision: d.revision });
     assert.equal(put.status, 200);
+    const stale = await adminPut({ content: "# Memory\n\n- stale admin edit\n", revision: d.revision });
+    assert.equal(stale.status, 409);
+    assert.doesNotMatch(await stale.text(), /Standup moved/);
     const after = await json(
       await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, { headers: ALICE_ADMIN }),
     );
     assert.equal(after.content, "# Memory\n\n- Standup moved to 9:30\n");
 
-    await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, {
-      method: "PUT",
-      headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-      body: JSON.stringify({ content: "   \n" }),
-    });
+    await adminPut({ content: "   \n", revision: after.revision });
     assert.equal(
       (
         await json(

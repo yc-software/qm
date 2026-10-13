@@ -27,6 +27,13 @@ export function stripMention(text: string, botUserId: string): string {
 
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
+const BOLD_SPAN = new RegExp(`${BOLD_SENTINEL}([^${BOLD_SENTINEL}\n]+)${BOLD_SENTINEL}`, "g");
+const WORD_NEIGHBOR = /[\p{L}\p{N}\p{Extended_Pictographic}]/u;
+const boundaryPad = (ch: string | undefined): string => (ch && WORD_NEIGHBOR.test(ch) ? "\u200b" : "");
+
+function escapeSlackText(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
 
 const MASS_MENTION = /<!(here|channel|everyone)(?:\|[^>]*)?>/gi;
 export function neutralizeMassMentions(text: string): string {
@@ -35,19 +42,19 @@ export function neutralizeMassMentions(text: string): string {
 
 const RESERVED_MENTION_NAMES = new Set(["here", "channel", "everyone"]);
 
-let mentionIdByName: ReadonlyMap<string, string> = new Map();
-let mentionNameById: ReadonlyMap<string, string> = new Map();
-export function setMentionIndex(index: ReadonlyMap<string, string>): void {
-  mentionIdByName = index;
+const DEFAULT_ACCOUNT = "default";
+const mentionIndexes = new Map<string, { byName: ReadonlyMap<string, string>; byId: ReadonlyMap<string, string> }>();
+export function setMentionIndex(accountId: string, index: ReadonlyMap<string, string>): void {
   const byId = new Map<string, string>();
   for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
-  mentionNameById = byId;
+  mentionIndexes.set(accountId, { byName: index, byId });
 }
 const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^>]*))?>/gi;
 
 function neutralizedMention(kind: string, label: string | undefined): string {
   const name = label?.trim().replace(/^@/, "") || "";
-  if (kind.startsWith("@")) return `@${name || mentionNameById.get(kind.slice(1)) || kind.slice(1)}`;
+  if (kind.startsWith("@"))
+    return `@${name || mentionIndexes.get(DEFAULT_ACCOUNT)?.byId.get(kind.slice(1)) || kind.slice(1)}`;
   const command = kind.slice(1);
   if (command.toLowerCase().startsWith("subteam^")) return `@${name || command.slice("subteam^".length)}`;
   return `@\u200b${command.toLowerCase()}`;
@@ -74,8 +81,9 @@ const PLAIN_MENTION = new RegExp(
   "gu",
 );
 
-function armUserMentions(text: string, wrap: (armed: string) => string = (s) => s): string {
-  if (!mentionIdByName.size || !text.includes("@")) return text;
+function armUserMentions(text: string, accountId: string, wrap: (armed: string) => string): string {
+  const mentionIdByName = mentionIndexes.get(accountId)?.byName;
+  if (!mentionIdByName?.size || !text.includes("@")) return text;
   return text.replace(PLAIN_MENTION, (match, name: string) => {
     const words = name.split(" ");
     for (let n = words.length; n >= 1; n--) {
@@ -132,18 +140,19 @@ function stashFencedBlocks(text: string, keep: (s: string) => string): string {
   return out + text.slice(i);
 }
 
-export function toSlackMrkdwn(md: string): string {
+export function toSlackMrkdwn(md: string, accountId = DEFAULT_ACCOUNT): string {
   if (!md) return md;
   const stash: string[] = [];
   const keep = (s: string): string => `${STASH_OPEN}${stash.push(s) - 1}${STASH_OPEN}`;
+  const keepEscaped = (s: string): string => keep(escapeSlackText(s));
 
   let text = md.replace(/\r\n/g, "\n");
 
-  text = stashFencedBlocks(text, keep);
-  text = text.replace(/`[^`\n]+`/g, keep);
+  text = stashFencedBlocks(text, keepEscaped);
+  text = text.replace(/`[^`\n]+`/g, keepEscaped);
   text = neutralizeMassMentions(text);
 
-  text = reformatTables(text, keep);
+  text = reformatTables(text, keepEscaped);
 
   text = text.replace(/!?\[([^\]]*)\]\(\s*<?([^()\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_m, label, url) =>
     keep(label ? `<${url}|${label}>` : `<${url}>`),
@@ -155,10 +164,19 @@ export function toSlackMrkdwn(md: string): string {
     return keep(`<${kept}>`) + url.slice(kept.length);
   });
 
-  text = armUserMentions(text, keep);
+  text = armUserMentions(text, accountId, keep);
+
+  text = text
+    .split("\n")
+    .map((line) => {
+      const marker = /^(?:[ \t]*>)+/.exec(line)?.[0] ?? "";
+      return marker + escapeSlackText(line.slice(marker.length));
+    })
+    .join("\n");
 
   text = text.replace(/^[ \t]*([-*_])\1{2,}[ \t]*$/gm, "──────────");
 
+  text = text.replace(/\*\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*\*/g, `${BOLD_SENTINEL}_$1_${BOLD_SENTINEL}`);
   text = text.replace(/\*\*(?!\s)([^\n]+?)(?<!\s)\*\*/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
   text = text.replace(/__(?!\s)([^\n]+?)(?<!\s)__/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
 
@@ -171,8 +189,15 @@ export function toSlackMrkdwn(md: string): string {
 
   text = text.replace(/^([ \t]*)[-*+][ \t]+/gm, "$1• ");
 
-  text = text.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![*\w])/g, "$1_$2_");
+  text = text.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![*\w])/g, (_m, pre: string, inner: string) =>
+    /^_.*_$/.test(inner) ? `${pre}${inner}` : `${pre}_${inner}_`,
+  );
 
+  text = text.replace(BOLD_SPAN, (span, inner: string, offset: number, whole: string) => {
+    const before = Array.from(whole.slice(Math.max(0, offset - 2), offset)).pop();
+    const after = Array.from(whole.slice(offset + span.length, offset + span.length + 2))[0];
+    return `${boundaryPad(before)}*${inner}*${boundaryPad(after)}`;
+  });
   text = text.replaceAll(BOLD_SENTINEL, "*");
   text = text.replace(new RegExp(`${STASH_OPEN}(\\d+)${STASH_OPEN}`, "g"), (_m, i) => stash[Number(i)] ?? "");
 

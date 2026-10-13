@@ -29,6 +29,7 @@ export interface Run {
   turnUserSeq: number | null;
   dedupKey: string | null;
   attempts: number;
+  handbacks: number;
   errorAttempts: number;
   maxAttempts: number;
   leaseToken: string | null;
@@ -91,7 +92,10 @@ export interface RunStore {
     threadRefs: readonly string[],
     opts?: { excludePrivateMessages?: boolean },
   ): Promise<Map<string, Run>>;
-  latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
+  latestForThread(
+    threadRef: string,
+    opts?: { excludePrivateMessages?: boolean; webHumanOnly?: boolean },
+  ): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
@@ -133,8 +137,15 @@ export function releasesDedupKey(result: TurnResult): boolean {
   return result.refusalKind === "session_busy";
 }
 
-export function errorParks(run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts">, maxClaims?: number): boolean {
-  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && run.attempts >= maxClaims);
+export function crashClaims(run: Pick<Run, "attempts" | "handbacks">): number {
+  return run.attempts - run.handbacks;
+}
+
+export function errorParks(
+  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "handbacks">,
+  maxClaims?: number,
+): boolean {
+  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && crashClaims(run) >= maxClaims);
 }
 
 export function leaseLapsed(run: Pick<Run, "status" | "leaseExpiresAt">, asOf: number): boolean {

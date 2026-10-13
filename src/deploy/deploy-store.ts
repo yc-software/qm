@@ -115,6 +115,8 @@ export interface DeployStore {
   setPublic(id: string, isPublic: boolean): Promise<void>;
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
   setAppliedVersion(id: string, version: number): Promise<void>;
+  markRunning(id: string, version: number, endpoint: DeployEndpoint): Promise<void>;
+  markStopped(id: string, status: Exclude<DeploymentStatus, "running">): Promise<void>;
   touch(id: string, at: number): Promise<void>;
   versionOf(id: string, version: number): Promise<DeploymentVersion | null>;
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
@@ -266,6 +268,21 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     return at == null ? d : { ...d, lastAccessAt: at };
   }
 
+  async function mutate(id: string, edit: (d: Deployment) => Deployment): Promise<Deployment | null> {
+    if (backingMap.update) return backingMap.update(id, (d) => edit(structuredClone(d)));
+    const d = await backingMap.get(id);
+    if (!d) return null;
+    const next = edit(structuredClone(d));
+    await backingMap.put(id, next);
+    return next;
+  }
+
+  const versionOrThrow = (d: Deployment, version: number): DeploymentVersion => {
+    const v = d.versions.find((x) => x.version === version);
+    if (!v) throw new Error(`no such version ${version}`);
+    return v;
+  };
+
   async function putNamed(d: Deployment): Promise<void> {
     try {
       await backingMap.put(d.id, d);
@@ -300,6 +317,14 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       ...(commit ? { commit } : {}),
       ...(parentCommit ? { parentCommit } : {}),
     };
+  }
+
+  async function appendVersion(id: string, v: DeploymentVersion): Promise<void> {
+    const saved = await mutate(id, (cur) => {
+      if (cur.versions.length + 1 !== v.version) throw new Error(`deployment ${id} changed while adding a version`);
+      return { ...cur, versions: [...cur.versions, v], currentVersion: v.version };
+    });
+    if (!saved) throw new Error(`unknown deployment: ${id}`);
   }
 
   async function updateVersionRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
@@ -339,9 +364,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       const version = d.versions.length + 1;
       const parentCommit = currentVersionOf(d)?.commit;
       const v = await makeVersion(id, version, input, parentCommit);
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await appendVersion(id, v);
       await updateVersionRef(id, v);
       return v;
     },
@@ -361,9 +384,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
         commit,
         ...(current?.commit ? { parentCommit: current.commit } : {}),
       };
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await appendVersion(id, v);
       await updateVersionRef(id, v);
       return v;
     },
@@ -382,56 +403,52 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       return ds.map((d) => withAccess(d, accessAt.get(d.id)));
     },
     async setCurrentVersion(id, version) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await mutate(id, (d) => {
+        versionOrThrow(d, version);
+        return { ...d, currentVersion: version };
+      });
     },
     async setVersionImage(id, version, image) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      v.image = image;
-      await backingMap.put(id, d);
+      await mutate(id, (d) => {
+        versionOrThrow(d, version).image = image;
+        return d;
+      });
     },
     async setStatus(id, status) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.status = status;
-        await backingMap.put(id, d);
-      }
+      await mutate(id, (d) => ({ ...d, status }));
     },
     async setEndpoint(id, endpoint) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.endpoint = endpoint;
-        await backingMap.put(id, d);
-      }
+      await mutate(id, (d) => ({ ...d, endpoint }));
+    },
+    async markRunning(id, version, endpoint) {
+      if (!endpoint.host) throw new Error(`deployment ${id} has no endpoint host`);
+      let applied: DeploymentVersion | undefined;
+      await mutate(id, (d) => {
+        applied = versionOrThrow(d, version);
+        return { ...d, status: "running", endpoint, appliedVersion: version };
+      });
+      if (applied) await updateAppliedRef(id, applied);
+    },
+    async markStopped(id, status) {
+      await mutate(id, (d) => ({ ...d, status, endpoint: null }));
     },
     async setName(id, name) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.name = name;
-        await putNamed(d);
+      try {
+        await mutate(id, (d) => ({ ...d, name }));
+      } catch (e) {
+        if (isNameConflict(e)) throw new Error(`deployment name taken: ${name}`, { cause: e });
+        throw e;
       }
     },
     async setOwnerScope(id, ownerScopeId) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.ownerScopeId = ownerScopeId;
-        await backingMap.put(id, d);
-      }
+      await mutate(id, (d) => ({ ...d, ownerScopeId }));
     },
     async setDisplayName(id, displayName) {
-      const d = await backingMap.get(id);
-      if (d) {
+      await mutate(id, (d) => {
         if (displayName) d.displayName = displayName;
         else delete d.displayName;
-        await backingMap.put(id, d);
-      }
+        return d;
+      });
     },
     async setAlwaysOn(id, alwaysOn) {
       await backingMap.merge(id, { alwaysOn } as Partial<Deployment>);
@@ -443,20 +460,15 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       await backingMap.merge(id, { public: isPublic ? true : undefined });
     },
     async setDefaultAudience(id, snapshot) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.defaultAudience = snapshot;
-        await backingMap.put(id, d);
-      }
+      await mutate(id, (d) => ({ ...d, defaultAudience: snapshot }));
     },
     async setAppliedVersion(id, version) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.appliedVersion = version;
-      await backingMap.put(id, d);
-      await updateAppliedRef(id, v);
+      let applied: DeploymentVersion | undefined;
+      await mutate(id, (d) => {
+        applied = versionOrThrow(d, version);
+        return { ...d, appliedVersion: version };
+      });
+      if (applied) await updateAppliedRef(id, applied);
     },
     async touch(id, at) {
       const prev = lastTouch.get(id);

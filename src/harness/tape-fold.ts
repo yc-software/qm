@@ -31,7 +31,7 @@ export function filterTapeForAudience(
           content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
           isError: true,
           timestamp: r.createdAt,
-          ...(msg.interrupted === true ? { interrupted: true } : {}),
+          interrupted: true,
         },
       });
     }
@@ -177,7 +177,36 @@ function contextEvent(row: TapeRecord): TapeEvent | null {
   return null;
 }
 
-type Foldable = { out: unknown[]; boundaries: Array<{ pos: number; entrySeq: number }> };
+type Foldable = {
+  out: unknown[];
+  boundaries: Array<{ pos: number; entrySeq: number }>;
+  summaryCovers?: number;
+};
+
+function openCallIds(messages: readonly unknown[]): Set<string> {
+  const open = new Set<string>();
+  for (const m of messages) trackCalls(open, m);
+  return open;
+}
+
+function onlyCalls(m: unknown): boolean {
+  const msg = m as { role?: string; content?: unknown };
+  if (msg?.role !== "assistant" || !Array.isArray(msg.content)) return false;
+  return (
+    assistantDroppedAtReplay(m) ||
+    msg.content.every((b: { type?: string }) => b?.type === "toolCall" || b?.type === "thinking")
+  );
+}
+
+function trackCalls(open: Set<string>, m: unknown): void {
+  const msg = m as { role?: string; content?: unknown; toolCallId?: unknown };
+  if (msg?.role === "toolResult" && typeof msg.toolCallId === "string") open.delete(msg.toolCallId);
+  if (msg?.role !== "assistant" || !Array.isArray(msg.content) || assistantDroppedAtReplay(m)) return;
+  for (const block of msg.content) {
+    const b = block as { type?: string; id?: unknown };
+    if (b?.type === "toolCall" && typeof b.id === "string") open.add(b.id);
+  }
+}
 
 export function assistantDroppedAtReplay(m: unknown): boolean {
   const msg = m as { role?: string; stopReason?: string };
@@ -209,6 +238,7 @@ function healDanglingCalls(out: unknown[], at: number): void {
       content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
       isError: true,
       timestamp: at,
+      interrupted: true,
     });
   }
 }
@@ -228,13 +258,13 @@ function interruptedToolResult(message: unknown): string | undefined {
     : undefined;
 }
 
-function realToolResults(rows: readonly TapeRecord[]): Map<string, unknown> {
-  const results = new Map<string, unknown>();
+function realToolResults(rows: readonly TapeRecord[]): Map<string, TapeRecord> {
+  const results = new Map<string, TapeRecord>();
   for (const row of rows) {
     if (row.kind !== "message") continue;
     const msg = row.payload as { role?: string; interrupted?: unknown; toolCallId?: unknown } | null;
     if (msg?.role === "toolResult" && msg.interrupted !== true && typeof msg.toolCallId === "string")
-      results.set(msg.toolCallId, row.payload);
+      results.set(msg.toolCallId, row);
   }
   return results;
 }
@@ -249,27 +279,56 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
   const f: Foldable = { out: [], boundaries: [] };
   const realResults = realToolResults(rows);
   const superseded = new Set<string>();
+  let open = new Set<string>();
+  let maxSeq = -1;
+  let unseqd = false;
+  const settle = (entrySeq: number | undefined, message?: unknown): void => {
+    if (entrySeq === undefined) {
+      if (message !== undefined && !onlyCalls(message)) unseqd = true;
+      return;
+    }
+    maxSeq = Math.max(maxSeq, entrySeq);
+    if (!open.size && !unseqd) f.boundaries.push({ pos: f.out.length, entrySeq: maxSeq });
+  };
+  const trust = (entrySeq: number | undefined): void => {
+    unseqd = entrySeq === undefined;
+    if (entrySeq !== undefined) maxSeq = Math.max(maxSeq, entrySeq);
+  };
   for (const row of rows) {
     if (row.kind === "annotation") {
-      if ((row.payload as { turnEnd?: unknown } | null)?.turnEnd === true && row.entrySeq !== undefined) {
-        f.boundaries.push({ pos: f.out.length, entrySeq: row.entrySeq });
-      }
+      const bound = row.payload as { turnEnd?: unknown; subturnEnd?: unknown } | null;
+      if (bound?.turnEnd === true && row.entrySeq !== undefined) {
+        trust(row.entrySeq);
+        f.boundaries.push({ pos: f.out.length, entrySeq: maxSeq });
+      } else if (bound?.subturnEnd === true) settle(row.entrySeq);
       continue;
     }
     const ev = contextEvent(row);
     if (ev) {
       if (ev.event === "legacy_import") {
         f.out = healLegacyAssistantVoice(ev.messages ?? []);
+        open = openCallIds(f.out);
+        f.summaryCovers = undefined;
+        maxSeq = -1;
+        trust(row.coversEntrySeq);
         f.boundaries = row.coversEntrySeq !== undefined ? [{ pos: f.out.length, entrySeq: row.coversEntrySeq }] : [];
       } else if (ev.event === "legacy_patch") {
         f.out.push(...healLegacyAssistantVoice(ev.messages ?? []));
-        if (row.coversEntrySeq !== undefined) f.boundaries.push({ pos: f.out.length, entrySeq: row.coversEntrySeq });
+        open = openCallIds(f.out);
+        trust(row.coversEntrySeq);
+        if (row.coversEntrySeq !== undefined) f.boundaries.push({ pos: f.out.length, entrySeq: maxSeq });
       } else if (ev.event === "compaction") {
         const cut =
           row.coversEntrySeq !== undefined
             ? [...f.boundaries].reverse().find((b) => b.entrySeq <= row.coversEntrySeq!)
             : undefined;
-        const kept = withoutThinking(cut ? f.out.slice(cut.pos) : f.out);
+        const foldsPrior =
+          !cut &&
+          f.summaryCovers !== undefined &&
+          row.coversEntrySeq !== undefined &&
+          row.coversEntrySeq >= f.summaryCovers;
+        const from = cut?.pos ?? (foldsPrior ? 1 : 0);
+        const kept = withoutThinking(f.out.slice(from));
         f.out = [
           {
             role: "user",
@@ -278,32 +337,39 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
           },
           ...kept,
         ];
-        f.boundaries = cut
-          ? f.boundaries
-              .filter((b) => b.pos >= cut.pos)
-              .map((b) => ({ pos: b.pos - cut.pos + 1, entrySeq: b.entrySeq }))
-          : f.boundaries.map((b) => ({ pos: b.pos + 1, entrySeq: b.entrySeq }));
+        f.boundaries = f.boundaries
+          .filter((b) => b.pos >= from)
+          .map((b) => ({ pos: b.pos - from + 1, entrySeq: b.entrySeq }));
+        f.summaryCovers = row.coversEntrySeq;
+        open = openCallIds(f.out);
       } else {
         healDanglingCalls(f.out, row.createdAt);
+        open = openCallIds(f.out);
       }
       continue;
     }
     if (row.kind !== "message" || row.payload == null) continue;
     const msg = row.payload as { role?: string; toolCallId?: unknown };
     const interruptedCall = interruptedToolResult(row.payload);
+    let entrySeq = row.entrySeq;
     if (interruptedCall === undefined) {
       if (msg.role === "toolResult" && typeof msg.toolCallId === "string" && superseded.has(msg.toolCallId)) continue;
       f.out.push(row.payload);
     } else if (realResults.has(interruptedCall)) {
+      const real = realResults.get(interruptedCall)!;
       superseded.add(interruptedCall);
-      f.out.push(realResults.get(interruptedCall));
+      f.out.push(real.payload);
+      entrySeq = real.entrySeq;
     } else {
       f.out.push({
         ...(row.payload as Record<string, unknown>),
         content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
         isError: true,
+        interrupted: true,
       });
     }
+    trackCalls(open, f.out[f.out.length - 1]);
+    settle(entrySeq, f.out[f.out.length - 1]);
   }
   return f.out;
 }

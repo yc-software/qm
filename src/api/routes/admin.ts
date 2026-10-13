@@ -52,7 +52,12 @@ import {
   managedSlackRequest,
 } from "./admin/slack-installation.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
-import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
+import {
+  createCustomProvider,
+  deleteCustomProvider,
+  getCustomProviders,
+  putCustomProvider,
+} from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
@@ -96,6 +101,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "PUT", path: "/v1/admin/model-registry/:model", auth: "either", handle: modelRegistry },
   { method: "DELETE", path: "/v1/admin/model-registry/:model", auth: "either", handle: modelRegistry },
   { method: "GET", path: "/v1/admin/custom-providers", auth: "either", handle: getCustomProviders },
+  { method: "POST", path: "/v1/admin/custom-providers", auth: "either", handle: createCustomProvider },
   { method: "PUT", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: putCustomProvider },
   { method: "DELETE", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: deleteCustomProvider },
   {

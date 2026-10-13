@@ -6,6 +6,7 @@ import {
   type BridgedTool,
   type SteerIntake,
 } from "./harness-shared.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
@@ -80,6 +81,8 @@ import {
   contextTokenBudgetForModel,
   CODEX_SUBSCRIPTION_PROVIDER,
   codexProviderModelId,
+  FAST_COST_MULTIPLIER,
+  scaleCost,
 } from "../model/pi-models.ts";
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
 import {
@@ -110,9 +113,10 @@ import {
   zeroUsage,
   type PiReplayMessage,
   type SeededMessage,
+  withoutStaleSnapshots,
 } from "./replay.ts";
 import { assistantDroppedAtReplay, ELIDED_IMAGE_TEXT, planTapeSeed, withResumedToolResult } from "./tape-fold.ts";
-import { estimateHistoryTokens, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { estimateHistoryTokens } from "./context-compaction.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
@@ -685,8 +689,8 @@ interface PiAgentWithPayloadHook {
 }
 
 export function endsAtRecordedToolResult(messages: readonly unknown[]): boolean {
-  const last = messages.at(-1) as { role?: unknown; content?: unknown } | undefined;
-  return last?.role === "toolResult" && textFromContent(last.content) !== INTERRUPTED_TOOL_RESULT;
+  const last = messages.at(-1) as { role?: unknown; interrupted?: unknown } | undefined;
+  return last?.role === "toolResult" && last.interrupted !== true;
 }
 
 function continueAssistantTurn(session: AgentSession): Promise<void> {
@@ -976,25 +980,15 @@ type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "message
 function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
   const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant") as
     AssistantMessage | undefined;
-  return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
-}
-
-function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
-  const ok = [...session.messages]
-    .reverse()
-    .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
-    AssistantMessage | undefined;
-  const u = ok?.usage;
-  return u ? u.input + u.cacheRead + u.cacheWrite : undefined;
+  if (lastAssistant?.stopReason === "error") return lastAssistant;
+  const toolUseWithoutCalls =
+    lastAssistant?.stopReason === "toolUse" && !lastAssistant.content.some((block) => block.type === "toolCall");
+  return toolUseWithoutCalls ? lastAssistant : undefined;
 }
 
 function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
   const failed = piFailedAssistant(session);
-  if (!failed) return null;
-  const contextWindow = (
-    failed.model ? (resolveModel(failed.model) as { contextWindow?: number } | undefined) : undefined
-  )?.contextWindow;
-  return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
+  return failed ? providerTurnError(failed) : null;
 }
 
 /** Codes that retry the turn on the configured fallback model. */
@@ -1153,7 +1147,10 @@ async function createIsolatedResources(prefix: string, systemPrompt: string): Pr
     ephemeralCwd = cwd;
   }
   const agentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
-  const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
+  const settingsManager = SettingsManager.inMemory(
+    { retry: { enabled: false }, compaction: { enabled: false } },
+    { projectTrusted: false },
+  );
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -1411,18 +1408,6 @@ const FAST_MODE_BETA = "fast-mode-2026-02-01";
 const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
 const THINKING_BINDING = { prefix_mismatch_behavior: "drop_block" } as const;
 
-export const FAST_COST_MULTIPLIER = 2;
-
-export function scaleCost<T>(cost: T, factor: number): T {
-  if (!cost || typeof cost !== "object") return cost;
-  const out: Record<string, unknown> = { ...(cost as Record<string, unknown>) };
-  for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
-    if (typeof out[key] === "number") out[key] = (out[key] as number) * factor;
-  }
-  if (Array.isArray(out.tiers)) out.tiers = out.tiers.map((t) => scaleCost(t, factor));
-  return out as T;
-}
-
 export { modelSupportsFastMode } from "../model/pi-models.ts";
 
 export function wantsFastMode(fastMode: boolean | undefined, modelId: string | undefined): boolean {
@@ -1651,6 +1636,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     turnProviderKeys: ProviderKeys | undefined,
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
+    currentRunId: string | undefined,
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
     let reconstructed: PiReplayMessage[] | null;
@@ -1679,7 +1665,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         console.error("%s", `${tag} fold threw:`, errMessage(err));
       }
     }
-    const seedSource = foldSeed ?? reconstructed;
+    const unprojected = foldSeed ?? reconstructed;
+    const seedSource = unprojected && withoutStaleSnapshots(unprojected, history, currentRunId);
     const seedPlan = planColdStartSeed(seedSource, !!priorTurns?.length);
     const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
@@ -1747,11 +1734,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const prior = agent.onPayload;
         agent.onPayload = async (payload, model) => {
           ref.modelCalls = (ref.modelCalls ?? 0) + 1;
-          (ref.modelDispatch ??= []).push({
+          const call: NonNullable<typeof ref.modelDispatch>[number] = {
+            model: (model as Model<Api>).id,
             start: Date.now(),
             ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
             ...(ref.pendingTransformContext !== undefined ? { transformContext: ref.pendingTransformContext } : {}),
-          });
+          };
+          (ref.modelDispatch ??= []).push(call);
           ref.pendingPrepareNextTurn = undefined;
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
@@ -1776,13 +1765,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           } catch (e) {
             swallow("pi: request byte budget", e);
           }
-          if (captureRequests) {
-            try {
-              ref.llmCapture?.push(capturedPayload!);
-            } catch (e) {
-              swallow("pi: llm request capture", e);
-            }
-          }
+          if (capturedPayload) call.capture = capturedPayload;
           return finalPayload;
         };
         const priorResponse = agent.onResponse;
@@ -1884,12 +1867,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         if (resumed) {
           const callId = resumed.message.toolCallId;
           const resultScope = ref.tapeResultScopes?.get(callId);
+          const resultSeq = ref.tapeResultSeqs?.get(callId);
           ref.tapeResultScopes?.delete(callId);
+          ref.tapeResultSeqs?.delete(callId);
           await turn.tape?.({
             kind: "message",
             harness: "pi",
             payload: stripImageBytes(resumed.message),
             scopeLabel: resultScope ?? turn.scopeLabel,
+            ...(resultSeq !== undefined ? { entrySeq: resultSeq } : {}),
           });
         }
         const { entry, compileMs } = await createTurnSession(
@@ -1906,6 +1892,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.providerKeys,
           ref,
           tools,
+          turn.runId,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
@@ -1962,7 +1949,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             return "";
           })();
           const modelPrompt = [goalNote, turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
-          entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];
           entry.ref.pendingPrepareNextTurn = undefined;
@@ -1977,11 +1963,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           });
 
           const callStats: Array<PerCallStat> = [];
+          let recordTail: Promise<void> = Promise.resolve();
           let curStart: number | undefined;
           let curFirst: number | undefined;
           let prevStepEnd: number | undefined;
           const stepWindows: Array<{ gapStart?: number; gapEnd: number }> = [];
           let thinkTail: Promise<unknown> = Promise.resolve();
+          let heldNarration: string | undefined;
           let tapeError: Error | undefined;
           let tapedTriggerUser = continueTurn;
           const toolAbort = new AbortController();
@@ -2008,7 +1996,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (!turn.tape || tapeError) return;
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
+            const resultSeq = typeof callId === "string" ? entry.ref.tapeResultSeqs?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
+            if (typeof callId === "string") entry.ref.tapeResultSeqs?.delete(callId);
             const taped = stripImageBytes(message, isTrigger ? turn.images : steer?.images);
             const rec: NewTapeRecord = {
               kind: "message",
@@ -2018,6 +2008,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   ? { ...(taped as Record<string, unknown>), interrupted: true }
                   : taped,
               scopeLabel: resultScope ?? turn.scopeLabel,
+              ...(resultSeq !== undefined ? { entrySeq: resultSeq } : {}),
               ...(isTrigger && userEntry
                 ? {
                     entrySeq: userEntry.seq,
@@ -2074,7 +2065,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               const u = (event.message as { usage?: Partial<Usage> }).usage;
               const stepModel = entry.agentSession.model;
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
-              meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
+              meterGrindCall(grindMeter, usage);
               const meteredGoal = entry.ref.goal;
               if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
               callStats.push({
@@ -2089,62 +2080,66 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               });
               prevStepEnd = end;
               toolWallByStep.push([]);
+              const call = entry.ref.modelDispatch?.at(-1);
+              if (call && call.stat === undefined) call.stat = callStats.length - 1;
+              recordTail = recordTail.then(() => recordCalls(false));
               const stepContent = (event.message as { content?: unknown }).content;
+              const emitNarration = (text: string): void => {
+                thinkTail = thinkTail
+                  .then(() => turn.emit({ type: "text", payload: { text }, scopeLabel: turn.scopeLabel }))
+                  .catch(swallowAs("pi: text entry persist", undefined));
+              };
+              if (heldNarration) emitNarration(heldNarration);
+              heldNarration = undefined;
               for (const block of thinkingBlocksFromContent(stepContent)) {
                 thinkTail = thinkTail
                   .then(() => turn.emit({ type: "thinking", payload: block, scopeLabel: turn.scopeLabel }))
                   .catch(swallowAs("pi: thinking entry persist", undefined));
               }
+              const narration = textFromContent(stepContent).trim();
               if (contentHasToolUse(stepContent)) {
-                const narration = textFromContent(stepContent).trim();
-                if (narration)
-                  thinkTail = thinkTail
-                    .then(() => turn.emit({ type: "text", payload: { text: narration }, scopeLabel: turn.scopeLabel }))
-                    .catch(swallowAs("pi: text entry persist", undefined));
-              }
+                if (narration) emitNarration(narration);
+              } else if (narration) heldNarration = narration;
               curStart = undefined;
               curFirst = undefined;
             }
           });
-          const drainCaptured = async (): Promise<void> => {
-            const captured = entry.ref.llmCapture ?? [];
-            entry.ref.llmCapture = undefined;
-            if (!turn.recordLlmRequest) return;
-            const statsAligned = callStats.length === captured.length;
-            const dispatch = entry.ref.modelDispatch ?? [];
-            const dispatchWork: GapWork[] = dispatch
-              .filter((d): d is { start: number; first: number } => d.first !== undefined)
+          let recorded = 0;
+          const recordCalls = async (all: boolean): Promise<void> => {
+            const calls = entry.ref.modelDispatch ?? [];
+            const dispatchWork: GapWork[] = calls
+              .filter((d): d is typeof d & { first: number } => d.first !== undefined)
               .map((d) => ({ phase: "model_dispatch" as const, start: d.start, end: d.first }));
-            const marksAligned = dispatch.length === captured.length;
-            entry.ref.modelDispatch = undefined;
-            const allGapWork = [...gapWork, ...dispatchWork];
-            for (let step = 0; step < captured.length; step++) {
-              const stat = statsAligned ? callStats[step] : undefined;
-              const d = marksAligned ? dispatch[step] : undefined;
-              const marks: DispatchMarks | undefined = d
-                ? {
-                    ...(d.start !== undefined ? { onPayload: d.start } : {}),
-                    ...(d.first !== undefined ? { onResponse: d.first } : {}),
-                    ...(d.streamStart !== undefined ? { messageStart: d.streamStart } : {}),
-                    ...(d.prepareNextTurn !== undefined ? { prepareNextTurn: d.prepareNextTurn } : {}),
-                    ...(d.transformContext !== undefined ? { transformContext: d.transformContext } : {}),
-                  }
-                : undefined;
-              const gapPhases = statsAligned
-                ? decomposeGapPhases(stepWindows[step], allGapWork, stat?.stepGapMs ?? null, marks)
-                : undefined;
+            for (; recorded < calls.length; recorded++) {
+              const call = calls[recorded]!;
+              if (!all && (call.stat === undefined || call.stat >= callStats.length - 1)) return;
+              const stat = call.stat !== undefined ? callStats[call.stat] : undefined;
+              const capture = call.capture;
+              call.capture = undefined;
+              if (!turn.recordLlmRequest) continue;
+              const marks: DispatchMarks = {
+                onPayload: call.start,
+                ...(call.first !== undefined ? { onResponse: call.first } : {}),
+                ...(call.streamStart !== undefined ? { messageStart: call.streamStart } : {}),
+                ...(call.prepareNextTurn !== undefined ? { prepareNextTurn: call.prepareNextTurn } : {}),
+                ...(call.transformContext !== undefined ? { transformContext: call.transformContext } : {}),
+              };
+              const gapPhases =
+                stat && call.stat !== undefined
+                  ? decomposeGapPhases(stepWindows[call.stat], [...gapWork, ...dispatchWork], stat.stepGapMs, marks)
+                  : undefined;
               try {
                 await turn.recordLlmRequest({
                   turnSeq: userEntry?.seq ?? null,
-                  step,
-                  model: captured[step]!.transport?.modelId ?? effectiveModel,
-                  promptEnvelope: captured[step]!.envelope,
-                  truncated: captured[step]!.truncated,
-                  transport: captured[step]!.transport ?? null,
+                  step: recorded,
+                  model: call.model,
+                  ...(capture ? { promptEnvelope: capture.envelope } : {}),
+                  truncated: capture?.truncated ?? false,
+                  transport: capture?.transport ?? null,
                   ttftMs: stat?.ttftMs ?? null,
                   durationMs: stat?.durationMs ?? null,
                   stepGapMs: stat?.stepGapMs ?? null,
-                  toolWallMs: toolWallByStep[step] ?? null,
+                  toolWallMs: call.stat !== undefined ? (toolWallByStep[call.stat] ?? null) : null,
                   gapPhases: gapPhases ?? null,
                   usage: stat?.usage ?? null,
                 });
@@ -2152,6 +2147,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 swallow("pi: llm request record", e);
               }
             }
+          };
+          const drainCaptured = async (): Promise<void> => {
+            await recordTail;
+            await recordCalls(true);
+            entry.ref.modelDispatch = undefined;
           };
           const tapeEntryMirror = async (mirrored: {
             seq: number;
@@ -2247,6 +2247,37 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const raceCapMs = floorCap.raceCapMs;
           const extendCapMs = floorCap.extendMs;
           const refusedModelIds = new Set<string>();
+          const dropFailedAssistant = (): void => {
+            const state = entry.agentSession.agent.state;
+            for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
+              const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;
+              if (m?.role === "assistant" && m.stopReason === "error") {
+                state.messages = [...state.messages.slice(0, i), ...state.messages.slice(i + 1)];
+                break;
+              }
+            }
+          };
+          const attemptStandardLane = async (retryAfterMs = 0): Promise<boolean> => {
+            const modelId = (entry.agentSession.model as { id?: string } | undefined)?.id;
+            const standard = modelId ? resolveModel(modelId, !turn.providerKeys) : undefined;
+            if (!entry.ref.fast || !modelId || !standard || userAborted || turn.cancel?.aborted) return false;
+            if (turnWallClockMs > 0 && raceCapMs() - retryAfterMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+            if (retryAfterMs > 0) await sleep(retryAfterMs, undefined, turn.cancel ? { signal: turn.cancel } : {});
+            const capMs = raceCapMs();
+            console.error(
+              `[pi] fast lane rate-limited; retrying ${modelId} in standard mode session=${turn.session.id}`,
+            );
+            await entry.agentSession.setModel(withRequestHeaders(standard, !turnModelGateway?.models[modelId], false));
+            entry.ref.fast = false;
+            applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
+            dropFailedAssistant();
+            const outcome = await raceTurnWallClock(continueAssistantTurn(entry.agentSession), {
+              capMs,
+              extendMs: extendCapMs,
+              abort: () => entry.agentSession.abort(),
+            });
+            return !userAborted && outcome === "ok";
+          };
           const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
             if (userAborted || turn.cancel?.aborted) return false;
             const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
@@ -2271,14 +2302,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             entry.ref.effortLevel =
               custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
             applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
-            const state = entry.agentSession.agent.state;
-            for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
-              const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;
-              if (m?.role === "assistant" && m.stopReason === "error") {
-                state.messages = [...state.messages.slice(0, i), ...state.messages.slice(i + 1)];
-                break;
-              }
-            }
+            dropFailedAssistant();
             const outcome = await raceTurnWallClock(
               entry.agentSession.prompt(
                 refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
@@ -2289,8 +2313,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
             return true;
           };
-          const recoverRefusedRound = async (): Promise<void> => {
+          const recoverFailedRound = async (): Promise<void> => {
             if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
+            const failure = piAssistantFailure(messagesSince(entry.agentSession, messagesBefore));
+            if (failure?.code === "context_too_long") {
+              entry.ref.runtimeHandoff = { context: "recent", overflow: failure };
+              return;
+            }
+            if (failure?.code === "rate_limit" && (await attemptStandardLane(failure.retryAfterMs)))
+              return recoverFailedRound();
             const refusal = providerRefusalError(entry.agentSession, messagesBefore);
             if (!refusal) return;
             try {
@@ -2314,10 +2345,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 abort: () => entry.agentSession.abort(),
               },
             );
-            if (wallClock === "ok") await recoverRefusedRound();
+            if (wallClock === "ok") await recoverFailedRound();
             const goalAfterPrompt = entry.ref.goal;
             if (
               wallClock === "ok" &&
+              !entry.ref.runtimeHandoff &&
               goalAfterPrompt &&
               (goalAfterPrompt.status === "active" || goalFloorUnmet(goalAfterPrompt, grindMeter)) &&
               !userAborted &&
@@ -2362,7 +2394,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                     extendMs: extendCapMs,
                     abort: () => entry.agentSession.abort(),
                   });
-                  if (outcome === "ok") await recoverRefusedRound();
+                  if (outcome === "ok") await recoverFailedRound();
                   return outcome;
                 },
               });
@@ -2417,7 +2449,16 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (!userAborted && !cancelAbortRejection) {
               const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
               let recovered = false;
-              if (turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
+              if (turnErr instanceof ProviderTurnError && turnErr.code === "context_too_long") {
+                entry.ref.runtimeHandoff = { context: "recent", overflow: turnErr };
+                recovered = true;
+              } else if (turnErr instanceof ProviderTurnError && turnErr.code === "rate_limit" && entry.ref.fast) {
+                recovered = await attemptStandardLane(turnErr.retryAfterMs).catch((e: unknown) => {
+                  swallow("pi: standard-lane retry", e);
+                  return false;
+                });
+                if (recovered) await recoverFailedRound();
+              } else if (turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
                 try {
                   recovered = await attemptRefusalFallback(turnErr.message);
                 } catch (e) {
@@ -2581,7 +2622,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       },
 
       async compactHistory(input: HarnessCompactInput): Promise<string> {
-        const primaryId = resolveModelId();
+        const primaryId = input.model && resolveModel(input.model) ? input.model : resolveModelId();
         const providerKeys = await resolveProviderKeys();
         const runtime = await buildModelRuntime(providerKeys, modelGateway);
         const summarize = (compactModelId: string) =>
@@ -2694,7 +2735,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         }
       },
 
-      async generateTitle(transcript: string): Promise<string | undefined> {
+      async generateTitle(transcript: string, signal?: AbortSignal): Promise<string | undefined> {
         if (!transcript.trim()) return undefined;
         const model = getRequiredModel(titleModelId());
         const providerKeys = await resolveProviderKeys();
@@ -2705,7 +2746,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           providerKeys,
           TITLE_GENERATION_PROMPT,
           titleUserPrompt(transcript),
-          { modelGateway },
+          { modelGateway, ...(signal ? { signal } : {}) },
         );
         return sanitizeTitle(out);
       },

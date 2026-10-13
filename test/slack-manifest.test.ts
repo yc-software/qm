@@ -29,3 +29,14 @@ test("membership events invalidate the pushed authorization roster", async () =>
   assert.ok(events.includes("member_joined_channel"));
   assert.ok(events.includes("member_left_channel"));
 });
+
+test("channel lifecycle events that change what the bot can see are subscribed", async () => {
+  for (const path of ["../src/slack/manifest.json", "../cli/templates/slack-manifest.json"]) {
+    const manifest = JSON.parse(await readFile(new URL(path, import.meta.url), "utf8")) as {
+      settings?: { event_subscriptions?: { bot_events?: string[] } };
+    };
+    const events = manifest.settings?.event_subscriptions?.bot_events ?? [];
+    for (const name of ["channel_archive", "channel_deleted", "channel_left", "group_archive", "group_left"])
+      assert.ok(events.includes(name), `${path} subscribes to ${name}`);
+  }
+});

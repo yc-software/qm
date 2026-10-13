@@ -114,6 +114,7 @@ export function createDirectory(deps: {
   userCacheTtlMs?: number;
   internalOverrides?: () => Promise<ReadonlySet<string>>;
   coreSingleton?: boolean;
+  accountId?: string;
 }): Directory {
   const { core, ids } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
@@ -173,7 +174,7 @@ export function createDirectory(deps: {
         }
       }
     }
-    if (CORE_SINGLETON) setMentionIndex(mentionIndex);
+    setMentionIndex(deps.accountId ?? "default", mentionIndex);
     if (missingEmails > 0) {
       console.warn(
         `[slack] email identity mode: ${missingEmails} own-team member(s) have no visible email (missing users:read.email scope?) — they fail closed to guest`,

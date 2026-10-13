@@ -83,9 +83,9 @@ test("goalReport escapes every field of the record, not a named few", () => {
 
 test("meterGoalCall accumulates usage onto the goal", () => {
   const goal = createGoalRecord({ objective: "work" });
-  meterGoalCall(goal, { input: 100, output: 50 } as never);
-  meterGoalCall(goal, { input: 10, output: 5 } as never);
-  assert.equal(goal.tokensUsed, 165);
+  meterGoalCall(goal, { input: 100, output: 50, cacheRead: 300, cacheWrite: 20, totalTokens: 470, costUsd: 0 });
+  meterGoalCall(goal, { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, costUsd: 0 });
+  assert.equal(goal.tokensUsed, 485);
 });
 
 test("prompts carry the objective as escaped user data plus audit language", () => {
@@ -228,7 +228,7 @@ test("enforceGoal respects external blockers (approval pause, abort)", async () 
 
 test("grindState floor math still works for goal floors", () => {
   const meter = createGrindMeter(Date.now() - 61_000);
-  meterGrindCall(meter, { input: 500, output: 500 } as never, "gpt-5");
+  meterGrindCall(meter, { input: 500, output: 500, cacheRead: 0, cacheWrite: 0, totalTokens: 1000, costUsd: 0 });
   const state = grindState({ minMs: 60_000, minTokens: 900 }, meter);
   assert.equal(state.met, true);
   const unmet = grindState({ minTurns: 5 }, meter);
@@ -275,7 +275,7 @@ test("goalFloorUnmet applies only to active goals and counts only active time", 
 
 test("goalFloorMeter counts the goal's own cumulative tokens, not the turn's", () => {
   const meter = createGrindMeter();
-  meterGrindCall(meter, { input: 500, output: 500 } as never, "gpt-5");
+  meterGrindCall(meter, { input: 500, output: 500, cacheRead: 0, cacheWrite: 0, totalTokens: 1000, costUsd: 0 });
   const goal = createGoalRecord({ objective: "work", floor: { minTokens: 800 } });
   assert.equal(goalFloorUnmet(goal, meter), true, "turn tokens from before the goal do not count");
   goal.tokensUsed = 900;

@@ -16,6 +16,7 @@ import { egressClaimAllowingControlPlane } from "../src/core/orchestrator.ts";
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
 import { contextSummaryPayload } from "../src/sessions/session-store.ts";
+import { reconstructMessagesFromHistory, withoutStaleSnapshots } from "../src/harness/replay.ts";
 import { egressDecision } from "../src/resolution/egress-policy.ts";
 import { hashId } from "../src/util/crypto.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
@@ -2357,6 +2358,26 @@ test("turn file context leads the environment block before the conversation head
   assert.ok(envAt < inboxAt, "file manifest should be inside the environment block");
   assert.ok(inboxAt < headerAt, "file manifest should precede the conversation header");
   assert.ok(headerAt < envEndAt, "conversation header should remain inside the environment block");
+});
+
+test("after compaction a turn's replay keeps its file manifest but not its stale conversation header", async () => {
+  const { app, blobTransfer, sessions } = freshApp();
+  const blob = await blobTransfer.put(Buffer.from("notes"));
+  const res = await app.turn(
+    channel("what should I do with this?", {
+      conversationHeader: "You are in #eng. People here: @Alice, @Bob. You are replying to a top-level message.",
+      attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    }),
+  );
+  assert.equal(res.status, "ok");
+  const recorded = await sessions.getEntries(res.sessionId!);
+  const summary = { ...recorded[0]!, seq: recorded.at(-1)!.seq + 1, type: "system" as const };
+  const entries = [...recorded, { ...summary, payload: { kind: "context_summary", throughSeq: -1, text: "earlier" } }];
+  const [replayed] = withoutStaleSnapshots(reconstructMessagesFromHistory(recorded), entries);
+  const text = replayed!.content.map((block) => ("text" in block ? block.text : "")).join("");
+  assert.match(text, /what should I do with this\?/);
+  assert.match(text, /The user shared 1 file/);
+  assert.doesNotMatch(text, /You are in #eng/);
 });
 
 test("the situational conversationHeader rides in the <environment> block, not as a message list", async () => {

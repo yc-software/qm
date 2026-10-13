@@ -36,6 +36,25 @@ test("snapshots survive serialized replay and emit only changed or removed inven
   assert.match(JSON.stringify(replay), /No longer included: Sandboxes/);
 });
 
+test("an anchor before the latest context summary re-renders the full inventory", () => {
+  const blocks = { Credentials: "## Credentials\n- a", Skills: "## Skills\n- browse" };
+  const first = entry(1, blocks, []);
+  const summary = {
+    sessionId: "s",
+    seq: 2,
+    parentSeq: 1,
+    type: "system",
+    createdAt: 2,
+    scopeLabel: "personal:U1",
+    payload: { kind: "context_summary", throughSeq: 1, text: "earlier work" },
+  } as SessionEntry;
+  assert.equal(environmentDelta(blocks, [first], "s").text, "");
+  const after = environmentDelta(blocks, [first, summary], "s");
+  assert.match(after.text, /- a/);
+  assert.match(after.text, /- browse/);
+  assert.equal(after.record.anchorSeq, undefined);
+});
+
 test("a compacted-away snapshot anchor resets the full baseline even when a later delta remains", () => {
   const blocks = { Credentials: "## Credentials\n- a", Skills: "## Skills\n- browse" };
   const first = entry(1, blocks, []);

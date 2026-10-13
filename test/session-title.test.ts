@@ -242,3 +242,31 @@ test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample
   assert.ok(p.includes("</transcript>"));
   assert.ok(p.trimEnd().endsWith("(2–6 words, or exactly NONE)."));
 });
+
+test("a hung title model is abandoned and aborted, and the fallback title applies", { timeout: 5_000 }, async () => {
+  const { createSessionTitles } = await import("../src/core/session-title.ts");
+  let seen: AbortSignal | undefined;
+  const written: string[] = [];
+  const recorded: Array<{ code: string }> = [];
+  const titles = createSessionTitles({
+    sessions: { updateTitle: async (_id: string, title: string) => void written.push(title) } as never,
+    harness: {
+      models: {
+        generateTitle: (_transcript: string, signal?: AbortSignal) => {
+          seen = signal;
+          return new Promise<string | undefined>(() => {});
+        },
+      },
+    } as never,
+    errors: { record: (entry: { code: string }) => void recorded.push(entry), flush: () => {} } as never,
+    titleGenerationTimeoutMs: 20,
+  });
+  const title = await titles.generateAndStore("s1", "org:test" as never, "User:\nhello", undefined, "Fix the deploy");
+  assert.equal(title, "Fix the deploy");
+  assert.deepEqual(written, ["Fix the deploy"]);
+  assert.deepEqual(
+    recorded.map((entry) => entry.code),
+    ["timeout"],
+  );
+  assert.equal(seen?.aborted, true);
+});

@@ -2,6 +2,7 @@ import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -670,6 +671,40 @@ test("background compaction excludes thinking entries from the summary batch (Bu
     compactCalls[0]!.history.every((e) => e.type !== "thinking"),
     "the summarizer batch must not include the durable thinking entry",
   );
+});
+
+test("background compaction summarizes only what the turn's whole audience may see", async () => {
+  const { harness, compactCalls } = spyHarness();
+  const bob: Principal = { id: "U2", type: "internal" };
+  const channel = scopeId("channel", "C1");
+  const shared: Conversation = { kind: "channel", threadRef: "ch:C1:t9", channelRef: "C1", audience: [actor, bob] };
+  const common = msgTexts(8);
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...common)));
+  const session = await sessions.getOrCreateByThread(shared.threadRef, "channel", channel);
+  const { lease } = await sessions.acquireLease(session.id);
+  for (const [i, text] of common.entries()) {
+    if (i === 2) {
+      await sessions.append(lease!, {
+        type: "tool_call",
+        payload: { callId: "c1", name: "read" },
+        scopeLabel: PERSONAL,
+      });
+      await sessions.append(lease!, {
+        type: "tool_result",
+        payload: { callId: "c1", output: "PRIVATE_CANARY alice's personal note" },
+        scopeLabel: PERSONAL,
+      });
+    }
+    await sessions.append(lease!, { type: "user", payload: { text }, scopeLabel: channel });
+  }
+  await sessions.releaseLease(lease!);
+
+  const res = await orch.handleTurn({ ...spineTurn("!histcount"), conversation: shared });
+  assert.equal(res.status, "ok");
+  assert.equal((await waitForSummary(sessions, session.id)).length, 1, "a background compaction ran");
+  const summarized = JSON.stringify(compactCalls[0]!.history);
+  assert.doesNotMatch(summarized, /PRIVATE_CANARY/);
+  assert.match(summarized, /msg 0/);
 });
 
 test("a session parked over soft with a too-large prior summary re-summarizes (Bugbot: reuse-parked)", async () => {
@@ -1465,7 +1500,7 @@ for (const explicit of [false, true]) {
   });
 }
 
-test("retry recovery supplies an excluded request without rerunning its completed action", async () => {
+test("retry recovery restores an excluded request to context without rerunning its completed action", async () => {
   const base = createMockHarness();
   let mainCalls = 0;
   const harness: Harness = {
@@ -1480,9 +1515,13 @@ test("retry recovery supplies an excluded request without rerunning its complete
       ...base.turns,
       runTurn: async (input) => {
         mainCalls++;
-        assert.match(input.input, /Current request.*\nfinish the stored request/);
+        assert.doesNotMatch(input.input, /Current request/);
         assert.match(input.input, /don't start over or repeat completed steps/);
-        assert.ok(!input.history.some((e) => e.type === "user"));
+        assert.ok(
+          input.history.some(
+            (e) => e.type === "user" && (e.payload as { text?: string }).text === "finish the stored request",
+          ),
+        );
         await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
         return { reply: "resumed" };
       },
@@ -1498,4 +1537,61 @@ test("retry recovery supplies an excluded request without rerunning its complete
   assert.equal(result.status, "ok");
   assert.equal(result.reply, "resumed");
   assert.equal(mainCalls, 1);
+});
+
+test("a provider context overflow reduces context once and finishes the request", async () => {
+  const base = createMockHarness();
+  const seen: import("../src/harness/harness.ts").HarnessTurnInput[] = [];
+  const overflow = new ProviderTurnError("request too large", { code: "context_too_long", retryable: false, raw: "" });
+  const harness: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      runTurn: async (input) => {
+        seen.push(input);
+        if (seen.length === 1) {
+          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+          return { reply: "", runtimeHandoff: { context: "recent", overflow }, modelCalls: 1 };
+        }
+        await input.emit({ type: "assistant", payload: { text: "recovered" }, scopeLabel: input.scopeLabel });
+        return { reply: "recovered", modelCalls: 1 };
+      },
+    },
+  };
+  const { orch, sessions } = buildOrchestrator(harness);
+  await orch.handleTurn({ ...turn("big request"), surfaceTools: false });
+  assert.equal(seen.length, 2);
+  assert.notEqual(seen[1]!.input, seen[0]!.input, "the second call continues the request instead of replaying it");
+  assert.ok(
+    seen[1]!.history.some((e) => e.type === "user" && JSON.stringify(e.payload).includes("big request")),
+    "the reduced context keeps the unfinished request",
+  );
+  const session = await sessions.getByThread(conv.threadRef);
+  const entries = await sessions.getEntries(session!.id);
+  assert.deepEqual(
+    entries.filter((e) => e.type === "assistant").map((e) => (e.payload as { text: string }).text),
+    ["recovered"],
+  );
+});
+
+test("a context overflow that survives reduction fails the request instead of looping", async () => {
+  const base = createMockHarness();
+  let calls = 0;
+  const overflow = new ProviderTurnError("request too large", { code: "context_too_long", retryable: false, raw: "" });
+  const harness: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      runTurn: async () => {
+        calls++;
+        return { reply: "", runtimeHandoff: { context: "recent", overflow }, modelCalls: 1 };
+      },
+    },
+  };
+  const { orch } = buildOrchestrator(harness);
+  await assert.rejects(
+    orch.handleTurn({ ...turn("still too big"), surfaceTools: false }),
+    (error) => error === overflow,
+  );
+  assert.equal(calls, 2);
 });

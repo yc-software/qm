@@ -113,6 +113,7 @@ test("background compaction snapshots the latest goal under the write lease, not
     scopeId: scope,
     orgScopeId: "org:test",
     actorId: "test",
+    visibleTo: (entries) => entries,
   });
   await started.promise;
   const updateLease = (await sessions.acquireLease(session.id)).lease;
@@ -184,6 +185,7 @@ for (const background of [false, true]) {
         orgScopeId: "org:test",
         actorId: "alice",
         includeSecurityTainted: true,
+        visibleTo: (entries) => entries,
       });
       const deadline = Date.now() + 3000;
       while (

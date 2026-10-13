@@ -178,6 +178,7 @@ async function simTurn(sim: Sim, turn: SimTurn): Promise<void> {
         entryCreatedAt: steered.createdAt,
       },
     });
+    await emit("text", { text: turn.steer.preReplyText });
   }
 
   for (const roundReply of turn.goalRoundReplies ?? []) {
@@ -198,6 +199,7 @@ async function simTurn(sim: Sim, turn: SimTurn): Promise<void> {
       payload: { role: "user", content: [{ type: "text", text: "[goal continuation note]" }], timestamp: CLOCK },
       scopeLabel: scope,
     });
+    await emit("text", { text: roundReply });
   }
 
   if (!turn.silent) {
@@ -434,7 +436,7 @@ test("finish_silently followed by a spoken reply keeps the reply text", async ()
   assert.deepEqual(projected[projected.length - 1]!.payload, { text: "Actually, here is the answer." });
 });
 
-test("goal continuation rounds keep only the recorded assistant reply", async () => {
+test("goal continuation rounds keep their interim text and one recorded assistant reply", async () => {
   const sim = await simSession();
   await simTurn(sim, {
     input: "grind on the goal",
@@ -443,6 +445,9 @@ test("goal continuation rounds keep only the recorded assistant reply", async ()
   });
   const projected = await assertParity(sim);
   assert.equal(projected.filter((e) => e.type === "assistant").length, 1);
+  assert.ok(
+    projected.some((e) => e.type === "text" && (e.payload as { text?: string }).text === "round one partial answer"),
+  );
 });
 
 test("goal snapshots and outbound file events project from their mirror annotations", async () => {

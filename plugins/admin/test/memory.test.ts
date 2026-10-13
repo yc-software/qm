@@ -49,7 +49,7 @@ test("PUT /api/memory forwards the body + scope to the core", async () => {
   const r = await fetch(`${base}/api/memory?scope=personal:U1`, {
     method: "PUT",
     headers: { cookie: ADMIN, "content-type": "application/json" },
-    body: JSON.stringify({ content: "# Memory\n\n- edited" }),
+    body: JSON.stringify({ content: "# Memory\n\n- edited", revision: "r1" }),
   });
   assert.equal(r.status, 200);
   const c = calls.at(-1)!;
@@ -57,7 +57,7 @@ test("PUT /api/memory forwards the body + scope to the core", async () => {
   assert.equal(c.url, "/v1/admin/memory?scope=personal:U1");
   assert.equal(c.actor, "U-admin@acme");
   assert.equal(c.signed, true);
-  assert.deepEqual(JSON.parse(c.body), { content: "# Memory\n\n- edited" });
+  assert.deepEqual(JSON.parse(c.body), { content: "# Memory\n\n- edited", revision: "r1" });
 });
 
 test("GET /api/memory/scopes (the notebook directory) forwards as a memory READ sub-path", async () => {

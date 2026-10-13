@@ -5,14 +5,13 @@ import {
   applyFastSpeed,
   applyThinkingBinding,
   piUsageToCallUsage,
-  scaleCost,
   withRequestHeaders,
-  FAST_COST_MULTIPLIER,
   modelSupportsFastMode,
   wantsFastMode,
   createPiHarness,
 } from "../src/harness/pi-harness.ts";
 import type { PiHarnessOptions } from "../src/harness/pi-harness.ts";
+import { FAST_COST_MULTIPLIER, scaleCost } from "../src/model/pi-models.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
@@ -335,7 +334,12 @@ async function runTurn(
   respond: (payload: Record<string, unknown>, index: number) => Response,
   gateway = false,
   extra: Partial<PiHarnessOptions> = {},
-): Promise<{ rows: HarnessLlmRequestRecord[]; payloads: Array<Record<string, unknown>>; betas: Array<string | null> }> {
+): Promise<{
+  rows: HarnessLlmRequestRecord[];
+  payloads: Array<Record<string, unknown>>;
+  betas: Array<string | null>;
+  result: Awaited<ReturnType<ReturnType<typeof createPiHarness>["turns"]["runTurn"]>>;
+}> {
   const rows: HarnessLlmRequestRecord[] = [];
   const payloads: Array<Record<string, unknown>> = [];
   const betas: Array<string | null> = [];
@@ -366,8 +370,9 @@ async function runTurn(
     return respond(payload, payloads.length - 1);
   }) as typeof globalThis.fetch;
   let seq = 0;
+  let result;
   try {
-    await harness.turns.runTurn({
+    result = await harness.turns.runTurn({
       session: { id: sessionId } as HarnessTurnInput["session"],
       input: "price this turn",
       systemPrompt: "BASE",
@@ -386,7 +391,7 @@ async function runTurn(
   } finally {
     globalThis.fetch = realFetch;
   }
-  return { rows, payloads, betas };
+  return { rows, payloads, betas, result };
 }
 
 for (const [name, gateway, fastMode, expected, echoedTier] of [
@@ -446,27 +451,36 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
   assert.equal("block_binding" in (payloads[0]!.thinking as object), false);
 });
 
-test("a refusal fallback prices each step on its actual model and tier", async () => {
-  const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
-    index === 0
-      ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
-      : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
-  );
-  assert.equal(payloads.length, 2);
-  assert.equal(payloads[0]?.model, "claude-sonnet-5");
-  assert.equal("speed" in payloads[0]!, false);
-  assert.equal(payloads[1]?.model, "claude-opus-5");
-  assert.equal(payloads[1]?.speed, "fast");
-  assert.deepEqual(
-    rows.map((r) => [r.step, r.model]),
-    [
-      [0, "claude-sonnet-5"],
-      [1, "claude-opus-5"],
-    ],
-  );
-  assertUsd(rows[0]!.usage!.costUsd, 0.03); // a stop_reason refusal is a billed 200 response
-  assertUsd(rows[1]!.usage!.costUsd, 0.15);
-});
+for (const captureRequests of [true, false]) {
+  test(`a refusal fallback prices each step on its actual model and tier (capture=${captureRequests})`, async () => {
+    const { rows, payloads } = await runTurn(
+      "refusal-fallback-pricing",
+      "claude-sonnet-5",
+      true,
+      (_payload, index) =>
+        index === 0
+          ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
+          : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
+      false,
+      { captureRequests },
+    );
+    assert.equal(payloads.length, 2);
+    assert.equal(payloads[0]?.model, "claude-sonnet-5");
+    assert.equal("speed" in payloads[0]!, false);
+    assert.equal(payloads[1]?.model, "claude-opus-5");
+    assert.equal(payloads[1]?.speed, "fast");
+    assert.deepEqual(
+      rows.map((r) => [r.step, r.model]),
+      [
+        [0, "claude-sonnet-5"],
+        [1, "claude-opus-5"],
+      ],
+    );
+    assertUsd(rows[0]!.usage!.costUsd, 0.03);
+    assertUsd(rows[1]!.usage!.costUsd, 0.15);
+    for (const row of rows) assert.equal("promptEnvelope" in row, captureRequests);
+  });
+}
 
 for (const gateway of [true, false]) {
   test(`Ultrafast prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`, async () => {
@@ -554,4 +568,91 @@ test("compaction retries a refused summary on the configured fallback model", as
     globalThis.fetch = realFetch;
   }
   assert.deepEqual(models, ["claude-sonnet-5", "gpt-6-sol"]);
+});
+
+test("a request-too-large rejection hands the turn back for context reduction instead of failing it", async () => {
+  const { payloads, result } = await runTurn(
+    "request-too-large",
+    "claude-sonnet-5",
+    false,
+    () =>
+      new Response(JSON.stringify({ type: "error", error: { type: "request_too_large", message: "too large" } }), {
+        status: 413,
+        headers: { "content-type": "application/json" },
+      }),
+  );
+  assert.equal(payloads.length, 1);
+  const handoff = result.runtimeHandoff as { context?: string; overflow?: { code?: string } } | undefined;
+  assert.equal(handoff?.context, "recent");
+  assert.equal(handoff?.overflow?.code, "context_too_long");
+});
+
+test("a rate-limited fast lane retries the same model once in standard mode", async () => {
+  const rateLimited = () =>
+    new Response(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "fast lane full" } }), {
+      status: 429,
+      headers: { "content-type": "application/json" },
+    });
+  const { payloads, betas, result } = await runTurn("fast-lane-rate-limit", "claude-opus-5", true, (_payload, index) =>
+    index === 0 ? rateLimited() : anthropicReply("standard lane answer", ANTHROPIC_WIRE_USAGE),
+  );
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0]?.speed, "fast");
+  assert.equal(payloads[1]?.model, "claude-opus-5");
+  assert.equal("speed" in payloads[1]!, false);
+  assert.equal(betas[1]?.includes("fast-mode") ?? false, false);
+  assert.equal(result.reply, "standard lane answer");
+});
+
+test("the standard-lane retry waits for the fast lane's Retry-After first", async () => {
+  const sentAt: number[] = [];
+  const { payloads, result } = await runTurn("fast-lane-retry-after", "claude-opus-5", true, (_payload, index) => {
+    sentAt.push(Date.now());
+    return index === 0
+      ? new Response(
+          JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "fast lane full" } }),
+          {
+            status: 429,
+            headers: { "content-type": "application/json", "retry-after": "1" },
+          },
+        )
+      : anthropicReply("standard lane answer", ANTHROPIC_WIRE_USAGE);
+  });
+  assert.equal(payloads.length, 2);
+  assert.ok(sentAt[1]! - sentAt[0]! >= 900, `retried after ${sentAt[1]! - sentAt[0]!}ms`);
+  assert.equal(result.reply, "standard lane answer");
+});
+
+test("a reply that stops for tool use without any tool call fails the turn instead of passing as done", async () => {
+  const outcome = await runTurn("tool-use-without-calls", "claude-opus-5", false, () =>
+    anthropicReply(
+      '<function_calls><invoke name="execute"></invoke></function_calls>',
+      ANTHROPIC_WIRE_USAGE,
+      "tool_use",
+    ),
+  ).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  const failure = outcome as { code?: string; retryable?: boolean; raw?: string } | null;
+  assert.equal(failure?.code, "unknown");
+  assert.equal(failure?.retryable, true);
+  assert.match(failure?.raw ?? "", /tool use without sending a tool call/);
+});
+
+test("a rate limit in standard mode is left to the run queue", async () => {
+  const outcome = await runTurn(
+    "standard-rate-limit",
+    "claude-opus-5",
+    false,
+    () =>
+      new Response(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "slow down" } }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      }),
+  ).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  assert.equal((outcome as { code?: string } | null)?.code, "rate_limit");
 });

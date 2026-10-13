@@ -49,6 +49,7 @@ import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.t
 import { CONFIG_DEFAULTS } from "../config.ts";
 import {
   acquireLeaseWithin,
+  contextSummaryPayload,
   entrySecurityTainted,
   isOverheardEntry,
   TAPE_IMPORT_MAX_ENTRIES,
@@ -155,7 +156,7 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "./turn-resume.ts";
+import { findTrailingPartialTurn, handoffNote, resumeNote, resumeStrategy, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   appendCoverageImport,
@@ -172,6 +173,7 @@ import {
   isNonRetryable,
   NonRetryableTurnError,
   ProviderTurnError,
+  TurnInterrupted,
   turnFailureMessage,
   type TurnFailurePayload,
 } from "./turn-error.ts";
@@ -2073,11 +2075,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let contextRecovered = false;
       let turnProgress = 0;
       const turnAbort = new AbortController();
-      if (input.cancel?.aborted) turnAbort.abort();
-      else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
+      if (input.cancel?.aborted) turnAbort.abort(input.cancel.reason);
+      else input.cancel?.addEventListener("abort", () => turnAbort.abort(input.cancel?.reason), { once: true });
       const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
         progress: () => turnProgress,
-        onStalled: () => turnAbort.abort(),
+        onStalled: () => turnAbort.abort(new TurnInterrupted("stall")),
       });
       let failureUserPayload: Record<string, unknown> | undefined;
       try {
@@ -3092,8 +3094,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return undefined;
           }
         })();
+        const withTurnRequest = async (entries: SessionEntry[], seq: number | undefined): Promise<SessionEntry[]> => {
+          if (seq === undefined || entries.some((entry) => entry.seq === seq)) return entries;
+          const stored = await deps.sessions.getEntry(session.id, seq);
+          const [request] = stored ? filterHistory(forModelContext([stored], { includeSecurityTainted: false })) : [];
+          if (!request) return entries;
+          const at = entries.findIndex((entry) => contextSummaryPayload(entry)) + 1;
+          return [...entries.slice(0, at), request, ...entries.slice(at)];
+        };
         const compactStart = Date.now();
-        const history = await withManagedRosterVersion(() =>
+        const compacted = await withManagedRosterVersion(() =>
           compactContextIfNeeded({
             cancel: turnAbort.signal,
             session,
@@ -3105,9 +3115,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.model ? { model: input.model } : {}),
           }),
         );
+        const history = await withTurnRequest(compacted, partial?.userSeq);
         contextRecovered =
-          history !== visibleHistory &&
-          history.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
+          compacted !== visibleHistory &&
+          compacted.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
         compactMs = Date.now() - compactStart;
         const documentInputs = strictReadOnly
           ? { documents: [], notices: [] }
@@ -3205,14 +3216,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input.text,
           usedSkills,
         );
-        const turnEnvironmentContents = [
-          manifest,
-          principalDelivered,
-          sender,
-          unscreenedNote,
-          input.conversationHeader?.trim(),
-          volatileContext,
-        ]
+        const turnEnvironmentContents = [manifest, principalDelivered, sender, unscreenedNote]
           .filter((s) => s && s.trim())
           .join("\n\n");
         const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
@@ -3289,12 +3293,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const emittedEntries: SessionEntry[] = [];
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
         failureUserPayload =
-          !syntheticPrompt && input.text.trim()
+          !syntheticPrompt && (input.text.trim() || inbound.metas.length)
             ? {
                 text: input.text,
                 ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
                 ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
+                ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
               }
             : undefined;
         const requestedTurnWallClockMs =
@@ -3489,8 +3494,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ) => {
           const recall = memoryRecallDelta(recalled, continuation?.history ?? history);
           const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
+          const stateSnapshot = [input.conversationHeader?.trim(), volatileContext, snapshot.text]
+            .filter((s) => s && s.trim())
+            .join("\n\n");
           const turnEnvironment = environmentNote(
-            [turnEnvironmentContents, snapshot.text, recall.text ? `${memoryHeading}${recall.text}` : ""]
+            [turnEnvironmentContents, stateSnapshot, recall.text ? `${memoryHeading}${recall.text}` : ""]
               .filter(Boolean)
               .join("\n\n"),
           );
@@ -3530,6 +3538,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   payload.memoryContext = nextContext;
                   payload.environmentSnapshot = snapshot.record;
                   if (environment) payload.environment = environment;
+                  if (environment && stateSnapshot) payload.stateSnapshot = stateSnapshot;
                   if (recall.text) payload.memoryRecall = recall.record;
                 }
                 Object.assign(payload, swarmEntryProvenance);
@@ -3952,14 +3961,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
         };
         let runtimeHandoffs = restoredRuntime ? 1 : 0;
+        let overflowRecovered = false;
         const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
           let segment = await runHarnessSegment(...args);
           let modelCalls = segment.modelCalls ?? 0;
-          const usage = { cacheRead: 0, cacheWrite: 0, uncachedInput: 0 };
+          let usage: HarnessTurnResult["cacheUsage"];
           const addUsage = () => {
-            if (segment.cacheUsage)
-              for (const key of ["cacheRead", "cacheWrite", "uncachedInput"] as const)
-                usage[key] += segment.cacheUsage[key];
+            const seen = segment.cacheUsage;
+            if (!seen) return;
+            usage = usage
+              ? {
+                  cacheRead: usage.cacheRead + seen.cacheRead,
+                  cacheWrite: usage.cacheWrite + seen.cacheWrite,
+                  uncachedInput: usage.uncachedInput + seen.uncachedInput,
+                }
+              : seen;
           };
           addUsage();
           while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
@@ -3967,6 +3983,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
               throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
             const recovery = "context" in segment.runtimeHandoff;
+            const overflow = "context" in segment.runtimeHandoff ? segment.runtimeHandoff.overflow : undefined;
+            if (overflow) {
+              if (overflowRecovered && (segment.modelCalls ?? 0) <= 1) throw overflow;
+              overflowRecovered = true;
+            }
             if ("choice" in segment.runtimeHandoff) {
               await adoptRuntime(segment.runtimeHandoff.choice);
               await deps.harness.turns.resetSession?.(session.id);
@@ -3989,6 +4010,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   cancel: turnAbort.signal,
                 }),
               );
+            resumedHistory = await withTurnRequest(resumedHistory, spine.turnUserEntrySeq);
             contextRecovered ||= recovery;
             turnAbort.signal.throwIfAborted();
             const resumedTape = tapeRows
@@ -4003,19 +4025,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               : undefined;
             segment = await runHarnessSegment(
-              resumeNote({ cause: "runtime-change" }) +
-                (recovery ? "\nContext reduced without a new summary." : "\nRuntime handoff completed.") +
-                " Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request." +
-                (recovery &&
-                !resumedHistory.some(
-                  (entry) =>
-                    entry.type === "user" &&
-                    isObj(entry.payload) &&
-                    typeof entry.payload.text === "string" &&
-                    entry.payload.text.startsWith(baseText),
-                )
-                  ? `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`
-                  : ""),
+              handoffNote(recovery ? "context" : "runtime") +
+                (spine.turnUserEntrySeq !== undefined && resumedHistory.some((e) => e.seq === spine.turnUserEntrySeq)
+                  ? ""
+                  : `\nCurrent request:\n${baseText}`),
               inbound.images.length ? { images: inbound.images } : {},
               { history: resumedHistory, ...(resumedTape ? { tape: resumedTape } : {}) },
             );
@@ -4187,7 +4200,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return fb?.closed && text ? text : undefined;
         })();
         const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
-        const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
+        const cancelStopped = turnAbort.signal.aborted && result.stopped === true;
+        const interruption = turnAbort.signal.reason instanceof TurnInterrupted ? turnAbort.signal.reason : undefined;
 
         await latchCoverage();
 
@@ -4316,7 +4330,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let finalResult: TurnResult;
         const sourceUserSeq = turnUserSeq;
         const sourceAssistantEntrySeq = [...emittedEntries].reverse().find((e) => e.type === "assistant")?.seq;
-        if (cancelStopped && !result.pendingApprovals?.length) {
+        if (cancelStopped && interruption && !result.pendingApprovals?.length) {
+          finalResult = { status: "failed", sessionId: session.id, reason: interruption.message };
+        } else if (cancelStopped && !result.pendingApprovals?.length) {
           finalResult = { status: "silent", sessionId: session.id, stopped: true };
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
@@ -4558,6 +4574,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             scopeId,
             orgScopeId: resolution.orgScopeId,
             actorId: actor.id,
+            visibleTo: filterHistory,
             ...(input.model ? { model: input.model } : {}),
           });
       }

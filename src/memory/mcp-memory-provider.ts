@@ -1,4 +1,4 @@
-import { mcpResultText, type McpClient, type McpToolResult } from "../mcp/mcp-client.ts";
+import { mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
 import type { MemoryService } from "./memory-service.ts";
 
 export interface McpMemoryOperation {
@@ -17,27 +17,6 @@ export interface McpMemoryOperation {
   timeoutMs: number;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`memory provider timed out after ${timeoutMs}ms`)), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-function resultText(result: McpToolResult): string {
-  const text = mcpResultText(result);
-  if (text) return text;
-  return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
-}
-
 export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?: McpMemoryOperation }): MemoryService {
   const read = async (scopeId: string, query: string, actorId?: string, maxChars?: number): Promise<string> => {
     const op = opts.read;
@@ -45,7 +24,7 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
     if (actorId) args[op.actorArg ?? "acting_user"] = actorId;
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const text = resultText(await withTimeout(op.client.callTool(op.tool, args), op.timeoutMs));
+    const text = mcpResultText(await op.client.callTool(op.tool, args, { timeoutMs: op.timeoutMs }));
     return maxChars && text.length > maxChars ? text.slice(0, maxChars) : text;
   };
 
@@ -64,7 +43,7 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
       const actorId = context?.actorId ?? author;
       if (actorId) args[op.actorArg ?? "acting_user"] = actorId;
       if (op.scopeArg) args[op.scopeArg] = scopeId;
-      await withTimeout(op.client.callTool(op.tool, args), op.timeoutMs);
+      await op.client.callTool(op.tool, args, { timeoutMs: op.timeoutMs });
       return facts.length;
     },
 

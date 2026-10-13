@@ -2,6 +2,7 @@ import { CODEX_OAUTH_ISSUER, asObject, codexOAuthJwtAccountId, type JsonObject }
 import { codexOAuthRefreshToken, readCodexOAuthAuthFile, sanitizedCodexOAuthAuth } from "./codex-auth-file.ts";
 import type { CredentialFile, Keychain } from "../credentials/keychain.ts";
 import { swallow } from "../util/errors.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { acquireCodexOAuthAuthLock, writeCodexOAuthAuthFile } from "./codex-auth.ts";
 
 /**
@@ -146,6 +147,7 @@ interface KeychainCodexAuthStoreDeps {
   credentialId: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  lock?: AdvisoryLock;
 }
 
 function codexAuthFromFiles(files: CredentialFile[]): { path: string; auth: JsonObject } | null {
@@ -165,13 +167,14 @@ function codexAuthFromFiles(files: CredentialFile[]): { path: string; auth: Json
 /**
  * Keychain-backed Codex subscription auth. The credential (a file bundle
  * holding the Codex CLI's auth.json) lives encrypted in its owner's keychain;
- * core is the single writer. Refreshed tokens are persisted back to the
- * keychain with a compare-and-set against the refresh token they replaced, so
- * a concurrent rotation loses cleanly instead of clobbering.
+ * core is the single writer. Refresh runs under a shared advisory lock and
+ * re-reads the stored login first, so replicas never present the same
+ * single-use refresh token twice.
  */
 export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexAuthStore {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const now = deps.now ?? Date.now;
+  const lock = deps.lock ?? createMemoryAdvisoryLock();
   let refreshing: Promise<JsonObject | null> | null = null;
 
   const readCurrent = async (): Promise<{
@@ -189,14 +192,7 @@ export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexA
     return found ? { ownerId: meta.ownerId, service: meta.service, ...found } : null;
   };
 
-  const persist = async (
-    current: { ownerId: string; service: string; path: string },
-    replacedRefreshToken: string | undefined,
-    next: JsonObject,
-  ): Promise<boolean> => {
-    // Compare-and-set: re-read and refuse if someone else rotated first.
-    const latest = await readCurrent();
-    if (!latest || codexOAuthRefreshToken(latest.auth) !== replacedRefreshToken) return false;
+  const persist = async (current: { ownerId: string; service: string; path: string }, next: JsonObject) => {
     await deps.keychain.save({
       ownerId: current.ownerId,
       service: current.service,
@@ -205,7 +201,6 @@ export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexA
         ? { expiresAt: codexOAuthAccessTokenExpiresAt(next) }
         : {}),
     });
-    return true;
   };
 
   return {
@@ -217,10 +212,15 @@ export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexA
       // Single refresh in flight per store; concurrent loads share it.
       refreshing ??= (async () => {
         try {
-          const next = await refreshCodexOAuth(current.auth, fetchImpl);
-          if (!next) return null;
-          await persist(current, codexOAuthRefreshToken(current.auth), next);
-          return next;
+          return await lock.withLock(`codex-auth-refresh:${deps.credentialId}`, async () => {
+            const latest = await readCurrent();
+            if (!latest) return null;
+            if (!authNeedsRefresh(latest.auth, now())) return latest.auth;
+            const next = await refreshCodexOAuth(latest.auth, fetchImpl);
+            if (!next) return null;
+            await persist(latest, next);
+            return next;
+          });
         } finally {
           refreshing = null;
         }
