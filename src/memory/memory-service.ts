@@ -18,7 +18,7 @@ import {
 /** Path the agent may read to see its notebook; memory is never stored as an editable file. */
 export const MEMORY_FILE = "memory/MEMORY.md";
 /** Where the database-less store keeps a scope's facts. */
-export const MEMORY_FACTS_FILE = "memory/facts.json";
+const MEMORY_FACTS_FILE = "memory/facts.json";
 
 export interface MemoryRecallContext {
   query?: string;
@@ -76,7 +76,7 @@ export function queryFacts(facts: readonly MemoryFact[], q: string, limit: numbe
     .map(factLine);
 }
 
-export function cleanCapturedFacts(facts: string[], at: number, trustedProvenance = false): string[] {
+function cleanCapturedFacts(facts: string[], at: number, trustedProvenance = false): string[] {
   const date = dateStr(at);
   return facts.flatMap((f) => {
     let text = f

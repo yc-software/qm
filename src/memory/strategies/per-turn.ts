@@ -12,7 +12,7 @@ import { parseSensitivity, SENSITIVITY_PROMPT } from "../classification.ts";
 import { UNTRACKED_PROVENANCE, type MemoryCaptureMetadata } from "../facts.ts";
 
 export const DEFAULT_CAPTURE_QUIET_MS = 180_000;
-export const DEFAULT_CAPTURE_MAX_TURNS = 10;
+const DEFAULT_CAPTURE_MAX_TURNS = 10;
 
 export const MEMORY_EXTRACTION_PROMPT = [
   "You extract durable facts worth remembering about the user across FUTURE conversations.",
@@ -45,7 +45,7 @@ export function parseFacts(out: string): string[] {
   return bullets(trimmed).filter(Boolean);
 }
 
-export async function extractFacts(
+async function extractFacts(
   harness: HarnessModelUtilities,
   turns: Array<{ input: string; reply: string }>,
 ): Promise<{ facts: string[]; sensitivity: NonNullable<MemoryCaptureMetadata["sensitivity"]> }> {
@@ -62,7 +62,7 @@ export async function extractFacts(
   }
 }
 
-export interface Burst extends MemoryCaptureMetadata {
+interface Burst extends MemoryCaptureMetadata {
   scopeId: ScopeId;
   actorId?: string;
   conversationScopeId: ScopeId;
@@ -73,7 +73,7 @@ export interface Burst extends MemoryCaptureMetadata {
   timer?: NodeJS.Timeout;
 }
 
-export type TurnEndCtx = MemoryCaptureMetadata & {
+type TurnEndCtx = MemoryCaptureMetadata & {
   scopeId: ScopeId;
   input: string;
   reply: string;
@@ -85,7 +85,7 @@ export type TurnEndCtx = MemoryCaptureMetadata & {
   idempotencyKey?: string;
 };
 
-export function createBurstBuffer(
+function createBurstBuffer(
   quietMs: number,
   maxTurns: number,
   flush: (burst: Burst) => Promise<void>,
@@ -143,7 +143,7 @@ export function createBurstBuffer(
   };
 }
 
-export function burstCaptureContext(burst: Burst): MemoryCaptureContext {
+function burstCaptureContext(burst: Burst): MemoryCaptureContext {
   return {
     mode: "automatic",
     ...(burst.inheritedFacts !== undefined ? { inheritedFacts: burst.inheritedFacts } : {}),

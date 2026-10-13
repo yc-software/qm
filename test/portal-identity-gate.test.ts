@@ -131,7 +131,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   it("per-user reads bind their caller-named identity field to the portal actor", async () => {
     const alice = await token("U1");
     for (const path of [
-      "/v1/memory/history?principalId=",
+      "/v1/memory?principalId=",
       "/v1/contexts/policy?scope=channel:C1&principalId=",
       "/v1/sessions/s1/background?viewer=",
       "/v1/shared-sessions/token?viewer=",
@@ -162,17 +162,16 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
-  it("memory restore binds its body principalId to the portal actor", async () => {
-    assert.equal(
-      (await post("/v1/memory/restore", { principalId: "U2", revision: "r1", expectedRevision: "r0" })).status,
-      401,
-    );
-    const r = await post(
-      "/v1/memory/restore",
-      { principalId: "U2", revision: "r1", expectedRevision: "r0" },
-      { "x-portal-identity": await token("U1") },
-    );
-    assert.equal(r.status, 403, "restoring another person's memory must not pass on a bare valid actor");
+  it("memory edits bind their body principalId to the portal actor", async () => {
+    const patch = (headers: Record<string, string>) =>
+      fetch(`${base}/v1/memory`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ principalId: "U2", facts: [{ id: "1", text: "x" }] }),
+      });
+    assert.equal((await patch({})).status, 401);
+    const r = await patch({ "x-portal-identity": await token("U1") });
+    assert.equal(r.status, 403, "editing another person's memory must not pass on a bare valid actor");
   });
 
   it("directory resolve requires a portal actor even though it names no identity field", async () => {
