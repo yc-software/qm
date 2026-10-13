@@ -145,7 +145,7 @@ const PROTOCOLS: Record<
 };
 
 export function createDecisionBackend(opts: {
-  providers: () => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
+  providers: (ids: string[]) => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
   gateway?: { url: string; apiKey: string; apiKeyHeader?: string };
   credential: (slug: string) => Promise<{ host: string; enabled: boolean; header: [string, string] } | null>;
   fetch?: typeof fetch;
@@ -173,9 +173,15 @@ export function createDecisionBackend(opts: {
   return {
     async choose({ questions, state, model, signal }) {
       signal.throwIfAborted();
-      const provider = (await opts.providers()).find((p) => p.id === model.provider);
+      const aborted = new Promise<never>((_, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true }),
+      );
+      aborted.catch(() => {});
+      const provider = (await Promise.race([opts.providers([model.provider]), aborted])).find(
+        (p) => p.id === model.provider,
+      );
       if (!provider) throw new Error(`decision provider ${model.provider} is not configured`);
-      const { base, auth } = await endpoint(provider);
+      const { base, auth } = await Promise.race([endpoint(provider), aborted]);
       const keys = Object.keys(questions);
       const wire = PROTOCOLS[provider.protocol];
       const url = new URL(base);

@@ -1477,7 +1477,7 @@ export function buildApp(
     decisions,
     overrides.decisionBackend ??
       createDecisionBackend({
-        providers: async () => (await decisions?.providers()) ?? [],
+        providers: async (ids) => (await decisions?.providers(ids)) ?? [],
         ...(config.modelGateway?.apiKey
           ? {
               gateway: {
