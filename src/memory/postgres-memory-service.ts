@@ -51,7 +51,7 @@ const SCHEMA = [
     INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, created_at, updated_at)
     SELECT scope_id, text, sensitivity, sources, source_unknown, at, at
       FROM (SELECT * FROM snapshot UNION ALL SELECT * FROM legacy) f
-     WHERE btrim(text) <> '' AND text !~ '^<!-- (consolidated|captures-since-promote)'
+     WHERE btrim(text) <> '' AND text !~ '^(<!-- (consolidated|captures-since-promote)|#{1,6} )'
      ORDER BY scope_id, ord;
   END $$`,
 ];
