@@ -210,8 +210,9 @@ test("the catalog IS the gate: discovery rows with real paths are admitted, unli
   assert.equal(agentApiMatches("POST", "/v1/crons/abc/note"), true);
   assert.equal(agentApiMatches("GET", "/v1/crons/abc/note"), false, "note is POST-only");
   assert.equal(agentApiMatches("POST", "/v1/webhooks/abc/enable"), true);
-  assert.equal(agentApiMatches("PUT", "/v1/memory/self"), true);
-  assert.equal(agentApiMatches("PUT", "/v1/admin/memory"), true);
+  assert.equal(agentApiMatches("PATCH", "/v1/memory/facts"), true);
+  assert.equal(agentApiMatches("PUT", "/v1/memory/self"), false, "notebooks are edited by fact id, not rewritten");
+  assert.equal(agentApiMatches("PATCH", "/v1/admin/memory"), true);
   assert.equal(agentApiMatches("GET", "/v1/admin/whoami"), true);
   assert.equal(
     agentApiMatches("POST", "/v1/connectors/oauth/revoke"),

@@ -1356,7 +1356,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     match: (m, p) =>
       (p === "/v1/memory/self" && m === "GET") ||
-      (p === "/v1/memory/facts" && m !== "GET") ||
+      (p === "/v1/memory/facts" && (m === "POST" || m === "PATCH" || m === "DELETE")) ||
       (m === "POST" && p === "/v1/memory/search"),
     auth: "either",
     handle: agentMemory,
