@@ -2,6 +2,7 @@ import { previewFile } from "./file-open.ts";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { ref } from "lit/directives/ref.js";
 import { tip } from "./tooltip.ts";
 import { Check, ChevronDown, Download, createElement, type IconNode } from "lucide";
 
@@ -253,6 +254,12 @@ export function fieldSelect(props: {
     class=${`field-select${props.compact ? " compact" : ""}${props.className ? ` ${props.className}` : ""}`}
   >
     <select
+      ${ref((element) => {
+        if (!element || props.value === undefined) return;
+        queueMicrotask(() => {
+          (element as HTMLSelectElement).value = props.value!;
+        });
+      })}
       id=${props.id ?? nothing}
       aria-label=${props.ariaLabel ?? nothing}
       aria-description=${props.ariaDescription ?? nothing}

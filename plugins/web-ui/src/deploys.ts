@@ -5,8 +5,8 @@ import { Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "
 import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, icon, relTime } from "./ui";
-import { listBackLink, listPageTpl } from "./list-page";
-import { contextsState, ensureContexts, scopeChip } from "./contexts";
+import { groupListRows, listBackLink, listPageTpl, listTabsTpl } from "./list-page";
+import { contextsState, ensureContexts, scopeChip, scopeTitle } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
@@ -18,6 +18,7 @@ import {
 } from "./deploy-notices";
 import {
   deploymentAfterRestore,
+  deploymentActivityAt,
   deploymentActionView,
   deploymentArchiveUndoAvailable,
   deploymentCanManage as canManage,
@@ -52,6 +53,7 @@ const DEPLOY_EDIT_FIELDS: Record<DeployEditField, { endpoint: string; savedValue
   embedAncestors: { endpoint: "embed-ancestors", savedValue: (d) => (d.embedAncestors ?? []).join("\n") },
 };
 
+let deploysGrouped = true;
 let deployList: DeploymentView[] = [];
 let deployNotices: DeploymentNotices = { list: "", detail: null };
 let deployLoading = false;
@@ -121,26 +123,15 @@ function deployTabs(): TemplateResult {
     DEPLOY_TABS.map((tab) => [tab.value, inContext.filter((d) => deploymentTab(d, viewer) === tab.value).length]),
   ) as Record<DeploymentTab, number>;
   const tabs = DEPLOY_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || deployTab === tab.value);
-  return html`
-    <div class="cron-list-controls" role="tablist" aria-label="App view">
-      ${tabs.map(
-        (tab) => html`
-          <button
-            type="button"
-            role="tab"
-            aria-selected=${deployTab === tab.value}
-            class="cron-filter-chip ${deployTab === tab.value ? "active" : ""}"
-            @click=${() => {
-              deployTab = tab.value;
-              drawDeploysPage();
-            }}
-          >
-            <span>${tab.label}</span><span class="cron-filter-count">${counts[tab.value]}</span>
-          </button>
-        `,
-      )}
-    </div>
-  `;
+  return listTabsTpl(
+    "App view",
+    tabs.map((tab) => ({ ...tab, count: counts[tab.value] })),
+    deployTab,
+    (value) => {
+      deployTab = value;
+      drawDeploysPage();
+    },
+  );
 }
 
 function deploymentRow(d: DeploymentView): TemplateResult {
@@ -194,7 +185,7 @@ function drawDeploysPage(): void {
     query: deployQuery,
     viewer,
     sort: "newest",
-  });
+  }).sort((a, b) => deploymentActivityAt(b) - deploymentActivityAt(a));
   const allForTab = deployList.filter(
     (d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, deployScope),
   );
@@ -203,17 +194,6 @@ function drawDeploysPage(): void {
   else if (deployLoading && deployList.length === 0) empty = "Loading apps…";
   else if (deployQuery && allForTab.length) empty = "No apps match your search.";
   else if (deployScope) empty = "No apps in this context.";
-  const content = deployList.length
-    ? [
-        deployTabs(),
-        ...(deployNotices.list
-          ? [html`<div class="status deploy-list-notice" role="status" aria-live="polite">${deployNotices.list}</div>`]
-          : []),
-        ...(rows.length
-          ? rows.map(deploymentRow)
-          : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
-      ]
-    : [];
   const scoped = Boolean(scopedSession.active);
   deployPageHost.classList.toggle("scoped-view", scoped);
   render(
@@ -229,7 +209,22 @@ function drawDeploysPage(): void {
             drawDeploysPage();
           },
         },
-        rows: content,
+        filters: html`${deployList.length ? deployTabs() : nothing}${deployNotices.list ? html`<div class="status" role="status">${deployNotices.list}</div>` : nothing}`,
+        rows: rows.map(deploymentRow),
+        groups: groupListRows(
+          rows,
+          (d) => deploymentContextScope(d) ?? "",
+          (d) => scopeTitle(deploymentContextScope(d) ?? null),
+          deploymentRow,
+          deploymentActivityAt,
+        ),
+        grouping: {
+          value: deploysGrouped,
+          onChange: (value) => {
+            deploysGrouped = value;
+            drawDeploysPage();
+          },
+        },
         empty,
       })}
       ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}

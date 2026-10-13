@@ -85,6 +85,25 @@ test("GET /v1/skills returns metadata only; authorized detail fetch returns the 
   }
 });
 
+test("skill lists expose recorded use and fallback timestamps for recency ordering", async () => {
+  const srv = start();
+  try {
+    await publish(srv.skills, scopeId("personal", "U1"), "recent", "recent skill");
+    const skill = (await srv.skills.list()).find((item) => item.manifest.name === "recent")!;
+    await srv.skills.recordUse(skill.id, 12345);
+    const response = await fetch(`${srv.base}/v1/skills?principalId=U1`);
+    const body = (await response.json()) as {
+      skills: Array<{ id: string; lastUsedAt: number; createdAt: number; updatedAt: number }>;
+    };
+    const row = body.skills.find((item) => item.id === skill.id)!;
+    assert.equal(row.lastUsedAt, 12345);
+    assert.equal(row.createdAt, skill.createdAt);
+    assert.equal(row.updatedAt, skill.updatedAt);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("GET /v1/skills marks a private-channel skill editable for a member and not for a non-member", async () => {
   const srv = start();
   try {
@@ -326,6 +345,15 @@ test("GET /v1/skills can include every active scope variant without changing the
     );
     assert.equal(notes[0]!.shadowed, true);
     assert.equal(notes[1]!.shadowed, false);
+    const detail = await fetch(`${srv.base}/v1/skills/${notes[1]!.id}?principalId=U1`);
+    assert.equal(detail.status, 200);
+    assert.equal(((await detail.json()) as { skill: SkillView }).skill.body, "# notes");
+    const edit = await fetch(`${srv.base}/v1/skills/${notes[1]!.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", body: "changed" }),
+    });
+    assert.equal(edit.status, 404);
   } finally {
     await srv.close();
   }

@@ -21,20 +21,20 @@ import {
   statusCounts,
   type SkillStatusFilter,
 } from "./skill-registry";
-import { listBackLink, listPageTpl } from "./list-page";
+import { groupListRows, listBackLink, listPageTpl, listTabsTpl } from "./list-page";
 import { scopeTitle } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { SkillsRefreshSequence } from "./skills-refresh";
 import { SkillsMutationSequence } from "./skills-mutation";
+import { markdown } from "./message-markdown";
 import { tip } from "./tooltip";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 
 let skillRows: SkillItem[] = [];
 let skillsNotice = "";
 let skillSearch = "";
-let scopeFilter = "all";
-let sourceFilter = "all";
+let skillsGrouped = true;
 let statusFilter: SkillStatusFilter = "active";
 let createScopes: Array<{ scopeId: string; name: string }> = [];
 let skillsPageHost: HTMLElement | null = null;
@@ -151,13 +151,15 @@ function restoreFocusedFlow(target: HTMLElement | null): void {
     if (creating || editingTarget || archiveConfirmation || appState.currentView !== "skills") return;
     const skillId = target?.dataset.skillId;
     const matchingEdit = skillId
-      ? [...(skillsPageHost?.querySelectorAll<HTMLElement>(".skill-edit-trigger") ?? [])].find(
+      ? [...(skillsPageHost?.querySelectorAll<HTMLElement>(".skill-row") ?? [])].find(
           (element) => element.dataset.skillId === skillId,
         )
       : null;
     const search = skillsPageHost?.querySelector<HTMLElement>(".list-search input") ?? null;
     const create = skillsPageHost?.querySelector<HTMLElement>(".list-page-action") ?? null;
     const fallback = skillId ? (matchingEdit ?? search ?? create) : (create ?? search);
+    const group = fallback?.closest("details");
+    if (group) group.open = true;
     restoreDialogFocus(target, () => fallback ?? null);
   });
 }
@@ -200,46 +202,31 @@ function skillScopeTitle(s: SkillItem): string {
   return scopeLabel(s.scope);
 }
 
-function skillVariant(s: SkillItem, hasScopeVariants: boolean): TemplateResult {
-  const actions = skillActions(s);
+function skillVariant(s: SkillItem): TemplateResult {
   const archived = isArchivedSkill(s);
-  let archiveLabel = "Archive";
-  if (deleting === s.id) archiveLabel = "Working…";
-  else if (archived) archiveLabel = "Restore";
   return html`
-    <div class="skill-variant ${archived ? "archived" : ""}">
-      <a
-        class="skill-variant-main"
-        href=${deepLinkPath(UI_BASE, "skills", null, null, s.id ?? null)}
-        aria-label=${`Open /${s.name}`}
-        @click=${(event: MouseEvent) => {
-          if (!isPlainLeftClick(event)) return;
-          event.preventDefault();
-          openSkill(s, { push: true });
-        }}
-      >
-        <code class="skill-variant-name" dir="auto">/${s.name}</code>
-        <span class="skill-variant-description" ${tip(s.description)}>${s.description}</span>
-      </a>
-      <div class="skill-variant-state">
-        ${archived ? html`<span class="badge">Archived</span>` : nothing}
-        ${!archived && hasScopeVariants ? html`<span class="badge">Scope variant</span>` : nothing}
-        ${actions.edit && !archived ? html`<button class="btn skill-edit-trigger" data-skill-id=${s.id ?? ""} type="button" ?disabled=${deleting === s.id} @click=${() => void startEdit(s)}>Edit</button>` : nothing}
-        ${
-          actions.delete
-            ? html`<button
-                class="btn skill-archive-trigger"
-                data-skill-id=${s.id ?? ""}
-                type="button"
-                ?disabled=${deleting === s.id}
-                @click=${(event: Event) => void deleteSkill(s, event.currentTarget as HTMLElement)}
-              >
-                ${archiveLabel}
-              </button>`
-            : nothing
-        }
-      </div>
-    </div>
+    <a
+      class="list-row skill-row ${archived ? "archived" : ""}"
+      data-skill-id=${s.id ?? ""}
+      href=${deepLinkPath(UI_BASE, "skills", null, null, s.id ?? null)}
+      aria-label=${`Open /${s.name}`}
+      @click=${(event: MouseEvent) => {
+        if (!isPlainLeftClick(event)) return;
+        event.preventDefault();
+        openSkill(s, { push: true });
+      }}
+    >
+      <span class="list-row-title" dir="auto">/${s.name}</span>
+      <span class="skill-row-description" dir="auto" ${tip(s.description)}>${s.description}</span>
+      ${
+        !skillsGrouped || archived
+          ? html`<span class="list-row-meta">
+              ${!skillsGrouped ? skillScopeTitle(s) : nothing}
+              ${archived ? html`<span class="badge">Archived</span>` : nothing}
+            </span>`
+          : nothing
+      }
+    </a>
   `;
 }
 
@@ -249,6 +236,8 @@ function openSkill(s: SkillItem, opts: { push?: boolean } = {}): void {
   syncSkillUrl(activeSkillId, opts.push);
   const archived = isArchivedSkill(s);
   const host = document.createElement("div");
+  const instructions = document.createElement("div");
+  const actions = skillActions(s);
   host.className = "resource-pane skill-pane";
   render(
     html`<div class="resource-detail">
@@ -256,6 +245,10 @@ function openSkill(s: SkillItem, opts: { push?: boolean } = {}): void {
       <div class="resource-heading">
         <h2 dir="auto">/${s.name}</h2>
         ${archived ? html`<span class="badge">Archived</span>` : nothing}
+      </div>
+      <div class="actions">
+        ${actions.edit && !archived ? html`<button class="btn skill-edit-trigger" data-skill-id=${s.id ?? ""} @click=${() => void startEdit(s)}>Edit</button>` : nothing}
+        ${actions.delete ? html`<button class="btn" data-skill-id=${s.id ?? ""} @click=${(event: Event) => void deleteSkill(s, event.currentTarget as HTMLElement)}>${archived ? "Restore" : "Archive"}</button>` : nothing}
       </div>
       <div class="field">
         <label>Description</label>
@@ -281,18 +274,27 @@ function openSkill(s: SkillItem, opts: { push?: boolean } = {}): void {
         <label>Assets</label>
         <div class="value">${s.assetCount ?? 0}</div>
       </div>
+      <div class="field">
+        <label>Instructions</label>
+        ${instructions}
+      </div>
     </div>`,
     host,
   );
   appState.mainEl.replaceChildren(host);
-}
-
-function skillGroup(skills: SkillItem[]): TemplateResult {
-  const activeVariants = skills.filter((skill) => !isArchivedSkill(skill)).length;
-  const hasScopeVariants = activeVariants > 1;
-  return html`<section class="skill-group" aria-label=${`/${skills[0]?.name ?? "skill"}`}>
-    ${skills.map((skill) => skillVariant(skill, hasScopeVariants))}
-  </section>`;
+  render(html`<div class="value">Loading instructions…</div>`, instructions);
+  void api<{ skill: SkillItem }>(`/api/skills/${encodeURIComponent(s.id ?? "")}`)
+    .then(({ skill }) => {
+      if (host.parentElement !== appState.mainEl || activeSkillId !== s.id) return;
+      render(skill.body ? markdown(skill.body) : html`<div class="value">No instructions.</div>`, instructions);
+    })
+    .catch((error: unknown) => {
+      if (host.parentElement !== appState.mainEl || activeSkillId !== s.id) return;
+      render(
+        html`<div class="form-error" role="alert">${errMessage(error, "Failed to load instructions.")}</div>`,
+        instructions,
+      );
+    });
 }
 
 function editorPane() {
@@ -528,6 +530,10 @@ function creatorPane() {
   `;
 }
 
+function skillActivity(skill: SkillItem): number {
+  return skill.lastUsedAt ?? skill.updatedAt ?? skill.createdAt ?? 0;
+}
+
 function drawSkills(loading = false): void {
   if (appState.currentView !== "skills" || !appState.mainEl) return;
   activeSkillId = null;
@@ -541,7 +547,7 @@ function drawSkills(loading = false): void {
     render(creating ? creatorPane() : editorPane(), skillsPageHost);
     return;
   }
-  const filters = { query: skillSearch, scope: scopeFilter, source: sourceFilter, status: statusFilter };
+  const filters = { query: skillSearch, scope: "all", source: "all", status: statusFilter };
   const scopedScope = scopedSession.active?.scopeId ?? null;
   skillsPageHost.classList.toggle("scoped-view", Boolean(scopedScope));
   let groups = filterSkillGroups(groupSkills(skillRows), filters);
@@ -552,13 +558,17 @@ function drawSkills(loading = false): void {
         skills: group.skills.filter((skill) => skill.scopeId === scopedScope),
       }))
       .filter((group) => group.skills.length > 0);
-  const filtered = groups.flatMap((group) => group.skills);
+  const filtered = groups.flatMap((group) => group.skills).sort((a, b) => skillActivity(b) - skillActivity(a));
   const counts = statusCounts(skillRows);
-  const rows: TemplateResult[] = groups.map((group) => skillGroup(group.skills));
+  const rows = groupListRows(
+    filtered,
+    (skill) => skill.scopeId ?? skill.scope,
+    skillScopeTitle,
+    skillVariant,
+    skillActivity,
+  );
   const clearFilters = () => {
     skillSearch = "";
-    scopeFilter = "all";
-    sourceFilter = "all";
     statusFilter = "all";
     drawSkills();
   };
@@ -575,6 +585,13 @@ function drawSkills(loading = false): void {
   render(
     html`${scopedViewTopbar("skills", () => drawSkills())}${listPageTpl({
       title: "Skills",
+      grouping: {
+        value: skillsGrouped,
+        onChange: (value) => {
+          skillsGrouped = value;
+          drawSkills();
+        },
+      },
       action: { label: "New skill", onClick: startCreate },
       search: {
         value: skillSearch,
@@ -584,73 +601,25 @@ function drawSkills(loading = false): void {
           drawSkills();
         },
       },
-      filters: html`<div class="skill-registry-controls">
-          <div class="resource-tabs" role="group" aria-label="Filter by skill status">
-            ${(
-              [
-                ["active", "Active", counts.active],
-                ["archived", "Archived", counts.archived],
-                ["all", "All", counts.all],
-              ] as const
-            ).map(
-              ([value, label, count]) =>
-                html`<button
-                  type="button"
-                  aria-pressed=${statusFilter === value}
-                  class=${statusFilter === value ? "active" : ""}
-                  @click=${() => {
-                    statusFilter = value;
-                    drawSkills();
-                  }}
-                >
-                  ${label}<span>${count}</span>
-                </button>`,
-            )}
-          </div>
-          <div class="skill-filter-fields">
-            <label class="list-select"
-              ><span>Scope</span>${fieldSelect({
-                compact: true,
-                ariaLabel: "Filter skills by scope",
-                value: scopeFilter,
-                onChange: (value) => {
-                  scopeFilter = value;
-                  drawSkills();
-                },
-                options: [
-                  html`<option value="all">All scopes</option>`,
-                  html`<option value="personal">Personal</option>`,
-                  html`<option value="channel">Channel</option>`,
-                  html`<option value="group">Project / group</option>`,
-                  html`<option value="team">Team</option>`,
-                  html`<option value="org">Organization</option>`,
-                ],
-              })}</label
-            >
-            <label class="list-select"
-              ><span>Source</span>${fieldSelect({
-                compact: true,
-                ariaLabel: "Filter skills by source",
-                value: sourceFilter,
-                onChange: (value) => {
-                  sourceFilter = value;
-                  drawSkills();
-                },
-                options: [
-                  html`<option value="all">All sources</option>`,
-                  html`<option value="native">Local</option>`,
-                  html`<option value="pack">Skill packs</option>`,
-                  html`<option value="overrides">Overrides</option>`,
-                ],
-              })}</label
-            >
-          </div>
-        </div>
-        <div class="skill-result-count" aria-live="polite">
-          ${loading ? "Loading…" : `${filtered.length} skill${filtered.length === 1 ? "" : "s"} in ${groups.length} ${groups.length === 1 ? "group" : "groups"}`}
-        </div>
-        ${skillsNotice ? html`<div class="status">${skillsNotice}</div>` : nothing}`,
-      rows,
+      filters: html`${listTabsTpl(
+        "Filter by skill status",
+        [
+          { value: "active", label: "Active", count: counts.active },
+          { value: "archived", label: "Archived", count: counts.archived },
+          { value: "all", label: "All", count: counts.all },
+        ].filter((tab) => tab.value === "active" || counts.archived > 0 || statusFilter === tab.value) as Array<{
+          value: SkillStatusFilter;
+          label: string;
+          count: number;
+        }>,
+        statusFilter,
+        (value) => {
+          statusFilter = value;
+          drawSkills();
+        },
+      )}${skillsNotice ? html`<div class="status">${skillsNotice}</div>` : nothing}`,
+      rows: filtered.map(skillVariant),
+      groups: rows,
       empty,
     })}${archiveConfirmation ? archiveDialog(archiveConfirmation) : nothing}`,
     skillsPageHost,
@@ -670,15 +639,7 @@ function closeArchiveDialog(): void {
   archiveFocusTarget = null;
   drawSkills();
   setSkillsBackgroundInert(false);
-  queueMicrotask(() => {
-    if (archiveConfirmation || appState.currentView !== "skills") return;
-    const fallback = target?.dataset.skillId
-      ? [...document.querySelectorAll<HTMLElement>(".skill-archive-trigger")].find(
-          (element) => element.dataset.skillId === target.dataset.skillId,
-        )
-      : null;
-    restoreDialogFocus(target, () => fallback);
-  });
+  restoreFocusedFlow(target);
 }
 
 function archiveDialog(skill: SkillItem): TemplateResult {
@@ -856,17 +817,7 @@ async function performArchive(s: SkillItem): Promise<void> {
     deleting = null;
     skillsNotice = errMessage(e, "Failed to archive skill.");
     drawSkills();
-    requestAnimationFrame(() => {
-      const fallback = focusTarget?.dataset.skillId
-        ? [...(skillsPageHost?.querySelectorAll<HTMLElement>(".skill-archive-trigger") ?? [])].find(
-            (element) => element.dataset.skillId === focusTarget.dataset.skillId,
-          )
-        : null;
-      restoreDialogFocus(
-        focusTarget,
-        () => fallback ?? skillsPageHost?.querySelector<HTMLElement>(".list-search input") ?? null,
-      );
-    });
+    restoreFocusedFlow(focusTarget);
   }
 }
 

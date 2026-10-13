@@ -3,8 +3,8 @@ import { Check, ChevronDown, Plus } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, copyText, icon, relTime, setFormMenuValue, toggleFormMenu } from "./ui";
-import { listBackLink, listPageTpl } from "./list-page";
-import { ensureContexts, scopeChip } from "./contexts";
+import { groupListRows, listBackLink, listPageTpl } from "./list-page";
+import { ensureContexts, scopeChip, scopeTitle } from "./contexts";
 import { appState } from "./shell";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 
@@ -54,6 +54,7 @@ const WEBHOOK_SCHEMES: Array<{ value: WebhookScheme; label: string; guidance: st
   },
 ];
 
+let webhooksGrouped = true;
 let webhookList: WebhookView[] = [];
 let webhooksScope: string | null = null;
 let webhooksPageHost: HTMLElement | null = null;
@@ -140,8 +141,7 @@ function drawWebhooksPage(): void {
         !webhooksSearch.trim() ||
         `${w.action} ${w.verification.scheme}`.toLowerCase().includes(webhooksSearch.trim().toLowerCase()),
     )
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .map((w) => webhookPageRow(w));
+    .sort((a, b) => (b.lastFiredAt ?? b.createdAt) - (a.lastFiredAt ?? a.createdAt));
   let empty = "No webhooks yet.";
   if (webhooksNotice) empty = webhooksNotice;
   else if (webhooksLoading && webhookList.length === 0) empty = "Loading webhooks…";
@@ -165,7 +165,22 @@ function drawWebhooksPage(): void {
           drawWebhooksPage();
         },
       },
-      rows: [...noticeRow, ...rows],
+      filters: html`${noticeRow}`,
+      rows: rows.map(webhookPageRow),
+      groups: groupListRows(
+        rows,
+        (w) => w.ownerScopeId,
+        (w) => scopeTitle(w.ownerScopeId),
+        webhookPageRow,
+        (w) => w.lastFiredAt ?? w.createdAt,
+      ),
+      grouping: {
+        value: webhooksGrouped,
+        onChange: (value) => {
+          webhooksGrouped = value;
+          drawWebhooksPage();
+        },
+      },
       empty,
     }),
     webhooksPageHost,

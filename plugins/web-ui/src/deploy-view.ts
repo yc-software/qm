@@ -86,6 +86,10 @@ export function deploymentLatestAt(d: DeploymentView): number {
   return applied?.createdAt ?? d.versions?.at(-1)?.createdAt ?? 0;
 }
 
+export function deploymentActivityAt(d: DeploymentView): number {
+  return d.lastAccessAt ?? (deploymentLatestAt(d) || d.updatedAt || d.createdAt || 0);
+}
+
 export function deploymentTab(d: DeploymentView, viewer: string | undefined): DeploymentTab {
   if (d.status === "archived") return "archived";
   if (!viewer) return "shared";

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deploymentAfterRestore,
+  deploymentActivityAt,
   deploymentActionView,
   deploymentArchiveUndoAvailable,
   deploymentCanManage,
@@ -268,4 +269,15 @@ test("list refresh completion leaves a pending detail's loading state untouched"
   finish();
   await completion;
   assert.equal(state.detailLoading, true);
+});
+
+test("app recency prefers use over deployment time and falls back for unversioned apps", () => {
+  const used = deployment({ lastAccessAt: 300, versions: [{ version: 1, createdAt: 10 }] });
+  const deployed = deployment({ versions: [{ version: 1, createdAt: 200 }] });
+  const created = deployment({ versions: [], createdAt: 100 });
+  assert.deepEqual(
+    [created, deployed, used].sort((a, b) => deploymentActivityAt(b) - deploymentActivityAt(a)),
+    [used, deployed, created],
+  );
+  assert.equal(deploymentActivityAt(deployment({ versions: [], updatedAt: 150, createdAt: 100 })), 150);
 });

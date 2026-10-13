@@ -34,20 +34,19 @@ test("Files uses compact rows that open directly", () => {
   assert.match(css, /\.file-row \.list-row-meta \{\s*gap: 14px;/);
   assert.match(
     css,
-    /\.file-list,\s*\.file-groups,\s*\.deploy-list,\s*\.files-page \.file-drop \{\s*width: min\(960px, 100%\);\s*margin-inline: auto;/,
+    /\.file-list,\s*\.list-groups,\s*\.deploy-list,\s*\.files-page \.file-drop \{\s*width: min\(960px, 100%\);\s*margin-inline: auto;/,
   );
   assert.doesNotMatch(
     css,
-    /\.files-page \.list-page-head,\s*\.files-page \.file-drop,\s*\.files-page \.list-toolbar,\s*\.files-page \.file-groups,\s*\.files-page \.file-list \{\s*margin-right: 0;\s*margin-left: 0;/,
+    /\.files-page \.list-page-head,\s*\.files-page \.file-drop,\s*\.files-page \.list-toolbar,\s*\.files-page \.list-groups,\s*\.files-page \.file-list \{\s*margin-right: 0;\s*margin-left: 0;/,
   );
 });
 
 test("Files groups rows by scope instead of repeating scope badges", () => {
-  assert.match(source, /function groupFilesByScope\(files: FileRow\[\]\)/);
-  assert.match(source, /groups\.map\(/);
-  assert.match(source, /<h2>\$\{scopeTitle\(group\.scope\)\}<\/h2>/);
+  assert.match(source, /groups: groupListRows\(/);
+  assert.match(source, /scopeTitle\(fileScope\(file\)\)/);
   assert.doesNotMatch(source, /scopeChip/);
-  assert.match(css, /\.file-scope-group h2 \{/);
+  assert.match(css, /\.list-group summary \{/);
   assert.match(source, /else if \(filesScope\) \{\s*filesScope = null;/);
 });
 
