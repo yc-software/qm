@@ -2202,3 +2202,70 @@ test("Codex skips the stopped reply when shutdown cancels the turn, leaving it o
   );
   assert.equal(turnAtSeq(entries, entries[0]!.seq)?.answer, undefined);
 });
+
+function silentAfterStopCodexBinary(dir: string, ackInterrupt: boolean): string {
+  const path = join(dir, "silent-codex");
+  writeFileSync(
+    path,
+    `#!/usr/bin/env node
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "t" } } });
+  if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "turn", status: "inProgress", items: [] } } });
+    return require("node:fs").writeFileSync(${JSON.stringify(join(dir, "started"))}, "");
+  }
+  if (msg.method === "turn/interrupt" && ${ackInterrupt}) return send({ id: msg.id, result: {} });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+for (const [ackInterrupt, viaCancel] of [
+  [true, false],
+  [false, false],
+  [true, true],
+] as const)
+  test(
+    `a ${viaCancel ? "cancelled" : "stopped"} Codex turn settles when ${ackInterrupt ? "completion" : "the interrupt reply"} never arrives`,
+    { timeout: 5000 },
+    async (t) => {
+      const dir = mkdtempSync(join(tmpdir(), "qm-codex-silent-stop-"));
+      const signals = createMemoryRunSignalStore();
+      const harness = createCodexHarness({
+        binaryPath: silentAfterStopCodexBinary(dir, ackInterrupt),
+        env: testHarnessEnv(dir),
+        signals,
+        stopGraceMs: 200,
+      });
+      t.after(async () => {
+        await harness.turns.close?.();
+        rmSync(dir, { recursive: true, force: true });
+      });
+      const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+      const cancel = new AbortController();
+      const running = harness.turns.runTurn({
+        ...(viaCancel ? { cancel: cancel.signal } : {}),
+        session: { id: "silent" } as Session,
+        input: "hi",
+        runId: "run-silent",
+        systemPrompt: "be concise",
+        history: [],
+        tools: {} as HarnessTurnInput["tools"],
+        scopeLabel: scope,
+        orgScopeId: scope,
+        emit: async (entry) => ({ ...entry, sessionId: "silent", seq: 1, createdAt: Date.now() }) as SessionEntry,
+        recordModelCall: () => {},
+      });
+      while (!existsSync(join(dir, "started"))) await new Promise((resolve) => setTimeout(resolve, 10));
+      if (viaCancel) cancel.abort();
+      else await signals.send("run-silent", { kind: "abort" });
+      const result = await running;
+      assert.equal(result.stopped, true);
+      assert.equal(result.stoppedByUser, viaCancel ? undefined : true);
+    },
+  );

@@ -55,6 +55,8 @@ export interface CodexHarnessOptions extends HarnessToolPlumbing {
   env?: NodeJS.ProcessEnv;
   turnWallClockMs?: number;
   appServerStartTimeoutMs?: number;
+  /** How long a stopped turn waits for Codex to confirm before it settles as stopped anyway. */
+  stopGraceMs?: number;
   /** Cap on simultaneous per-user app-server launches (default 8). */
   maxConcurrentUserServers?: number;
   /** Custodian of the ChatGPT-subscription Codex login (keychain-backed in production). */
@@ -171,6 +173,7 @@ type StartingRuntime = {
   waiters: number;
 };
 const CODEX_START_TIMEOUT_MS = 30_000;
+const CODEX_STOP_GRACE_MS = 10_000;
 
 // Codex app-server TurnError.codexErrorInfo (protocol v2, codex-cli 0.156.1). Strings and single-key
 // objects; HTTP-backed variants carry httpStatusCode.
@@ -1193,6 +1196,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     };
     let turnId = "";
     let stoppedByUser = false;
+    let stopTimer: NodeJS.Timeout | undefined;
     const interrupt = async (stopped: boolean) => {
       if (stopped && !state.stopped) {
         state.stoppedReply = textFromTurn({
@@ -1203,7 +1207,18 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       }
       state.stopped ||= stopped;
       toolAbort.abort();
-      if (turnId) await rt.server.request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
+      const graceMs = opts.stopGraceMs ?? CODEX_STOP_GRACE_MS;
+      if (stopped && !stopTimer) {
+        stopTimer = setTimeout(() => {
+          runtimeCleanupRequested = true;
+          state.resolve({ id: turnId, status: "interrupted", items: [] });
+        }, graceMs);
+        stopTimer.unref();
+      }
+      if (turnId)
+        await rt.server
+          .request("turn/interrupt", { threadId, turnId }, AbortSignal.timeout(graceMs))
+          .catch(() => undefined);
     };
     state.interrupt = () => interrupt(false);
     let stoppedReplySaved: Promise<void> | undefined;
@@ -1378,6 +1393,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       }
     } finally {
       if (timer) clearTimeout(timer);
+      if (stopTimer) clearTimeout(stopTimer);
       try {
         await stopSignals?.();
       } catch (error) {
