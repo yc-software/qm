@@ -9,7 +9,8 @@ import { test, afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { defaultModelForHarness } from "../src/model/pi-models.ts";
+import { defaultModelForHarness, defaultWebuiModelIds } from "../src/model/pi-models.ts";
+import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -69,4 +70,18 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("web turns accept a custom-provider model when no web UI model list is configured", () => {
+  setCustomProviders([
+    {
+      id: "acme",
+      name: "Acme",
+      protocol: "openai",
+      baseUrl: "http://127.0.0.1:9/v1",
+      models: [{ id: "acme-chat" }],
+    },
+  ]);
+  assert.ok(defaultWebuiModelIds().includes("acme-chat"));
+  assert.equal(validateWebTurnModelOptions({ model: "acme-chat" }, null), null);
 });
