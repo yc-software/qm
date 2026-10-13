@@ -2494,8 +2494,17 @@ export function buildApp(
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   let ingressMaintenance: Promise<void> | undefined;
+  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
+  const memoryTidy = createMemoryTidyService({
+    store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
+    memory: baseMemory,
+    timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
+    crons,
+    scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
+  });
   const scheduler = createScheduler({
     admittedWork,
+    skipFire: (cron) => memoryTidy.skipFire(cron),
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     lock: advisoryLock,
     crons,
@@ -2523,7 +2532,6 @@ export function buildApp(
       await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
     },
   });
-  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
     sessions,
@@ -2532,19 +2540,15 @@ export function buildApp(
     enabled: config.suggestedActivitiesEnabled === true,
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
-  const memoryTidy = createMemoryTidyService({
-    store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
-    notebooks: async () => (await baseMemory.metadata?.()) ?? new Map(),
-    timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
-    crons,
-    scheduler,
-  });
   const platformCronMaintenance = createSweeper(
-    () =>
-      Promise.all([
-        leaderLease.hold("suggested-activities:maintenance", () => suggestedActivities.maintain()),
-        leaderLease.hold("memory-tidy:maintenance", () => memoryTidy.maintain()),
-      ]),
+    async () => {
+      await leaderLease
+        .hold("suggested-activities:maintenance", () => suggestedActivities.maintain())
+        .catch(reportFailureAs("suggested activities: maintain", undefined));
+      await leaderLease
+        .hold("memory-tidy:maintenance", () => memoryTidy.maintain())
+        .catch(reportFailureAs("memory tidy: maintain", undefined));
+    },
     60 * 60_000,
     { label: "platform-crons", immediate: true },
   );

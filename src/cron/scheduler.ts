@@ -90,6 +90,7 @@ export interface SchedulerDeps {
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
+  skipFire?: (cron: Cron) => Promise<string | undefined>;
   fireLoop?: (
     loopId: string,
     fireKey: string,
@@ -225,6 +226,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         note: "Cron is no longer enabled",
       });
       return { authzFailed: true };
+    }
+    const skipped = scheduledAt !== undefined ? await deps.skipFire?.(current) : undefined;
+    if (skipped) {
+      await deps.crons.recordFire(cron.id, {
+        fireKey,
+        threadRef: cronFireThreadRef(cron.id, fireKey),
+        firedAt: t,
+        endedAt: now(),
+        scheduledAt,
+        status: "silent",
+        note: skipped,
+      });
+      return { authzFailed: false };
     }
     return fireEnabled(current, t, fireKey, scheduledAt);
   }

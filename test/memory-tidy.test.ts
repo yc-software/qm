@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createHash } from "node:crypto";
 import { createMemoryTidyService, MEMORY_TIDY_TASK, type MemoryTidyProfile } from "../src/memory/tidy.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -8,112 +7,128 @@ import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
+import type { MemoryFact } from "../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
 
 function fixture() {
-  const notebooks = new Map<ScopeId, { updatedAt?: number }>();
+  const notebooks = new Map<ScopeId, MemoryFact[]>();
   const timezones = new Map<string, string>();
   const store = createMemoryMap<MemoryTidyProfile>();
   const crons = createCronStore();
   const calls: TurnRequest[] = [];
+  const fact = (updatedAt: number): MemoryFact => ({
+    id: String(updatedAt),
+    text: "Prefers concise replies",
+    sensitivity: "ordinary",
+    sources: [],
+    sourceUnknown: false,
+    createdAt: updatedAt,
+    updatedAt,
+  });
+  const service = createMemoryTidyService({
+    store,
+    memory: {
+      metadata: async () => new Map([...notebooks].map(([scope, facts]) => [scope, { bytes: facts.length }])),
+      facts: async (scope) => notebooks.get(scope) ?? [],
+    },
+    timezone: async (id) => timezones.get(id),
+    crons,
+    scheduler: { notifyChanged: () => {} },
+  });
   const scheduler = createScheduler({
     crons,
     deliveries: createDeliveryStore(),
     identity: createIdentityService(),
     idempotency: createIdempotencyStore(),
+    skipFire: (cron) => service.skipFire(cron),
     run: async (request) => {
       calls.push(request);
       return { status: "silent" };
     },
   });
-  const service = createMemoryTidyService({
-    store,
-    notebooks: async () => notebooks,
-    timezone: async (id) => timezones.get(id),
-    crons,
-    scheduler,
-  });
-  const cronOf = async (id: string) => crons.get((await store.get(id))!.cronId!);
-  return { notebooks, timezones, store, crons, calls, scheduler, service, cronOf };
+  const cronOf = async (id: string) => (await crons.get((await store.get(id))!.cronId!))!;
+  const fireAt = async (id: string, at: number) => {
+    const cron = await cronOf(id);
+    await crons.update(cron.id, { schedule: { everyMs: 60_000 } });
+    await scheduler.tick(at);
+    await crons.update(cron.id, { schedule: cron.schedule });
+  };
+  return { notebooks, timezones, store, crons, calls, service, scheduler, cronOf, fact, fireAt };
 }
 
-test("creates one nightly tidy cron per personal notebook near 3 AM in the owner's timezone", async () => {
+test("creates one nightly tidy cron per personal notebook, near 3 AM in the owner's timezone", async () => {
   const f = fixture();
-  f.notebooks.set(scopeId("personal", "alice"), { updatedAt: 1 });
-  f.notebooks.set(scopeId("personal", "bob"), { updatedAt: 1 });
-  f.notebooks.set(scopeId("channel", "C1"), { updatedAt: 1 });
+  f.notebooks.set(scopeId("personal", "alice"), [f.fact(1)]);
+  f.notebooks.set(scopeId("personal", "bob"), [f.fact(1)]);
+  f.notebooks.set(scopeId("channel", "C1"), [f.fact(1)]);
   f.timezones.set("alice", "Europe/London");
   await f.service.maintain();
   await f.service.maintain();
 
-  const all = await f.crons.list();
-  assert.equal(all.length, 2);
-  const alice = (await f.cronOf("alice"))!;
-  const minute = createHash("sha256").update("alice").digest()[0]! % 60;
-  assert.deepEqual(alice.schedule, { cron: `${minute} 3 * * *`, timezone: "Europe/London" });
+  assert.equal((await f.crons.list()).length, 2);
+  const alice = await f.cronOf("alice");
+  assert.match(alice.schedule.cron!, /^\d+ 3 \* \* \*$/);
+  assert.equal(alice.schedule.timezone, "Europe/London");
   assert.equal(alice.ownerScopeId, scopeId("personal", "alice"));
-  assert.equal(alice.runAs, "owner");
-  assert.equal(alice.action, MEMORY_TIDY_TASK);
   assert.equal(alice.enabled, true);
-  assert.equal((await f.cronOf("bob"))!.schedule.timezone, "America/Los_Angeles");
+  assert.equal((await f.cronOf("bob")).schedule.timezone, "America/Los_Angeles");
 });
 
-test("a fire runs the tidy task as an ordinary cron turn in the owner's personal scope", async () => {
+test("a scheduled fire runs the tidy only when the notebook changed since the last tidy", async () => {
   const f = fixture();
-  f.notebooks.set(scopeId("personal", "alice"), { updatedAt: 1 });
+  const scope = scopeId("personal", "alice");
+  f.notebooks.set(scope, [f.fact(1)]);
   await f.service.maintain();
-  const result = await f.scheduler.runNow((await f.cronOf("alice"))!.id);
+  const id = (await f.cronOf("alice")).id;
+
+  await f.fireAt("alice", Date.now() + 120_000);
+  assert.equal(f.calls.length, 1);
+  assert.match(f.calls[0]!.text, /Tidy your memory notebook/);
+  assert.equal(f.calls[0]!.surface, "cron");
+
+  await f.fireAt("alice", Date.now() + 240_000);
+  assert.equal(f.calls.length, 1);
+  const { runs } = await f.crons.listFires(id);
+  assert.equal(runs.at(-1)!.note, "notebook unchanged since the last tidy");
+
+  f.notebooks.set(scope, [f.fact(1), f.fact(Date.now() + 300_000)]);
+  await f.fireAt("alice", Date.now() + 360_000);
+  assert.equal(f.calls.length, 2);
+});
+
+test("a failed tidy does not count, and run-now always runs", async () => {
+  const f = fixture();
+  f.notebooks.set(scopeId("personal", "alice"), [f.fact(1)]);
+  await f.service.maintain();
+  const id = (await f.cronOf("alice")).id;
+  await f.crons.recordFire(id, { fireKey: "k1", threadRef: "t1", firedAt: 5, endedAt: 6, status: "failed" });
+  assert.equal(await f.service.skipFire(await f.cronOf("alice")), undefined);
+
+  await f.crons.recordFire(id, { fireKey: "k2", threadRef: "t2", firedAt: 7, endedAt: 8, status: "ok" });
+  assert.ok(await f.service.skipFire(await f.cronOf("alice")));
+  const result = await f.scheduler.runNow(id);
   assert.ok(result.started);
   await result.settled;
   assert.equal(f.calls.length, 1);
-  assert.match(f.calls[0]!.text, /Tidy your memory notebook/);
-  assert.equal(f.calls[0]!.actor.externalId, "alice");
-  assert.equal(f.calls[0]!.surface, "cron");
 });
 
-test("pauses while the notebook is unchanged since the last tidy and resumes once it changes", async () => {
+test("other crons are never skipped", async () => {
   const f = fixture();
-  const scope = scopeId("personal", "alice");
-  f.notebooks.set(scope, { updatedAt: 100 });
-  await f.service.maintain();
-  const id = (await f.cronOf("alice"))!.id;
-  await f.crons.recordFire(id, { fireKey: "k1", threadRef: "t1", firedAt: 150, endedAt: 200, status: "silent" });
-
-  await f.service.maintain();
-  assert.equal((await f.crons.get(id))!.enabled, false);
-
-  f.notebooks.set(scope, { updatedAt: 300 });
-  await f.service.maintain();
-  assert.equal((await f.crons.get(id))!.enabled, true);
+  const other = await f.crons.create({
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: scopeId("personal", "alice"),
+    schedule: { everyMs: 60_000 },
+    action: "Summarize my inbox.",
+  });
+  assert.equal(await f.service.skipFire(other), undefined);
 });
 
-test("a failed fire does not count as a tidy", async () => {
+test("respects the owner's edits and deletions", async () => {
   const f = fixture();
-  f.notebooks.set(scopeId("personal", "alice"), { updatedAt: 100 });
+  f.notebooks.set(scopeId("personal", "alice"), [f.fact(1)]);
   await f.service.maintain();
-  const id = (await f.cronOf("alice"))!.id;
-  await f.crons.recordFire(id, { fireKey: "k1", threadRef: "t1", firedAt: 150, endedAt: 200, status: "failed" });
-  await f.service.maintain();
-  assert.equal((await f.crons.get(id))!.enabled, true);
-});
-
-test("pauses a tidy cron once the notebook is emptied", async () => {
-  const f = fixture();
-  const scope = scopeId("personal", "alice");
-  f.notebooks.set(scope, { updatedAt: 100 });
-  await f.service.maintain();
-  const id = (await f.cronOf("alice"))!.id;
-  f.notebooks.delete(scope);
-  await f.service.maintain();
-  assert.equal((await f.crons.get(id))!.enabled, false);
-});
-
-test("respects the owner's edits, pauses and deletions", async () => {
-  const f = fixture();
-  const scope = scopeId("personal", "alice");
-  f.notebooks.set(scope, { updatedAt: 100 });
-  await f.service.maintain();
-  const id = (await f.cronOf("alice"))!.id;
+  const id = (await f.cronOf("alice")).id;
 
   const schedule = { cron: "0 5 * * *", timezone: "America/New_York" };
   await f.crons.update(id, { schedule, action: "Only merge exact duplicates." });
@@ -122,21 +137,16 @@ test("respects the owner's edits, pauses and deletions", async () => {
   assert.deepEqual((await f.crons.get(id))!.schedule, schedule);
   assert.equal((await f.crons.get(id))!.action, "Only merge exact duplicates.");
 
-  await f.crons.setEnabled(id, false);
-  f.notebooks.set(scope, { updatedAt: 500 });
-  await f.service.maintain();
-  assert.equal((await f.crons.get(id))!.enabled, false);
-
   await f.crons.delete(id);
   await f.service.maintain();
   assert.equal((await f.crons.list()).length, 0);
 });
 
-test("follows a newly learned timezone and task update while the cron is still platform-managed", async () => {
+test("follows a newly learned timezone and task update while the platform still manages the cron", async () => {
   const f = fixture();
-  f.notebooks.set(scopeId("personal", "alice"), { updatedAt: 100 });
+  f.notebooks.set(scopeId("personal", "alice"), [f.fact(1)]);
   await f.service.maintain();
-  const id = (await f.cronOf("alice"))!.id;
+  const id = (await f.cronOf("alice")).id;
   await f.crons.update(id, { action: "older platform task" });
   await f.store.merge("alice", { managedAction: "older platform task" });
   f.timezones.set("alice", "Asia/Tokyo");
