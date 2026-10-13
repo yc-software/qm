@@ -151,3 +151,18 @@ test("chunked recordings cannot exceed the audio limit", async () => {
   } as RequestInit);
   assert.equal(response.status, 413);
 });
+
+test("provider network failures log their cause chain", async (t) => {
+  const actualFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(input) !== "https://api.openai.com/v1/audio/transcriptions") return actualFetch(input, init);
+    throw new TypeError("fetch failed", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
+  });
+  const logged: string[] = [];
+  t.mock.method(console, "error", (line: unknown) => void logged.push(String(line)));
+  const result = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
+  assert.equal(result.status, 503);
+  const line = logged.find((entry) => entry.startsWith("[voice] dictation_provider:"));
+  assert.match(line ?? "", /fetch failed .*socket hang up \(ECONNRESET\)/);
+  assert.match(line ?? "", /"path":"audio\/transcriptions"/);
+});

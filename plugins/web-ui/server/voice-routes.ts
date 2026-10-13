@@ -17,9 +17,18 @@ import {
 
 const BODY_READ_TIMEOUT_MS = 30_000;
 
-function reportVoiceError(error: unknown, code: string): void {
-  const detail = error instanceof VoiceProviderError ? error.detail : undefined;
-  console.error(`[voice] ${code}: ${errMessage(error)}`, detail ? JSON.stringify(detail) : "");
+function causes(error: unknown): string {
+  const chain: string[] = [];
+  for (let e: unknown = error; e instanceof Error && chain.length < 4; e = e.cause) {
+    const code = (e as { code?: unknown }).code;
+    chain.push(`${e.name}: ${errMessage(e)}${typeof code === "string" ? ` (${code})` : ""}`);
+  }
+  return chain.length ? chain.join(" <- ") : errMessage(error);
+}
+
+function reportVoiceError(error: unknown, code: string, aborted = false): void {
+  const detail = { ...(error instanceof VoiceProviderError ? error.detail : {}), aborted };
+  console.error(`[voice] ${code}: ${causes(error)} ${JSON.stringify(detail)}`);
   reportBackendError(error, code, detail);
 }
 
@@ -54,7 +63,10 @@ export async function handleVoiceRoute(
     try {
       offer = JSON.parse((await readBodyBytes(req, 65_536)).toString("utf8")) as { sdp?: unknown } | null;
     } catch (error) {
-      if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "offer_too_large" });
+      if (error instanceof PayloadTooLargeError) {
+        res.setHeader("connection", "close");
+        return json(res, 413, { error: "offer_too_large" });
+      }
       return json(res, 400, { error: "invalid_offer" });
     }
     if (typeof offer?.sdp !== "string" || !offer.sdp.startsWith("v=0") || offer.sdp.length > 60_000)
@@ -100,7 +112,10 @@ export async function handleVoiceRoute(
     try {
       audio = await readBodyBytes(req, MAX_DICTATION_BYTES);
     } catch (error) {
-      if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "audio_too_large" });
+      if (error instanceof PayloadTooLargeError) {
+        res.setHeader("connection", "close");
+        return json(res, 413, { error: "audio_too_large" });
+      }
       if (!controller.signal.aborted) reportVoiceError(error, "dictation_upload");
       return controller.signal.aborted ? undefined : json(res, 400, { error: "upload_failed" });
     } finally {
@@ -109,7 +124,7 @@ export async function handleVoiceRoute(
     if (!audio.byteLength) return json(res, 400, { error: "empty_audio" });
     return json(res, 200, { text: await transcribe(audio, mimeType, caller) });
   } catch (error) {
-    reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider");
+    reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider", controller.signal.aborted);
     if (controller.signal.aborted) return;
     return dictation
       ? json(res, 503, {

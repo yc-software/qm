@@ -85,7 +85,7 @@ async function openai(path: string, body: FormData | string, headers: Record<str
   if (!response.ok)
     throw new VoiceProviderError(`OpenAI ${path} returned HTTP ${response.status}`, {
       ...detail,
-      body: text.slice(0, 2000),
+      body: text.slice(0, 500),
     });
   try {
     return JSON.parse(text) as Record<string, unknown> | null;
