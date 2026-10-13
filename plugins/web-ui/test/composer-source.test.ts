@@ -83,3 +83,9 @@ test("scope runtime defaults include effort and fast mode", () => {
   assert.match(composer, /getRuntimeConfig\(scopeKey\(\)\)\?\.effective\.effortLevel/);
   assert.match(composer, /getRuntimeConfig\(scopeKey\(\)\)\?\.effective\.fastMode === true/);
 });
+
+test("the / menu opens after CJK text but not inside words, paths or URLs", () => {
+  const slash = new RegExp(composer.match(/const SLASH_TOKEN = \/(.*)\/;/)![1]!);
+  for (const s of ["/", "see /", "帮我写周报/", "こんにちは/", "보고서/"]) assert.match(s, slash);
+  for (const s of ["hello/", "https://x.com/", "2026/09", "and/or"]) assert.doesNotMatch(s, slash);
+});

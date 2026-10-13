@@ -15,7 +15,7 @@ export function emojiToken(
     start--;
   if (start === end || value[start - 1] !== ":") return null;
   start--;
-  if (start > 0 && !" \n\t([{\"'".includes(value[start - 1]!)) return null;
+  if (start > 0 && /[\w/:]/.test(value[start - 1]!)) return null;
   return { start, end: caret, query: value.slice(start + 1, end), complete };
 }
 
