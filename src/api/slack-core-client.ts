@@ -1,3 +1,5 @@
+import type { CronFireStore } from "../cron/fire-store.ts";
+import { settleCronFire } from "../cron/fire-settlement.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
   createSlackSessionStatus,
@@ -161,6 +163,7 @@ export interface SlackCoreClientDeps {
   runtimeFallback: RuntimeChoice;
   blobTransfer: BlobTransferStore;
   deliveries: DeliveryStore;
+  cronFires: Pick<CronFireStore, "listByThreadRefs" | "record">;
   errors?: ErrorLog;
   metrics: MetricsSink;
   runs: RunStore;
@@ -492,6 +495,13 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         message: `delivery ${id} cannot be delivered (${reason}) — retrying until the TTL expires it`,
         scopeLabel: "slack:deliveries" as ScopeId,
       });
+      await settleCronFire(
+        deps.cronFires,
+        await deps.deliveries.get(id),
+        "failed",
+        Date.now(),
+        `delivery failed: ${reason}`,
+      );
     },
 
     async reportSlowDeliveryDrain(info) {

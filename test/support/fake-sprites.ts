@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   chmodSync,
   cpSync,
@@ -64,7 +64,7 @@ interface Engine {
 }
 
 interface FakeExec {
-  run(stdin: Buffer): { frames: Buffer[]; dropAfterRun: boolean };
+  run(stdin: Buffer): Promise<{ frames: Buffer[]; dropAfterRun: boolean }>;
   refused: boolean;
 }
 
@@ -108,8 +108,7 @@ class FakeWebSocket extends EventTarget {
     const frame = Buffer.from(data);
     if (frame[0] === 0) this.stdin.push(frame.subarray(1));
     if (frame[0] !== 4) return;
-    const { frames, dropAfterRun } = this.exec.run(Buffer.concat(this.stdin));
-    setImmediate(() => {
+    void this.exec.run(Buffer.concat(this.stdin)).then(({ frames, dropAfterRun }) => {
       if (this.closed) return;
       if (dropAfterRun) {
         this.fail("connection reset by peer");
@@ -225,31 +224,25 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     return Buffer.alloc(0);
   };
 
-  const runExec = (name: string, argv: string[], stdin: Buffer): Buffer[] => {
+  const runExec = async (name: string, argv: string[], stdin: Buffer): Promise<Buffer[]> => {
     mkdirSync(join(ensureDir(name), "tmp"), { recursive: true });
     const viaBody = argv[argv.length - 1] === SCRIPT_RUNNER;
     const script = viaBody ? stdin.toString("utf8") : (argv[argv.length - 1] ?? "");
     execScripts.push(script);
-    const r = viaBody
-      ? spawnSync("sh", ["-c", SCRIPT_RUNNER], {
-          encoding: "buffer",
-          maxBuffer: 128 * 1024 * 1024,
-          env: { ...process.env, COPYFILE_DISABLE: "1" },
-          input: Buffer.from(remap(name, script), "utf8"),
-        })
-      : spawnSync("sh", ["-c", remap(name, script)], {
-          encoding: "buffer",
-          maxBuffer: 128 * 1024 * 1024,
-          env: { ...process.env, COPYFILE_DISABLE: "1" },
-          input: stdin,
-        });
-    const code = r.status ?? (r.signal ? 137 : -1);
+    const child = spawn("sh", ["-c", viaBody ? SCRIPT_RUNNER : remap(name, script)], {
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdin.on("error", () => {});
+    child.stdin.end(viaBody ? Buffer.from(remap(name, script), "utf8") : stdin);
+    const code = await new Promise<number>((resolve) =>
+      child.on("close", (status, signal) => resolve(status ?? (signal ? 137 : -1))),
+    );
     const frame = (id: number, payload: Buffer): Buffer => Buffer.concat([Buffer.from([id]), payload]);
-    return [
-      frame(1, r.stdout ?? Buffer.alloc(0)),
-      frame(2, r.stderr ?? Buffer.alloc(0)),
-      Buffer.from([3, code & 0xff]),
-    ];
+    return [frame(1, Buffer.concat(stdout)), frame(2, Buffer.concat(stderr)), Buffer.from([3, code & 0xff])];
   };
 
   const deleteSprite = (name: string): void => {
@@ -429,8 +422,8 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     const call = calls[calls.length - 1]!;
     return {
       refused: !sprites.has(name) || gateway502.has(name),
-      run: (stdin) => {
-        const frames = runExec(name, argv, stdin);
+      run: async (stdin) => {
+        const frames = await runExec(name, argv, stdin);
         call.script = execScripts[execScripts.length - 1];
         const dropAfterRun = stallAfterRun.delete(name);
         return { frames, dropAfterRun };

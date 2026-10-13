@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+export const JOURNEYS = ["c1-cron-delivery", "c2-cron-resume", "w1-long-web-session", "s1-slack-reply-once"];
 export const CI_JOBS = [
   "Core typecheck",
   ...Array.from({ length: 5 }, (_, i) => `Core tests (${i + 1}/5)`),
+  ...JOURNEYS.map((journey) => `Journey ${journey}`),
   "Core",
   "CLI",
   "Lint",

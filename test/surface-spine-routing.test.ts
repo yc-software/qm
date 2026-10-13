@@ -458,15 +458,14 @@ test("first action is `post` (speaking deliberately) → the opening text is NOT
   }
 });
 
-test("addressed + finish_silently → no nudge (explicit decline is accepted)", async () => {
+test("addressed + finish_silently → the mention is still answered", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
-    const res = await built.app.turn({ ...mention("!finish-silent", "C-decline", "700.2"), async: false });
-    assert.equal(res.status, "silent", "an explicit finish_silently ends the turn silently");
+    await built.app.turn({ ...mention("!finish-silent", "C-decline", "700.2"), async: false });
     await sleep(300);
     const all = (await built.deliveries.pending("slack")) as any[];
-    assert.equal(all.length, 0, "finish_silently suppresses the nudge and closing reply");
+    assert.equal(all.length, 1, "exactly one reply reaches the channel");
   } finally {
     await built.runtime.stop();
   }
@@ -631,11 +630,14 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
   }
 });
 
-for (const command of ["!finish-silent-approval", "!finish-silent-paused"]) {
-  test(`surface silence preserves pending approval: ${command}`, async () => {
+for (const [command, status] of [
+  ["!finish-silent-approval", "ok"],
+  ["!finish-silent-paused", "pending_approval"],
+] as const) {
+  test(`a mention that tries to end silently keeps its pending approval: ${command}`, async () => {
     const built = freshApp();
     const result = await built.app.turn({ ...mention(command, "C-approval", command), async: false });
-    assert.equal(result.status, "pending_approval");
+    assert.equal(result.status, status);
     assert.equal(result.pendingApprovals?.length, 1);
     assert.equal((await built.deliveries.pending("slack")).length, 0);
   });

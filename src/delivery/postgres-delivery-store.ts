@@ -39,7 +39,10 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
   };
 }
 
-export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
+export function createPostgresDeliveryStore(
+  connectionString: string,
+  opts?: { maxAgeMs?: number; onExpire?: (d: Delivery) => void },
+): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
   const { q, query } = createPgPool(connectionString, [
     {
@@ -112,6 +115,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     for (const r of rows) {
       const d = rowToDelivery(r);
       logDeliveryExpiry(d, d.expiredAt ?? Date.now());
+      opts?.onExpire?.(d);
     }
   }
 

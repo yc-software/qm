@@ -19,8 +19,11 @@ export interface CronFireStore {
   backfill(cronId: string, entries: readonly CronFireLogEntry[]): Promise<void>;
   listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   listByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
+  listRunning(): Promise<CronFireRecord[]>;
   latestForThread(cronId: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
 }
+
+export const UNSETTLED = new Set<CronFireLogEntry["status"]>(["running", "delivering"]);
 
 function fireOrder(a: CronFireLogEntry, b: CronFireLogEntry): number {
   if (a.firedAt !== b.firedAt) return a.firedAt - b.firedAt;
@@ -46,7 +49,14 @@ export function createMemoryCronFireStore(): CronFireStore {
   };
   return {
     async record(cronId, entry) {
-      firesOf(cronId).set(entry.fireKey, { ...entry });
+      const fires = firesOf(cronId);
+      const settled = fires.get(entry.fireKey);
+      fires.set(
+        entry.fireKey,
+        entry.status === "delivering" && settled && !UNSETTLED.has(settled.status)
+          ? { ...entry, status: settled.status, endedAt: settled.endedAt }
+          : { ...entry },
+      );
     },
     async beginExclusive(cronId, entry, staleRunningMs) {
       const fires = firesOf(cronId);
@@ -63,7 +73,7 @@ export function createMemoryCronFireStore(): CronFireStore {
       let swept = 0;
       for (const fires of byCron.values()) {
         for (const [fireKey, entry] of fires) {
-          if (entry.status !== "running" || now - entry.firedAt < staleRunningMs) continue;
+          if (!UNSETTLED.has(entry.status) || now - entry.firedAt < staleRunningMs) continue;
           fires.set(fireKey, { ...entry, status: "failed", endedAt: now, note });
           swept += 1;
         }
@@ -106,6 +116,13 @@ export function createMemoryCronFireStore(): CronFireStore {
       }
       return records.sort(fireOrder);
     },
+    async listRunning() {
+      const records: CronFireRecord[] = [];
+      for (const [cronId, fires] of byCron) {
+        for (const entry of fires.values()) if (entry.status === "running") records.push({ ...entry, cronId });
+      }
+      return records.sort(fireOrder);
+    },
     async latestForThread(cronId, threadRef) {
       const matches = [...(byCron.get(cronId)?.values() ?? [])].filter((e) => e.threadRef === threadRef);
       const latest = matches.sort(fireOrder).at(-1);
@@ -135,7 +152,12 @@ const FIRE_COLUMN_DEFS: readonly FireColumn[] = [
 
 const FIRE_COLUMNS = FIRE_COLUMN_DEFS.map((c) => c.name).join(", ");
 const VALUE_COLUMN_DEFS = FIRE_COLUMN_DEFS.filter((c) => c.name !== "cron_id" && c.name !== "fire_key");
-const UPSERT_SET = VALUE_COLUMN_DEFS.map((c) => `${c.name} = EXCLUDED.${c.name}`).join(", ");
+const KEEPS_SETTLED = `EXCLUDED.status = 'delivering' AND cron_fires.status NOT IN ('running', 'delivering')`;
+const UPSERT_SET = VALUE_COLUMN_DEFS.map((c) =>
+  c.name === "status" || c.name === "ended_at"
+    ? `${c.name} = CASE WHEN ${KEEPS_SETTLED} THEN cron_fires.${c.name} ELSE EXCLUDED.${c.name} END`
+    : `${c.name} = EXCLUDED.${c.name}`,
+).join(", ");
 const ROW_OF = (prefix: string): string => `(${VALUE_COLUMN_DEFS.map((c) => `${prefix}.${c.name}`).join(", ")})`;
 
 const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
@@ -234,6 +256,12 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
         ],
       },
+      {
+        id: "cron/fires/0002-running",
+        statements: [
+          `CREATE INDEX IF NOT EXISTS idx_cron_fires_running ON cron_fires (fired_at) WHERE status = 'running'`,
+        ],
+      },
     ],
     [LEGACY_FIRE_MAINTENANCE],
   );
@@ -262,7 +290,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       const result = await query(
         `UPDATE cron_fires
             SET status = 'failed', ended_at = $1, note = $2
-          WHERE status = 'running' AND fired_at <= $3`,
+          WHERE status IN ('running', 'delivering') AND fired_at <= $3`,
         [now, pgTextSafe(note), now - staleRunningMs],
       );
       return result.rowCount;
@@ -339,6 +367,13 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           WHERE thread_ref = ANY($1)
           ORDER BY fired_at, fire_key`,
         [[...threadRefs]],
+      );
+      return rows.map((r) => ({ ...rowToEntry(r), cronId: r.cron_id as string }));
+    },
+    async listRunning() {
+      const rows = await q(
+        `SELECT ${FIRE_COLUMNS} FROM cron_fires WHERE status = 'running' ORDER BY fired_at, fire_key`,
+        [],
       );
       return rows.map((r) => ({ ...rowToEntry(r), cronId: r.cron_id as string }));
     },

@@ -80,6 +80,7 @@ export interface CronStore {
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
   listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
+  runningFires(): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   backfillFires(): Promise<number>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
@@ -210,6 +211,7 @@ export function createCronStore(
     },
     listFires: (id, opts) => fires.listByCron(id, opts),
     firesByThreadRefs: (threadRefs) => fires.listByThreadRefs(threadRefs),
+    runningFires: () => fires.listRunning(),
     latestFireForThread: (id, threadRef) => fires.latestForThread(id, threadRef),
     async backfillFires() {
       let backfilled = 0;

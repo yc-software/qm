@@ -789,6 +789,7 @@ test("the fire table is the journal of record — a write failure surfaces inste
         throw new Error("table down");
       },
       listByCron: async () => ({ runs: [], total: 0 }),
+      listRunning: async () => [],
       listByThreadRefs: async () => [],
       latestForThread: async () => undefined,
     },

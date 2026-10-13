@@ -29,6 +29,7 @@
     "test:root:shard": "node scripts/run-root-test-shard.mjs",
     "test:root:shard:check": "node scripts/run-root-test-shard.mjs --check --shards 5",
     "test:e2e": "node --test test/e2e/*.test.ts",
+    "test:journey": "node scripts/run-pg-tests.mjs",
     "live-e2e": "node test/live-slack/run.ts",
     "gallery:shots": "node test/live-slack/screenshots.ts",
     "gallery:shots:login": "node test/live-slack/screenshots.ts --login",

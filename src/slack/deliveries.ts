@@ -31,7 +31,7 @@ import {
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { Delivery } from "../types.ts";
 import type { TurnFlow } from "./turn-flow.ts";
-import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
+import { applyAndLogReactions, cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
 
@@ -179,7 +179,7 @@ export function createDeliveryPoller(deps: {
     (id: string) =>
     (stage: "post" | "ack", err: unknown, gaveUp: boolean): void => {
       const code = slackErrorCode(err);
-      if (stage === "post" && gaveUp && code && PERMANENT_POST_ERRORS.has(code) && !undeliverableReported.has(id)) {
+      if (stage === "post" && code && PERMANENT_POST_ERRORS.has(code) && !undeliverableReported.has(id)) {
         if (undeliverableReported.size >= 5000) undeliverableReported.clear();
         undeliverableReported.add(id);
         void core
@@ -290,7 +290,10 @@ export function createDeliveryPoller(deps: {
                   editRef = placeholder.ts;
                 }
               }
-              let text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
+              const cleaned = d.provenance?.trigger === "conversation" ? cleanAgentReplyForSlack(d.text) : undefined;
+              let text = toSlackMrkdwn(cleaned ? cleaned.text : stripSlackDirectives(d.text));
+              if (cleaned?.reactions.length && threadTs)
+                await applyAndLogReactions(client, channel, threadTs, cleaned.reactions);
               const replayAttachments = async (root?: string): Promise<void> => {
                 if (!d.attachments?.length) return;
                 try {

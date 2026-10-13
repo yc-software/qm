@@ -305,6 +305,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       });
       throw e;
     }
+    if (outcome.handedBack) return { authzFailed: false };
     if (outcome.deferred) {
       const deferUntil = now() + BUSY_DEFER_MS;
       await deps.crons.recordFire(cron.id, {
@@ -324,9 +325,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fireKey,
         threadRef,
         firedAt: t,
-        endedAt: now(),
+        ...(outcome.delivering ? {} : { endedAt: now() }),
         ...(scheduledAt !== undefined ? { scheduledAt } : {}),
-        status: outcome.status ?? (outcome.authzFailed ? "refused" : "ok"),
+        status: outcome.delivering ? "delivering" : (outcome.status ?? (outcome.authzFailed ? "refused" : "ok")),
         ...(outcome.note ? { note: truncate(outcome.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
         ...(outcome.reply !== undefined ? { reply: cronFireLogReply(outcome.reply) } : {}),
         ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
@@ -349,6 +350,28 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
     } catch (e) {
       reportFailure("scheduler: stranded-fire sweep", e);
+    }
+  };
+
+  const resuming = new Set<string>();
+  const resumeOrphanedFires = async (): Promise<void> => {
+    const lock = deps.lock;
+    if (!lock?.tryWithLock) return;
+    for (const orphan of await deps.crons.runningFires()) {
+      if (stopped || resuming.has(orphan.fireKey)) continue;
+      resuming.add(orphan.fireKey);
+      const work = withWork(() =>
+        lock.tryWithLock!(`cron-lifecycle:${orphan.cronId}`, async () => {
+          const cron = await deps.crons.get(orphan.cronId);
+          const latest = await deps.crons.latestFireForThread(orphan.cronId, orphan.threadRef);
+          if (stopped || !cron || cron.loopId || latest?.status !== "running") return;
+          await fire(cron, orphan.firedAt, orphan.fireKey, orphan.scheduledAt);
+        }),
+      )
+        .then(() => undefined, reportFailureAs("scheduler: resume orphaned fire", undefined, `fire=${orphan.fireKey}`))
+        .finally(() => resuming.delete(orphan.fireKey));
+      pending.add(work);
+      void work.finally(() => pending.delete(work));
     }
   };
 
@@ -407,6 +430,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       leaderLease.hold(TICK_LEASE_KEY, async () => {
         await fireDue(t, observed);
         await sweepStranded(t);
+        await resumeOrphanedFires().catch(reportFailureAs("scheduler: orphaned fire sweep", undefined));
         await gcFires(t);
         await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
       }),
@@ -496,6 +520,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   async function maintain(): Promise<void> {
     await sweepStranded(now());
+    await resumeOrphanedFires().catch(reportFailureAs("scheduler: orphaned fire sweep", undefined));
     await gcFires(now());
     await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));
   }

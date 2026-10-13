@@ -130,6 +130,7 @@ import {
 import type {
   CommandApprovalGrant,
   Cron,
+  Delivery,
   Loop,
   LoopItem,
   LoopOutput,
@@ -170,6 +171,7 @@ import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
+import { settleCronFire, withCronFireSettlement } from "./cron/fire-settlement.ts";
 import { createDirectoryStore, type DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import {
@@ -1777,8 +1779,18 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
+  const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
+  const expiredDelivery = (d: Delivery) =>
+    void settleCronFire(cronFires, d, "failed", Date.now(), "delivery expired undelivered").catch(
+      reportFailureAs("delivery: settle expired cron fire", undefined, `delivery=${d.id}`),
+    );
   const deliveries = withWebTranscriptDeliveries(
-    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
+    withCronFireSettlement(
+      config.databaseUrl
+        ? createPostgresDeliveryStore(config.databaseUrl, { onExpire: expiredDelivery })
+        : createDeliveryStore({ onExpire: expiredDelivery }),
+      cronFires,
+    ),
     sessions,
   );
   const deployService = createDeployService({
@@ -1868,7 +1880,6 @@ export function buildApp(
   );
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
-  const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
   const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
@@ -2288,6 +2299,7 @@ export function buildApp(
     runtimeFallback: fallback,
     blobTransfer,
     deliveries,
+    cronFires,
     errors,
     metrics,
     runs,

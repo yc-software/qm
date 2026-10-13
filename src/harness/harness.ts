@@ -129,6 +129,7 @@ export interface HarnessTurnInput {
   surfaceName?: string;
   clientTools?: readonly ClientToolDeclaration[];
   pollFire?: boolean;
+  addressed?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
   history: SessionEntry[];

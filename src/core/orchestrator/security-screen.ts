@@ -3,10 +3,13 @@ import type { ScopeId } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
 import {
+  securityScreenChunks,
   securityScreenSystemPrompt,
   UNSCREENED_REASON,
   type SecurityScreenVerdict,
 } from "../../security/security-posture.ts";
+import { MAX_DOCUMENT_TEXT_CHARS } from "../document-inputs.ts";
+import { hashId } from "../../util/crypto.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import type { HarnessLlmRequestRecord } from "../../harness/harness.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -17,6 +20,7 @@ import type { OrchestratorDeps } from "./types.ts";
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
 const MAX_AUDITED_SOURCES = 20;
+const REMEMBERED_SCREENS_MAX = 2_000;
 
 const unscreenedVerdict = (): SecurityScreenVerdict => ({
   decision: "auto",
@@ -46,6 +50,61 @@ export type SecurityClassifier = (
   recordLlmRequest: ((rec: HarnessLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>) | undefined,
   context: SecurityScreenContext,
 ) => Promise<SecurityScreenVerdict | undefined>;
+
+interface ChunkedScreen {
+  verdict: SecurityScreenVerdict | undefined;
+  clean: boolean;
+}
+
+export type ChunkedScreener = (input: {
+  surface: string;
+  content: string;
+  actorId: string;
+  scopeLabel: ScopeId;
+  context: SecurityScreenContext;
+  remember?: string;
+  signal?: AbortSignal;
+}) => Promise<ChunkedScreen>;
+
+export function createChunkedScreener(classify: SecurityClassifier): ChunkedScreener {
+  const remembered = new Map<string, Promise<ChunkedScreen>>();
+  const screen = async (
+    input: Parameters<ChunkedScreener>[0],
+    text: string,
+    truncated: boolean,
+  ): Promise<ChunkedScreen & { complete: boolean }> => {
+    const verdicts: Array<SecurityScreenVerdict | undefined> = [];
+    for (const chunk of securityScreenChunks(input.surface, text)) {
+      input.signal?.throwIfAborted();
+      const verdict = await classify(chunk, input.actorId, input.scopeLabel, undefined, input.context);
+      verdicts.push(verdict);
+      if (verdict?.decision === "strict") break;
+    }
+    const verdict =
+      verdicts.find((value) => value?.decision === "strict") ??
+      verdicts.find((value) => !value || value.unscreened) ??
+      verdicts[0];
+    const complete = verdicts.every((value) => value && !value.unscreened);
+    return { verdict, clean: complete && verdict?.decision === "auto" && !truncated, complete };
+  };
+  return async function screenChunked(input) {
+    const text = input.content.slice(0, MAX_DOCUMENT_TEXT_CHARS);
+    const truncated = text.length < input.content.length;
+    const key = input.remember === undefined ? undefined : hashId([input.remember, input.surface, text], 32);
+    const known = key === undefined ? undefined : remembered.get(key);
+    if (known) return known;
+    const pending = screen(input, text, truncated).then(({ complete, ...result }) => {
+      if (key !== undefined && !complete) remembered.delete(key);
+      return result;
+    });
+    if (key !== undefined) {
+      if (remembered.size >= REMEMBERED_SCREENS_MAX) remembered.delete(remembered.keys().next().value!);
+      remembered.set(key, pending);
+      pending.catch(() => remembered.delete(key));
+    }
+    return pending;
+  };
+}
 
 function screenSources(payload: string): string[] {
   let parsed: unknown;

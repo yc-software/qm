@@ -354,7 +354,7 @@ export function createMockHarness(): Harness {
           reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
         } else if (command0 === "!finish-silent") {
           usedTool = true;
-          silent = turn.pollFire === true || turn.surfaceTools === true;
+          silent = turn.pollFire === true || (turn.surfaceTools === true && !turn.addressed);
           reply = silent ? "" : "Nothing to report; ending silently.";
           if (silent) {
             await turn.emit({ type: "tool_call", payload: { tool: "finish_silently" }, scopeLabel: turn.scopeLabel });
@@ -366,7 +366,7 @@ export function createMockHarness(): Harness {
           }
         } else if (command0 === "!finish-silent-approval") {
           usedTool = true;
-          silent = turn.pollFire === true || turn.surfaceTools === true;
+          silent = turn.pollFire === true || (turn.surfaceTools === true && !turn.addressed);
           reply = silent ? "" : "I couldn't finish one check, but nothing to report.";
           collected.push({ command: "gated-check", reason: "requires approval" });
         } else if (command0 === "!cachemiss") {
@@ -494,7 +494,7 @@ export function createMockHarness(): Harness {
           reply = `about to run it`;
         } else if (command0 === "!finish-silent-paused") {
           usedTool = true;
-          silent = turn.pollFire === true || turn.surfaceTools === true;
+          silent = turn.pollFire === true || (turn.surfaceTools === true && !turn.addressed);
           pausedOnApproval = true;
           collected.push({ command: "gated-check", reason: "requires approval" });
           reply = "";

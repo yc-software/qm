@@ -59,7 +59,7 @@ export interface DeliveryStore {
   onEnqueue(listener: () => void): () => void;
 }
 
-export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore {
+export function createDeliveryStore(opts?: { maxAgeMs?: number; onExpire?: (d: Delivery) => void }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
   const deliveries = new Map<string, Delivery>();
   const byKey = new Map<string, string>();
@@ -73,6 +73,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       if (now - d.createdAt < maxAgeMs) continue;
       d.expiredAt = now;
       logDeliveryExpiry(d, now);
+      opts?.onExpire?.(d);
     }
   };
 

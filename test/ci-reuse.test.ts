@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CI_JOBS, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
+import { CI_JOBS, JOURNEYS, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
 
 const repository = "example/qm";
 const release = "a".repeat(40),
@@ -298,6 +298,8 @@ test("all quality jobs keep successful names and missing proof runs full checks"
     if (["reuse", "certify", "notify-deployments"].includes(id)) continue;
     const name = block.match(/^ {4}name: (.+)$/m)![1]!;
     if (id === "core-tests") names.push(...[1, 2, 3, 4, 5].map((n) => name.replace("${{ matrix.shard }}", String(n))));
+    else if (id === "journeys")
+      names.push(...JOURNEYS.map((journey) => name.replace("${{ matrix.journey }}", journey)));
     else names.push(name);
     if (["core", "coauthor-trailers", "dependency-audit"].includes(id)) continue;
     assert.ok(block.includes("needs: reuse\n    if: always() && !cancelled()"));
@@ -306,6 +308,7 @@ test("all quality jobs keep successful names and missing proof runs full checks"
     for (const step of steps.slice(1)) assert.ok(step.includes("if: needs.reuse.outputs.reusable != 'true'"));
   }
   assert.deepEqual(names.sort(), [...CI_JOBS].sort());
+  assert.ok(jobs.journeys!.includes(`journey: [${JOURNEYS.join(", ")}]`));
   assert.ok(jobs.reuse!.includes("continue-on-error: true"));
   assert.ok(jobs.reuse!.includes("steps.proof.outcome == 'success' && steps.proof.outputs.reusable == 'true'"));
   assert.ok(jobs.reuse!.includes("if: github.event_name == 'push' && github.ref == 'refs/heads/main'"));
@@ -318,7 +321,7 @@ test("deployment notice fires only for a fully green main push and holds no repo
   );
   assert.ok(
     job.includes(
-      "needs: [core, cli, lint, dependency-audit, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]",
+      "needs:\n      [\n        core,\n        cli,\n        lint,\n        dependency-audit,\n        core-postgres,\n        journeys,\n        admin-plugin,\n        web-ui-plugin,\n        auth-plugin,\n        portal-plugin,\n      ]",
     ),
   );
   assert.ok(job.includes("permissions: {}"));
@@ -340,7 +343,7 @@ test("receipt is an isolated immutable checkout with no secrets, artifacts, cach
   assert.ok(job.includes("permissions:\n      contents: read"));
   assert.ok(
     job.includes(
-      "needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]",
+      "needs:\n      [\n        core,\n        cli,\n        lint,\n        core-postgres,\n        journeys,\n        admin-plugin,\n        web-ui-plugin,\n        auth-plugin,\n        portal-plugin,\n        coauthor-trailers,\n      ]",
     ),
   );
   assert.equal([...job.matchAll(/^ {6}- /gm)].length, 3);
@@ -362,6 +365,7 @@ test("inline receipt eligibility rejects missing or failed prerequisites, not an
     "cli",
     "lint",
     "core-postgres",
+    "journeys",
     "admin-plugin",
     "web-ui-plugin",
     "auth-plugin",

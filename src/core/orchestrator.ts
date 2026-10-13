@@ -214,7 +214,7 @@ import {
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
-import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
+import { createChunkedScreener, createSecurityClassifier } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -333,6 +333,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const classifySecurityData = createSecurityClassifier(deps);
+  const screenChunked = createChunkedScreener(classifySecurityData);
 
   const titles = createSessionTitles({
     sessions: deps.sessions,
@@ -2884,15 +2885,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 fileRegistration,
                 turnInboxDir,
                 securityPolicy.screening !== "off" && (deps.securityScreener || deps.harness.models.screenSecurity)
-                  ? ({ content }) =>
-                      classifySecurityData(content, actor.id, scopeId, undefined, {
-                        ...screenTrace,
-                        sessionId: session.id,
-                        hook: "tool_response",
-                        request: input.text,
-                        surface: "inbound_file",
-                        origin: input.origin.kind,
-                      })
+                  ? async ({ content }) =>
+                      (
+                        await screenChunked({
+                          surface: "tool_result:inbound_file",
+                          content,
+                          actorId: actor.id,
+                          scopeLabel: scopeId,
+                          signal: turnAbort.signal,
+                          context: {
+                            ...screenTrace,
+                            sessionId: session.id,
+                            hook: "tool_response",
+                            request: input.text,
+                            surface: "inbound_file",
+                            origin: input.origin.kind,
+                          },
+                        })
+                      ).verdict
                   : undefined,
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
@@ -3126,34 +3136,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 documentsUnscreened = true;
                 continue;
               }
-              const verdicts: Array<SecurityScreenVerdict | undefined> = [];
-              for (const chunk of securityScreenChunks("tool_result:inbound_document", content)) {
-                turnAbort.signal.throwIfAborted();
-                const verdict = await classifySecurityData(chunk, actor.id, scopeId, undefined, {
+              const { verdict, clean } = await screenChunked({
+                surface: "tool_result:inbound_document",
+                content,
+                actorId: actor.id,
+                scopeLabel: scopeId,
+                remember: session.id,
+                signal: turnAbort.signal,
+                context: {
                   ...screenTrace,
                   sessionId: session.id,
                   hook: "tool_response",
                   request: requestText,
                   surface: "inbound_file",
                   origin: input.origin.kind,
-                });
-                verdicts.push(verdict);
-                if (verdict?.decision === "strict") break;
-              }
-              const verdict =
-                verdicts.find((value) => value?.decision === "strict") ??
-                verdicts.find((value) => value?.unscreened) ??
-                verdicts[0];
+                },
+              });
               if (verdict?.decision === "strict") {
                 documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
                 documentInputs.notices.push(
                   `${document.name}: document withheld by the external-data security screen.`,
                 );
-              } else if (
-                !verdicts.every((value) => value?.decision === "auto" && !value.unscreened) ||
-                content.includes("[Document text truncated")
-              )
-                documentsUnscreened = true;
+              } else if (!clean) documentsUnscreened = true;
             }
           }
           return enforceScreen && documentsUnscreened;
@@ -3718,6 +3722,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.clientTools?.length ? { clientTools: input.clientTools } : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(isPollFire ? { pollFire: true } : {}),
+            ...(input.addressed ? { addressed: true } : {}),
             ...(effectiveTurnWallClockMs !== undefined
               ? {
                   turnWallClockMs:
@@ -4068,7 +4073,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !input.cancel?.aborted &&
           spine.surfaceOutboundCount === 0 &&
           !result.silent &&
-          !result.stopped
+          !result.stopped &&
+          !result.pendingApprovals?.length
         ) {
           await latchCoverage();
           // The model already wrote a reply as plain assistant text — deliver that text
@@ -4140,7 +4146,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   })
               : undefined;
             result = await runHarnessTurn(
-              "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.",
+              "[system] You were addressed directly. Reply with the `slack` tool's `post` action — ending the turn without a reply is not allowed here.",
               nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
             );

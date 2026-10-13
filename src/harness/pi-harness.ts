@@ -1864,6 +1864,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           pausedOnApproval: undefined,
           silentRequested: false,
           pollFire: !!dispatched.pollFire,
+          addressed: !!dispatched.addressed,
           screenToolResult: dispatched.screenToolResult,
           governGoal: dispatched.governGoal,
           emit: dispatched.emit,

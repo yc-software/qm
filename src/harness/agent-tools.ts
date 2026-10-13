@@ -106,6 +106,7 @@ export interface ToolContextRef {
   abortSignal?: AbortSignal;
   shutdown?: AbortSignal;
   pollFire?: boolean;
+  addressed?: boolean;
   silentRequested?: boolean;
 
   goal?: GoalRecord | null;
@@ -3832,7 +3833,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
     }),
     async execute(callId, params) {
-      if (!ref.pollFire && !surfaceTools) {
+      if (!ref.pollFire && (ref.addressed || !surfaceTools)) {
         await recordCall(callId, { tool: "finish_silently", ...(params.reason ? { reason: params.reason } : {}) });
         return recordResult(
           callId,

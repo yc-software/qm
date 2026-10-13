@@ -51,7 +51,7 @@ interface CronRunView {
 
 function cronRunTiming(run: CronRunView): string {
   const fired = new Date(run.firedAt).toLocaleString();
-  if (run.status === "running") {
+  if (run.status === "running" || run.status === "delivering") {
     const min = Math.max(0, Math.round((Date.now() - run.firedAt) / 60_000));
     return `${fired} — in flight for ${min}m`;
   }
