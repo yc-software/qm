@@ -532,6 +532,7 @@ export interface DistinctScope {
 }
 
 export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
+  entryScopeLabel: ScopeId;
   sessionId: string;
   seq: number;
   type: EntryType;
@@ -588,7 +589,7 @@ export type TranscriptEntry = SessionEntry & { truncated?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
 const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
-  user: new Set(["environment", "memoryRecall"]),
+  user: new Set(["environment", "environmentSnapshot", "memoryRecall"]),
   thinking: new Set(["thinkingSignature"]),
 };
 const WALK_DEPTH = 8;
@@ -779,8 +780,6 @@ export interface SessionStore {
   listByScope(scope: ScopeId): Promise<Session[]>;
 
   scopeHasSessions(scope: ScopeId): Promise<boolean>;
-
-  countPersonalConversations(scope: ScopeId, limit?: number): Promise<number>;
 
   sessionsByThreadRefs(threadRefs: readonly string[]): Promise<SessionRef[]>;
 

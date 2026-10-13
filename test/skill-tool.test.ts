@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext, type SkillResult } from "../src/tools/primitives.ts";
+import { createToolContext, type ToolContextDeps, type SkillResult } from "../src/tools/primitives.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -70,7 +70,7 @@ test("execute, read, write and background never trigger skill synchronization", 
   });
   await tc.execute("cd skills/google-workspace && python scripts/gmail.py");
   await tc.read("skills/google-workspace/SKILL.md");
-  await tc.backgroundStart("sh skills/.packs/selected/job.sh");
+  await tc.backgroundStart("sh skills/.packs/selected/job.sh", { purpose: "Run background tests" });
   assert.equal(loads, 0);
   assert.equal(calls.length, 2);
 });
@@ -80,7 +80,7 @@ test("skill without a materializer reports no file", async () => {
   assert.deepEqual(await tc.skill("send"), { content: null, sourceScopeId: null });
 });
 
-function createToolContextWithout() {
+function createToolContextWithout(extra: Partial<ToolContextDeps> = {}) {
   const tc = createToolContext({
     sandbox: {} as unknown as Sandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
@@ -92,6 +92,59 @@ function createToolContextWithout() {
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",
+    ...extra,
   });
   return { tc };
 }
+
+test("skill discovery pages the current visible catalog without provisioning or exposing metadata", async () => {
+  const skills = Array.from({ length: 3 }, (_, i) => ({
+    skill: {
+      manifest: {
+        name: `skill-${i}`,
+        description: i === 2 ? "Telescope planning" : "General task",
+        body: "Instructions",
+        requiredCapabilities: [],
+      },
+      id: `id-${i}`,
+      signature: "",
+      status: "published" as const,
+      createdBy: "someone",
+      version: 1,
+      grantedCapabilities: [],
+      approvals: [],
+      lastUsedAt: 100,
+      scopeId: scopeId("personal", "someone"),
+    },
+    shadowed: [],
+  }));
+  const { tc } = createToolContextWithout({
+    provision: async () => {
+      throw new Error("must not provision");
+    },
+    listSkills: async (source) => skills.filter(({ skill }) => skill.scopeId === (source ?? "personal:U1")),
+  });
+  assert.deepEqual(await tc.listSkills(), { sourceScopeId: null, skills: [] });
+  assert.deepEqual(await tc.listSkills("", 0, 2, "personal:someone"), {
+    sourceScopeId: "personal:someone",
+    skills: [0, 1].map((i) => ({ name: `skill-${i}`, description: "General task", source: "personal:someone" })),
+    nextOffset: 2,
+  });
+  assert.deepEqual(await tc.listSkills("", 2, 2, "personal:someone"), {
+    sourceScopeId: "personal:someone",
+    skills: [{ name: "skill-2", description: "Telescope planning", source: "personal:someone" }],
+  });
+  assert.deepEqual(await tc.listSkills("telescope", 0, 50, "personal:someone"), {
+    sourceScopeId: "personal:someone",
+    skills: [{ name: "skill-2", description: "Telescope planning", source: "personal:someone" }],
+  });
+  skills[1]!.skill.scopeId = scopeId("personal", "U1");
+  const native = await tc.listSkills();
+  assert.deepEqual(native, {
+    sourceScopeId: null,
+    skills: [{ name: "skill-1", description: "General task", source: "personal:U1" }],
+  });
+  assert.deepEqual(await tc.listSkills("", 0, 100, "personal:missing"), { sourceScopeId: null, skills: [] });
+  skills.pop();
+  assert.deepEqual(await tc.listSkills("telescope", 0, 50, "personal:someone"), { sourceScopeId: null, skills: [] });
+});

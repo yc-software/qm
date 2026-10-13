@@ -366,7 +366,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const handles = await deps.acl.handlesFor(myScopes);
     const page = await deps.files.listDocuments(
       myScopes,
-      handles.map((h) => ({ ownerScopeId: h.ownerScopeId, path: h.ownerPath })),
+      handles.map((h) => ({ ownerScopeId: h.ownerScopeId, id: h.fileId })),
       {
         ...opts,
         ...(inScope ? { createdInScope: inScope } : {}),
@@ -415,6 +415,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ...(deps.projects ? { managedGroups: deps.projects } : {}),
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.identity ? { identity: deps.identity } : {}),
+    ...(deps.teams ? { teams: deps.teams } : {}),
   };
 
   const principalCanReadScope = createCanReadScope(scopeMembershipDeps);
@@ -485,7 +486,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (r.kind === "skill") return (await deps.skills.get(r.id))?.createdBy;
     if (r.kind === "cron") return (await deps.crons.get(r.id))?.createdBy;
     if (r.kind === "deploy") return (await deps.deploy.listDeployments()).find((d) => d.id === r.id)?.createdBy;
-    if (r.kind === "file") return (await deps.files.resolveByOwnerPaths([{ ownerScopeId, path: r.id }]))[0]?.createdBy;
+    if (r.kind === "file") return (await deps.files.resolveByIds([{ ownerScopeId, id: r.id }]))[0]?.createdBy;
     return undefined;
   }
 

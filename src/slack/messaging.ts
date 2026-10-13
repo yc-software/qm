@@ -1,17 +1,11 @@
 import { extractPrivateContinuation } from "./external-access.ts";
 import {
-  type ActorAssertion,
-  type AgentRequestDirective,
   type ReactionDirective,
-  AGENT_REQUEST_INSTRUCTION,
   MAX_REACTIONS_PER_TURN,
-  REACTION_INSTRUCTION,
   SLACK_TEXT_LIMIT,
   applyReactions,
   botIdentityArgs,
-  extractAgentRequests,
   extractReactions,
-  stripAgentRequestDirectives,
   stripReactionDirectives,
 } from "./lib.ts";
 
@@ -38,41 +32,16 @@ export async function updateSlackMessage(
   return true;
 }
 
-export async function tryUpdateSlackMessage(
-  client: any,
-  channel: string,
-  ts: string | undefined,
-  text: string,
-  blocks?: Array<Record<string, unknown>>,
-): Promise<boolean> {
-  try {
-    return await updateSlackMessage(client, channel, ts, text, blocks);
-  } catch (err) {
-    console.error("[slack-plugin] chat.update failed:", (err as Error).message);
-    return false;
-  }
-}
+export const HANDOFF_INSTRUCTION =
+  "When work needs another person's own logins, files or memory, follow the `hand-off` skill.";
 
-export function cleanAgentReplyForSlack(text: string): {
-  text: string;
-  reactions: ReactionDirective[];
-  agentRequests: AgentRequestDirective[];
-} {
-  const extractedReactions = extractReactions(text);
-  const extractedRequests = extractAgentRequests(extractedReactions.text);
-  return {
-    text: extractPrivateContinuation(extractedRequests.text).text,
-    reactions: extractedReactions.reactions,
-    agentRequests: extractedRequests.requests,
-  };
-}
-
-export function slackSurfaceInstructions(kind: SlackConversationKind): string {
-  return kind === "dm" ? REACTION_INSTRUCTION : `${REACTION_INSTRUCTION}\n\n${AGENT_REQUEST_INSTRUCTION}`;
+export function cleanAgentReplyForSlack(text: string): { text: string; reactions: ReactionDirective[] } {
+  const extracted = extractReactions(text);
+  return { text: extractPrivateContinuation(extracted.text).text, reactions: extracted.reactions };
 }
 
 export function stripSlackDirectives(text: string): string {
-  return extractPrivateContinuation(stripAgentRequestDirectives(stripReactionDirectives(text))).text;
+  return extractPrivateContinuation(stripReactionDirectives(text)).text;
 }
 
 export async function applyAndLogReactions(
@@ -96,12 +65,6 @@ export async function applyAndLogReactions(
   }
 }
 
-function possessive(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return "Their";
-  return trimmed.endsWith("s") || trimmed.endsWith("S") ? `${trimmed}'` : `${trimmed}'s`;
-}
-
 export function conversationPlaceLabel(
   kind: SlackConversationKind,
   channelName: string | undefined,
@@ -109,18 +72,4 @@ export function conversationPlaceLabel(
 ): string {
   if (kind === "group") return channelName ? `group DM (${channelName})` : "group DM";
   return channelName ? `#${channelName}` : `channel ${channel}`;
-}
-
-export function channelAgentLabel(
-  kind: SlackConversationKind,
-  channelName: string | undefined,
-  channel: string,
-): string {
-  if (kind === "group") return channelName ? `group DM (${channelName}) agent` : "group DM agent";
-  return channelName ? `#${channelName} agent` : `channel ${channel} agent`;
-}
-
-export function personalAgentLabel(actor: ActorAssertion | undefined, userId: string): string {
-  const name = actor?.displayName?.trim() || userId;
-  return `${possessive(name)} personal agent`;
 }

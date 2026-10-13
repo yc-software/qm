@@ -95,17 +95,27 @@ test("ack emoji keeps working on a non-Anthropic base model when an Anthropic ke
     resolveProviderKeys: async () => ({ anthropic: "sk-ant-test" }),
   });
   const realFetch = globalThis.fetch;
-  const calls: Array<{ url: string; model: unknown }> = [];
+  const calls: Array<{ url: string; model: unknown; thinking: unknown }> = [];
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(url), model: JSON.parse(String(init?.body ?? "{}")).model });
-    return new Response(JSON.stringify({ content: [{ type: "text", text: '{"emoji":"eyes"}' }] }), { status: 200 });
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    calls.push({ url: String(url), model: body.model, thinking: body.thinking });
+    return new Response(
+      JSON.stringify({
+        content: [
+          { type: "thinking", thinking: "" },
+          { type: "text", text: '{"emoji":"eyes"}' },
+        ],
+      }),
+      { status: 200 },
+    );
   }) as typeof globalThis.fetch;
   try {
     const picked = await harness.models.pickAckEmoji?.("ship it", ["eyes", "rocket"]);
     assert.equal(picked, "eyes", "the pick still lands even though the base model is OpenAI");
     assert.equal(calls.length, 1, "the Anthropic ack call was actually attempted");
     assert.match(calls[0]!.url, /anthropic/, "it went to the Anthropic API");
-    assert.equal(calls[0]!.model, "claude-haiku-4-5", "it used the Anthropic auxiliary, not the OpenAI judge model");
+    assert.equal(calls[0]!.model, "claude-haiku-5-5", "it used the Anthropic auxiliary, not the OpenAI judge model");
+    assert.deepEqual(calls[0]!.thinking, { type: "disabled" }, "the 64-token pick never spends its budget thinking");
   } finally {
     globalThis.fetch = realFetch;
   }

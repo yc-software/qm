@@ -2098,51 +2098,23 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "GET",
-    path: "/api/memory/history",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/memory/history?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/memory/restore",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ revision?: unknown; expectedRevision?: unknown }>(req, res, false);
-      if (!p) return;
-      const revision = typeof p.revision === "string" ? p.revision : "";
-      const expectedRevision = typeof p.expectedRevision === "string" ? p.expectedRevision : "";
-      return relayCore(
-        res,
-        "POST",
-        "/v1/memory/restore",
-        JSON.stringify({ principalId: user, revision, expectedRevision }),
-      );
-    },
-  },
-  {
-    method: "PUT",
+    method: "PATCH",
     path: "/api/memory",
     handle: async (c) => {
       const { req, res, user } = c;
-      const p = await readJson<{ content?: unknown; revision?: unknown }>(req, res, false);
+      const p = await readJson<{ facts?: unknown }>(req, res, false);
       if (!p) return;
-      if (typeof p.content !== "string")
-        return json(res, 400, { error: "bad_request", message: "content must be a string" });
-      const content = p.content;
-      const revision =
-        typeof p.revision === "string"
-          ? p.revision
-          : await coreFetch("GET", `/v1/memory?principalId=${encodeURIComponent(user)}`).then((head) => {
-              try {
-                return String((JSON.parse(head.text) as { revision?: unknown }).revision ?? "");
-              } catch {
-                return "";
-              }
-            });
-      return relayCore(res, "PUT", "/v1/memory", JSON.stringify({ principalId: user, content, revision }));
+      return relayCore(res, "PATCH", "/v1/memory", JSON.stringify({ principalId: user, facts: p.facts }));
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/memory",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ ids?: unknown }>(req, res, false);
+      if (!p) return;
+      return relayCore(res, "DELETE", "/v1/memory", JSON.stringify({ principalId: user, ids: p.ids }));
     },
   },
   {

@@ -36,11 +36,12 @@ anything externally facing or high-fidelity. Two adjustments for this runtime:
 
 You have a real computer, not a hosted design canvas. Build the artifact as files in your
 workspace, verify it locally, and when it should outlive the turn ship it with the
-`publish` skill.
+`publish` skill. Keep the same explicit `sandbox_id` on file, build, preview,
+and publish calls; run commands through `execute`, not `sandbox`.
 
 - **`files` actions `write` / `read`** — author and inspect workspace files.
-- **`sandbox` action `exec`** — install deps and run build steps (`execute` before sandbox-resource activation).
-- **`sandbox` action `start_process`** — run a dev server (`PORT=8080 node server.js`) so you can look at it (`background` action `start` before activation).
+- **`execute`** — install deps and run build steps.
+- **`execute` with `background:true`** — run a dev server (`PORT=8080 node server.js`, `purpose: "App preview server"`) so you can look at it.
 - **local headless Chromium** — confirm the page renders, the content is there, no console
   errors, layout and links intact: `chromium --headless --no-sandbox --disable-gpu
 --dump-dom http://localhost:<port>` (or `--screenshot=/tmp/page.png`, then use `files` action `read` on the

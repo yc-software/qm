@@ -8,7 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildMemoryContextSnapshot } from "../src/memory/context-boundary.ts";
-import type { MemoryRecords } from "../src/memory/records.ts";
+import type { MemoryFact } from "../src/memory/facts.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import type { Principal } from "../src/types.ts";
 
@@ -22,26 +22,23 @@ async function fixture() {
     { id: "alice", type: "internal" },
     { id: "bob", type: "internal" },
   ];
-  let records: MemoryRecords = {
-    version: 1,
-    records: [
-      {
-        id: "fact",
-        text: "- PRIVATE_SENTINEL",
-        sensitivity: "ordinary",
-        sources: [{ scopeId: HOME }],
-        sourceUnknown: false,
-      },
-    ],
-  };
-  const head = () => ({ content: records.records.map((record) => record.text).join("\n"), revision: "r", records });
+  let records: MemoryFact[] = [
+    {
+      id: "1",
+      text: "- PRIVATE_SENTINEL",
+      sensitivity: "ordinary",
+      sources: [HOME],
+      sourceUnknown: false,
+      createdAt: 0,
+      updatedAt: 0,
+    },
+  ];
   const memory: MemoryService = {
-    readHead: async () => head(),
-    read: async () => head().content,
+    facts: async () => records,
+    read: async () => records.map((record) => record.text).join("\n"),
     query: async () => [],
-    recall: async () => "",
+    recall: async () => [],
     capture: async () => 0,
-    replace: async () => {},
   };
   await built.app.upsertGroups([
     { groupId: "room", principalId: "alice" },
@@ -102,7 +99,7 @@ async function fixture() {
     session,
     append,
     checkpoint,
-    setRecords: (next: MemoryRecords) => {
+    setRecords: (next: MemoryFact[]) => {
       records = next;
     },
     records: () => records,
@@ -137,9 +134,8 @@ for (const change of ["remove", "reclassify", "posture", "audience"] as const) {
       await f.checkpoint();
       await f.append("assistant", { text: "PRIVATE_SENTINEL" });
       assert.equal((await f.get()).status, 200);
-      if (change === "remove") f.setRecords({ version: 1, records: [] });
-      if (change === "reclassify")
-        f.setRecords({ version: 1, records: f.records().records.map((r) => ({ ...r, sensitivity: "restricted" })) });
+      if (change === "remove") f.setRecords([]);
+      if (change === "reclassify") f.setRecords(f.records().map((r) => ({ ...r, sensitivity: "restricted" })));
       if (change === "posture") await f.built.config.setSharingPosture(HOME, "isolated");
       if (change === "audience")
         f.setAudience([
@@ -253,10 +249,7 @@ test("adding an authorized fact preserves an otherwise compatible checkpoint", a
   try {
     await f.checkpoint();
     await f.append("assistant", { text: "SAFE_REPLY" });
-    f.setRecords({
-      version: 1,
-      records: [...f.records().records, { ...f.records().records[0]!, id: "added", text: "- NEW_FACT" }],
-    });
+    f.setRecords([...f.records(), { ...f.records()[0]!, id: "2", text: "- NEW_FACT" }]);
     assert.equal((await f.get()).status, 200);
   } finally {
     await f.close();

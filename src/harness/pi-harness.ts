@@ -24,8 +24,6 @@ import {
 import {
   calculateCost,
   InMemoryCredentialStore,
-  isContextOverflow,
-  isRetryableAssistantError,
   type Api,
   type AssistantMessage,
   type Context,
@@ -63,6 +61,7 @@ import type {
 } from "../sessions/session-store.ts";
 import { tapeEntryMirrorRecord } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
+import { providerTurnError } from "./provider-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -83,7 +82,11 @@ import {
   codexProviderModelId,
 } from "../model/pi-models.ts";
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import {
+  GatewayModelUnavailableError,
+  modelGatewayRequest,
+  type ModelGatewayTransportConfig,
+} from "../model/provider-endpoints.ts";
 import {
   defineHarness,
   promptEnvelopeWithoutHistory,
@@ -129,6 +132,8 @@ import {
   meterGoalCall,
   rehydrateOpenGoal,
   goalSnapshotPayload,
+  goalWorkDigest,
+  type GovernorVerdict,
 } from "./goal.ts";
 
 export interface PiHarnessOptions {
@@ -394,14 +399,16 @@ async function directAnthropicJson(
     body: JSON.stringify({
       model: gateway?.target ?? requestModel.id,
       max_tokens: 64,
+      // Haiku 5.5 thinks by default; a 64-token budget would go entirely to thinking.
+      thinking: { type: "disabled" },
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
     }),
     signal: AbortSignal.timeout(2_000),
   });
   if (!res.ok) return undefined;
-  const json = (await res.json()) as { content?: Array<{ text?: string }> };
-  return json.content?.[0]?.text;
+  const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
+  return json.content?.find((block) => block.type === "text")?.text;
 }
 
 const APPROVAL_SUMMARY_PROMPT = [
@@ -946,44 +953,25 @@ export function textFromContent(content: unknown): string {
     .join("");
 }
 
-type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
-
-function parseProviderError(message: string): { type: string; message: string } | null {
-  const jsonAt = message.indexOf("{");
-  if (jsonAt < 0) return null;
-  try {
-    const parsed = JSON.parse(message.slice(jsonAt)) as {
-      type?: unknown;
-      message?: unknown;
-      error?: { type?: unknown; message?: unknown };
-    };
-    const body = parsed.error && typeof parsed.error === "object" ? parsed.error : parsed;
-    const providerMessage = typeof body.message === "string" ? body.message.trim() : "";
-    const providerType = typeof body.type === "string" ? body.type.trim() : "";
-    return providerMessage || providerType ? { type: providerType, message: providerMessage } : null;
-  } catch (e) {
-    swallow("pi: assistant error json parse", e);
-    return null;
+/** The agent's recent pi messages as governor work lines: what it said, called and got back. */
+function piGoalWork(messages: ReadonlyArray<unknown>): string {
+  const lines: string[] = [];
+  for (const m of messages as ReadonlyArray<{ role?: string; content?: unknown; toolName?: string }>) {
+    if (m.role === "toolResult") lines.push(`tool_result ${m.toolName ?? ""}: ${textFromContent(m.content)}`);
+    else if (m.role === "user" || m.role === "assistant") {
+      const said = textFromContent(m.content);
+      if (said) lines.push(`${m.role}: ${said}`);
+      for (const c of Array.isArray(m.content) ? m.content : [])
+        if ((c as { type?: string }).type === "toolCall")
+          lines.push(
+            `tool_call ${(c as { name?: string }).name ?? ""}: ${JSON.stringify((c as { arguments?: unknown }).arguments ?? {})}`,
+          );
+    }
   }
+  return goalWorkDigest(lines);
 }
 
-function formatPiAssistantError(raw: string | undefined): string {
-  const message = raw?.trim();
-  if (!message) return "Pi agent stopped with an error";
-  const provider = parseProviderError(message);
-  if (!provider?.message) return message;
-  return provider.type
-    ? `Model provider API error (${provider.type}): ${provider.message}`
-    : `Model provider API error: ${provider.message}`;
-}
-
-const TRANSIENT_PROVIDER_ERROR_TYPES = new Set(["overloaded_error", "api_error", "rate_limit_error", "timeout_error"]);
-
-function piErrorRetryable(failed: AssistantMessage): boolean {
-  const providerType = failed.errorMessage ? parseProviderError(failed.errorMessage)?.type : undefined;
-  if (providerType && !TRANSIENT_PROVIDER_ERROR_TYPES.has(providerType)) return false;
-  return isRetryableAssistantError(failed) && !isContextOverflow(failed);
-}
+type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
 
 function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
   const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant") as
@@ -991,17 +979,26 @@ function piFailedAssistant(session: AssistantTextSession): AssistantMessage | un
   return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
 }
 
-function piAssistantError(session: AssistantTextSession): string | null {
-  const failed = piFailedAssistant(session);
-  return failed ? formatPiAssistantError(failed.errorMessage) : null;
+function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
+  const ok = [...session.messages]
+    .reverse()
+    .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
+    AssistantMessage | undefined;
+  const u = ok?.usage;
+  return u ? u.input + u.cacheRead + u.cacheWrite : undefined;
 }
 
-function piAssistantFailure(session: AssistantTextSession): Error | null {
+function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
   const failed = piFailedAssistant(session);
   if (!failed) return null;
-  const message = formatPiAssistantError(failed.errorMessage);
-  return piErrorRetryable(failed) ? new ProviderTurnError(message) : new NonRetryableTurnError(message);
+  const contextWindow = (
+    failed.model ? (resolveModel(failed.model) as { contextWindow?: number } | undefined) : undefined
+  )?.contextWindow;
+  return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
 }
+
+/** Codes that retry the turn on the configured fallback model. */
+const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
   const err = piAssistantFailure(session);
@@ -1025,16 +1022,9 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
 
-const PROVIDER_REFUSAL_PATTERN =
-  /violate Anthropic(?:'|’)?s (?:Terms of Service|usage policy)|under Anthropic(?:'|’)?s usage policy|refusals-and-fallback|reduce refusals for your users by configuring a fallback model|the model refused to complete the request|gateway model is unavailable/i;
-
-export function isProviderRefusal(message: string | undefined): boolean {
-  return !!message && PROVIDER_REFUSAL_PATTERN.test(message);
-}
-
 export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
-  const err = piAssistantError(messagesSince(session, messagesBefore));
-  return err && isProviderRefusal(err) ? err : null;
+  const err = piAssistantFailure(messagesSince(session, messagesBefore));
+  return err && FALLBACK_CODES.has(err.code) ? err.message : null;
 }
 
 export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
@@ -1096,7 +1086,7 @@ export function emptyEndingNote(opts: {
   if (opts.pollFire) return null;
   const calls = opts.ref.modelCalls ?? 0;
   if (calls === 0) return null;
-  if (piAssistantError(opts.session)) return null;
+  if (piFailedAssistant(opts.session)) return null;
   if ((opts.session.getLastAssistantText() ?? "").trim()) return null;
   if (opts.turnWallClockMs > 0 && opts.turnWallClockMs - opts.elapsedMs < EMPTY_ENDING_MIN_BUDGET_MS) return null;
   return EMPTY_ENDING_NOTE;
@@ -1311,7 +1301,7 @@ export async function buildModelRuntime(
       options: wireModelId(routed, model, async () => {
         await modelGateway?.refresh?.();
         const current = modelGatewayRequest(modelGateway, model);
-        if (!current) throw new Error(`Gateway model is unavailable: ${model.id}`);
+        if (!current) throw new GatewayModelUnavailableError(model.id);
         return current.target;
       }),
     };
@@ -1411,8 +1401,10 @@ export async function probeModel(
     )
     .result();
   signal.throwIfAborted();
+  if (response.stopReason === "aborted") throw new DOMException("Model verification was aborted", "AbortError");
+  if (response.stopReason === "error") throw providerTurnError(response);
   if (response.stopReason !== "stop" || !response.content.some((part) => part.type === "text" && part.text.trim()))
-    throw new Error(response.errorMessage || "Model verification did not produce a completed text response");
+    throw new Error("Model verification did not produce a completed text response");
 }
 
 const FAST_MODE_BETA = "fast-mode-2026-02-01";
@@ -1779,7 +1771,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             );
           }
           try {
-            finalPayload = trimPayloadToByteBudget(finalPayload);
+            const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+            finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
           } catch (e) {
             swallow("pi: request byte budget", e);
           }
@@ -1872,7 +1865,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           silentRequested: false,
           pollFire: !!dispatched.pollFire,
           screenToolResult: dispatched.screenToolResult,
-          verifyGoal: dispatched.verifyGoal,
+          governGoal: dispatched.governGoal,
           emit: dispatched.emit,
           scopeLabel: dispatched.scopeLabel,
           orgScopeId: dispatched.orgScopeId,
@@ -2172,6 +2165,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           let wallClock!: TurnWallClockOutcome;
           const messagesBefore = entry.agentSession.messages.length;
+          entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
           const freshAssistantStopReason = (): string | undefined => {
             const fresh = entry.agentSession.messages.slice(messagesBefore);
             const last = [...fresh].reverse().find((m) => (m as { role?: string }).role === "assistant") as
@@ -2341,6 +2335,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   !!entry.ref.pausedOnApproval ||
                   !!entry.ref.pendingApprovals?.length ||
                   piRoundFailed(entry.agentSession, messagesBefore),
+                ...(entry.ref.governGoal
+                  ? {
+                      govern: (previous: GovernorVerdict | undefined) =>
+                        entry.ref.governGoal!({
+                          objective: goalAfterPrompt.objective,
+                          trigger: "checkpoint",
+                          recentWork: entry.ref.goalRecentWork?.() ?? "",
+                          ...(previous ? { previous } : {}),
+                        }),
+                    }
+                  : {}),
                 beforePrompt: async (note) => {
                   console.error(
                     `[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`,
@@ -2412,7 +2417,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (!userAborted && !cancelAbortRejection) {
               const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
               let recovered = false;
-              if (isProviderRefusal(turnErr.message)) {
+              if (turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
                 try {
                   recovered = await attemptRefusalFallback(turnErr.message);
                 } catch (e) {
@@ -2478,11 +2483,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (entry.ref.goal) {
               const g = entry.ref.goal;
 
+              bankGoalTurn(g, grindMeter.startedAt);
               if (userAborted && g.status === "active") {
                 g.status = "paused";
                 g.updatedAt = Date.now();
               }
-              bankGoalTurn(g, grindMeter.startedAt);
               const goalEntry = await turn.emit({
                 type: "system",
                 payload: goalSnapshotPayload(g),
@@ -2597,8 +2602,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             (id) => !!resolveModel(id),
           );
           if (
-            !(error instanceof Error) ||
-            !isProviderRefusal(error.message) ||
+            !(error instanceof ProviderTurnError) ||
+            error.code !== "refusal" ||
             !fallbackId ||
             !resolveModel(fallbackId)
           )

@@ -128,6 +128,7 @@ async function harness(opts?: {
   await processes.register({
     processId: "p-1",
     scopeId: SCOPE,
+    sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: npm run build",
     ttlMs: 600_000,
@@ -518,4 +519,16 @@ test("an unwatch between the tick snapshot and the poll is honored", async () =>
   const victim = fired === a ? b : a;
   assert.equal((await h.monitors.get(fired.id))?.enabled, true);
   assert.equal(await h.monitors.get(victim.id), null);
+});
+
+test("watch wakes and Slack notices use the saved purpose with a legacy command fallback", async () => {
+  for (const purpose of [undefined, "Run regression tests"]) {
+    const h = await harness({ result: { status: "refused", reason: "rate limit exceeded" } });
+    await h.arm(purpose ? { purpose } : {});
+    h.append("p-1", "compiling...\n");
+    await h.poller.tick();
+    assert.ok(h.calls[0]?.text.includes(purpose ?? "bg: npm run build"));
+    const notices = await h.deliveries.pending("slack");
+    assert.ok(notices[0]?.text.includes(purpose ?? "bg: npm run build"));
+  }
 });

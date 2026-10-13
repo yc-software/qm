@@ -16,9 +16,15 @@ test("core deploy image includes git", () => {
   );
   assert.match(
     dockerfile,
-    /npm audit --omit=dev --audit-level=moderate/,
-    "the production dependency threshold is a build gate",
+    /npm ci --omit=dev && npm run audit:prod/,
+    "the production dependency audit is a build gate",
   );
+  const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
+    scripts: Record<string, string>;
+  };
+  assert.equal(packageJson.scripts["audit:prod"], "npm audit --omit=dev --audit-level=moderate");
+  const workflow = readFileSync(join(repoRoot, ".github/workflows/cicd.yml"), "utf8");
+  assert.match(workflow, /run: npm run audit:prod/, "CI runs the same audit as the core image build");
   assert.doesNotMatch(dockerfile, /patch-pi-shrinkwrap/, "the dependency layer should be lockfile-only");
   assert.match(
     dockerfile,

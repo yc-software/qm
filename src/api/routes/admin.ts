@@ -20,7 +20,7 @@ import {
   putAdminCronDestination,
   putAdminCronRuntime,
 } from "./admin/artifacts.ts";
-import { getAdminMemory, listMemoryScopes, putAdminMemory } from "./admin/memory.ts";
+import { adminMemory, listMemoryScopes } from "./admin/memory.ts";
 import { manageSandboxResources } from "./admin/sandbox.ts";
 import {
   createAdminGrant,
@@ -147,8 +147,10 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/skills/:id", auth: "either", handle: getAdminSkill },
   { method: "DELETE", path: "/v1/admin/skills/:id", auth: "either", handle: archiveAdminSkill },
   { method: "GET", path: "/v1/admin/memory/scopes", auth: "either", handle: listMemoryScopes },
-  { method: "GET", path: "/v1/admin/memory", auth: "either", handle: getAdminMemory },
-  { method: "PUT", path: "/v1/admin/memory", auth: "either", handle: putAdminMemory },
+  { method: "GET", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
+  { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
+  { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
+  { method: "DELETE", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
   { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
   { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
   { method: "GET", path: "/v1/admin/users", auth: "either", handle: listUsers },

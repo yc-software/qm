@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
-import type { SlackAgentRequestContext } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
@@ -338,24 +337,7 @@ class FakeCore implements SlackCoreClient {
   async getApproval(): Promise<null> {
     return null;
   }
-  readonly agentRequests = new Map<string, SlackAgentRequestContext>();
-  async putAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<void> {
-    this.agentRequests.set(requestId, record);
-  }
-  async getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
-    return this.agentRequests.get(requestId) ?? null;
-  }
-  async takeAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
-    const record = this.agentRequests.get(requestId) ?? null;
-    this.agentRequests.delete(requestId);
-    return record;
-  }
-  async agentRequestForApproval(approvalRequestId: string): Promise<SlackAgentRequestContext | null> {
-    for (const record of this.agentRequests.values()) {
-      if (record.approvalRequestIds?.includes(approvalRequestId)) return record;
-    }
-    return null;
-  }
+
   async pushDirectory(body: any): Promise<boolean> {
     this.directories.push(body);
     return true;

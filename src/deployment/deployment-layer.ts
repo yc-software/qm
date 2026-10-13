@@ -1,6 +1,5 @@
 export {
   compileApproval,
-  credentialPathError,
   parseToolDescriptor,
   type ToolCredentialBroker,
   type ToolCredentialPath,

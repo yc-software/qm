@@ -1,4 +1,4 @@
-import { assertDocumentListing } from "./support/file-document-listing.ts";
+import { assertDocumentListing, assertSharedRecordIdentity } from "./support/file-document-listing.ts";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -150,17 +150,17 @@ test("pg scoped file pages have a matching enabled recency index", { skip }, asy
   }
 });
 
-test("pg resolveByOwnerPaths returns the shared set; disabled excluded", { skip }, async () => {
+test("pg resolveByIds returns the shared set; disabled excluded", { skip }, async () => {
   const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
   await store.put(put({ id: "r1", path: "p/r1", data: Buffer.from("1") }));
   await store.put(put({ id: "r2", path: "p/r2", data: Buffer.from("2") }));
 
   assert.deepEqual(
-    (await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "p/r1" }])).map((f) => f.id),
+    (await store.resolveByIds([{ ownerScopeId: owner, id: "r1" }])).map((f) => f.id),
     ["r1"],
   );
   await store.setEnabled("r1", false);
-  assert.equal((await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "p/r1" }])).length, 0);
+  assert.equal((await store.resolveByIds([{ ownerScopeId: owner, id: "r1" }])).length, 0);
 });
 
 test("pg open round-trips bytes; delete removes the ROW only", { skip }, async () => {
@@ -252,5 +252,9 @@ test("pg concurrent first shares reuse one path generation and republish after d
   const current = await second.put({ ...input, id: "share-three", data: Buffer.from("new content") });
   assert.equal(current.created, true);
   assert.equal(current.artifact.id, "share-three");
-  assert.equal((await first.resolveByOwnerPaths([{ ownerScopeId: owner, path: input.path }])).length, 1);
+  assert.equal((await first.resolveByIds([{ ownerScopeId: owner, id: current.artifact.id }])).length, 1);
+});
+
+test("shared file refs authorize only the exact record ID", { skip }, async () => {
+  await assertSharedRecordIdentity(createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore()));
 });

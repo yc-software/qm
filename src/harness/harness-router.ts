@@ -22,8 +22,11 @@ import {
   goalSnapshotPayload,
   latestGoalRecord,
   rehydrateOpenGoal,
-  verifyGoalCompletion,
+  governGoal,
+  goalWorkFromEntries,
+  type GoalGovernorInput,
   type GoalRecord,
+  type GovernorVerdict,
 } from "./goal.ts";
 
 const GOAL_ROUND_MIN_WALL_MS = 30_000;
@@ -60,7 +63,7 @@ async function runTurnEnforcingGoal(
     meter.turns += result.modelCalls ?? 1;
     const tokens = inputTokens(result);
     meter.tokens += tokens;
-    goal.tokensUsed += tokens;
+    if (goal.status !== "paused") goal.tokensUsed += tokens;
   };
   account();
   const remainingWallMs = () =>
@@ -79,6 +82,17 @@ async function runTurnEnforcingGoal(
     outcome: blocked() ? "halted" : "ok",
     ok: "ok",
     blocked,
+    ...(input.governGoal
+      ? {
+          govern: (previous: GovernorVerdict | undefined) =>
+            input.governGoal!({
+              objective: goal.objective,
+              trigger: "checkpoint",
+              recentWork: goalWorkFromEntries([...input.history.slice(-40), ...emitted]),
+              ...(previous ? { previous } : {}),
+            }),
+        }
+      : {}),
     beforePrompt: () => {
       console.error(`[goal] continuation session=${input.session.id} harness=${harnessId} turns=${meter.turns}`);
     },
@@ -96,11 +110,11 @@ async function runTurnEnforcingGoal(
       return blocked() ? "halted" : "ok";
     },
   });
+  bankGoalTurn(goal, startedAt);
   if (result.stopped && (result.stoppedByUser || !input.cancel?.aborted) && goal.status === "active") {
     goal.status = "paused";
     goal.updatedAt = Date.now();
   }
-  bankGoalTurn(goal, startedAt);
   await dispatched.emit({ type: "system", payload: goalSnapshotPayload(goal), scopeLabel: input.scopeLabel });
   return result;
 }
@@ -289,8 +303,7 @@ export function createHarnessRouter(
             : input.tools,
           ...(judge
             ? {
-                verifyGoal: (objective: string, evidence: string) =>
-                  verifyGoalCompletion(judge, objective, evidence, input.cancel),
+                governGoal: (goalInput: GoalGovernorInput) => governGoal(judge, goalInput, input.cancel),
               }
             : {}),
         };

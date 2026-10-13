@@ -308,7 +308,7 @@ function effort(level: string | undefined): "low" | "medium" | "high" | "xhigh" 
 
 export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
   const configuredModel = opts.modelId;
-  const judgeModelId = opts.judgeModelId ?? "claude-haiku-4-5";
+  const judgeModelId = opts.judgeModelId ?? "claude-haiku-5-5";
   const resolveModelId = (scope?: ScopeId) =>
     [
       typeof configuredModel === "function" ? configuredModel(scope) : configuredModel,
@@ -443,10 +443,15 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       options: {
         abortController: controller,
         cwd: jail,
-        env: perUserClaudeEnv(
-          claudeChildEnv(authEnv ? { ...opts.env, ...authEnv } : (opts.env ?? {}), jail),
-          turn.claudeOauthToken,
-        ),
+        env: {
+          ...perUserClaudeEnv(
+            claudeChildEnv(authEnv ? { ...opts.env, ...authEnv } : (opts.env ?? {}), jail),
+            turn.claudeOauthToken,
+          ),
+          ...(turn.timezone
+            ? { TZ: new Intl.DateTimeFormat("en-US", { timeZone: turn.timezone }).resolvedOptions().timeZone }
+            : {}),
+        },
         tools: allowSubagents ? ["Agent"] : [],
         skills: [],
         settingSources: [],

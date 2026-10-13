@@ -95,9 +95,8 @@ for (const change of ["source", "audience"] as const)
     const memory: MemoryService = {
       read: async () => content,
       query: async () => [content],
-      recall: async () => content,
+      recall: async () => [{ text: content, score: 0.2 }],
       capture: async () => 0,
-      replace: async () => {},
     };
     const seen: HarnessTurnInput[] = [];
     const reopened: unknown[] = [];
@@ -182,9 +181,8 @@ for (const operation of ["read", "search"] as const)
     const memory: MemoryService = {
       read: async () => content,
       query: async () => [content],
-      recall: async () => content,
+      recall: async () => [{ text: content, score: 0.2 }],
       capture: async () => 0,
-      replace: async () => {},
     };
     const base = createMockHarness();
     const seen: HarnessTurnInput[] = [];
@@ -255,9 +253,8 @@ test("a failed audience reset is retried before recording the new checkpoint", a
   const memory: MemoryService = {
     read: async () => "",
     query: async () => [],
-    recall: async () => "",
+    recall: async () => [],
     capture: async () => 0,
-    replace: async () => {},
   };
   const base = createMockHarness();
   let resets = 0;

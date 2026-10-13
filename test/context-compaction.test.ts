@@ -614,11 +614,11 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
     compactCalls.push(input);
     return "tiny recap";
   };
-  const keptAfterFirstTurn = ["msg 4", "msg 5", "msg 6", "msg 7", "!histcount", "history:8"];
-  const { orch, sessions } = buildOrchestrator(harness, budgetWhoseKeepWindowFits(tokensOf(...keptAfterFirstTurn)));
+  const messages = msgTexts(8).map((text) => `${text} ${"history ".repeat(1000)}`);
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...messages)));
   const sid = await seed(
     sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
+    messages.map((text) => ({ payload: { text } })),
   );
 
   await orch.handleTurn(turn("!histcount"));
@@ -626,10 +626,17 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
   assert.equal(compactCalls.length, 1);
   await waitForLeaseRelease(sessions, sid);
 
+  const expectedHistory = forModelContext(await sessions.getEntries(sid));
+  assert.ok(expectedHistory.some((entry) => contextSummaryPayload(entry)));
+  assert.ok(expectedHistory.some((entry) => entry.type === "user"));
   delete harness.models.compactHistory;
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
-  assert.equal(res.reply, "history:7", "the follow-up starts on [summary, recent…] with no summarizer call");
+  assert.equal(
+    res.reply,
+    `history:${expectedHistory.length}`,
+    "the follow-up starts on [summary, recent…] with no summarizer call",
+  );
 });
 
 test("forModelContext strips thinking/text/soul (never laundered into a durable summary)", () => {
@@ -984,10 +991,7 @@ test("the background pass waits out a turn that holds the lock rather than throw
 
 test("a turn landing mid-summarization does not disturb the fold: it covers a prefix, the turn's entries stay", async () => {
   const { harness, compactCalls, open } = gatedHarness();
-  const paddedTexts = Array.from(
-    { length: 15 },
-    (_, i) => `msg ${i} with enough padding words that a mid-summarization turn stays under the hard threshold`,
-  );
+  const paddedTexts = Array.from({ length: 15 }, (_, i) => `msg ${i} ${"padding ".repeat(1000)}`);
   const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...paddedTexts)));
   const sid = await seed(
     sessions,

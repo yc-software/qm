@@ -21,11 +21,15 @@ them to (re)connect it through the product OAuth flow.
 Use the bundled helper for every draft — it owns destination resolution, rich-text
 block construction, and the required draft envelope:
 
+Run these commands with `execute` and an explicit `sandbox_id`, using the absolute
+directory reported by the skill read in place of `<skill dir>`. Keep that ID for
+preparing body files and running the helper.
+
 ```bash
-python3 skills/slack-drafts/scripts/slack_drafts.py create --to '#general' --text 'hello'
-python3 skills/slack-drafts/scripts/slack_drafts.py create --to '@jane' --text-file body.txt
-python3 skills/slack-drafts/scripts/slack_drafts.py create --to C0123ABCDEF --thread-ts 1712345678.000100 --text '...'
-python3 skills/slack-drafts/scripts/slack_drafts.py resolve --to '#general'
+python3 "<skill dir>/scripts/slack_drafts.py" create --to '#general' --text 'hello'
+python3 "<skill dir>/scripts/slack_drafts.py" create --to '@jane' --text-file body.txt
+python3 "<skill dir>/scripts/slack_drafts.py" create --to C0123ABCDEF --thread-ts 1712345678.000100 --text '...'
+python3 "<skill dir>/scripts/slack_drafts.py" resolve --to '#general'
 ```
 
 - `--to` takes a channel/IM ID (`C…`/`G…`/`D…`), a user ID (`U…`/`W…`), `#channel-name`,

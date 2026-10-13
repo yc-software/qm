@@ -458,6 +458,20 @@ test("resolveEndpoint: destroy invalidates a hot resolve cache", async () => {
   assert.equal(resolved, null, "a destroyed deployment must not serve a cached endpoint");
 });
 
+test("resolveEndpoint: an app whose process and supervisor are both gone returns null, and the re-apply reuses the body", async () => {
+  const { api, counts } = fakeApi();
+  const appGoneProbe = (cmd: string): boolean => cmd.includes("qm-app.pid") && cmd.includes("exit 99");
+  const { fetchImpl, execs } = fakeDaemon({ execCode: (cmd) => (appGoneProbe(cmd) ? 99 : 0) });
+  const p = provider(api, fetchImpl);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+
+  assert.equal(await p.resolveEndpoint!(d, version("/unused")), null, "a dead app is not served as a live endpoint");
+  await p.apply(d, version(localSnapshot("a", "1")));
+  assert.equal(counts.run, 1, "the running body is reused, only the app is restarted");
+  assert.equal(execs.filter(appStartScript).length, 2, "the app was started again");
+});
+
 test("resolveEndpoint (gone): a terminated body returns null (signal to re-apply) and clears the pointer", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
@@ -571,7 +585,7 @@ test("apply: the readiness gate fails when the launched process dies instead of 
   );
   assert.match(
     execs.find(readinessProbe)!,
-    /kill -0 -"\$pid"/,
+    /alive "\$pid"/,
     "readiness tracks the process this deploy launched, not just the port",
   );
 });

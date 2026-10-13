@@ -1,4 +1,4 @@
-import { isStrongSigningSecret } from "../auth/source-auth.ts";
+import { isBearerSecret, isStrongSigningSecret } from "../auth/source-auth.ts";
 
 type SecretGate =
   | "production"
@@ -12,6 +12,7 @@ type SecretGate =
   | "porter"
   | "agent37"
   | "superserve"
+  | "do-managed-agents"
   | "porter-deploy"
   | "fly-shared-deploy"
   | "fly-deploy"
@@ -46,6 +47,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
   { name: "SUPERSERVE_API_KEY", requiredWhen: "superserve" },
   { name: "E2B_API_KEY", requiredWhen: "e2b" },
+  { name: "DO_AGENTS_API_TOKEN", requiredWhen: "do-managed-agents" },
   { name: "MODAL_TOKEN_ID", requiredWhen: "modal" },
   { name: "MODAL_TOKEN_SECRET", requiredWhen: "modal" },
   { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: ["porter", "porter-deploy"] },
@@ -73,6 +75,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   porter: (env) => sandboxBackendSelected(env, "porter"),
   agent37: (env) => sandboxBackendSelected(env, "agent37"),
   superserve: (env) => sandboxBackendSelected(env, "superserve"),
+  "do-managed-agents": (env) => sandboxBackendSelected(env, "do-managed-agents"),
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
   "fly-shared-deploy": (env) => env.DEPLOY_PROVIDER === "fly" && Boolean(env.FLY_DEPLOY_SHARED_APP_NAME?.trim()),
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
@@ -101,6 +104,7 @@ export function validateCoreSecretEnv(env: NodeJS.ProcessEnv): string[] {
 function isInvalidSecret(name: string, value: string | undefined): boolean {
   const candidate = value?.trim();
   if (!candidate || /^(replace-me|placeholder|changeme|todo)$/i.test(candidate)) return true;
+  if (name === "DEPLOYMENT_CONTROL_SECRET" && !isBearerSecret(value)) return true;
   return (
     (name === "CONNECTOR_SECRET_KEY" ||
       name === "CORE_SIGNING_SECRET" ||

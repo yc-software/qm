@@ -255,7 +255,7 @@ const connectedConnectors = new Set<string>();
 const redrawHooks = new Set<() => void>();
 let proactiveOpenerStarted = false;
 
-export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export function markConnectorConnected(provider: string): void {
   if (!provider) return;
@@ -2049,6 +2049,13 @@ export function createChatSurface(
     return `${url}${sep}returnTo=${encodeURIComponent(returnTo)}`;
   }
 
+  async function continueAfterConnection(name: string): Promise<void> {
+    const agent = chatState.agent;
+    if (!agent) return;
+    await ctx.composer.refreshRuntimeSelection(chatState.scopeId, agent);
+    await ctx.composer.sendSuggestedPrompt(`I connected ${name}. Please continue.`, agent);
+  }
+
   function connectorWidget(link: ConnectorLink): TemplateResult {
     if (link.provider === "slack-bot") return html`<qm-slack-setup></qm-slack-setup>`;
     return connectorCard(link, connectedConnectors.has(link.provider), withReturnTo);
@@ -2122,6 +2129,8 @@ export function createChatSurface(
                 .base=${withBase("")}
                 .adminBase=${ADMIN_BASE}
                 .widget=${part.type === "setup" ? "apps" : part.type}
+                .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
+                .onConnected=${continueAfterConnection}
                 .returnKey=${`reply:${message.timestamp}:${chunkIndex}:${partIndex}`}
                 .setupOnly=${true}
                 .animateWelcome=${false}
@@ -2423,11 +2432,15 @@ export function createChatSurface(
           @click=${() => toggleJobOutput(j.processId)}
         >
           ${icon(Terminal, 13)}
-          <code class="bg-row-cmd">${j.command}</code>
+          ${
+            j.purpose
+              ? html`<span class="bg-row-cmd bg-job-purpose">${j.purpose}</span>`
+              : html`<code class="bg-row-cmd">${j.command}</code>`
+          }
           <span class="bg-row-meta">started ${relTime(j.startedAt)} · ${status}</span>
           <span class="bg-row-toggle">${icon(ChevronRight, 13)}</span>
         </button>
-        ${open ? html`<pre class="bg-row-output">${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
+        ${open ? html`<pre class="bg-row-output">${j.purpose ? `${j.command}\n\n` : ""}${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
       </div>
     `;
   }
@@ -3171,12 +3184,13 @@ export function createChatSurface(
     const session = sessionPresentation(row, status);
     const sessionView = session ? sessionToolView(call, result, sessionsState.list) : null;
     const sessionDetail = [sessionView?.detail, session?.preview].filter(Boolean).join(" · ");
+    const sessionText = session ? [session.label, sessionDetail].filter(Boolean).join(" ") : null;
     const rowIcon = session
       ? Bot
       : { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[description.category];
     const classes = ["tool-row", `tool-${kind}`].join(" ");
     const head = html`<span class="tool-icon">${icon(rowIcon, 15)}</span>
-      ${session ? html`<span class="session-action">${session.label}</span>${sessionView?.chipTitle ? subagentChip(sessionView.chipTitle, sessionView.sessionId) : nothing}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${detail ? `${label}: ${detail}` : label}>${visible}</span>`}`;
+      ${session && sessionView?.chipTitle ? html`<span class="session-action">${session.label}</span>${subagentChip(sessionView.chipTitle, sessionView.sessionId)}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${sessionText ?? (detail ? `${label}: ${detail}` : label)}>${sessionText ?? visible}</span>`}`;
     if (!row.call && !row.result) return html`<div class="${classes}">${head}</div>`;
     const renderDisclosure = (details: HTMLDetailsElement): void => {
       const host = details.querySelector<HTMLElement>(".tool-disclosure-host");

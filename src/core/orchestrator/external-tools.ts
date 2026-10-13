@@ -9,7 +9,7 @@ export function externalTools(tools: ToolContext, authorizeSandbox?: (id: string
   const allowed = new Set(["attach", "history", "historyOpen", "commandCredentialHandles"]);
   return new Proxy(tools, {
     get(target, property, receiver) {
-      if (property === "sessionSyscalls" || property === "runtime" || property === "registerLogin") return undefined;
+      if (property === "sessionSyscalls" || property === "runtime") return undefined;
       if (property === "mcpToolDefs") return () => [];
       if (property === "execute")
         return async (command: string, opts?: Parameters<ToolContext["execute"]>[1]) => {

@@ -465,8 +465,7 @@ test("OpenCode advertises aliases only for tools available on the turn", async (
     await harness.turns.runTurn(turnInput([], []));
     const { systemPrompt } = JSON.parse(readFileSync(captured, "utf8")) as { systemPrompt: string };
     assert.doesNotMatch(systemPrompt, /workspace_read|workspace_write/);
-    if (sandboxResources) assert.doesNotMatch(systemPrompt, /workspace_execute/);
-    else assert.match(systemPrompt, /workspace_execute is execute/);
+    assert.match(systemPrompt, /workspace_execute is execute/);
   }
 });
 
@@ -578,7 +577,11 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   assert.equal(entries.filter((entry) => entry.type === "user").length, 1, "queued input is not model intake");
   writeFileSync(capturePath + ".release", "continue");
   await running;
-  assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+  const intake = entries.filter((entry) => entry.type === "user");
+  assert.deepEqual(
+    intake.map((entry) => (entry.payload as { steered?: boolean }).steered),
+    [undefined, true],
+  );
   assert.equal((await signals.pending(turn.runId)).length, 0);
   const sent = readFileSync(capturePath, "utf8");
   assert.ok(sent.includes(pdf));

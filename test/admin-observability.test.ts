@@ -647,7 +647,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
     const reqs = await s.built.sessions.listLlmRequests(session!.id);
     const latest = reqs[reqs.length - 1] as any;
     const userMessage = latest.promptEnvelope.messages.at(-1).content;
-    assert.match(userMessage, /Recent agent-initiated deliveries to this conversation/);
+    assert.match(userMessage, /Delivered here since the user's last message/);
     assert.match(userMessage, /the deploy is done/);
   } finally {
     await s.close();

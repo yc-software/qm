@@ -13,7 +13,7 @@ const PREFIX: Record<Exclude<ResourceKind, "file">, string> = {
   "service-cred": "service-cred:",
 };
 
-export const fileRef = (path: string): ResourceRef => ({ kind: "file", id: path });
+export const fileRef = (id: string): ResourceRef => ({ kind: "file", id });
 export const skillRef = (id: string): ResourceRef => ({ kind: "skill", id });
 export const deployRef = (id: string): ResourceRef => ({ kind: "deploy", id });
 export const cronRef = (id: string): ResourceRef => ({ kind: "cron", id });

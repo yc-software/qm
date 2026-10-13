@@ -188,3 +188,30 @@ test("the daemon probe reports a hung daemon as a timeout", async () => {
 
   assert.equal(await dockerDaemonFailure({ dockerExec }), "no response within 10s");
 });
+
+test("a Docker app that only answers 5xx fails publish, reports its output and leaves no container", async () => {
+  const calls: string[][] = [];
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    const script = args[0] === "exec" ? args.at(-1)! : "";
+    if (script.includes("http_code")) return { code: 96, stdout: "500\n", stderr: "" };
+    if (script.startsWith("tail -c")) return { code: 0, stdout: "boot: database unreachable", stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const reported: Array<{ code: string; message: string }> = [];
+  const store = createDeployStore();
+  const d = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/broken",
+  });
+  const provider = createDockerDeployProvider({ dockerExec, onError: (e) => reported.push(e) });
+  await assert.rejects(provider.apply(d, d.versions[0]!), /answered HTTP 500 on \/ .*database unreachable/s);
+  assert.deepEqual(
+    reported.map((e) => e.code),
+    ["app_start_failed"],
+  );
+  assert.match(reported[0]!.message, new RegExp(`\\(deployment ${d.id}\\)`), "the record names the deployment");
+  assert.equal(calls.at(-2)!.join(" "), `rm -f agent-deploy-${d.id.slice(0, 12)}`);
+});

@@ -1,4 +1,4 @@
-import { assertDocumentListing } from "./support/file-document-listing.ts";
+import { assertDocumentListing, assertSharedRecordIdentity } from "./support/file-document-listing.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
@@ -180,23 +180,19 @@ test("listOwnedByScopes: nameQuery matches names case-insensitively across the w
   assert.equal((await store.listOwnedByScopes([owner], { nameQuery: "missing" })).files.length, 0);
 });
 
-test("resolveByOwnerPaths returns the SHARED set by (owner, path); disabled excluded", async () => {
+test("resolveByIds returns the SHARED set by (owner, id); disabled excluded", async () => {
   const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a") }));
   await store.put(put({ id: "b", path: "p/b", data: Buffer.from("b") }));
 
-  const hit = await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "p/a" }]);
+  const hit = await store.resolveByIds([{ ownerScopeId: owner, id: "a" }]);
   assert.deepEqual(
     hit.map((f) => f.id),
     ["a"],
   );
 
   await store.setEnabled("a", false);
-  assert.equal(
-    (await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "p/a" }])).length,
-    0,
-    "disabled excluded",
-  );
+  assert.equal((await store.resolveByIds([{ ownerScopeId: owner, id: "a" }])).length, 0, "disabled excluded");
   assert.equal(await store.get("a"), null, "get hides disabled by default");
   assert.ok(await store.get("a", { includeDisabled: true }), "get can surface disabled");
 });
@@ -242,4 +238,8 @@ test("local stream failure removes partial bytes and publishes nothing", async (
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("shared file refs authorize only the exact record ID", async () => {
+  await assertSharedRecordIdentity(createMemoryFileArtifactStore(createMemoryDurableByteStore()));
 });

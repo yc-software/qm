@@ -6099,11 +6099,6 @@
       #view-data .memory-editor > .body {
         padding: 0;
       }
-      #view-data .memory-editor label {
-        display: block;
-        margin-bottom: 4px;
-        font-size: 13px;
-      }
       #view-data .memory-editor textarea {
         width: 100%;
         box-sizing: border-box;
@@ -6112,17 +6107,21 @@
         line-height: 1.6;
         resize: vertical;
       }
-      #view-data .memory-editor .foot {
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 12px;
-        border: 0;
-        padding: 12px 0 0;
+      #view-data .memory-editor .memory-facts {
+        margin: 0;
+        padding: 0;
+        list-style: none;
       }
-      #view-data .memory-editor .status {
-        order: -1;
-        margin-right: auto;
+      #view-data .memory-editor .memory-facts li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid #e3e8ee;
+      }
+      #view-data .memory-editor .memory-facts li > span,
+      #view-data .memory-editor .memory-facts li > textarea {
+        flex: 1;
       }
       #view-data .memory-editor button.primary {
         min-height: 32px;
@@ -6848,8 +6847,6 @@
 
       const FOCUS_STALE_MS = 60000;
       const viewLoadedAt = {};
-      let memDraft = null;
-      let memDraftScope = null;
       let cronDestinationEditId = null;
       const transcriptVisibility = { thinking: true, toolResults: true };
 
@@ -7183,8 +7180,6 @@
         route();
       }
       const signOut = async () => {
-        memDraft = null;
-        memDraftScope = null;
         await api("POST", "/api/logout");
 
         if (API_BASE) {
@@ -7280,7 +7275,11 @@
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
         if (st.view === "metrics" && st.phase) p.set("phase", st.phase);
-        if (st.view === "spend" && st.range) p.set("range", st.range);
+        const spendWindow = st.view === "spend" ? governanceUI.spend.spendWindow(st) : null;
+        if (spendWindow && spendWindow.preset === null) {
+          p.set("from", spendWindow.from);
+          p.set("to", spendWindow.to);
+        } else if (spendWindow && st.range) p.set("range", spendWindow.preset);
         if (st.view === "slack" && st.container) p.set("container", st.container);
         if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
         if (st.view === "judgments" && st.container) p.set("container", st.container);
@@ -7346,6 +7345,8 @@
           mem: p.get("mem") || null,
           phase: p.get("phase") || null,
           range: p.get("range") || null,
+          from: p.get("from") || null,
+          to: p.get("to") || null,
           historyKind: normalizedHistoryKind,
           page: Math.max(1, parseInt(p.get("page"), 10) || 1),
           cursor: p.get("cursor") || null,
@@ -9333,18 +9334,9 @@
           sparkline,
         });
       }
-      const SPEND_RANGES = { "7d": 7, "30d": 30, "90d": 90 };
       function spendQuery(st) {
-        const DAY = 86400000;
-        const range = SPEND_RANGES[st.range] ? st.range : "30d";
-        const to = Math.floor(Date.now() / DAY) * DAY + DAY;
-        const iso = (t) => new Date(t).toISOString().slice(0, 10);
-        const params = new URLSearchParams({
-          from: iso(to - SPEND_RANGES[range] * DAY),
-          to: iso(to),
-          bucket: range === "90d" ? "week" : "day",
-        });
-        return params.toString();
+        const { from, to, bucket } = governanceUI.spend.spendWindow(st);
+        return new URLSearchParams({ from, to, bucket }).toString();
       }
       function renderSpend(root, d) {
         governanceUI.spend.spend(root, d, {
@@ -9353,9 +9345,10 @@
           fmtTokens,
           shortName,
           plural,
-          range: urlToState().range || "30d",
+          window: governanceUI.spend.spendWindow(urlToState()),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),
-          setRange: (range) => go({ ...urlToState(), view: "spend", range }),
+          setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
+          setCustomRange: (from, to) => go({ ...urlToState(), view: "spend", range: null, from, to }),
           downloadCsv: (breakdown = "entity") => {
             const a = document.createElement("a");
             a.href =
@@ -9690,12 +9683,6 @@
           reload: () => (current() ? renderData() : Promise.resolve()),
           setCronEditing: (id) => {
             if (current()) cronDestinationEditId = id;
-          },
-          memoryDraft: () => (memDraftScope === capturedScope ? memDraft : null),
-          setMemoryDraft: (draft) => {
-            if (!current()) return;
-            memDraft = draft;
-            memDraftScope = draft === null ? null : capturedScope;
           },
         };
       }

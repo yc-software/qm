@@ -111,9 +111,11 @@ test("strict overlay validation rejects malformed fields, prices, bounds, reserv
   ]) {
     assert.throws(() => validateModelOverlay(invalid));
   }
-  assert.equal(validateModelOverlay(spec).base, true);
-  assert.equal(validateModelOverlay(spec).webui, true);
-  assert.equal(validateModelOverlay(spec).auxiliary, false);
+  const parsed = validateModelOverlay(spec);
+  assert.ok("base" in parsed);
+  assert.equal(parsed.base, true);
+  assert.equal(parsed.webui, true);
+  assert.equal(parsed.auxiliary, false);
 });
 
 test("store reload and independent readers observe edits and soft deletion without mutating in-flight models", async () => {

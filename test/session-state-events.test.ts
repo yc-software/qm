@@ -40,7 +40,7 @@ function parseFrame(data: string): SessionStateEvent | null {
 }
 
 function statesFor(events: SessionStateEvent[], threadRef: string): string[] {
-  return events.filter((e) => e.threadRef === threadRef).map((e) => e.state);
+  return events.filter((e) => e.threadRef === threadRef && e.state !== "metadata").map((e) => e.state);
 }
 
 test("a plain turn emits working then idle", async () => {
@@ -178,7 +178,8 @@ test("GET /v1/session-state/events streams transitions as SSE frames", async () 
           ?.slice("data: ".length);
         if (!data) continue;
         const ev = parseFrame(data);
-        if (ev && ev.threadRef === "web:U1:sse" && !frames.some((f) => f.state === ev.state)) frames.push(ev);
+        if (ev && ev.threadRef === "web:U1:sse" && ev.state !== "metadata" && !frames.some((f) => f.state === ev.state))
+          frames.push(ev);
       }
       if (frames.some((f) => f.state === "awaiting_approval")) break;
     }

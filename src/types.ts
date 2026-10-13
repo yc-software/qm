@@ -55,6 +55,7 @@ export function isSharedScope(id: ScopeId | undefined): boolean {
 export type ConversationKind = "dm" | "channel" | "group";
 
 export interface Conversation {
+  teamIds?: string[];
   kind: ConversationKind;
   threadRef: string;
   channelRef?: string;
@@ -181,7 +182,7 @@ export interface GrantedHandle {
   carried?: true;
   handlePath: string;
   ownerScopeId: ScopeId;
-  ownerPath: string;
+  fileId: string;
   permission: Permission;
 }
 
@@ -319,6 +320,7 @@ export interface Webhook extends TriggerBase {
 export interface Monitor extends TriggerBase {
   processId: string;
   command: string;
+  purpose?: string;
   threadRef: string;
   instructions?: string;
   pattern?: string;
@@ -341,6 +343,7 @@ export interface ShipActionPolicy {
 
 export interface LoopCaps {
   maxItemsPerFire?: number;
+  maxConcurrentItems?: number;
   maxOpenOutputs?: number;
   maxItemAttempts?: number;
 }
@@ -790,7 +793,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy";
+  refusalKind?: "security_quarantine" | "session_busy" | "model_budget";
   adminUrl?: string;
   runId?: string;
   steered?: true;

@@ -5,11 +5,13 @@
 // model-provider credential, not like a personal connector.
 
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
+import { PROVIDERS } from "../../../connectors/oauth.ts";
+import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../../../mcp/oauth-discovery.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
-const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials"];
+const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -79,11 +81,34 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
   const existing = await ctx.deps.mcpServers.get(id);
-  const credentialScope = b.credentialScope ?? existing?.credentialScope ?? "shared";
+  const oauthUser = auth === "oauth-user";
+  if (oauthUser && PROVIDERS[id]) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
+  }
+  const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
   if (credentialScope !== "shared" && credentialScope !== "per-user") {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "credentialScope must be shared or per-user" });
   }
-  const credentialHost = b.credentialHost ?? existing?.credentialHost;
+  const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
+  if (
+    oauthUser &&
+    typeof credentialHost === "string" &&
+    Object.values(PROVIDERS).some((p) =>
+      p.hosts.some((h) => credentialHost === h || credentialHost.endsWith(`.${h}`) || h.endsWith(`.${credentialHost}`)),
+    )
+  ) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "credentialHost is already used by another connector",
+    });
+  }
+  for (const field of ["oauthAuthorizeUrl", "oauthTokenUrl"] as const) {
+    if (oauthUser && b[field] !== undefined && !httpsUrl(b[field])) {
+      return sendJson(ctx.res, 400, { error: "bad_request", message: `${field} must be an HTTPS URL` });
+    }
+  }
+  let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
+  let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);
   const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
   if (!["default", "personal", "company"].includes(credentialAccountType)) {
     return sendJson(ctx.res, 400, {
@@ -111,6 +136,12 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "per-user credentials require HTTPS (except loopback)",
     });
   }
+  let discovered: DiscoveredOAuth | undefined;
+  if (oauthUser && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
+    discovered = await discoverOAuth(parsed);
+    oauthAuthorizeUrl ??= discovered.authorize;
+    oauthTokenUrl ??= discovered.token;
+  }
   const server: McpServer = {
     id,
     name: typeof b.name === "string" && b.name.trim() ? b.name.trim().slice(0, 80) : id,
@@ -120,6 +151,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(credentialScope === "per-user" ? { credentialHost, credentialAccountType } : {}),
     ...(auth === "bearer"
       ? { bearerToken: typeof b.bearerToken === "string" && b.bearerToken ? b.bearerToken : existing?.bearerToken }
+      : {}),
+    ...(oauthUser
+      ? {
+          clientId: typeof b.clientId === "string" && b.clientId ? b.clientId.trim() : existing?.clientId,
+          oauthAuthorizeUrl,
+          oauthTokenUrl,
+          oauthScopes: parseScopes(b.oauthScopes) ?? existing?.oauthScopes ?? discovered?.scopes ?? [],
+        }
       : {}),
     ...(auth === "client-credentials"
       ? {
@@ -141,8 +180,16 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "client-credentials auth requires clientId and clientSecret",
     });
   }
+  if (oauthUser && (!server.clientId || !server.oauthAuthorizeUrl || !server.oauthTokenUrl)) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message:
+        "oauth-user auth requires clientId plus HTTPS oauthAuthorizeUrl and oauthTokenUrl, or OAuth metadata to discover them" +
+        (discovered?.errors.length ? ` (discovery: ${discovered.errors.join("; ")})` : ""),
+    });
+  }
   let toolNames: string[] | undefined;
-  if (b.validate !== false && ctx.deps.mcpToolService) {
+  if (b.validate !== false && !oauthUser && ctx.deps.mcpToolService) {
     try {
       toolNames = await ctx.deps.mcpToolService.probe(server);
     } catch (e) {

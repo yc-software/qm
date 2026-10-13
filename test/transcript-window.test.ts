@@ -227,8 +227,11 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
     assert.equal((shown.payload as { memoryRecall?: unknown }).memoryRecall, undefined);
     assert.equal(typeof (oneBody.entry.payload as { environment?: unknown }).environment, "string");
     assert.deepEqual(
-      { ...oneBody.entry, payload: { ...(oneBody.entry.payload as object), environment: undefined } },
-      { ...shown, payload: { ...(shown.payload as object), environment: undefined } },
+      {
+        ...oneBody.entry,
+        payload: { ...(oneBody.entry.payload as object), environment: undefined, environmentSnapshot: undefined },
+      },
+      { ...shown, payload: { ...(shown.payload as object), environment: undefined, environmentSnapshot: undefined } },
       "the whole entry, exactly as stored, is one fetch away",
     );
 
@@ -299,7 +302,12 @@ test("a user entry carrying huge model-only context no longer hides the turns be
   for (let turn = 0; turn < 4; turn++) {
     log.push({
       ...entry(turn * 2, "user"),
-      payload: { text: `ask ${turn}`, environment: context, memoryRecall: { body: context } },
+      payload: {
+        text: `ask ${turn}`,
+        environment: context,
+        environmentSnapshot: { hashes: { Skills: "abc" }, sessionId: "s" },
+        memoryRecall: { body: context },
+      },
     });
     log.push(entry(turn * 2 + 1, "assistant"));
   }

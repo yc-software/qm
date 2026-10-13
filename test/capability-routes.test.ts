@@ -448,6 +448,19 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.ok(got.effectiveSoul.includes(got.orgSoul));
   });
 
+  it("effective SOUL deduplicates organization text without rewriting stored scope policy", async () => {
+    const orgScope = scopeId("org", "default-org");
+    const personalScope = scopeId("personal", "U7");
+    const orgSoul = built.config.getSoul(orgScope)!;
+    built.config.setSoul(personalScope, ` ${orgSoul} `);
+    const res = await get("/v1/soul", { "x-agent-capability": await capFor("U7") });
+    assert.equal(res.status, 200);
+    const got = (await res.json()) as any;
+    assert.equal(got.soul, ` ${orgSoul} `);
+    assert.equal(got.effectiveSoul.split(orgSoul).length - 1, 1);
+    assert.equal(built.config.getSoul(personalScope), got.soul);
+  });
+
   it("reads channel SOUL for a channel-scoped token without exposing the actor's personal SOUL", async () => {
     built.config.setSoul(scopeId("personal", "U8"), "Private U8 instruction.");
     built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");

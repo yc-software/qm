@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, readMemory } from "../src/memory/memory-service.ts";
+import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy, parseMemoryStrategyKind } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts } from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
@@ -14,7 +14,7 @@ const SCOPE = "user:U1";
 
 function freshMemory() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mst-")));
-  return { workspace, memory: createMemoryService(workspace) };
+  return { memory: createMemoryService(workspace) };
 }
 
 test("per-turn via oneShot sends the extraction prompt + the exact user/reply framing the old extractor sent", async () => {
@@ -25,14 +25,14 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
       return Promise.resolve("- Prefers terse replies\n* Working on the Q3 launch\nnot a bullet");
     },
   };
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness, memory });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.system, MEMORY_EXTRACTION_PROMPT);
   assert.equal(calls[0]!.prompt, "User said:\nhi\n\nAssistant replied:\nhello");
-  const body = (await readMemory(workspace, SCOPE)) ?? "";
+  const body = await memory.read(SCOPE);
   assert.match(body, /Prefers terse replies/);
   assert.match(body, /Working on the Q3 launch/);
   assert.doesNotMatch(body, /not a bullet/);
@@ -67,20 +67,20 @@ test("per-turn swallows extraction failures and captures nothing", async () => {
   const harness: HarnessModelUtilities = {
     oneShot: () => Promise.reject(new Error("model down")),
   };
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness, memory });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
-  assert.equal(await readMemory(workspace, SCOPE), null, "nothing captured");
+  assert.equal(await memory.read(SCOPE), "", "nothing captured");
 });
 
 test("per-turn does not capture when the model says NONE", async () => {
   const harness: HarnessModelUtilities = {
     oneShot: () => Promise.resolve("NONE"),
   };
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness, memory });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
-  assert.equal(await readMemory(workspace, SCOPE), null);
+  assert.equal(await memory.read(SCOPE), "");
 });
 
 test("MEMORY_STRATEGY parsing: per-turn is the default, agent-only disables post-turn extraction", () => {
@@ -89,10 +89,10 @@ test("MEMORY_STRATEGY parsing: per-turn is the default, agent-only disables post
   assert.equal(parseMemoryStrategyKind("bogus"), "per-turn");
   assert.equal(parseMemoryStrategyKind("agent-only"), "agent-only");
 
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const harness = createMockHarness().models;
-  assert.equal(createMemoryStrategy("agent-only", { harness, memory, workspace }).strategy.onTurnEnd, undefined);
-  assert.ok(createMemoryStrategy("per-turn", { harness, memory, workspace }).strategy.onTurnEnd);
+  assert.equal(createMemoryStrategy("agent-only", { harness, memory }).strategy.onTurnEnd, undefined);
+  assert.ok(createMemoryStrategy("per-turn", { harness, memory }).strategy.onTurnEnd);
 });
 
 test("debounced: an autonomous turn is skipped and never joins the live actor's burst", async () => {

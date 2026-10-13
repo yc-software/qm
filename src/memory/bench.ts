@@ -51,7 +51,6 @@ export async function replayConversation(
   for (const turn of conversation.turns) {
     await strategy.onTurnEnd?.({ scopeId, input: turn.input, reply: turn.reply });
   }
-  await strategy.maintain?.(scopeId);
 }
 
 export const JUDGE_PROMPT = [

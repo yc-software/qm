@@ -2,7 +2,7 @@ import { swallow } from "../util/errors.ts";
 import { sleep, createInFlightThreadMap, type GoalNoticeView, type RunTaskView } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
-import { GENERIC_FAILURE_CLAUSE, GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
+import { GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
 
 class SlackTurnFailure extends Error {
   constructor(message: string, cause: unknown) {
@@ -12,10 +12,6 @@ class SlackTurnFailure extends Error {
 
 export function slackFailureText(err: unknown): string {
   return err instanceof SlackTurnFailure ? err.message : GENERIC_FAILURE_TEXT;
-}
-
-export function slackFailureClause(err: unknown): string {
-  return err instanceof SlackTurnFailure ? err.message : GENERIC_FAILURE_CLAUSE;
 }
 
 export type CoreTurnBody = Omit<TurnRequest, "surface">;

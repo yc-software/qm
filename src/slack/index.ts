@@ -280,7 +280,7 @@ export async function startSlackPlugin(
     externalParticipantsEnabled,
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
-  const approvals = createApprovals({ core, flow, directory, threads, ids, externalAccess: !!cfg.externalAccess });
+  const approvals = createApprovals({ core, flow, directory, threads, externalAccess: !!cfg.externalAccess });
   registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
   registerDeployAccessActions(app, { core, directory });
   const ensureHeader = createSurfaceHeaderEnsurer({
@@ -364,7 +364,6 @@ export async function startSlackPlugin(
     directory,
     mirror,
     serializer,
-    approvals,
     ackEmoji,
     ackEmojiCandidates: ackEmojiOverride,
     ids,

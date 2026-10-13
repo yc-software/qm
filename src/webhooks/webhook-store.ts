@@ -35,6 +35,7 @@ export interface WebhookStore {
   get(id: string): Promise<Webhook | null>;
   list(): Promise<Webhook[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
+  update(id: string, patch: { action: string }): Promise<Webhook | null>;
   setRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
@@ -101,6 +102,9 @@ export function createWebhookStore(
     list: () => backing.all(),
     setEnabled(id, enabled) {
       return setTriggerEnabled(backing, id, enabled);
+    },
+    update(id, patch) {
+      return backing.merge(id, { action: patch.action });
     },
     setRecipientConsent(id, recipientConsent) {
       return setTriggerRecipientConsent(backing, id, recipientConsent);

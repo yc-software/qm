@@ -7,7 +7,7 @@ import {
   type HarnessTurnResult,
 } from "./harness.ts";
 import { classifyScopeLabel } from "../classify/scope-classifier.ts";
-import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -229,6 +229,13 @@ export function createMockHarness(): Harness {
           await turn.tools.post(msg);
           resumePostSessions.set(turn.session.id, `${msg} (repost)`);
           throw new Error("boom: simulated fault before the post's tool result landed");
+        } else if (command0 === "!over-budget") {
+          throw new ProviderTurnError("Model provider API error (budget_exceeded): ExceededBudget", {
+            code: "model_budget",
+            retryable: false,
+            status: 429,
+            raw: '429: {"message":"ExceededBudget: Team=team-a over 1d budget.","type":"budget_exceeded"}',
+          });
         } else if (command0.startsWith("!post-then-boom ")) {
           const rest = cmd.slice(cmd.indexOf("!post-then-boom ") + "!post-then-boom ".length);
           const bar = rest.indexOf("|");
@@ -372,12 +379,6 @@ export function createMockHarness(): Harness {
           reply = `wallclock:${turn.turnWallClockMs ?? 0}`;
         } else if (command0 === "!surfacename") {
           reply = `surface:${turn.surfaceName ?? "none"}`;
-        } else if (command0.startsWith("!askagent ")) {
-          const rest = command0.slice("!askagent ".length).trim();
-          const sp = rest.indexOf(" ");
-          const target = sp === -1 ? rest : rest.slice(0, sp);
-          const task = sp === -1 ? "help with this request" : rest.slice(sp + 1).trim();
-          reply = `I'll ask their personal agent.\n\n[[ask-agent: ${target} | ${task}]]`;
         } else if (command0.startsWith("!think ")) {
           await turn.emit({
             type: "thinking",
@@ -390,10 +391,12 @@ export function createMockHarness(): Harness {
             command: string;
             credentials?: string[];
             ownerAuth?: boolean;
+            sandboxId?: string;
           };
           const result = await turn.tools.execute(params.command, {
             credentials: params.credentials,
             ownerAuth: params.ownerAuth,
+            sandboxId: params.sandboxId,
           });
           await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
           turn.onProgress?.({ toolCalls: 1 });
@@ -570,9 +573,13 @@ export function createMockHarness(): Harness {
           const hits = await turn.tools.memorySearch(query);
           usedTool = true;
           reply = hits?.join("\n") ?? "(memory unavailable)";
+        } else if (command0.startsWith("!memoryread ")) {
+          const scope = command0.slice("!memoryread ".length).trim();
+          reply = (await turn.tools.memoryRead(scope)) ?? "(memory unavailable)";
+          usedTool = true;
         } else if (command0.startsWith("!memoryremember ")) {
           const fact = command0.slice("!memoryremember ".length).trim();
-          const added = await turn.tools.memoryRemember([fact]);
+          const added = await turn.tools.memoryAdd([fact]);
           usedTool = true;
           reply = added === null ? "(memory unavailable)" : `remembered ${added}`;
         } else if (command0.startsWith("!skill-run ")) {

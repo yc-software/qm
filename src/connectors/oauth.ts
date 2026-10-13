@@ -90,6 +90,9 @@ function toToken(
   };
 }
 
+const resourceBody = (p: OAuthProviderConfig): Record<string, string> =>
+  p.authParams?.resource ? { resource: p.authParams.resource } : {};
+
 function makeTokenAdapters(opts: {
   acceptJson?: boolean;
   rejectErrorBody?: boolean;
@@ -109,7 +112,7 @@ function makeTokenAdapters(opts: {
     ...(basic ? { authorization: `Basic ${Buffer.from(`${client.id}:${client.secret}`).toString("base64")}` } : {}),
   });
   const clientBody = (client: ResolvedClient): Record<string, string> =>
-    basic ? { client_id: client.id } : { client_id: client.id, client_secret: client.secret };
+    basic || !client.secret ? { client_id: client.id } : { client_id: client.id, client_secret: client.secret };
   const checkErrorBody = (raw: Record<string, unknown>): void => {
     if (opts.rejectErrorBody && raw.error)
       throw new Error(`${prefix}oauth error: ${String(raw.error_description ?? raw.error)}`);
@@ -125,6 +128,7 @@ function makeTokenAdapters(opts: {
           redirect_uri: redirectUri,
           ...clientBody(client),
           ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
+          ...resourceBody(provider),
         }).toString(),
       });
       if (!res.ok) throw new Error(`${prefix}token exchange failed (${res.status})`);
@@ -140,6 +144,7 @@ function makeTokenAdapters(opts: {
           grant_type: "refresh_token",
           refresh_token: token.refreshToken ?? "",
           ...clientBody(client),
+          ...resourceBody(provider),
         }).toString(),
       });
       if (!res.ok) throw new Error(`${prefix}token refresh failed (${res.status})`);
@@ -344,7 +349,6 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
     redirectPath: "linear/callback",
     consentMode: "standard",
     egressRule: ["api.linear.app"],
-    refresh: null,
     setupGuide: {
       console: "Linear → Settings → API → OAuth applications",
       url: "https://linear.app/settings/api/applications",
@@ -442,6 +446,53 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
     },
   },
 };
+
+export interface PublicOAuthClient {
+  name: string;
+  host: string;
+  authUrl: string;
+  tokenUrl: string;
+  scopes: string[];
+  clientId: string;
+  resource?: string;
+}
+
+const publicClients = new Map<string, PublicOAuthClient>();
+const publicProviders = new Map<string, OAuthProviderConfig>();
+
+export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
+  publicClients.clear();
+  publicProviders.clear();
+  for (const c of clients) {
+    if (PROVIDERS[c.name]) continue;
+    publicClients.set(c.name, c);
+    publicProviders.set(c.name, {
+      hosts: [c.host],
+      authUrl: c.authUrl,
+      tokenUrl: c.tokenUrl,
+      scopes: c.scopes,
+      clientIdEnv: "",
+      clientSecretEnv: "",
+      redirectPath: `${c.name}/callback`,
+      consentMode: "standard",
+      egressRule: [],
+      pkce: true,
+      ...(c.resource ? { authParams: { resource: c.resource } } : {}),
+      setupGuide: { console: "Admin → MCP servers", url: "", steps: [] },
+    });
+  }
+}
+
+export function oauthProvider(name: string): OAuthProviderConfig | undefined {
+  return PROVIDERS[name] ?? publicProviders.get(name);
+}
+
+export function withPublicOAuthClients(resolve: OAuthClientResolver): OAuthClientResolver {
+  return async (provider, ctx) => {
+    const c = publicClients.get(provider);
+    return c ? { id: c.clientId, secret: "", clientRef: `public:${provider}` } : resolve(provider, ctx);
+  };
+}
 
 export interface ResolvedClient {
   id: string;
@@ -546,7 +597,7 @@ export function authorizeUrl(
     codeChallenge?: string;
   },
 ): string {
-  const p = PROVIDERS[provider];
+  const p = oauthProvider(provider);
   if (!p) throw new Error(`unknown OAuth provider: ${provider}`);
   const accountType = opts.accountType ?? "default";
   const scopes = scopesFor(p, opts.client);
@@ -578,7 +629,7 @@ export async function exchangeCode(
     codeVerifier?: string;
   },
 ): Promise<{ hosts: string[]; token: OAuthToken }> {
-  const p = PROVIDERS[provider];
+  const p = oauthProvider(provider);
   if (!p) throw new Error(`unknown OAuth provider: ${provider}`);
   const adapter = p.exchange ?? defaultExchange;
   return adapter({
@@ -594,7 +645,7 @@ export async function exchangeCode(
 }
 
 function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {
-  for (const [name, config] of Object.entries(PROVIDERS)) {
+  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicProviders]) {
     if (config.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return { name, config };
   }
   return null;

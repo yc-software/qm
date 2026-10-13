@@ -6,6 +6,7 @@ import { assertSafeSkillName } from "./skill-name.ts";
 import type { ScopeId } from "../types.ts";
 
 export const SKILLS_DIR = "skills";
+export const SKILLS_ROOT = ".agent-skills";
 
 export function safeSkillDirName(name: string): string {
   return assertSafeSkillName(name);
@@ -91,26 +92,66 @@ export async function materializeSkillTree(
   for (const e of entries) await sandbox.writeFile(handle, e.path, e.content);
 }
 
-export function skillsIndex(resolved: SkillResolution[], provenanceScopes: readonly ScopeId[] = []): string {
+export function rankedSkills(
+  resolved: SkillResolution[],
+  query = "",
+  usedNames: readonly string[] = [],
+  onlyMatches = false,
+): SkillResolution[] {
+  const tokens = (text: string) =>
+    new Set(
+      [...new Intl.Segmenter("en", { granularity: "word" }).segment(text.toLowerCase())]
+        .filter((part) => part.isWordLike)
+        .map((part) => part.segment),
+    );
+  const ignored = new Set(
+    "a an and are as at be by can do for from have help i in is it me my of on or please that the this to today use want what with you your".split(
+      " ",
+    ),
+  );
+  const words = [...tokens(query)].filter((word) => !ignored.has(word));
+  const unique = new Map<string, SkillResolution>();
+  for (const entry of resolved) {
+    if (entry.skill && !unique.has(entry.skill.manifest.name)) unique.set(entry.skill.manifest.name, entry);
+  }
+  return [...unique.values()]
+    .map((entry) => {
+      const skill = entry.skill!;
+      const text = tokens(`${skill.manifest.name} ${skill.manifest.description}`);
+      return {
+        entry,
+        relevance: words.filter((word) => text.has(word)).length,
+        used: usedNames.includes(skill.manifest.name) ? 1 : 0,
+      };
+    })
+    .filter(({ relevance }) => !onlyMatches || relevance > 0)
+    .sort(
+      (a, b) =>
+        b.relevance - a.relevance ||
+        b.used - a.used ||
+        a.entry.skill!.manifest.name.localeCompare(b.entry.skill!.manifest.name),
+    )
+    .map(({ entry }) => entry);
+}
+
+export function skillsIndex(
+  resolved: SkillResolution[],
+  provenanceScopes: readonly ScopeId[] = [],
+  query = "",
+  usedNames: readonly string[] = [],
+): string {
   const provenance = new Set(provenanceScopes);
-  const items = resolved
-    .filter((r) => r.skill)
-    .sort((a, b) => {
-      const [x, y] = [a.skill!.manifest.name, b.skill!.manifest.name];
-      if (x < y) return -1;
-      if (x > y) return 1;
-      return 0;
-    });
+  const ranked = rankedSkills(resolved, query, usedNames);
+  const items = ranked.slice(0, 12);
   if (!items.length) return "";
   const lines = items.map((r) => {
     const m = r.skill!.manifest;
-    const shadow = r.shadowed.length ? " (shadows a broader-scope skill of the same name)" : "";
     const source = provenance.has(r.skill!.scopeId) ? ` [from ${r.skill!.scopeId}]` : "";
-    return `- **${m.name}**${source} — ${m.description}${shadow}`;
+    return `- **${m.name}**${source} — ${m.description}`;
   });
   return [
     "## Skills",
-    'Load a skill with the skills tool before relying on it: skills({ action: "read", name }) returns its instructions without starting a sandbox. When a skill ships scripts or supporting files, the same call syncs them into a directory that lives for this turn and names it; run and read them there.',
+    `Showing ${items.length} of ${ranked.length} available skills. Use skills action list or search for the rest.`,
     ...lines,
   ].join("\n");
 }

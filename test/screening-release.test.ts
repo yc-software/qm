@@ -58,7 +58,9 @@ mock.module("../src/harness/mock-harness.ts", {
         ) => Promise<{ content: Array<{ text?: string }> }>;
         const result = await execute(
           "fixture-call",
-          sharedRead ? { action: "read", path: "private.txt" } : { command: "printf SCREENING_FIXTURE_BLOCK" },
+          sharedRead
+            ? { action: "read", path: "private.txt" }
+            : { command: "printf SCREENING_FIXTURE_BLOCK", purpose: "Check output screening" },
         );
         const reply = result.content.map((part) => part.text ?? "").join("\n");
         await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });

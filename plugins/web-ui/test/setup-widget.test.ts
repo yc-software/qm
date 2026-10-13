@@ -48,3 +48,25 @@ test("personal Slack linking has its own standalone widget trigger", () => {
       false,
     );
 });
+
+test("an app-scoped picker directive carries its catalog id", () => {
+  assert.deepEqual(setupContent('Notion is not connected yet.\n\n::connect-apps{toolkit="notion"}').slice(1), [
+    { type: "setup", toolkit: "notion" },
+  ]);
+  assert.deepEqual(setupContent("::connect-apps{toolkit=googlecalendar}"), [
+    { type: "setup", toolkit: "googlecalendar" },
+  ]);
+  assert.deepEqual(setupContent("toString"), [{ type: "text", text: "toString" }]);
+  for (const text of [
+    '`::connect-apps{toolkit="notion"}`',
+    '> ::connect-apps{toolkit="notion"}',
+    'Use ::connect-apps{toolkit="notion"} here',
+    '::connect-apps{toolkit="Notion App"}',
+    '::connect-apps{toolkit="notion}',
+  ])
+    assert.equal(
+      setupContent(text).some((part) => part.type === "setup"),
+      false,
+      text,
+    );
+});

@@ -225,17 +225,33 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     `(${col}.payload IS NULL OR ${col}.payload NOT LIKE '%"overheard":true%')`;
   const userTurn = (col: string): string => `${col}.type = 'user' AND ${notOverheard(col)}`;
   const lastActivityExpr = (col: string): string => `COALESCE(${col}.last_activity, ${col}.created_at)`;
+  const participantWindowBounds = (entry: string, participant: string) =>
+    [
+      [
+        `(${participant}.valid_from_seq IS NOT NULL AND ${entry}.seq >= ${participant}.valid_from_seq)`,
+        `(${participant}.valid_from_seq IS NULL AND ${entry}.created_at >= ${participant}.valid_from)`,
+      ],
+      [
+        `(${participant}.valid_to_seq IS NOT NULL AND ${entry}.seq < ${participant}.valid_to_seq)`,
+        `(${participant}.valid_to_seq IS NULL AND ${participant}.valid_to IS NOT NULL AND ${entry}.created_at < ${participant}.valid_to)`,
+        `(${participant}.valid_to_seq IS NULL AND ${participant}.valid_to IS NULL)`,
+      ],
+    ] as const;
   const withinParticipantWindow = (entry: string, participant: string): string =>
-    `(((${participant}.valid_from_seq IS NOT NULL AND ${entry}.seq >= ${participant}.valid_from_seq)
-       OR (${participant}.valid_from_seq IS NULL AND ${entry}.created_at >= ${participant}.valid_from))
-      AND ((${participant}.valid_to_seq IS NOT NULL AND ${entry}.seq < ${participant}.valid_to_seq)
-       OR (${participant}.valid_to_seq IS NULL AND (${participant}.valid_to IS NULL OR ${entry}.created_at < ${participant}.valid_to))))`;
+    participantWindowBounds(entry, participant)
+      .map((bounds) => `(${bounds.join(" OR ")})`)
+      .join(" AND ");
+  const [fromBounds, toBounds] = participantWindowBounds("x", "p");
+  const participantPresenceSql = fromBounds
+    .flatMap((from) =>
+      toBounds.map((to) => `SELECT 1 FROM session_entries x WHERE x.session_id = s.id AND ${from} AND ${to}`),
+    )
+    .join(" UNION ALL ");
   const participantSessionsSql = (extraWhere: string): string =>
     `SELECT s.*, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
             COALESCE((SELECT MAX(e.created_at) FROM session_entries e
                        WHERE e.session_id = s.id AND e.type = 'user'), s.created_at) AS user_last_activity,
-            EXISTS (SELECT 1 FROM session_entries x WHERE x.session_id = s.id
-                      AND ${withinParticipantWindow("x", "p")}) AS has_entries
+            EXISTS (${participantPresenceSql}) AS has_entries
        FROM sessions s
        JOIN participants p ON p.session_id = s.id
       WHERE p.principal_id = $1${extraWhere}`;
@@ -1608,9 +1624,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const ts = tsPrefixQuery(query);
       if (!ts) return [];
       const rows = await q(
-        `SELECT h.session_id, h.seq, h.type, h.author, h.text, h.created_at,
+        `SELECT h.session_id, h.seq, h.type, h.author, h.text, h.created_at, e.scope_label,
                 s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
            FROM session_entry_search h
+           JOIN session_entries e ON e.session_id = h.session_id AND e.seq = h.seq
            JOIN participants p ON p.session_id = h.session_id AND p.principal_id = $1
            JOIN sessions s ON s.id = h.session_id
           WHERE h.search_tsv @@ to_tsquery('simple', $2)
@@ -1626,6 +1643,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         return [
           {
             sessionId: r.session_id as string,
+            entryScopeLabel: r.scope_label as ScopeId,
             scopeId: r.scope_id as ScopeId,
             ...(r.title != null ? { title: r.title as string } : {}),
             ...(r.channel_name ? { channelName: r.channel_name as string } : {}),
@@ -1709,33 +1727,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async scopeHasSessions(scope): Promise<boolean> {
       const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1) AS present", [scope]);
       return Boolean(rows[0]?.present);
-    },
-
-    async countPersonalConversations(scope, limit = 3): Promise<number> {
-      const boundedLimit = Math.max(0, Math.floor(limit));
-      if (!boundedLimit) return 0;
-      const rows = await q(
-        `SELECT COUNT(*) AS n FROM (
-           SELECT s.id FROM sessions s
-           WHERE s.scope_id = $1 AND s.type = 'dm' AND s.parent_session_id IS NULL
-             AND ${hasOrigin("s", "conversation")}
-             AND EXISTS (
-               SELECT 1 FROM (
-                 SELECT DISTINCT ON (seq) seq, type, payload FROM (
-                   SELECT seq, type, payload, 1 AS priority FROM session_transcript_entries WHERE session_id = s.id
-                   UNION ALL
-                   SELECT seq, type, payload, 0 AS priority FROM session_entries WHERE session_id = s.id
-                 ) sources ORDER BY seq, priority DESC
-               ) e
-               WHERE e.seq > COALESCE(s.fork_boundary_seq, -1) AND e.type = 'user'
-                 AND (safe_json(replace(e.payload, '\\u0000', ''))->'hidden')::text IS DISTINCT FROM 'true'
-                 AND (safe_json(replace(e.payload, '\\u0000', ''))->'overheard')::text IS DISTINCT FROM 'true'
-             )
-           LIMIT $2
-         ) conversations`,
-        [scope, boundedLimit],
-      );
-      return Number(rows[0]?.n ?? 0);
     },
 
     async sessionsByThreadRefs(threadRefs): Promise<SessionRef[]> {

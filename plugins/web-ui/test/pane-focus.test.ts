@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { readFileSync } from "node:fs";
 import {
   focusComposerOnPaneClick,
   focusPaneComposer,
@@ -43,14 +42,6 @@ test("activating a pane cannot cost the composer its focus or caret", () => {
 
   assert.equal(doc.activeElement, ta);
   assert.equal(ta.selectionStart, 1);
-});
-
-test("a pane focusin never re-activates the pane it is already in", () => {
-  const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
-  const focusPane = split.match(/function focusPane\([\s\S]*?\n\}/)?.[0] ?? "";
-  assert.ok(focusPane, "focusPane not found");
-  assert.match(focusPane, /if \(!panel \|\| panel\.api\.isActive\) return;/, "re-activation remounts the pane");
-  assert.match(focusPane, /preservingFocus\(document, \(\) => activatePanel\(panel\)\)/, "activation drops focus");
 });
 
 function clickFixture(secondContent = '<textarea class="composer-input">draft</textarea>') {
