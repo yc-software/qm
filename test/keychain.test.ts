@@ -907,9 +907,7 @@ test("manifest: own credentials need no grant but require explicit execution req
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
   });
-  assert.match(own, /file-login.*no grant needed/);
-  assert.match(own, /own; no grant needed/);
-  assert.match(own, /including background turns/);
+  assert.match(own, /### Alice \(U1\) — own; no grant needed \(including background turns\)\n.*file-login/);
   assert.doesNotMatch(own, /Teammate keychains/);
   assert.ok(!own.includes("no grant for this conversation"));
   assert.match(
@@ -1605,8 +1603,9 @@ test("manifest merges credential representations without conflating login identi
   const rendered = renderKeychainManifest(input, 1000);
   assert.equal(rendered.split("### ").length - 1, 1);
   assert.equal(rendered.split("connected app gmail.googleapis.com").length - 1, 1);
+  assert.match(rendered, /run in execute scope `owner` unless marked/);
   assert.ok(rendered.includes(`\`${credentialHandle(credential)}\` (execute scope \`scoped\`)`));
-  assert.ok(rendered.includes("`connector:gmail.googleapis.com:default` (execute scope `owner`)"));
+  assert.match(rendered, /`connector:gmail\.googleapis\.com:default`(?! \(execute scope)/);
   assert.match(rendered, /NEEDS RECONNECT/);
   assert.match(rendered, /token expires at/);
   assert.match(rendered, /account work, EXPIRED/);

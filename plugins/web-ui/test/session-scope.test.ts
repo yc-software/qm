@@ -16,7 +16,6 @@ for (const [key, value] of Object.entries({
 }))
   Object.defineProperty(globalThis, key, { configurable: true, value });
 const { html, nothing, render } = await import("lit");
-const { sessionStatusMark } = await import("../src/session-status.ts");
 
 function load(api: (path: string) => Promise<unknown> = async () => ({})) {
   return runInNewContext(
@@ -26,7 +25,6 @@ function load(api: (path: string) => Promise<unknown> = async () => ({})) {
     {
       api,
       html,
-      sessionStatusMark,
       nothing,
       icon: () => nothing,
       tip: () => nothing,
@@ -154,22 +152,4 @@ test("zero counts remain hidden in desktop and mobile tools", () => {
   const host = document.createElement("div");
   render(load().sessionTopbarTpl({ crumb: null, title: "Test", onTool: () => {}, toolCount: () => 0 }), host);
   assert.equal(host.querySelectorAll(".session-tool-count").length, 0);
-});
-
-test("session status appears after the heading and before tools", () => {
-  const host = document.createElement("div");
-  render(
-    load().sessionTopbarTpl({
-      crumb: null,
-      title: "Release verification",
-      status: { emoji: "🚀", text: "Live in production" },
-      onTool: () => {},
-    }),
-    host,
-  );
-  const status = host.querySelector(".session-status")!;
-  assert.equal(status.textContent, "🚀");
-  assert.equal(status.getAttribute("aria-label"), "Live in production");
-  assert.ok(status.previousElementSibling?.classList.contains("session-heading"));
-  assert.ok(status.nextElementSibling?.classList.contains("session-tools"));
 });

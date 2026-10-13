@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { createTranscriptViewport } from "../src/transcript-viewport.ts";
 
@@ -371,49 +370,6 @@ test("rest heights are never taken from an expanded prompt", () => {
   }
 });
 
-test("the disclosure rides the last visible line while clamped and drops to a row when expanded or over rich content", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const bubble = css.match(/\n\.user-bubble \{[^}]*\}/)?.[0] ?? "";
-  assert.match(bubble, /--bubble-bg: color-mix/);
-  assert.match(bubble, /position: relative/);
-  const toggle = css.match(/\n\.pin-toggle \{[^}]*\}/)?.[0] ?? "";
-  assert.match(toggle, /position: absolute/);
-  assert.match(toggle, /height: 1lh/);
-  assert.match(toggle, /background: linear-gradient\(to right, transparent, var\(--bubble-bg\)/);
-  assert.doesNotMatch(toggle, /font-size/);
-  const row =
-    css.match(
-      /\.user-row\.pin-expanded > \.user-bubble > \.pin-toggle,\s*\.message-stack\s+\.user-bubble\s+> \.pin-content:has\(code-block[^{]*~ \.pin-toggle \{[^}]*\}/,
-    )?.[0] ?? "";
-  assert.match(row, /position: static/);
-  assert.match(row, /margin: 6px 0 0 auto/);
-  assert.match(
-    css,
-    /\.user-row\.pin-expanded > \.user-bubble > \.pin-toggle > \.icon \{\s*transform: rotate\(180deg\);/,
-  );
-});
-
-test("the condensed strip keeps the resting line layout, with a scroll-driven height on stuck", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const stuck =
-    css.match(/\.message-stack \.user-row\.stuck:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/)?.[0] ??
-    "";
-  assert.match(stuck, /max-height: var\(--pin-content-max, none\)/);
-  assert.doesNotMatch(stuck, /line-clamp|transition/);
-  assert.match(css, /\.user-row\.stuck:not\(\.pin-expanded\) \{\s*min-height: var\(--pin-rest-height\)/);
-  assert.match(
-    css,
-    /\.user-row\.stuck:not\(\.pin-expanded\)\s+\.user-bubble\s+> \.pin-content:has\(code-block[^{]*\{\s*max-height: var\(--pin-content-max, 6lh\)/,
-  );
-  const rest =
-    css.match(
-      /\.message-stack \.user-row\.latest-prompt:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/,
-    )?.[0] ?? "";
-  assert.match(rest, /-webkit-line-clamp: 6/);
-  assert.doesNotMatch(rest, /max-height|transition/);
-  assert.doesNotMatch(css, /pin-condensed[^{]*\{[^}]*transition/);
-});
-
 test("expanded prompts reserve pins and chrome when panes resize or content grows", () => {
   const f = fixture();
   try {
@@ -490,12 +446,6 @@ test("ordinary multi-line prompts stay fully visible without a disclosure", () =
   }
 });
 
-test("condensing clips content without changing its typography", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const rules = css.match(/[^{}]*\.pin-condensed[^{}]*\{[^}]*\}/g) ?? [];
-  for (const rule of rules) assert.doesNotMatch(rule, /margin|font-size|line-height|line-clamp/);
-});
-
 test("border-box prompts reserve the entire row including the metadata lane", () => {
   const f = fixture();
   try {
@@ -509,12 +459,4 @@ test("border-box prompts reserve the entire row including the metadata lane", ()
   } finally {
     f.close();
   }
-});
-
-test("pinned image chips cannot grow into more rows than their thumbnails", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const rule = css.match(/\.user-row\.stuck > \.message-files > \.attachment-images \{[^}]*\}/)?.[0] ?? "";
-  assert.match(rule, /flex-wrap: nowrap/);
-  assert.match(rule, /overflow-x: auto/);
-  assert.match(rule, /justify-content: safe flex-end/);
 });

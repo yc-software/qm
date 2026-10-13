@@ -1,3 +1,5 @@
+import type { MemoryEmbedder } from "./model/embeddings.ts";
+import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import { brokerCredentialAuthHeader } from "./api/credential-broker.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
@@ -43,6 +45,8 @@ import {
   stoppableAncestors,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
+import { createMemoryEmbedder } from "./model/embeddings.ts";
+import { createSemanticMemoryService, type MemoryVector } from "./memory/semantic-recall.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
@@ -284,7 +288,7 @@ import {
   type FeatureFlagRecord,
   type FeatureFlagStore,
 } from "./feature-flags.ts";
-import { makeRefresh, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
+import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
   deriveConnectorKey,
@@ -425,7 +429,7 @@ import {
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
 import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
-import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
@@ -835,9 +839,20 @@ export function buildApp(
           files,
         })
       : undefined;
-  const defaultMemory: MemoryService = config.databaseUrl
+  const notebookMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
+  const defaultMemory = createSemanticMemoryService(
+    notebookMemory,
+    async () => {
+      const id = await configStore.getEmbeddingModelDurable();
+      return id ? resolveMemoryEmbedder(id) : undefined;
+    },
+    artifactMap<MemoryVector>("memory_vectors", ["scope"]),
+    {
+      onError: (error) => reportFailure("memory semantic recall; using recent facts", error),
+    },
+  );
   // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = createConfiguredMemoryService({
@@ -1217,11 +1232,13 @@ export function buildApp(
           createAwsSecretsManagerSource({ prefix: config.secretsPrefix }),
         )
       : createEnvSecretSource();
-  const resolveClient: OAuthClientResolver = createConnectorClientResolver({
-    reader: configStore,
-    orgScopeId: (o) => scopeId("org", o),
-    secrets: secretSource,
-  });
+  const resolveClient: OAuthClientResolver = withPublicOAuthClients(
+    createConnectorClientResolver({
+      reader: configStore,
+      orgScopeId: (o) => scopeId("org", o),
+      secrets: secretSource,
+    }),
+  );
   const keychainKeyMaterial = config.connectorSecretKey;
   const legacyCredentialKey =
     keychainKeyMaterial && config.signingSecret && config.signingSecret !== keychainKeyMaterial
@@ -1285,6 +1302,12 @@ export function buildApp(
     servers: mcpServers,
     audit: auditLog,
     ...(keychain ? { userTokens: keychain } : {}),
+    ...(config.publicWebUrl
+      ? {
+          signInUrl: (id: string) =>
+            `${config.publicWebUrl!.replace(/\/$/, "")}/connect/${encodeURIComponent(id)}/self-connect`,
+        }
+      : {}),
   });
   const mcpTools = () => mcpToolService.toolDefs();
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
@@ -1326,6 +1349,7 @@ export function buildApp(
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
     modelGateway: gatewayTransport,
     probe: overrides.modelVerificationProbe,
+    fetchImpl: overrides.modelCredentialFetch,
   });
   const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
   const refreshCustomProviders = async () => {
@@ -1335,6 +1359,12 @@ export function buildApp(
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
     await modelRegistry.refresh();
+  };
+  const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
+    const model = resolveEmbeddingModel(id);
+    if (!model) throw new Error(`Embedding model unavailable: ${id}`);
+    const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
+    return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
@@ -1762,8 +1792,6 @@ export function buildApp(
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     harness: harness.models,
     memory: baseMemory,
-    workspace,
-    ...(config.memoryConsolidateAfter !== undefined ? { consolidateAfter: config.memoryConsolidateAfter } : {}),
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
     onCaptureError: (e, scope) =>
@@ -2073,6 +2101,7 @@ export function buildApp(
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
+    projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),

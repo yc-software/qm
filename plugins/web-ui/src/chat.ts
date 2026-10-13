@@ -255,7 +255,7 @@ const connectedConnectors = new Set<string>();
 const redrawHooks = new Set<() => void>();
 let proactiveOpenerStarted = false;
 
-export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export function markConnectorConnected(provider: string): void {
   if (!provider) return;
@@ -1619,7 +1619,6 @@ export function createChatSurface(
         ? chatState.forkSession.forkedFrom
         : undefined;
     return sessionTopbarTpl({
-      status: session?.status,
       sessionId: chatState.sessionId ?? session?.id,
       crumb,
       title,

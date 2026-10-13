@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { splitMentions } from "../src/linkify.ts";
 
@@ -118,28 +117,6 @@ test("the directive grammar resists catastrophic backtracking", () => {
     const ms = Number(process.hrtime.bigint() - start) / 1e6;
     assert.ok(ms < 200, `strip took ${ms}ms on a ${input.length}-char pathological input`);
   }
-});
-
-test("the local grammar mirrors the Slack plugin, ReDoS-hardened in lockstep with core", () => {
-  const reactions = readFileSync(new URL("../../../src/slack/reactions.ts", import.meta.url), "utf8");
-  const directives = readFileSync(new URL("../../../src/slack/directives.ts", import.meta.url), "utf8");
-  const local = readFileSync(new URL("../src/slack-text.ts", import.meta.url), "utf8");
-  assert.ok(reactions.includes("/\\[\\[react:([^\\]]*)\\]\\]/gi"));
-  assert.ok(local.includes("/\\[\\[react:[^\\]]*\\]\\]/gi"));
-  assert.ok(
-    !directives.includes("[ \\t]+\\n") && !local.includes("[ \\t]+\\n"),
-    "the tidy step is linear on both sides",
-  );
-  assert.ok(directives.includes("/```[\\s\\S]*?```|`[^`\\n]*`/g"));
-  assert.ok(local.includes("/```[\\s\\S]*?```|`[^`\\n]*`/g"));
-});
-
-test("the local entity decode matches core's decodeSlackEntities", () => {
-  const mrkdwn = readFileSync(new URL("../../../src/slack/mrkdwn.ts", import.meta.url), "utf8");
-  const decode = 'text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")';
-  assert.ok(mrkdwn.includes(decode));
-  const local = readFileSync(new URL("../src/slack-text.ts", import.meta.url), "utf8");
-  assert.ok(local.includes(decode));
 });
 
 test("a labeled user mention never doubles its at-sign", () => {

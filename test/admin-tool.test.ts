@@ -164,12 +164,12 @@ test("strict approval of an admin read cannot authorize an admin mutation", asyn
   await tool.execute("read", { action: "whoami" }, undefined, undefined, {} as never);
   const blocked = await tool.execute(
     "write",
-    { action: "replace_memory", scope: "org:test", value: { content: "synthetic replacement" } },
+    { action: "delete_memory", scope: "org:test", value: { ids: ["1"] } },
     undefined,
     undefined,
     {} as never,
   );
   assert.deepEqual(calls, ["whoami"]);
-  assert.equal(approvals[0]?.approvalKey, "tool:admin:replace_memory");
+  assert.equal(approvals[0]?.approvalKey, "tool:admin:delete_memory");
   assert.match((blocked.content[0] as { text: string }).text, /needs human approval/);
 });

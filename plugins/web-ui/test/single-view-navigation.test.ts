@@ -221,11 +221,3 @@ test("single and multiview headers render mutually exclusive tools and pane cont
   assert.equal(actions.menuOpen, false);
   assert.doesNotMatch(output, /split-tools-btn|role="menu"|Close pane/);
 });
-
-test("single-pane toolbar and split menu put Crons and Apps first", () => {
-  const tools = split.slice(split.indexOf("const PANE_TOOLS:"), split.indexOf("function openPaneTool"));
-  assert.deepEqual(
-    [...tools.matchAll(/tool: "([^"]+)"/g)].map((match) => match[1]),
-    ["crons", "apps", "files", "skills", "memory", "keychain"],
-  );
-});

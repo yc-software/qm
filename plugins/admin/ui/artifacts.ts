@@ -368,23 +368,24 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
       back: { label: "← Memory", onClick: () => c.go({ view: "memory", scope: "org:" + c.orgId, session: null }) },
       title: c.orgWide ? "Org-wide" : c.shortName(c.scope),
     });
-  let baseline = d.content || "";
-  let draft = c.memoryDraft() ?? baseline;
+  let facts: Array<{ id: string; text: string }> = d.facts || [];
+  let editing: { id: string; text: string } | null = null;
+  let draft = "";
   let saving = false,
-    message = draft !== baseline ? "Unsaved changes" : "",
+    message = "",
     tone = "";
-  const save = async () => {
+  const change = async (method: "POST" | "PATCH" | "DELETE", body: object) => {
     if (saving) return;
     saving = true;
-    const submitted = draft;
     draw();
     try {
-      const response = await c.api("PUT", "/api/memory?scope=" + encodeURIComponent(c.scope), { content: submitted });
+      const response = await c.api(method, "/api/memory?scope=" + encodeURIComponent(c.scope), body);
       if (response.ok) {
-        baseline = submitted;
-        c.setMemoryDraft(draft === submitted ? null : draft);
-        message = draft === submitted ? "Saved ✓" : "Unsaved changes";
-        tone = draft === submitted ? "ok" : "";
+        facts = response.data?.facts || [];
+        editing = null;
+        if (method === "POST") draft = "";
+        message = "Saved ✓";
+        tone = "ok";
       } else {
         message =
           response.status === 403 ? "You don't administer this scope." : response.data?.message || "Save failed.";
@@ -398,36 +399,69 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
       draw();
     }
   };
+  const row = (fact: { id: string; text: string }) =>
+    editing?.id === fact.id
+      ? html`<li>
+          <textarea
+            aria-label="Fact text"
+            .value=${editing.text}
+            @input=${(e: Event) => (editing = { id: fact.id, text: (e.target as HTMLTextAreaElement).value })}
+          ></textarea>
+          <button class="primary" ?disabled=${saving} @click=${() => change("PATCH", { facts: [editing] })}>Save</button
+          ><button
+            @click=${() => {
+              editing = null;
+              draw();
+            }}
+          >
+            Cancel
+          </button>
+        </li>`
+      : html`<li>
+          <span>${fact.text}</span>
+          <button
+            @click=${() => {
+              editing = { id: fact.id, text: fact.text };
+              draw();
+            }}
+          >
+            Edit</button
+          ><button ?disabled=${saving} @click=${() => change("DELETE", { ids: [fact.id] })}>Forget</button>
+        </li>`;
   const draw = () =>
     render(
       html`<section class="card memory-editor">
         <div class="head">
           <h2>Notebook</h2>
-          <p>What the agent remembers in this scope. Changes apply when you save.</p>
+          <p>What the agent remembers in this scope, one fact per row.</p>
         </div>
         <div class="body">
-          <div>
-            <label for="memory-text">Notebook contents</label
-            ><textarea
-              id="memory-text"
-              spellcheck="false"
-              aria-label="Notebook contents"
-              style="min-height:340px;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px"
-              placeholder="No memory stored for this scope yet. Anything you write here, the agent will remember."
+          ${
+            facts.length
+              ? html`<ul class="memory-facts">
+                  ${facts.map(row)}
+                </ul>`
+              : html`<p class="empty">No memory stored for this scope yet.</p>`
+          }
+          <div class="memory-add">
+            <textarea
+              aria-label="New fact"
+              placeholder="Add a fact"
               .value=${draft}
               @input=${(e: Event) => {
                 draft = (e.target as HTMLTextAreaElement).value;
-                c.setMemoryDraft(draft);
-                message = draft !== baseline ? "Unsaved changes" : "";
-                tone = "";
                 draw();
               }}
             ></textarea>
-            <div class="foot">
-              <button class="primary" ?disabled=${saving} @click=${save}>Save</button
-              ><span class=${"status" + (tone ? " " + tone : "")} id="st-memory" role="status">${message}</span>
-            </div>
+            <button
+              class="primary"
+              ?disabled=${saving || !draft.trim()}
+              @click=${() => change("POST", { facts: [draft] })}
+            >
+              Add
+            </button>
           </div>
+          <span class=${"status" + (tone ? " " + tone : "")} id="st-memory" role="status">${message}</span>
         </div>
       </section>`,
     );

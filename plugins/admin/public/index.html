@@ -6122,11 +6122,6 @@
       #view-data .memory-editor > .body {
         padding: 0;
       }
-      #view-data .memory-editor label {
-        display: block;
-        margin-bottom: 4px;
-        font-size: 13px;
-      }
       #view-data .memory-editor textarea {
         width: 100%;
         box-sizing: border-box;
@@ -6135,17 +6130,21 @@
         line-height: 1.6;
         resize: vertical;
       }
-      #view-data .memory-editor .foot {
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 12px;
-        border: 0;
-        padding: 12px 0 0;
+      #view-data .memory-editor .memory-facts {
+        margin: 0;
+        padding: 0;
+        list-style: none;
       }
-      #view-data .memory-editor .status {
-        order: -1;
-        margin-right: auto;
+      #view-data .memory-editor .memory-facts li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid #e3e8ee;
+      }
+      #view-data .memory-editor .memory-facts li > span,
+      #view-data .memory-editor .memory-facts li > textarea {
+        flex: 1;
       }
       #view-data .memory-editor button.primary {
         min-height: 32px;
@@ -6873,8 +6872,6 @@
 
       const FOCUS_STALE_MS = 60000;
       const viewLoadedAt = {};
-      let memDraft = null;
-      let memDraftScope = null;
       let cronDestinationEditId = null;
       const transcriptVisibility = { thinking: true, toolResults: true };
 
@@ -7208,8 +7205,6 @@
         route();
       }
       const signOut = async () => {
-        memDraft = null;
-        memDraftScope = null;
         await api("POST", "/api/logout");
 
         if (API_BASE) {
@@ -9717,12 +9712,6 @@
           reload: () => (current() ? renderData() : Promise.resolve()),
           setCronEditing: (id) => {
             if (current()) cronDestinationEditId = id;
-          },
-          memoryDraft: () => (memDraftScope === capturedScope ? memDraft : null),
-          setMemoryDraft: (draft) => {
-            if (!current()) return;
-            memDraft = draft;
-            memDraftScope = draft === null ? null : capturedScope;
           },
         };
       }

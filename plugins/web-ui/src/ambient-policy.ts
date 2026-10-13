@@ -4,9 +4,9 @@ import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { tip } from "./tooltip";
 
-export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
-export type BotMode = (typeof BOT_MODES)[number];
-export interface BotPolicyView {
+const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
+type BotMode = (typeof BOT_MODES)[number];
+interface BotPolicyView {
   name: string;
   mode: BotMode;
   rollupHours?: number;
@@ -20,7 +20,7 @@ interface PolicyWire {
   };
 }
 
-export const ambientPolicyState = {
+const ambientPolicyState = {
   scope: null as string | null,
   loading: false,
   orders: "",
@@ -37,7 +37,7 @@ export const ambientPolicyState = {
 let loadSeq = 0;
 let redraw: () => void = () => {};
 
-export function ambientPolicyApplies(scopeId: string): boolean {
+function ambientPolicyApplies(scopeId: string): boolean {
   return scopeId.startsWith("channel:") || scopeId.startsWith("group:");
 }
 

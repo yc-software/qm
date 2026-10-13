@@ -53,6 +53,7 @@ import {
   threadRefCronIdExpr,
   userMessagePreview,
   tapeTranscriptEntryRecord,
+  isWebThread,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
@@ -78,7 +79,6 @@ export function rowToSession(r: Record<string, unknown>): Session {
     threadRef: r.thread_ref as string,
     ...(r.surface != null ? { surface: r.surface as string } : {}),
     createdAt: Number(r.created_at),
-    ...(r.status != null ? { status: r.status as Session["status"] } : {}),
     ...(r.title != null ? { title: r.title as string } : {}),
     ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),
     ...(r.forked_from_session_id != null && r.fork_boundary_seq != null
@@ -101,6 +101,8 @@ function rowToParticipantSession(r: Record<string, unknown>): Session {
   if (r.p_archived) s.archived = true;
   if (r.p_pinned) s.pinned = true;
   if (r.p_color != null) s.color = r.p_color as string;
+  if (r.agent_last_reply != null && Number(r.agent_last_reply) > Number(r.p_read_at ?? 0) && isWebThread(s.threadRef))
+    s.unread = true;
   if (r.user_last_activity != null) s.lastActivityAt = Number(r.user_last_activity);
   if (r.has_entries != null) s.hasEntries = Boolean(r.has_entries);
   return s;
@@ -249,6 +251,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     .join(" UNION ALL ");
   const participantSessionsSql = (extraWhere: string): string =>
     `SELECT s.*, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
+            p.read_at AS p_read_at,
+            (SELECT MAX(e.created_at) FROM session_entries e
+              WHERE e.session_id = s.id AND e.type IN ('assistant', 'delivery')) AS agent_last_reply,
             COALESCE((SELECT MAX(e.created_at) FROM session_entries e
                        WHERE e.session_id = s.id AND e.type = 'user'), s.created_at) AS user_last_activity,
             EXISTS (${participantPresenceSql}) AS has_entries
@@ -812,6 +817,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
              ON sessions((COALESCE(last_activity, created_at)) DESC, id DESC)`,
         ],
       },
+      {
+        id: "sessions/store/0026-participant-read-at",
+        statements: [
+          `ALTER TABLE participants ADD COLUMN IF NOT EXISTS read_at BIGINT`,
+          `UPDATE participants SET read_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint WHERE read_at IS NULL`,
+          `ALTER TABLE sessions DROP COLUMN IF EXISTS status`,
+        ],
+      },
+      {
+        id: "sessions/store/0027-agent-reply-index",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_agent_reply
+             ON session_entries(session_id, created_at DESC) WHERE type IN ('assistant', 'delivery')`,
+        ],
+      },
     ],
     [
       {
@@ -996,13 +1016,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async updateTitle(sessionId, title): Promise<void> {
       await q("UPDATE sessions SET title = $2 WHERE id = $1", [sessionId, title]);
-    },
-
-    async updateStatus(sessionId, status): Promise<void> {
-      await q("UPDATE sessions SET status = $2::jsonb WHERE id = $1", [
-        sessionId,
-        status ? JSON.stringify(status) : null,
-      ]);
     },
 
     async updateForkProvenance(sessionId, provenance): Promise<void> {
@@ -1565,6 +1578,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           sessionId,
           principalId,
           patch.color,
+        ]);
+      }
+      if (patch.readAt !== undefined) {
+        await q("UPDATE participants SET read_at = $3 WHERE session_id = $1 AND principal_id = $2", [
+          sessionId,
+          principalId,
+          patch.readAt,
         ]);
       }
     },

@@ -2060,7 +2060,11 @@ test("Codex steers extracted documents into the active turn without copying cont
   }
   assert.equal(entries.filter((entry) => entry.type === "user").length, 1, "turn/steer acceptance is not intake");
   await running;
-  assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+  const intake = entries.filter((entry) => entry.type === "user");
+  assert.deepEqual(
+    intake.map((entry) => (entry.payload as { steered?: boolean }).steered),
+    [undefined, true],
+  );
   assert.equal((await signals.pending("steer-document-run")).length, 0);
   assert.match(readFileSync(capture, "utf8"), /STEER-PRIVATE-492/);
   assert.doesNotMatch(JSON.stringify(tape), /STEER-PRIVATE-492/);

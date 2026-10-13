@@ -29,8 +29,12 @@ test(
     const errors = [];
     let flushes = 0;
     const session = {
-      setPermissionRequestHandler() {},
-      setPermissionCheckHandler() {},
+      setPermissionRequestHandler(handler) {
+        this.requestPermission = handler;
+      },
+      setPermissionCheckHandler(handler) {
+        this.checkPermission = handler;
+      },
       cookies: {
         flushStore: async () => {
           flushes++;
@@ -94,6 +98,23 @@ test(
       await import("../main.mjs");
       await initialLoad.promise;
       assert.equal(windows[0].url, "https://old.example/");
+      for (const [permission, requestingUrl, allowed] of [
+        ["clipboard-sanitized-write", "https://old.example/", true],
+        ["clipboard-sanitized-write", "https://old.example/share/internal/test", true],
+        ["clipboard-sanitized-write", "https://evil.example/", false],
+        ["clipboard-sanitized-write", "about:blank", false],
+        ["clipboard-sanitized-write", undefined, false],
+        ["clipboard-read", "https://old.example/", false],
+        ["media", "https://old.example/", false],
+        ["notifications", "https://old.example/", false],
+      ]) {
+        assert.equal(session.checkPermission(windows[0].webContents, permission, requestingUrl), allowed);
+        let granted;
+        session.requestPermission(windows[0].webContents, permission, (value) => (granted = value), {
+          requestingUrl,
+        });
+        assert.equal(granted, allowed);
+      }
       for (const destination of ["about:blank", "https://old.example/file.pdf", "blob:https://old.example/id"]) {
         const popup = windows[0].popup({ url: destination });
         assert.equal(popup.action, "allow");

@@ -1,4 +1,3 @@
-import { sessionStatusMark } from "./session-status.ts";
 import { openSessionShare } from "./session-share";
 import { preserveTranscriptScroll } from "./transcript-viewport";
 import { html, nothing, render, type TemplateResult } from "lit";
@@ -812,7 +811,7 @@ function computeHeaderSignature(): string {
       const parent = session?.parentSessionId
         ? sessionsState.list.find((row) => row.id === session.parentSessionId)
         : undefined;
-      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${JSON.stringify(session?.status ?? null)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}`;
+      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}`;
     })
     .join("~");
 }
@@ -1266,7 +1265,6 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
-        ${sessionStatusMark(paneSession(panel)?.status)}
         ${
           this.inStrip
             ? html`<span class="split-tab-actions">

@@ -1,84 +1,60 @@
 import { retainedSnapshot } from "../harness/context-snapshot.ts";
 import type { SessionEntry } from "../types.ts";
-import { isMemoryBookkeeping } from "./notebook.ts";
+import { renderRecall, type RecalledFact } from "./cross-scope.ts";
+import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
+
+interface Shown {
+  scope: string;
+  id?: string;
+  hash: string;
+}
 
 interface RecallRecord {
-  body: string;
+  shown: Shown[];
   anchorSeq?: number;
 }
 
-interface Fact {
-  scope: string;
-  header: string;
-  text: string;
-}
+const shownOf = ({ scope, id, text }: RecalledFact): Shown => ({
+  scope,
+  ...(id !== undefined ? { id } : {}),
+  hash: factHash(text).slice(0, 16),
+});
 
-function facts(body: string): Map<string, Fact> {
-  const result = new Map<string, Fact>();
-  const headings: string[] = [];
-  let scope = "";
-  let pending: string[] = [];
-  const flush = () => {
-    const text = pending.join("\n").trim();
-    if (text) {
-      const header = [scope, ...headings.filter(Boolean)].filter(Boolean).join("\n");
-      result.set(`${header}\n${text}`, { scope: scope.slice(4), header, text });
-    }
-    pending = [];
-  };
-  for (const line of body.split("\n")) {
-    if (/^### [^\s:]+:/.test(line)) {
-      flush();
-      scope = line;
-      headings.length = 0;
-      continue;
-    }
-    const heading = /^(#{1,6})\s/.exec(line);
-    if (heading) {
-      flush();
-      const level = heading[1]!.length;
-      headings.length = level;
-      headings[level - 1] = line;
-    } else if (!line.trim() || isMemoryBookkeeping(line) || /^[-*]\s/.test(line)) {
-      flush();
-      if (line.trim() && !isMemoryBookkeeping(line)) pending.push(line);
-    } else pending.push(line);
-  }
-  flush();
-  return result;
-}
+export const shownFacts = (facts: readonly MemoryFact[]) =>
+  new Map(facts.map((fact) => [fact.id, shownOf({ scope: "", id: fact.id, text: renderFacts([fact]) }).hash]));
 
-function render(list: Iterable<Fact>): string {
-  const groups = new Map<string, string[]>();
-  for (const { header, text } of list) groups.set(header, [...(groups.get(header) ?? []), text]);
-  return [...groups].map(([header, texts]) => [header, ...texts].filter(Boolean).join("\n")).join("\n\n");
-}
+const keyOf = ({ scope, id, hash }: Shown) => JSON.stringify([scope, id ?? null, hash]);
 
 export function memoryRecallDelta(
-  body: string,
+  recalled: readonly RecalledFact[],
   history: readonly SessionEntry[],
-  authorizedScopes: readonly string[] = [...body.matchAll(/^### ([^\s:]+:[^\n]+)$/gm)].map((match) => match[1]!),
+  held: ReadonlyMap<string, ReadonlyMap<string, string>>,
+  labels: ReadonlyMap<string, string> = new Map(),
 ): { text: string; record: RecallRecord } {
-  const { previous, anchorSeq } = retainedSnapshot(
-    history,
-    (entry) => (entry.payload as { memoryRecall?: RecallRecord } | null)?.memoryRecall,
-  );
-  const record = { body, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
-  const newFacts = facts(body);
-  if (!previous) return { text: render(newFacts.values()), record };
-  if (previous.body === body) return { text: "", record };
-  const oldFacts = facts(previous.body);
-  const added = [...newFacts].filter(([key]) => !oldFacts.has(key)).map(([, fact]) => fact);
+  const { previous, anchorSeq } = retainedSnapshot(history, (entry) => {
+    const record = (entry.payload as { memoryRecall?: RecallRecord } | null)?.memoryRecall;
+    return record?.shown ? record : undefined;
+  });
+  const current = recalled.map(shownOf);
+  const record: RecallRecord = { shown: current, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
+  if (!previous) return { text: renderRecall(recalled, labels), record };
+  const before = new Map(previous.shown.map((shown) => [keyOf(shown), shown]));
+  const now = new Set(current.map(keyOf));
+  const added = recalled.filter((_, index) => !before.has(keyOf(current[index]!)));
   const removed = new Map<string, number>();
-  for (const [key, { scope }] of oldFacts) if (!newFacts.has(key)) removed.set(scope, (removed.get(scope) ?? 0) + 1);
-  const withdrawn = [...removed].filter(([scope]) => authorizedScopes.includes(scope));
+  for (const [key, shown] of before) {
+    if (now.has(key)) continue;
+    if (shown.id !== undefined && held.get(shown.scope)?.get(shown.id) === shown.hash) record.shown.push(shown);
+    else removed.set(shown.scope, (removed.get(shown.scope) ?? 0) + 1);
+  }
+  const withdrawn = [...removed].filter(([scope]) => held.has(scope));
   return {
     text: [
-      added.length ? `New or updated memory facts:\n\n${render(added)}` : "",
+      added.length ? `New or updated memory facts:\n\n${renderRecall(added, labels)}` : "",
       withdrawn
         .map(
           ([scope, n]) =>
-            `${scope}: ${n} earlier ${n === 1 ? "fact was" : "facts were"} consolidated or removed; rely only on the current list.`,
+            `${labels.get(scope) ?? scope}: ${n} earlier ${n === 1 ? "fact was" : "facts were"} consolidated or removed; rely only on the current list.`,
         )
         .join("\n"),
       removed.size > withdrawn.length

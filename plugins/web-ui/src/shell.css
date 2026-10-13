@@ -589,7 +589,7 @@ a.chat-row-open {
   box-sizing: border-box;
   text-align: left;
 
-  padding: 5px calc(5px + var(--session-status-space, 0px)) 5px 11px;
+  padding: 5px 5px 5px 11px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -601,7 +601,7 @@ a.chat-row-open {
 .session-row:hover .session,
 .session-row:focus-within .session,
 .session-row.menu-open .session {
-  padding-right: calc(90px + var(--session-status-space, 0px));
+  padding-right: 90px;
 }
 .session:hover {
   background: var(--conversation-hover);
@@ -665,23 +665,21 @@ a.chat-row-open {
   white-space: nowrap;
 }
 
-.session-status {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  font-size: var(--font-14);
-  line-height: 1;
+.unread-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--unread-dot, #2f81f7);
 }
-
-.session-row:has(.session-status) {
-  --session-status-space: 22px;
+.session-row:hover .unread-dot,
+.session-row:focus-within .unread-dot,
+.session-row.menu-open .unread-dot {
+  visibility: hidden;
 }
-.session-menu > .session-status {
-  justify-content: center;
-  width: 20px;
-}
-.split-pane-title > .session-status {
-  margin-inline-start: auto;
+.session-row.unread .title .tl {
+  font-weight: 600;
 }
 .working-mark {
   display: inline-flex;
@@ -5672,12 +5670,6 @@ a.connector-widget:focus-visible {
   flex-direction: column;
   gap: 14px;
 }
-.memory-help {
-  margin: 0;
-  font-size: var(--font-13);
-  line-height: 1.55;
-  color: var(--muted-foreground);
-}
 .memory-text {
   font: inherit;
   font-size: var(--font-13);
@@ -5690,8 +5682,15 @@ a.connector-widget:focus-visible {
   color: var(--foreground);
   width: 100%;
   box-sizing: border-box;
-  min-height: 360px;
+  min-height: 80px;
   resize: vertical;
+}
+.memory-fact > div:first-child {
+  flex: 1;
+}
+.memory-fact.editing {
+  flex-direction: column;
+  align-items: stretch;
 }
 .memory-text:focus {
   outline: 2px solid var(--border);
@@ -5705,18 +5704,12 @@ a.connector-widget:focus-visible {
   align-items: center;
   gap: 12px;
 }
-.memory-hint {
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.memory-facts,
-.memory-history {
+.memory-facts {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
-.memory-fact,
-.memory-revision {
+.memory-fact {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5725,8 +5718,7 @@ a.connector-widget:focus-visible {
   border-bottom: 1px solid var(--border);
   font-size: var(--font-13);
 }
-.memory-fact:last-child,
-.memory-revision:last-child {
+.memory-fact:last-child {
   border-bottom: 0;
 }
 .memory-fact .icon-btn {
@@ -5734,12 +5726,6 @@ a.connector-widget:focus-visible {
   width: 32px;
   height: 32px;
   color: var(--muted-foreground);
-}
-.memory-history h2 {
-  margin: 0;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--font-14);
 }
 
 .resource-pane {
@@ -6000,7 +5986,7 @@ a.connector-widget:focus-visible {
   .session-row:hover .session,
   .session-row:focus-within .session,
   .session-row.menu-open .session {
-    padding-right: calc(136px + var(--session-status-space, 0px));
+    padding-right: 136px;
   }
   .session-menu {
     right: 0;
@@ -8969,17 +8955,6 @@ h3.ambient-field-label {
   align-self: anchor-center;
   position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
 }
-.qm-tooltip.sidebar-status {
-  position-area: right span-all;
-  left: anchor(--qm-sidebar right);
-  justify-self: normal;
-  align-self: anchor-center;
-  margin: 8px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  line-height: 1.5;
-  position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
-}
 @position-try --qm-tooltip-above {
   left: auto;
   position-area: top span-all;
@@ -11319,7 +11294,7 @@ h3.ambient-field-label {
   .session-row:hover .session,
   .session-row:focus-within .session,
   .session-row.menu-open .session {
-    padding-right: calc(48px + var(--session-status-space, 0px));
+    padding-right: 48px;
   }
   .user-pill {
     min-height: 44px;
