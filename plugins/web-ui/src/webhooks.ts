@@ -110,9 +110,10 @@ async function refreshWebhooks(opts: { showLoading?: boolean } = {}): Promise<bo
 
 export async function renderWebhooksPage(): Promise<void> {
   if (appState.currentView !== "webhooks") return;
+  const refresh = refreshWebhooks({ showLoading: webhookList.length === 0 });
   await ensureContexts();
   drawWebhooksPage();
-  const loaded = await refreshWebhooks({ showLoading: webhookList.length === 0 });
+  const loaded = await refresh;
   const wanted = pendingWebhookId;
   pendingWebhookId = null;
   if (appState.currentView !== "webhooks") return;

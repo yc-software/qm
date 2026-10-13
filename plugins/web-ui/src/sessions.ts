@@ -609,9 +609,13 @@ async function commitProjectRename(item: Extract<RecentItem, { kind: "project" }
 
 export async function renderChatsPage(): Promise<void> {
   if (appState.currentView !== "chats") return;
+  const refresh = refreshSessions({
+    showLoading: sessionsState.list.length === 0,
+    silent: sessionsState.list.length > 0,
+  });
   await ensureContexts();
   drawChatsPage();
-  await refreshSessions({ showLoading: sessionsState.list.length === 0, silent: sessionsState.list.length > 0 });
+  await refresh;
   if (appState.currentView === "chats") drawChatsPage();
 }
 

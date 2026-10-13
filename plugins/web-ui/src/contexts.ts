@@ -113,20 +113,29 @@ let createProjectOpener: HTMLElement | null = null;
 let createProjectSeq = 0;
 let contextsResetSeq = 0;
 let contextsFetchSeq = 0;
+let contextsRequest: Promise<CoreContext[]> | null = null;
 let contextsQuery = "";
 let contextsWorkspaceFilter: "active" | "all" = "active";
 
 async function fetchContexts(): Promise<CoreContext[]> {
+  if (contextsRequest) return contextsRequest;
   const fetchSeq = ++contextsFetchSeq;
-  const result = await api<{ contexts: CoreContext[] }>("/api/contexts").catch((error: unknown) => {
-    if (fetchSeq !== contextsFetchSeq) return null;
-    throw error;
-  });
-  if (!result || fetchSeq !== contextsFetchSeq) return contextsState.list;
-  contextsState.list = result.contexts ?? [];
-  contextsState.loaded = true;
-  contextsState.loadedAt = Date.now();
-  return contextsState.list;
+  contextsRequest = api<{ contexts: CoreContext[] }>("/api/contexts")
+    .then((result) => {
+      if (fetchSeq !== contextsFetchSeq) return contextsState.list;
+      contextsState.list = result.contexts ?? [];
+      contextsState.loaded = true;
+      contextsState.loadedAt = Date.now();
+      return contextsState.list;
+    })
+    .catch((error: unknown) => {
+      if (fetchSeq !== contextsFetchSeq) return contextsState.list;
+      throw error;
+    })
+    .finally(() => {
+      if (fetchSeq === contextsFetchSeq) contextsRequest = null;
+    });
+  return contextsRequest;
 }
 
 export function resetContextsState(): void {
@@ -157,6 +166,7 @@ export function resetContextsState(): void {
   contextsNotice = "";
   memberSearchSeq++;
   contextsFetchSeq++;
+  contextsRequest = null;
   createProjectSeq++;
   contextsResetSeq++;
   createProjectOpener = null;
@@ -1122,6 +1132,7 @@ function projectFromResponse(response: unknown): CoreProject | null {
 function upsertProject(project: CoreProject): CoreContext {
   const loaded = contextsState.loaded;
   contextsFetchSeq++;
+  contextsRequest = null;
   const scopeId = project.scopeId;
   const current = contextsState.list.find((context) => context.scopeId === scopeId);
   const next: CoreContext = {

@@ -420,10 +420,11 @@ async function loadFiles(seq: number): Promise<void> {
   const requestSeq = ++filesRequestSeq;
   filesLoadAllQueued = false;
   filesLoadingMore = false;
-  await ensureContexts();
   drawFiles(true);
   try {
-    const page = await fetchFilePage();
+    const [, result] = await Promise.allSettled([ensureContexts(), fetchFilePage()]);
+    if (result.status === "rejected") throw result.reason;
+    const page = result.value;
     if (requestSeq !== filesRequestSeq || seq !== appState.viewRenderSeq || appState.currentView !== "files") return;
     fileRows = page.rows;
     filesNextCursor = page.nextCursor;
