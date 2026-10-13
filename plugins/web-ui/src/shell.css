@@ -1153,6 +1153,10 @@ a.chat-row-open {
   font-size: var(--font-12-5);
   color: var(--muted-foreground);
 }
+.settings-version a {
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
 .settings-row-action {
   display: inline-flex;
   align-items: center;

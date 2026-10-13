@@ -21,7 +21,10 @@ test("the release is the sole sandbox-base publisher and bakes in the browser en
     workflow,
     /- name: sandbox-base\n\s+dockerfile: fly\/Dockerfile\n\s+build-args: INSTALL_BROWSER_ENGINE=1\n/,
   );
-  assert.match(workflow, /build-args: \|\n\s+\$\{\{ matrix\.build-args \}\}\n\s+GIT_SHA=\$\{\{ github\.sha \}\}/);
+  assert.match(
+    workflow,
+    /build-args: \|\n\s+\$\{\{ matrix\.build-args \}\}\n\s+GIT_SHA=\$\{\{ github\.sha \}\}\n\s+QM_VERSION=\$\{\{ inputs\.version \}\}/,
+  );
   assert.equal(existsSync(".github/workflows/publish-sandbox-base.yml"), false);
   assert.equal(existsSync(".github/workflows/publish-images.yml"), false);
 });
@@ -124,7 +127,7 @@ test("one dispatchable workflow drives the whole release, main-only and in order
   );
   assert.match(
     workflow,
-    /^ {2}images:\n[\s\S]*?needs: preflight\n[\s\S]*?uses: \.\/\.github\/workflows\/release-package\.yml$/m,
+    /^ {2}images:\n[\s\S]*?needs: preflight\n[\s\S]*?uses: \.\/\.github\/workflows\/release-package\.yml\n {4}with:\n {6}version: \$\{\{ needs\.preflight\.outputs\.version \}\}$/m,
   );
   assert.match(
     workflow,
