@@ -4,18 +4,15 @@ import { spawn } from "node:child_process";
 import { chownSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  createSdkMcpServer,
-  query,
-  tool,
-  type Query,
-  type SDKMessage,
-  type SDKResultMessage,
-  type SDKUserMessage,
-  type SpawnOptions,
-  type SpawnedProcess,
-  type HookInput,
-  type HookJSONOutput,
+import type {
+  Query,
+  SDKMessage,
+  SDKResultMessage,
+  SDKUserMessage,
+  SpawnOptions,
+  SpawnedProcess,
+  HookInput,
+  HookJSONOutput,
 } from "@anthropic-ai/claude-agent-sdk";
 import { fromJSONSchema, type ZodObject } from "zod";
 import { contentText, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -331,6 +328,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       documentTextBudget,
       turn.cancel,
     );
+    const { createSdkMcpServer, query, tool } = await import("@anthropic-ai/claude-agent-sdk");
     const jail = mkdtempSync(join(tmpdir(), "qm-claude-"));
     const processIdentity = claudeProcessIdentity();
     if (processIdentity) chownSync(jail, processIdentity.uid, processIdentity.gid);
