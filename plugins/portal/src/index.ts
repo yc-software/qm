@@ -786,6 +786,7 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
       headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(o.session.sub) },
     });
     const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string; message?: string };
+    if (!r.ok) console.warn(`[portal] self-connect start returned HTTP ${r.status}: ${data.message ?? "no message"}`);
     if (data.authorizeUrl) {
       res.writeHead(302, { location: data.authorizeUrl, "cache-control": "no-store" });
       return void res.end();
@@ -795,7 +796,8 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
       200,
       connectErrorHtml(data.message ?? "We couldn't start the connection. This app may not be configured."),
     );
-  } catch {
+  } catch (error) {
+    console.warn(`[portal] self-connect start failed: ${errMessage(error)}`);
     return sendHtml(
       res,
       502,
