@@ -578,8 +578,10 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   writeFileSync(capturePath + ".release", "continue");
   await running;
   const intake = entries.filter((entry) => entry.type === "user");
-  assert.equal(intake.length, 2);
-  assert.equal((intake[1]?.payload as { steered?: boolean }).steered, true);
+  assert.deepEqual(
+    intake.map((entry) => (entry.payload as { steered?: boolean }).steered),
+    [undefined, true],
+  );
   assert.equal((await signals.pending(turn.runId)).length, 0);
   const sent = readFileSync(capturePath, "utf8");
   assert.ok(sent.includes(pdf));
