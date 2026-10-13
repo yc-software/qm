@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { json, readBodyBytes, PayloadTooLargeError } from "../../chassis/src/http.ts";
 import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { errChain } from "../../chassis/src/errors.ts";
 import {
   createLiveVoice,
   dictationFormats,
@@ -17,19 +17,10 @@ import {
 
 const BODY_READ_TIMEOUT_MS = 30_000;
 
-function causes(error: unknown): string {
-  const chain: string[] = [];
-  for (let e: unknown = error; e instanceof Error && chain.length < 4; e = e.cause) {
-    const code = (e as { code?: unknown }).code;
-    chain.push(`${e.name}: ${errMessage(e)}${typeof code === "string" ? ` (${code})` : ""}`);
-  }
-  return chain.length ? chain.join(" <- ") : errMessage(error);
-}
-
 function reportVoiceError(error: unknown, code: string, aborted = false): void {
   const detail = { ...(error instanceof VoiceProviderError ? error.detail : {}), aborted };
-  console.error(`[voice] ${code}: ${causes(error)} ${JSON.stringify(detail)}`);
-  reportBackendError(error, code, detail);
+  console.error(`[voice] ${code}: ${errChain(error)} ${JSON.stringify(detail)}`);
+  if (!aborted) reportBackendError(error, code, detail);
 }
 
 export async function handleVoiceRoute(

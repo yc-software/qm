@@ -163,6 +163,6 @@ test("provider network failures log their cause chain", async (t) => {
   const result = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
   assert.equal(result.status, 503);
   const line = logged.find((entry) => entry.startsWith("[voice] dictation_provider:"));
-  assert.match(line ?? "", /fetch failed .*socket hang up \(ECONNRESET\)/);
+  assert.match(line ?? "", /fetch failed <- .*ECONNRESET.*socket hang up/);
   assert.match(line ?? "", /"path":"audio\/transcriptions"/);
 });
