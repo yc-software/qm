@@ -56,3 +56,24 @@ test("a pending deep-linked cron is consumed even when the view changed mid-load
   const guard = body.indexOf('appState.currentView !== "crons") return', body.indexOf("await refreshCrons"));
   assert.ok(consume !== -1 && guard !== -1 && consume < guard);
 });
+
+test("permanent delete is only offered once a cron is archived", () => {
+  const detail = source.slice(source.indexOf("function openCron"), source.indexOf("function showCronDialog"));
+  assert.match(
+    detail,
+    /c\.archived\s+\? html`<button class="btn danger" @click=\$\{\(\) => showCronDialog\("delete", c\)\}>/,
+  );
+  assert.equal(detail.match(/showCronDialog\("delete"/g)?.length, 1);
+  const row = source.slice(source.indexOf("function cronRowActions"), source.indexOf("function openCron"));
+  assert.doesNotMatch(row, /showCronDialog\("delete"/);
+});
+
+test("the delete confirmation says where and when the cron runs", () => {
+  const dialog = source.slice(source.indexOf("function cronDialogTpl"), source.indexOf("Delete permanently"));
+  assert.match(dialog, /scopeChip\(c\.ownerScopeId, c\.scopeName \?\? null\)\} \$\{cronScheduleDetail\(c\)\}/);
+});
+
+test("archiving says how to get the cron back", () => {
+  const archive = source.slice(source.indexOf("async function archiveCron"), source.indexOf("function setCronEnabled"));
+  assert.match(archive, /cronActionNotice = "Archived\. Unarchive it from the Archived tab/);
+});

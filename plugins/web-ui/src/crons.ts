@@ -550,9 +550,13 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
                     ${icon(Pencil, 15)}<span>Edit</span>
                   </button>
                   ${stateActions}
-                  <button class="btn danger" @click=${() => showCronDialog("delete", c)}>
-                    ${icon(Trash2, 15)}<span>Delete</span>
-                  </button>
+                  ${
+                    c.archived
+                      ? html`<button class="btn danger" @click=${() => showCronDialog("delete", c)}>
+                          ${icon(Trash2, 15)}<span>Delete</span>
+                        </button>`
+                      : nothing
+                  }
                 </div>
               `
             : html`<div class="hint">Shared from ${cronScopeLabel(c)}. You can view it, but not change it.</div>`
@@ -690,10 +694,8 @@ function cronDialogTpl(dialog: { kind: "rename" | "delete"; cron: CronView }): T
             <h2 id="cron-delete-title">Delete <bdi>${cronTitle(c)}</bdi>?</h2>
           </div>
         </div>
-        <p>
-          This permanently removes the schedule and its retained run history. Archive it instead if you may need it
-          later.
-        </p>
+        <p>${scopeChip(c.ownerScopeId, c.scopeName ?? null)} ${cronScheduleDetail(c)}</p>
+        <p>This permanently removes the schedule and its retained run history. It can't be undone.</p>
         <div class="project-dialog-actions">
           <button class="btn" type="button" @click=${() => closeCronDialog(c)}>Cancel</button>
           <button class="btn danger" type="button" @click=${() => void confirmDeleteCron(c.id)}>
@@ -775,6 +777,7 @@ async function archiveCron(id: string, archived: boolean): Promise<void> {
   await refreshCrons();
   if (archived) {
     cronTab = "yours";
+    cronActionNotice = "Archived. Unarchive it from the Archived tab, or delete it permanently there.";
     drawCronsPage();
     return;
   }
