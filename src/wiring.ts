@@ -28,6 +28,7 @@ import { createLoopIngress, type LoopIngressService, type LoopIngress, type Ingr
 import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
+import { createMemoryTidyService, type MemoryTidyProfile } from "./memory/tidy.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import {
   createSessionSyscalls,
@@ -470,7 +471,7 @@ export function stopWithBackstop(
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
-  suggestedActivityMaintenance: Sweeper;
+  platformCronMaintenance: Sweeper;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   screenSecurity?: SecurityScreenProbe;
@@ -2522,18 +2523,30 @@ export function buildApp(
       await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
     },
   });
+  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const suggestedActivities = createSuggestedActivityService({
-    store: artifactMap<SuggestedActivityProfile>("suggested_activity_profiles"),
+    store: suggestedActivityProfiles,
     sessions,
     crons,
     scheduler,
     enabled: config.suggestedActivitiesEnabled === true,
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
-  const suggestedActivityMaintenance = createSweeper(
-    () => leaderLease.hold("suggested-activities:maintenance", () => suggestedActivities.maintain()),
+  const memoryTidy = createMemoryTidyService({
+    store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
+    notebooks: async () => (await baseMemory.metadata?.()) ?? new Map(),
+    timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
+    crons,
+    scheduler,
+  });
+  const platformCronMaintenance = createSweeper(
+    () =>
+      Promise.all([
+        leaderLease.hold("suggested-activities:maintenance", () => suggestedActivities.maintain()),
+        leaderLease.hold("memory-tidy:maintenance", () => memoryTidy.maintain()),
+      ]),
     60 * 60_000,
-    { label: "suggested-activities", immediate: true },
+    { label: "platform-crons", immediate: true },
   );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
@@ -2927,7 +2940,7 @@ export function buildApp(
       ? { suggestedActivities }
       : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
-    suggestedActivityMaintenance,
+    platformCronMaintenance,
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
     sessionShares: artifactMap<SessionShare>("session_shares"),
     sessionShareBytes:
