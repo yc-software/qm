@@ -2,6 +2,7 @@ import * as governance from "./governance.ts";
 import * as settings from "./settings.ts";
 import * as integrations from "./integrations.ts";
 import * as onboarding from "./onboarding.ts";
+import { mountRuntimes } from "./settings-runtimes.ts";
 import type { GovernanceState } from "./governance-state.ts";
 import type { SlackSetting } from "./integrations-state.ts";
 export * from "./governance.ts";
@@ -33,5 +34,6 @@ export const status = (key: string, message: string, tone: string) => owner(key)
 export const statusKey = (id: string) => modules.map((module) => module.statusKey(id)).find(Boolean);
 export function mountCards() {
   modules.forEach((module) => module.mountCards());
+  mountRuntimes();
   onboarding.mount();
 }

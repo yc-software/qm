@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "./runtime-config-store.ts";
+import { getRuntimeConfig } from "./runtime-config-cache.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 export type ModelMetadata = Pick<

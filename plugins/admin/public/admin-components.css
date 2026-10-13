@@ -42,7 +42,8 @@
       .model-chip button,
       .emoji-picker-grid button,
       .ovmenu button,
-      .dd-btn
+      .dd-btn,
+      .loadout-control button
     )
   ) {
   min-height: var(--control-height);

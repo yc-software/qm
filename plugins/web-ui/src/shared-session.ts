@@ -1,3 +1,5 @@
+import "./model-picker.css";
+import "./tooltip.css";
 import "./shell.css";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { html, render } from "lit";

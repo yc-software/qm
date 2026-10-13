@@ -1,12 +1,7 @@
 import { emojiCompletion } from "./emoji-completion";
 import { appEditSlug } from "./app-edit";
-import {
-  runtimeConfigKey,
-  getRuntimeConfig,
-  loadRuntimeConfig,
-  saveRuntimeConfig,
-  subscribeRuntimeConfig,
-} from "./runtime-config-store";
+import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
+import { getRuntimeConfig } from "./runtime-config-cache.ts";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";

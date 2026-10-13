@@ -1,8 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Check, ChevronDown, ChevronRight, Plus, Sparkles, Star, X, Zap } from "lucide";
-import { icon, modelMark } from "./ui";
-import { getRuntimeConfig, saveRuntimeConfig } from "./runtime-config-store";
+import { icon, modelMark } from "./icons.ts";
+import { getRuntimeConfig, type RuntimeChange } from "./runtime-config-cache.ts";
 import {
   EFFORT_LEVELS,
   effortLabel,
@@ -14,8 +14,8 @@ import {
   harnessSupportsFastMode,
   type EffortLevel,
   type ModelOption,
-} from "./model-options";
-import { modelSupportsFastMode } from "./pi-models";
+} from "./model-options.ts";
+import { modelSupportsFastMode } from "./pi-models.ts";
 import {
   LOADOUT_CAP,
   ULTRAFAST_MODEL_ID,
@@ -26,10 +26,10 @@ import {
   presetModelId,
   modelLoadoutOptions,
   type LoadoutEntry,
-} from "./composer-loadout";
-import { tip } from "./tooltip";
-import { isPhone } from "./viewport";
-import { burstEffortConfetti } from "./effort-confetti";
+} from "./composer-loadout.ts";
+import { tip } from "./tooltip.ts";
+import { isPhone } from "./viewport.ts";
+import { burstEffortConfetti } from "./effort-confetti.ts";
 
 const EFFORT_PEAK_FLOOR = EFFORT_LEVELS.findIndex((option) => option.value === "xhigh");
 
@@ -53,9 +53,11 @@ interface ModelPickerBindings<T> {
   selectHarness(harness: string, target: T): void;
   toggleFastMode(target: T): void;
   effectiveFastMode(): boolean;
-  changeDefault(change: Parameters<typeof saveRuntimeConfig>[1], target: T, keepOpen?: boolean): Promise<unknown>;
+  changeDefault(change: RuntimeChange, target: T, keepOpen?: boolean): Promise<unknown>;
   showDefaultAction?: boolean;
   showInheritAction?: boolean;
+  inheritLabel?: string;
+  emptyLabel?: string;
 }
 
 export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
@@ -472,7 +474,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         class="menu-button loadout-button ${ultrafastOn ? "ultrafast-active" : ""}"
         data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
-        aria-label=${choice ? `Model: ${modelLabel(choice)}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}` : "Choose model"}
+        aria-label=${choice ? `Model: ${modelLabel(choice)}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}` : (bindings.emptyLabel ?? "Choose model")}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
         aria-controls=${loadoutMenuId}
@@ -500,7 +502,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
           placeLoadout();
         }}
       >
-        <span class="menu-label">${choice ? modelLabel(choice) : "Choose model"}</span>
+        <span class="menu-label">${choice ? modelLabel(choice) : (bindings.emptyLabel ?? "Choose model")}</span>
         ${choice ? html`<span class="menu-suffix">${effortText(composerState.effortLevel)}</span>` : nothing}
         ${ultrafastOn ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 12)} Ultrafast</span>` : nothing}
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
@@ -652,7 +654,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                     : nothing
                 }
               </div>
-              ${bindings.showInheritAction !== false && getRuntimeConfig(scopeKey())?.scopeOverride ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>Use org default</button></div>` : nothing}
+              ${bindings.showInheritAction !== false && getRuntimeConfig(scopeKey())?.scopeOverride ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>${bindings.inheritLabel ?? "Use org default"}</button></div>` : nothing}
               ${loadoutSubmenu(agent, selected)}
             </div>`
           : nothing

@@ -1,5 +1,4 @@
-import { getRuntimeConfig } from "./runtime-config-store.ts";
-import type { RuntimeConfig } from "./core-bridge.ts";
+import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config-cache.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBaseModel, type ModelMetadata } from "./pi-models.ts";
 

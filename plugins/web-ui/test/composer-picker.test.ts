@@ -4,7 +4,7 @@ import type { Agent } from "@earendil-works/pi-agent-core";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
-import type { RuntimeConfig } from "../src/core-bridge.ts";
+import type { RuntimeConfig } from "../src/runtime-config-cache.ts";
 import type { ModelMetadata } from "../src/pi-models.ts";
 import type { LoadoutEntry } from "../src/composer-loadout.ts";
 

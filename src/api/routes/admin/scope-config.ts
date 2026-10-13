@@ -3,6 +3,7 @@ import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
   FAST_MODE_MODEL_IDS,
+  safeModelMetadata,
   harnessSupportsFastMode,
   HARNESS_IDS,
   selectableBaseModels,
@@ -403,6 +404,12 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
         configured.some((runtime) => runtime.modelId === model.id),
     );
   };
+  const modelsByHarness = Object.fromEntries(
+    HARNESS_IDS.map((id) => [
+      id,
+      modelsFor(id).map((model) => ({ ...model, effortLevels: thinkingLevelsForHarness(id, model.id) })),
+    ]),
+  );
   return {
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
     baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault),
@@ -415,11 +422,14 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
           runtime?.harnessId === id ||
           purposeRuntimes.some((runtime) => runtime.harnessId === id)),
     ),
-    modelsByHarness: Object.fromEntries(
-      HARNESS_IDS.map((id) => [
-        id,
-        modelsFor(id).map((model) => ({ ...model, effortLevels: thinkingLevelsForHarness(id, model.id) })),
-      ]),
+    modelsByHarness,
+    modelCatalog: Object.fromEntries(
+      Object.values(modelsByHarness)
+        .flat()
+        .flatMap((model) => {
+          const metadata = safeModelMetadata(model.id);
+          return metadata ? [[model.id, metadata]] : [];
+        }),
     ),
     thinkingLevelsByHarness: Object.fromEntries(
       HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),

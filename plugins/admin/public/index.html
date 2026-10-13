@@ -5310,20 +5310,43 @@
         height: 18px;
         accent-color: var(--cta);
       }
-      #view-governance .model-runtime-fields {
+      #view-governance {
+        --foreground: var(--text);
+        --muted-foreground: var(--muted);
+        --secondary: var(--subtle);
+        --background: var(--surface);
+        --popover: var(--surface);
+        --font-12-5: 12.5px;
+        --font-13: 13px;
+        --font-14: 14px;
+        --radius-sm: 6px;
+        --chat-surface-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+      }
+      #view-governance #card-base-model > .runtime-rows,
+      #view-governance .runtime-row {
         display: grid;
-        gap: 12px;
+        grid-column: 1 / -1;
+        grid-template-columns: subgrid;
+        align-items: center;
       }
-      #view-governance .model-runtime-fields label {
-        margin: 0 0 4px;
+      #view-governance .runtime-row {
+        min-height: 40px;
       }
-      #view-governance .model-runtime-fields .dd,
-      #view-governance .model-runtime-fields select {
-        width: 100%;
-        max-width: none;
+      #view-governance .runtime-label {
+        font-size: var(--section-font, 14px);
+        font-weight: 500;
       }
-      #view-governance #base-fast-mode-control {
-        margin-top: 16px;
+      #view-governance .runtime-row .loadout-control {
+        justify-self: start;
+      }
+      #view-governance .runtime-hint {
+        grid-column: 2;
+        margin: 0;
+      }
+      #view-governance .recall-popover {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
       }
       #view-governance .setting-toggle input:checked + .setting-switch {
         border-color: var(--cta);
@@ -5331,23 +5354,6 @@
       }
       #view-governance .setting-toggle input:focus-visible + .setting-switch {
         outline-color: var(--cta);
-      }
-      #view-governance #base-fast-mode-control strong,
-      #view-governance #base-fast-mode-control small {
-        font-size: 13px;
-        font-weight: 400;
-        line-height: 1.4;
-      }
-      #view-governance #base-fast-mode-control .setting-copy {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        column-gap: 8px;
-        row-gap: 0;
-      }
-      #view-governance #base-fast-mode-control small {
-        color: var(--muted);
-        margin: 0;
       }
       .model-list {
         display: flex;
@@ -6539,7 +6545,6 @@
                 </div>
                 <template data-settings-card="card-base-model"></template>
                 <template data-settings-card="card-webui-models"></template>
-                <template data-settings-card="card-memory-recall"></template>
                 <template data-settings-card="card-branding"></template>
                 <template data-settings-card="card-feature-flags"></template>
                 <div class="governance-group" id="governance-credentials">
@@ -6662,12 +6667,8 @@
 
         [
           $("card-base-model"),
-          $("card-cron-runtime"),
-          $("card-subagent-runtime"),
-          $("card-fallback-runtime"),
           providers,
           $("card-webui-models"),
-          $("card-memory-recall"),
           $("card-soul"),
           $("card-branding"),
           $("card-feature-flags"),

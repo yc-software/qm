@@ -338,12 +338,15 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
-          cache-dependency-path: plugins/admin/package-lock.json
+          cache-dependency-path: |
+            plugins/admin/package-lock.json
+            plugins/web-ui/package-lock.json
       - name: Install, typecheck, test
         if: needs.reuse.outputs.reusable != 'true'
         working-directory: plugins/admin
         run: |
           npm ci
+          npm ci --prefix ../web-ui
           npm run typecheck
           npm test
       - name: Build and boot production image

@@ -8,6 +8,7 @@ RUN npm ci --omit=dev && rm -rf /root/.npm /tmp/node-compile-cache
 COPY plugins/admin/src ./src
 COPY plugins/admin/ui ./ui
 COPY plugins/chassis/src /chassis/src
+COPY plugins/web-ui/src /web-ui/src
 COPY plugins/admin/public ./public
 COPY plugins/admin/tsconfig.json ./
 

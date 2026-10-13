@@ -1,0 +1,60 @@
+[data-qm-tooltip-anchor] {
+  anchor-name: --qm-tooltip-anchor;
+}
+
+.qm-tooltip {
+  border: 1px solid var(--border);
+  position: fixed;
+  position-anchor: --qm-tooltip-anchor;
+  position-area: top span-all;
+  justify-self: anchor-center;
+  position-try-fallbacks: flip-block;
+  position-visibility: anchors-visible;
+  inset: auto;
+  margin: 7px;
+  width: max-content;
+  z-index: 4000;
+  max-width: min(320px, calc(100vw - 14px));
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--foreground);
+  background: var(--popover);
+  box-shadow: var(--chat-surface-shadow);
+  pointer-events: none;
+  display: none;
+  overflow-wrap: anywhere;
+}
+.qm-tooltip.visible {
+  display: block;
+}
+.qm-tooltip.beside {
+  position-area: right span-all;
+  justify-self: normal;
+  align-self: anchor-center;
+  position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
+}
+.qm-tooltip.sidebar-status {
+  position-area: right span-all;
+  left: anchor(--qm-sidebar right);
+  justify-self: normal;
+  align-self: anchor-center;
+  margin: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  line-height: 1.5;
+  position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
+}
+@position-try --qm-tooltip-above {
+  left: auto;
+  position-area: top span-all;
+  justify-self: anchor-center;
+  align-self: normal;
+}
+@position-try --qm-tooltip-below {
+  left: auto;
+  position-area: bottom span-all;
+  justify-self: anchor-center;
+  align-self: normal;
+}

@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { RuntimeConfig } from "./core-bridge";
-import { getRuntimeConfig, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
+import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config-cache.ts";
+import { loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import {
   defaultEffortForModel,
   harnessSupportsFastMode,

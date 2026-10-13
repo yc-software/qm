@@ -12,6 +12,7 @@ export function buildGovernanceUI(): string {
     target: "es2022",
     minify: true,
     legalComments: "none",
+    nodePaths: [fileURLToPath(new URL("../node_modules", import.meta.url))],
   });
   return result.outputFiles[0]!.text.replace(/<\/script/gi, "<\\/script");
 }
