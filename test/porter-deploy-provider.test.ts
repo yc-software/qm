@@ -296,7 +296,7 @@ test("an app that only answers 5xx fails publish, and the failure reaches the er
   assert.equal(e!.scopeLabel, d.ownerScopeId);
   assert.match(e!.message, /app broken \(deployment dep-5f\): app answered HTTP 500[\s\S]*booting/);
   assert.doesNotMatch(e!.message, /sk-livevalue|hunter2/);
-  assert.match(e!.message, /connecting to \[redacted\]/);
+  assert.match(e!.message, /connecting to <redacted:DATABASE_URL>/);
 });
 
 test("a crash the supervisor recovers from is reported once, with the output before the exit", async () => {

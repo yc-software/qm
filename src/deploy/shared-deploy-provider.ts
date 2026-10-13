@@ -1,7 +1,8 @@
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 import { redactSecrets } from "../harness/redact-secrets.ts";
+import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { Deployment } from "./deploy-store.ts";
 
 const EXIT_APP_SERVER_ERROR = 96;
@@ -21,16 +22,10 @@ export type AppErrorSink = (
 ) => void;
 type Report = (code: string, detail: string) => Error;
 
-const LITERAL_SECRET_MIN = 8;
-
 export function appReporter(onError: AppErrorSink | undefined, d: Deployment, env?: Record<string, string>): Report {
-  const literals = Object.values(env ?? {})
-    .filter((v) => v.length >= LITERAL_SECRET_MIN)
-    .sort((a, b) => b.length - a.length);
+  const mask = createSecretValueMasker(env);
   return (code, detail) => {
-    let message = `app ${d.name ?? d.id} (deployment ${d.id}): ${detail}`;
-    for (const v of literals) message = message.split(v).join("[redacted]");
-    const error = new Error(redactSecrets(message));
+    const error = new Error(redactSecrets(mask(`app ${d.name ?? d.id} (deployment ${d.id}): ${detail}`)));
     onError?.({ category: "deploy", code, message: error.message, scopeLabel: d.ownerScopeId }, error);
     return error;
   };
@@ -114,9 +109,9 @@ export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<v
     `[ "$code" -ge 500 ] 2>/dev/null && { echo "$code"; exit ${EXIT_APP_SERVER_ERROR}; }; exit 1`;
   const r = await exec(probe, opts.windowSec + READY_EXEC_GRACE_SEC);
   if (r.code === 0) return;
-  const log = await exec(`tail -c 2000 ${shq(opts.logPath)} 2>/dev/null || true`, 30)
+  const log = await exec(`tail -c ${REPORT_LOG_BYTES} ${shq(opts.logPath)} 2>/dev/null || true`, 30)
     .then((out) => `${out.stdout}${out.stderr}`.trim())
-    .catch(() => "");
+    .catch((e: unknown) => `(the app log could not be read: ${errMessage(e)})`);
   let why = `app never listened on port ${opts.appPort} within ${opts.windowSec}s`;
   if (r.code === EXIT_APP_EXITED) why = `the version's entrypoint exited without binding port ${opts.appPort}`;
   if (r.code === EXIT_APP_SERVER_ERROR)
