@@ -11,9 +11,10 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { migrateRegisteredPgSchemas, waitForPgDatabase } from "./persistence/pg-pool.ts";
 
 const config = loadConfig();
+await waitForPgDatabase(config);
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);

@@ -8,6 +8,7 @@ import {
   concurrentIndexName,
   definePgMigration,
   pgMigrationChecksum,
+  waitForPgDatabase,
 } from "../src/persistence/pg-pool.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
@@ -98,6 +99,103 @@ test("concurrentIndexName recognizes retryable concurrent index creation", () =>
     "session_search",
   );
   assert.equal(concurrentIndexName("CREATE INDEX IF NOT EXISTS session_search ON sessions(id)"), undefined);
+});
+
+const pgError = (code: string) => Object.assign(new Error(`pg ${code}`), { code });
+
+test("waitForPgDatabase retries transient connect failures and logs once while waiting", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "log", (line: string) => logged.push(line));
+  const failures = [
+    ...["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN"].map(
+      pgError,
+    ),
+    ...["53300", "57P01", "57P02", "57P03"].map(pgError),
+    new Error("Connection terminated unexpectedly"),
+    new Error("Connection terminated due to connection timeout"),
+    new Error("timeout exceeded when trying to connect"),
+  ];
+  const attempts = failures.length + 1;
+  const calls: unknown[][] = [];
+  await waitForPgDatabase(
+    { databaseUrl: "postgres://db/qm" },
+    {
+      intervalMs: 1,
+      probe: async (...args) => {
+        calls.push(args);
+        const failure = failures.shift();
+        if (failure) throw failure;
+      },
+    },
+  );
+  assert.equal(calls.length, attempts);
+  assert.deepEqual(calls[0], ["postgres://db/qm", {}]);
+  assert.deepEqual(logged, ["[pg] waiting up to 180s for the database to accept connections (ECONNREFUSED)"]);
+});
+
+test("waitForPgDatabase fails immediately on a non-transient error", async (t) => {
+  t.mock.method(console, "log", () => {});
+  let calls = 0;
+  await assert.rejects(
+    waitForPgDatabase(
+      { databaseUrl: "postgres://db/qm" },
+      {
+        intervalMs: 1,
+        probe: async () => {
+          calls++;
+          throw pgError("28P01");
+        },
+      },
+    ),
+    /pg 28P01/,
+  );
+  assert.equal(calls, 1);
+});
+
+test("waitForPgDatabase throws the last transient error once the deadline passes", async (t) => {
+  t.mock.method(console, "log", () => {});
+  let calls = 0;
+  await assert.rejects(
+    waitForPgDatabase(
+      { databaseUrl: "postgres://db/qm" },
+      {
+        deadlineMs: 20,
+        intervalMs: 1,
+        probe: async () => {
+          calls++;
+          throw pgError(calls === 1 ? "ENOTFOUND" : "ECONNREFUSED");
+        },
+      },
+    ),
+    /pg ECONNREFUSED/,
+  );
+  assert.ok(calls > 1);
+});
+
+test("waitForPgDatabase skips the probe without a database URL", async () => {
+  let calls = 0;
+  await waitForPgDatabase(
+    {},
+    {
+      probe: async () => {
+        calls++;
+      },
+    },
+  );
+  assert.equal(calls, 0);
+});
+
+test("waitForPgDatabase probes with the configured database CA", async () => {
+  const seen: unknown[] = [];
+  await waitForPgDatabase(
+    { databaseUrl: "postgres://db/qm", databaseCaCert: "PEM" },
+    {
+      probe: async (_url, caTrust) => {
+        seen.push(caTrust);
+      },
+    },
+  );
+  assert.deepEqual(seen, [{ ssl: { ca: "PEM" } }]);
 });
 
 function pathToUrl(p: string): string {
