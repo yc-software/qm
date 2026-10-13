@@ -241,11 +241,10 @@ async function createCron(ctx: ApiCtx): Promise<void> {
     });
   }
   if (!isCreateCron(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a CreateCronInput" });
-  if (body.runAs === "scopeShared")
+  if (body.runAs === "scope" || body.runAs === "scopeShared")
     return sendJson(res, 400, {
       error: "bad_request",
-      message:
-        "scopeShared crons must be created through an agent capability (it validates the scope is membership-controlled)",
+      message: `${body.runAs} crons must be created through an agent capability from the conversation they run as`,
     });
   try {
     const cron = await app.createCron(body);
