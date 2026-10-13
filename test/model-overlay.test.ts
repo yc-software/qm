@@ -208,7 +208,7 @@ test("collisions are rejected in both registration orders and OpenRouter failure
 });
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
-  const config = testConfig({ harness: "pi", openaiApiKey: "local-test-key" });
+  const config = testConfig({ harness: "pi", anthropicApiKey: "local-test-key", openaiApiKey: "local-test-key" });
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
@@ -235,6 +235,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     harnessId: "pi",
     modelId: MODEL_ID,
   };
+  const fastSpec = { ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true };
   try {
     for (const method of ["PUT", "DELETE"])
       assert.equal(
@@ -247,8 +248,13 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
         .status,
       403,
     );
-    assert.equal((await api(path, "PUT", { ...spec, contextWindow: "400000" })).status, 400);
-    assert.equal((await api(path, "PUT", spec)).status, 200);
+    assert.equal((await api(path, "PUT", { ...fastSpec, contextWindow: "400000" })).status, 400);
+    assert.equal((await api(path, "PUT", fastSpec)).status, 200);
+    const settingsResponse = await api("/v1/admin/scopes/org%3Adefault-org?view=models");
+    assert.equal(settingsResponse.status, 200);
+    const settings = (await settingsResponse.json()) as { fastModeModelIds: string[] };
+    assert.ok(settings.fastModeModelIds.includes(MODEL_ID));
+    assert.ok(!settings.fastModeModelIds.includes("claude-haiku-4-5"));
     const response = await api("/v1/runtime-config", "PUT", runtime);
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
@@ -269,7 +275,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
       async: true,
     });
     assert.equal(turn.status, "queued");
-    assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
+    assert.equal((await api(path, "PUT", { ...fastSpec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
     await built.config.setRuntimeSelectionLatest("org:default-org", { harnessId: "pi", modelId: MODEL_ID });
     assert.equal((await api(path, "DELETE")).status, 200);
