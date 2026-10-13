@@ -1,7 +1,7 @@
 import { type ScopeId, parseScopeId, scopeId as makeScopeId } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { RECALL_MAX_CHARS, capTail, captureDate, dateStr, normalize } from "./notebook.ts";
+import { RECALL_MAX_CHARS, capTail } from "./notebook.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
   MemoryFactsMissing,
@@ -15,9 +15,7 @@ import {
   type MemoryProvenance,
 } from "./facts.ts";
 
-/** Path the agent may read to see its notebook; memory is never stored as an editable file. */
 export const MEMORY_FILE = "memory/MEMORY.md";
-/** Where the database-less store keeps a scope's facts. */
 const MEMORY_FACTS_FILE = "memory/facts.json";
 
 export interface MemoryRecallContext {
@@ -55,7 +53,6 @@ export interface MemoryService {
   ): Promise<number>;
   query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<string[]>;
   read(scopeId: ScopeId): Promise<string>;
-  /** Present only on notebook stores whose facts can be listed and edited one by one. */
   facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
   edit?(scopeId: ScopeId, edits: MemoryEdit[], author?: string, context?: MemoryCaptureMetadata): Promise<void>;
   delete?(scopeId: ScopeId, ids: string[], author?: string): Promise<void>;
@@ -76,8 +73,9 @@ export function queryFacts(facts: readonly MemoryFact[], q: string, limit: numbe
     .map(factLine);
 }
 
-function cleanCapturedFacts(facts: string[], at: number, trustedProvenance = false): string[] {
-  const date = dateStr(at);
+const normalize = (text: string) => text.trim().toLowerCase();
+
+function cleanCapturedFacts(facts: string[], trustedProvenance = false): string[] {
   return facts.flatMap((f) => {
     let text = f
       .replace(/\s+/g, " ")
@@ -87,17 +85,16 @@ function cleanCapturedFacts(facts: string[], at: number, trustedProvenance = fal
       text = text
         .replace(/^\((\d{4}-\d\d-\d\d)\)\s*/, "on $1: ")
         .replace(/\s+\(said in ([^)]+)\)\s*$/i, " [claimed source: $1]");
-    return text ? [`- (${date}) ${text}`] : [];
+    return text ? [text] : [];
   });
 }
 
-function editedText(previous: MemoryFact, text: string, at: number): string {
-  const clean = text
+function editedText(text: string): string {
+  return text
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^[-*]\s+/, "")
     .replace(/^\(\d{4}-\d\d-\d\d\)\s*/, "");
-  return `- (${captureDate(previous.text.replace(/^[-*]\s+/, "")) ?? dateStr(at)}) ${clean}`;
 }
 
 function sameProvenance(a: MemoryProvenance, b: MemoryProvenance): boolean {
@@ -126,7 +123,6 @@ export interface FactStoreTx {
 
 export interface FactStore {
   list(scopeId: ScopeId): Promise<MemoryFact[]>;
-  /** Runs `fn` serialized per scope; nothing it writes is kept if it throws. */
   transact<T>(scopeId: ScopeId, fn: (tx: FactStoreTx) => Promise<T>): Promise<T>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
@@ -138,7 +134,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
     },
 
     async capture(scopeId, facts, at, author, context) {
-      const lines = cleanCapturedFacts(facts, at, author?.startsWith("cc:") === true);
+      const lines = cleanCapturedFacts(facts, author?.startsWith("cc:") === true);
       if (!lines.length) return 0;
       const provenance = captureProvenance(scopeId, context);
       return store.transact(scopeId, async (tx) => {
@@ -183,7 +179,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
           edits.map((edit) => edit.id),
         );
         for (const [index, fact] of targets.entries()) {
-          const text = editedText(fact, edits[index]!.text, at);
+          const text = editedText(edits[index]!.text);
           await tx.update(
             fact.id,
             { text, ...(exposure ? mergeProvenance([fact, exposure], fact.sensitivity) : {}) },
@@ -212,7 +208,6 @@ interface FactsFile {
   facts: MemoryFact[];
 }
 
-/** Database-less store: one JSON file of facts per scope in the workspace. */
 export function createMemoryService(workspace: WorkspaceStore): MemoryService {
   const perScope = createKeyedQueue<ScopeId>();
   async function load(scopeId: ScopeId): Promise<FactsFile> {

@@ -565,7 +565,7 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, result);
 }
 
-async function memoryFacts(memory: MemoryService, scope: ScopeId) {
+export async function memoryFacts(memory: MemoryService, scope: ScopeId) {
   return ((await memory.facts?.(scope)) ?? []).map(({ id, text, createdAt, updatedAt }) => ({
     id,
     text,
@@ -574,7 +574,7 @@ async function memoryFacts(memory: MemoryService, scope: ScopeId) {
   }));
 }
 
-function parseEdits(body: unknown): MemoryEdit[] | string {
+export function parseEdits(body: unknown): MemoryEdit[] | string {
   const facts = (isObj(body) ? body : {}).facts;
   if (!Array.isArray(facts) || !facts.length) return "facts (non-empty array of {id, text}) required";
   const edits = facts.flatMap((fact): MemoryEdit[] =>
@@ -585,7 +585,7 @@ function parseEdits(body: unknown): MemoryEdit[] | string {
   return edits.length === facts.length ? edits : "every fact needs a string id and non-empty text";
 }
 
-function parseIds(body: unknown): string[] | string {
+export function parseIds(body: unknown): string[] | string {
   const ids = (isObj(body) ? body : {}).ids;
   return Array.isArray(ids) && ids.length && ids.every((id) => typeof id === "string" && id.trim())
     ? (ids as string[])

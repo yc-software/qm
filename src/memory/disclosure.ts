@@ -127,7 +127,6 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
     const allowed = await Promise.all(facts.map((fact) => policy.allows(scope, fact)));
     return facts.filter((_, index) => allowed[index]);
   }
-  /** Edits name facts by id; hidden facts are reported missing so their existence never leaks. */
   async function editable(scope: ScopeId, ids: readonly string[]): Promise<void> {
     if (!(await memoryDisclosurePolicy(access).narrow(scope))) throw new MemoryDisclosureDenied();
     const shown = new Set((await visible(scope)).map((fact) => fact.id));

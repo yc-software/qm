@@ -10,6 +10,7 @@ import { tip } from "./tooltip";
 interface Fact {
   id: string;
   text: string;
+  createdAt: number;
 }
 
 let facts: Fact[] = [];
@@ -24,11 +25,6 @@ export function resetMemoryState(): void {
   busy = false;
   search = "";
   editing = null;
-}
-
-function shown(text: string): { text: string; date?: string } {
-  const match = text.match(/^\s*[-*]\s+(?:\((\d{4}-\d{2}-\d{2})\)\s*)?([\s\S]*\S)\s*$/);
-  return match ? { text: match[2]!, ...(match[1] ? { date: match[1] } : {}) } : { text };
 }
 
 async function change(method: "PATCH" | "DELETE", body: object, done: string): Promise<void> {
@@ -48,7 +44,7 @@ async function change(method: "PATCH" | "DELETE", body: object, done: string): P
 }
 
 function factRow(fact: Fact) {
-  const { text, date } = shown(fact.text);
+  const { text } = fact;
   if (editing?.id === fact.id)
     return html`<div class="memory-fact editing">
       <textarea
@@ -82,7 +78,7 @@ function factRow(fact: Fact) {
   return html`<div class="memory-fact">
     <div>
       <div>${text}</div>
-      ${date ? html`<div class="card-meta">Captured ${date}</div>` : nothing}
+      <div class="card-meta">Captured ${new Date(fact.createdAt).toISOString().slice(0, 10)}</div>
     </div>
     <button
       class="icon-btn"

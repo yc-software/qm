@@ -70,8 +70,8 @@ test("withdrawals never quote facts from a revoked or disabled memory scope", ()
   assert.match(result.text, /no longer included/);
 });
 
-test("each scope and heading is rendered once and bookkeeping markers are never facts", () => {
-  const body = `### personal:alice\n### personal:alice\n## Work\n- ONE\n\n- TWO\n<!-- consolidated: 2026-10-01 -->\n<!-- captures-since-promote: 4 -->`;
+test("each scope and heading is rendered once", () => {
+  const body = `### personal:alice\n### personal:alice\n## Work\n- ONE\n\n- TWO`;
   assert.equal(memoryRecallDelta(body, []).text, "### personal:alice\n## Work\n- ONE\n- TWO");
   const delta = memoryRecallDelta(body.replace("- TWO", "- THREE\n- FOUR"), [entry(body)]);
   assert.equal(

@@ -58,21 +58,16 @@ test("pg memory: notebook snapshots migrate into one row per fact, in order", { 
   const one = await memory.facts!("personal:U1");
   assert.deepEqual(
     one.map(({ text, sensitivity, sources, sourceUnknown }) => ({ text, sensitivity, sources, sourceUnknown })),
-    [
-      { text: "# Memory", sensitivity: "unknown", sources: [], sourceUnknown: true },
-      {
-        text: "- (2026-05-01) Prefers terse replies",
-        sensitivity: "sensitive",
-        sources: ["channel:C1"],
-        sourceUnknown: false,
-      },
-    ],
+    [{ text: "Prefers terse replies", sensitivity: "sensitive", sources: ["channel:C1"], sourceUnknown: false }],
   );
-  assert.equal(await memory.read("personal:U1"), "# Memory\n\n- (2026-05-01) Prefers terse replies");
+  assert.equal(await memory.read("personal:U1"), "- (2026-05-01) Prefers terse replies");
+  const legacy = await memory.facts!("personal:U2");
   assert.deepEqual(
-    (await memory.facts!("personal:U2")).map((fact) => fact.text),
-    ["# Memory", "Intro paragraph\nthat wraps.", "- (2026-04-01) Owns billing", "* Second fact"],
+    legacy.map((fact) => fact.text),
+    ["Intro paragraph\nthat wraps.", "Owns billing", "Second fact"],
   );
+  assert.equal(legacy[1]!.createdAt, Date.UTC(2026, 3, 1));
+  assert.equal(legacy[2]!.createdAt, at);
 });
 
 test("pg memory: add, edit and delete by id; a bad id rolls back the whole call", { skip }, async () => {

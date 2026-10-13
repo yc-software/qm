@@ -26,7 +26,6 @@ export function detectOnboardingStatus(memory: string, version = ONBOARDING_VERS
   return "not_started";
 }
 
-/** Replaces the onboarding marker fact in a personal notebook. */
 export async function setOnboardingStatus(
   memory: MemoryService,
   scope: ScopeId,
@@ -35,11 +34,9 @@ export async function setOnboardingStatus(
   author: string,
   version = ONBOARDING_VERSION,
 ): Promise<void> {
-  const marker = new RegExp(
-    `^[-*]?\\s*(?:\\(\\d{4}-\\d\\d-\\d\\d\\)\\s*)?Onboarding:\\s*(?:completed|dismissed|pending)\\s+${escapeRegExp(version)}\\b`,
-    "i",
-  );
-  const stale = ((await memory.facts?.(scope)) ?? []).filter((fact) => marker.test(fact.text)).map((fact) => fact.id);
+  const stale = ((await memory.facts?.(scope)) ?? [])
+    .filter((fact) => fact.text.startsWith("Onboarding: "))
+    .map((fact) => fact.id);
   if (stale.length) await memory.delete?.(scope, stale, author);
   if (status === "not_started") return;
   const line =

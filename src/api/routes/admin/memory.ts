@@ -1,7 +1,7 @@
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, isObj, orgScope, requireScopedAdmin } from "../shared.ts";
-import type { MemoryEdit } from "../../../memory/memory-service.ts";
+import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.ts";
 import { renderFacts } from "../../../memory/facts.ts";
+import { memoryFacts, parseEdits, parseIds } from "../surface.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes } from "./common.ts";
 
@@ -51,23 +51,21 @@ export async function adminMemory(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   const memory = deps.memory;
   if (!memory) return sendJson(res, 404, { error: "not_found" });
-  const b = (isObj(body) ? body : {}) as { facts?: unknown; ids?: unknown };
   if (method === "PATCH") {
-    const facts = Array.isArray(b.facts) ? b.facts : [];
-    if (!facts.length || !facts.every((f) => isObj(f) && typeof f.id === "string" && typeof f.text === "string"))
-      return sendJson(res, 400, { error: "bad_request", message: "memory edit requires { facts: [{ id, text }] }" });
-    await memory.edit?.(scope, facts as MemoryEdit[], actor.id);
+    const edits = parseEdits(body);
+    if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
+    await memory.edit?.(scope, edits, actor.id);
   } else if (method === "DELETE") {
-    if (!Array.isArray(b.ids) || !b.ids.length || !b.ids.every((id) => typeof id === "string"))
-      return sendJson(res, 400, { error: "bad_request", message: "memory delete requires { ids: string[] }" });
-    await memory.delete?.(scope, b.ids as string[], actor.id);
+    const ids = parseIds(body);
+    if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
+    await memory.delete?.(scope, ids, actor.id);
   }
   const action = method === "GET" ? "memory.read" : "memory.update";
   audit(deps, { principalId: actor.id, action, resource: "memory", scopeLabel: scope });
-  const facts = (await memory.facts?.(scope)) ?? [];
+  const facts = await memoryFacts(memory, scope);
   return sendJson(res, 200, {
     scopeId: scope,
     content: memory.facts ? renderFacts(facts) : await memory.read(scope),
-    facts: facts.map(({ id, text, createdAt, updatedAt }) => ({ id, text, createdAt, updatedAt })),
+    facts,
   });
 }

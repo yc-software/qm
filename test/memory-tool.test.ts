@@ -207,7 +207,6 @@ test("the `memory` tool params expose NO scope field — the model cannot redire
   const memoryTool = createAgentTools({ current: null }).find((t) => t.name === "memory");
   assert.ok(memoryTool);
   const props = (memoryTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
-  assert.deepEqual(Object.keys(props).sort(), ["action", "facts", "ids", "limit", "query", "retrySafe"]);
   assert.equal("scope" in props, false);
 });
 

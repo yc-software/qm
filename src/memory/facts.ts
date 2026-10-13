@@ -1,5 +1,5 @@
 import type { ScopeId } from "../types.ts";
-import { bulletText, isBullet } from "./notebook.ts";
+import { dateStr } from "./notebook.ts";
 
 export type MemorySensitivity = "ordinary" | "unknown" | "sensitive" | "restricted";
 
@@ -55,7 +55,6 @@ export function mergeProvenance(
   return { sensitivity, sources: [...sources], sourceUnknown: items.some((item) => item.sourceUnknown) };
 }
 
-/** Provenance stamped on a fact written by a turn: what the turn had seen, plus where it was written from. */
 export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata | undefined): MemoryProvenance {
   const merged = mergeProvenance(context?.inheritedFacts ?? [], context?.sensitivity ?? "unknown");
   const source = context?.conversationScopeId ?? scope;
@@ -66,15 +65,14 @@ export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata
   };
 }
 
-export function renderFacts(facts: readonly Pick<MemoryFact, "text">[]): string {
-  return facts.reduce((body, fact, index) => {
-    if (index === 0) return fact.text;
-    return body + (isBullet(fact.text) && isBullet(facts[index - 1]!.text) ? "\n" : "\n\n") + fact.text;
-  }, "");
+type Shown = Pick<MemoryFact, "text" | "createdAt">;
+
+export function renderFacts(facts: readonly Shown[]): string {
+  return facts.map((fact) => `- (${dateStr(fact.createdAt)}) ${fact.text}`).join("\n");
 }
 
-export function factLine(fact: Pick<MemoryFact, "id" | "text">): string {
-  return `#${fact.id} ${isBullet(fact.text) ? bulletText(fact.text) : fact.text}`;
+export function factLine(fact: Shown & Pick<MemoryFact, "id">): string {
+  return `#${fact.id} (${dateStr(fact.createdAt)}) ${fact.text}`;
 }
 
 export function parseFactId(value: string): string {

@@ -3,7 +3,7 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { disclosedMemory, MemoryDisclosureDenied, type MemoryDisclosure } from "../src/memory/disclosure.ts";
-import { MemoryFactsMissing, type MemoryFact } from "../src/memory/facts.ts";
+import { MemoryFactsMissing, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 
@@ -36,11 +36,11 @@ function fixture() {
     const facts = notebooks.get(home) ?? [];
     facts.push({
       id: String(facts.length + 1),
-      text: `- ${text}`,
+      text,
       sensitivity,
       sources: unknown && sensitivity === "unknown" ? [] : [source],
       sourceUnknown: unknown,
-      createdAt: 1,
+      createdAt: Date.UTC(2026, 0, 2),
       updatedAt: 1,
     });
     notebooks.set(home, facts);
@@ -48,7 +48,7 @@ function fixture() {
   const edits: string[] = [];
   const raw: MemoryService = {
     facts: async (scope) => notebooks.get(scope) ?? [],
-    read: async (scope) => (notebooks.get(scope) ?? []).map((fact) => fact.text).join("\n"),
+    read: async (scope) => renderFacts(notebooks.get(scope) ?? []),
     query: async () => ["OPAQUE_SENTINEL"],
     recall: async () => "OPAQUE_SENTINEL",
     capture: async () => 0,
@@ -76,8 +76,8 @@ test("Open memory continuity shares ordinary personal facts, not sensitive, rest
     f.put("personal:alice", label, label);
   f.put("personal:alice", "incomplete", "ordinary", "personal:alice", true);
   const view = disclosedMemory(f.raw, f.access);
-  assert.equal(await view.read("personal:alice"), "- ordinary");
-  assert.deepEqual(await view.query("personal:alice", "ordinary"), ["#1 ordinary"]);
+  assert.equal(await view.read("personal:alice"), "- (2026-01-02) ordinary");
+  assert.deepEqual(await view.query("personal:alice", "ordinary"), ["#1 (2026-01-02) ordinary"]);
   assert.deepEqual(await view.query("personal:alice", "sensitive"), []);
   assert.equal((await view.facts!("personal:alice")).length, 1);
 });
@@ -245,8 +245,8 @@ test("each routed provider is filtered independently and a failure does not invo
   const wrapped = { ...routed, capture: async () => ++captures };
   const view = disclosedMemory(wrapped, first.access);
   assert.deepEqual(await view.query("personal:alice", "SENTINEL"), [
-    "#2 FIRST_ORDINARY_SENTINEL",
-    "#2 SECOND_ORDINARY_SENTINEL",
+    "#2 (2026-01-02) FIRST_ORDINARY_SENTINEL",
+    "#2 (2026-01-02) SECOND_ORDINARY_SENTINEL",
   ]);
   assert.doesNotMatch(await view.recall("personal:alice"), /PRIVATE_SENTINEL/);
   await view.capture("personal:alice", ["new fact"], 1);

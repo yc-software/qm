@@ -70,7 +70,10 @@ test("one context loads full source-labelled notebooks and shares authority with
   assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
   assert.match(recalled, /### channel:eng[\s\S]*SHARED_FACT[\s\S]*LAST_FACT/);
   assert.ok(recalled.length > 12000, "no relevance or per-notebook recall truncation");
-  assert.deepEqual(await context.searchMemory("LAST_FACT"), ["[channel:eng] LAST_FACT"]);
+  assert.match(
+    (await context.searchMemory("LAST_FACT"))!.join("\n"),
+    /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) LAST_FACT$/,
+  );
   assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
   assert.deepEqual(context.baseRecallScopes, ["personal:alice", "org:test"], "reusable tokens exclude carried sources");
   assert.equal(context.memoryAccess?.write, "personal:alice");

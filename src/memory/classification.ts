@@ -1,6 +1,7 @@
 import type { HarnessModelUtilities } from "../harness/harness.ts";
 import type { MemoryService } from "./memory-service.ts";
 import type { MemoryCaptureMetadata } from "./facts.ts";
+import { swallow } from "../util/errors.ts";
 
 type Sensitivity = NonNullable<MemoryCaptureMetadata["sensitivity"]>;
 const levels: Sensitivity[] = ["ordinary", "unknown", "sensitive", "restricted"];
@@ -27,7 +28,8 @@ async function classify(harness: HarnessModelUtilities, texts: string[]): Promis
         JSON.stringify(texts),
       ),
     );
-  } catch {
+  } catch (e) {
+    swallow("memory classification", e);
     return "unknown";
   }
 }

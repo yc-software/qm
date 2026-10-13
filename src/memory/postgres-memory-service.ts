@@ -18,7 +18,6 @@ const SCHEMA = [
     deleted_at     BIGINT
   )`,
   `CREATE INDEX IF NOT EXISTS memory_facts_live ON memory_facts(scope_id, id) WHERE deleted_at IS NULL`,
-  // One-time copy of each notebook's latest whole-notebook snapshot into rows.
   `DO $$
   BEGIN
     IF to_regclass('memory_revisions') IS NULL THEN RETURN; END IF;
@@ -49,9 +48,11 @@ const SCHEMA = [
        GROUP BY scope_id, at, block
     )
     INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, created_at, updated_at)
-    SELECT scope_id, text, sensitivity, sources, source_unknown, at, at
-      FROM (SELECT * FROM snapshot UNION ALL SELECT * FROM legacy) f
-     WHERE btrim(text) <> '' AND text !~ '^(<!-- (consolidated|captures-since-promote)|#{1,6} )'
+    SELECT scope_id, regexp_replace(body, '^\\(\\d{4}-\\d\\d-\\d\\d\\)\\s*', ''), sensitivity, sources, source_unknown,
+           COALESCE((extract(epoch FROM substring(body FROM '^\\((\\d{4}-\\d\\d-\\d\\d)\\)')::date) * 1000)::bigint, at), at
+      FROM (SELECT f.*, regexp_replace(btrim(text), '^[-*]\\s+', '') AS body
+              FROM (SELECT * FROM snapshot UNION ALL SELECT * FROM legacy) f
+             WHERE btrim(text) <> '' AND text !~ '^(<!-- (consolidated|captures-since-promote)|#{1,6} )') f
      ORDER BY scope_id, ord;
   END $$`,
 ];

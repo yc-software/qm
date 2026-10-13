@@ -65,7 +65,7 @@ test("a signed-in user lists, edits and forgets their own facts; identity is the
   );
   assert.deepEqual(
     ((await forget.json()) as Facts).facts.map((fact) => fact.text),
-    ["- (2026-01-02) Calls me Ally"],
+    ["Calls me Ally"],
   );
 
   const spoofed = await fetch(
