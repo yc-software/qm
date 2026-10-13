@@ -362,6 +362,12 @@ test("models view saves runtime rows through the composer picker and real page h
 
     assert.equal(row("cron-runtime").querySelector(".menu-label")!.textContent, "Job's scope default");
     open("cron-runtime");
+    assert.deepEqual(
+      [...row("cron-runtime").querySelectorAll(".loadout-pick .loadout-name")].map((name) => name.textContent),
+      ["model", "fast"],
+    );
+    for (const preset of ['[data-loadout-section="add"]', ".loadout-head", ".loadout-remove"])
+      assert.equal(row("cron-runtime").querySelector(preset), null);
     row("cron-runtime").querySelector<HTMLButtonElement>(".loadout-pick")!.click();
     assert.deepEqual(plain(f.ui.collect("cron-runtime")), {
       harnessId: "pi",
@@ -407,6 +413,7 @@ test("models view saves runtime rows through the composer picker and real page h
     for (const key of ["runtime", "cron-runtime", "memory-embedding-model"])
       assert.equal(f.ui.states.get(key).dirty, false);
 
+    assert.equal(f.window.localStorage.length, 0);
     open("cron-runtime");
     row("cron-runtime").querySelector<HTMLButtonElement>(".loadout-foot-btn")!.click();
     open("memory-embedding-model");

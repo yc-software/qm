@@ -44,11 +44,11 @@ interface ModelPickerBindings<T> {
   redraw(): void;
   scopeKey(): string | null;
   state: { openMenu: string | null; menuQuery: string; effortLevel: EffortLevel };
-  entries(selected: ModelOption): LoadoutEntry[];
+  entries?(selected: ModelOption): LoadoutEntry[];
   activeEntry(selected: ModelOption): LoadoutEntry;
-  saveEntries(entries: LoadoutEntry[]): void;
+  saveEntries?(entries: LoadoutEntry[]): void;
   apply(entry: LoadoutEntry, target: T): void;
-  add(option: ModelOption, target: T): void;
+  add?(option: ModelOption, target: T): void;
   selectEffort(effort: EffortLevel, target: T): void;
   selectHarness(harness: string, target: T): void;
   toggleFastMode(target: T): void;
@@ -64,7 +64,6 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
   const {
     scopeKey,
     state: composerState,
-    entries: seededLoadout,
     activeEntry: activeLoadoutEntry,
     apply: applyLoadout,
     add: addLoadoutEntry,
@@ -80,6 +79,15 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
   let loadoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
 
+  function seededLoadout(selected: ModelOption): LoadoutEntry[] {
+    if (bindings.entries) return bindings.entries(selected);
+    return modelLoadoutOptions(getModelOptions(scopeKey()), [], selected.harnessId).map((option) => ({
+      value: option.value,
+      effort: defaultEffortForModel(option.model),
+      fast: false,
+    }));
+  }
+
   function focusSpeedControl(label: string): void {
     requestAnimationFrame(() => bindings.host()?.querySelector<HTMLElement>(`button[aria-label="${label}"]`)?.focus());
   }
@@ -94,7 +102,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const entries = seededLoadout(selected);
     const index = entries.findIndex((entry) => entry.value === value);
     const next = entries.filter((entry) => entry.value !== value);
-    bindings.saveEntries(next);
+    bindings.saveEntries?.(next);
     bindings.redraw();
     placeLoadout();
     requestAnimationFrame(() => {
@@ -194,7 +202,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }
       ${isDefault && !canMakeDefault ? html`<span class="loadout-default-star" role="img" aria-label="My default" ${tip("My default")}>${icon(Star, 14)}</span>` : nothing}
       ${
-        !active
+        !active && bindings.saveEntries
           ? html`<button
               class="loadout-remove"
               type="button"
@@ -377,7 +385,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                     aria-label=${`Add ${modelLabel(option)} to presets`}
                     @click=${() => {
                       dismissSelection();
-                      addLoadoutEntry(option, agent);
+                      addLoadoutEntry?.(option, agent);
                     }}
                   >
                     ${modelGlyph(option)}<span class="menu-option-copy"
@@ -529,41 +537,45 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
               }}
             >
               <div class="loadout-panel">
-                <div class="loadout-head">Presets</div>
+                ${addLoadoutEntry ? html`<div class="loadout-head">Presets</div>` : nothing}
                 <div class="loadout-list">${entries.map((entry) => loadoutRow(entry, selected, agent))}</div>
-                <div
-                  class="loadout-submenu-anchor"
-                  ${tip(entries.length >= LOADOUT_CAP ? "Remove a preset to add another." : "")}
-                >
-                  <button
-                    class="loadout-add ${loadoutSection === "add" ? "open" : ""}"
-                    type="button"
-                    role="menuitem"
-                    data-loadout-section="add"
-                    aria-haspopup="menu"
-                    aria-expanded=${loadoutSection === "add" ? "true" : "false"}
-                    ?disabled=${entries.length >= LOADOUT_CAP}
-                    @mouseenter=${() => {
-                      if (isPhone() || entries.length >= LOADOUT_CAP) return;
-                      loadoutSectionHovered = true;
-                      openLoadoutSection("add");
-                    }}
-                    @keydown=${(e: KeyboardEvent) => {
-                      if (e.key === "ArrowRight") {
-                        e.preventDefault();
-                        loadoutSectionHovered = false;
-                        openLoadoutSection("add", true);
-                      }
-                    }}
-                    @click=${(e: MouseEvent) => {
-                      loadoutSectionHovered = e.detail !== 0 && !isPhone();
-                      openLoadoutSection("add", e.detail === 0);
-                    }}
-                  >
-                    <span class="loadout-icon" aria-hidden="true">${icon(Plus, 16)}</span><span>Add models</span
-                    ><span class="loadout-end">${icon(ChevronRight, 14)}</span>
-                  </button>
-                </div>
+                ${
+                  addLoadoutEntry
+                    ? html`<div
+                        class="loadout-submenu-anchor"
+                        ${tip(entries.length >= LOADOUT_CAP ? "Remove a preset to add another." : "")}
+                      >
+                        <button
+                          class="loadout-add ${loadoutSection === "add" ? "open" : ""}"
+                          type="button"
+                          role="menuitem"
+                          data-loadout-section="add"
+                          aria-haspopup="menu"
+                          aria-expanded=${loadoutSection === "add" ? "true" : "false"}
+                          ?disabled=${entries.length >= LOADOUT_CAP}
+                          @mouseenter=${() => {
+                            if (isPhone() || entries.length >= LOADOUT_CAP) return;
+                            loadoutSectionHovered = true;
+                            openLoadoutSection("add");
+                          }}
+                          @keydown=${(e: KeyboardEvent) => {
+                            if (e.key === "ArrowRight") {
+                              e.preventDefault();
+                              loadoutSectionHovered = false;
+                              openLoadoutSection("add", true);
+                            }
+                          }}
+                          @click=${(e: MouseEvent) => {
+                            loadoutSectionHovered = e.detail !== 0 && !isPhone();
+                            openLoadoutSection("add", e.detail === 0);
+                          }}
+                        >
+                          <span class="loadout-icon" aria-hidden="true">${icon(Plus, 16)}</span><span>Add models</span
+                          ><span class="loadout-end">${icon(ChevronRight, 14)}</span>
+                        </button>
+                      </div>`
+                    : nothing
+                }
                 ${
                   choice
                     ? html`<div class="loadout-divider"></div>

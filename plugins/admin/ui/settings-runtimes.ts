@@ -3,22 +3,13 @@ import { classMap } from "lit/directives/class-map.js";
 import { Check, ChevronDown } from "lucide";
 import { createModelPicker } from "../../web-ui/src/model-picker.ts";
 import { cacheRuntimeConfig } from "../../web-ui/src/runtime-config-cache.ts";
-import {
-  defaultEffortForModel,
-  getModelOptions,
-  harnessSupportsFastMode,
-  type EffortLevel,
-} from "../../web-ui/src/model-options.ts";
+import { getModelOptions, harnessSupportsFastMode, type EffortLevel } from "../../web-ui/src/model-options.ts";
 import { modelSupportsFastMode } from "../../web-ui/src/pi-models.ts";
 import { icon } from "../../web-ui/src/icons.ts";
 import {
   compatibleHarnessOptions,
   effortLevelsForHarness,
-  loadLoadout,
-  reconcileLoadout,
-  saveLoadout,
   ultrafastChoice,
-  upsertLoadout,
   ULTRAFAST_MODEL_ID,
   type LoadoutEntry,
 } from "../../web-ui/src/composer-loadout.ts";
@@ -90,16 +81,8 @@ function picker(s: SettingsState, inheritLabel?: string) {
     redraw: () => s.render(),
     scopeKey: () => scopeKey(s.key),
     state,
-    entries: () => reconcileLoadout(loadLoadout(), options(), current(s)),
     activeEntry: () => current(s),
-    saveEntries: saveLoadout,
     apply: (entry) => apply(s, entry),
-    add: (option) => {
-      const entry = { value: option.value, effort: defaultEffortForModel(option.model), fast: false };
-      saveLoadout(upsertLoadout(reconcileLoadout(loadLoadout(), options(), current(s)), entry));
-      state.menuQuery = "";
-      apply(s, entry);
-    },
     selectEffort: (effort) => apply(s, { ...current(s), effort }),
     selectHarness: (harnessId) => {
       const selected = options().find((option) => option.value === value(s));
