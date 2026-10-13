@@ -50,6 +50,7 @@ interface FakeFlyOptions {
   cordonStatus?: number;
   cordonFailsAfterApply?: boolean;
   uncordonStatus?: number;
+  exec?: (script: string) => { exit_code?: number; stdout?: string };
 }
 
 function fakeFly(opts: FakeFlyOptions = {}) {
@@ -160,6 +161,10 @@ function fakeFly(opts: FakeFlyOptions = {}) {
       if (status < 300) cordoned.delete(machineId);
       return json(status, {});
     }
+    if (method === "POST" && segments.length === 6 && segments[5] === "exec") {
+      const script = /^sh -c '(.*)'$/s.exec(JSON.parse(String(init.body)).cmd)![1]!.replaceAll(`'"'"'`, "'");
+      return json(200, opts.exec?.(script) ?? {});
+    }
     if (method === "DELETE" && segments.length === 5) {
       if ((opts.destroyMachineStatus ?? 200) < 300) {
         machines.delete(machineId);
@@ -260,7 +265,7 @@ test("apply: creates an isolated Fly app, injects the snapshot, and returns priv
   assert.equal(config.files[0]!.guest_path, "/app.tar.gz");
   assert.deepEqual(config.init.exec.slice(0, 2), ["/bin/sh", "-lc"]);
   assert.match(config.init.exec[2]!, /tar -xzf \/app\.tar\.gz -C \/app/);
-  assert.match(config.init.exec[2]!, /exec sh -lc 'node server\.js'/);
+  assert.match(config.init.exec[2]!, /cd \/app; node server\.js/);
 
   const unpacked = await parseTar(gunzipSync(Buffer.from(config.files[0]!.raw_value, "base64")));
   assert.deepEqual(
@@ -415,6 +420,39 @@ test("apply: an entrypoint that exits without binding the port reports why, with
     provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
     /entrypoint exited without binding port 8080 \(fly machine machine-1 is stopped\).*exit code 127/s,
   );
+});
+
+test("apply: an app that only answers 5xx fails publish and reports its output", async () => {
+  const reported: Array<{ code: string; message: string }> = [];
+  const { fetchImpl, machines } = fakeFly({
+    exec: (script) =>
+      script.includes("http_code") ? { exit_code: 96, stdout: "500\n" } : { stdout: "boot: database unreachable" },
+  });
+  await assert.rejects(
+    provider(fetchImpl, { onError: (e) => reported.push(e) }).apply(
+      deployment(ID),
+      version(snapshot({ "server.js": "" })),
+    ),
+    /answered HTTP 500 on \/ .*database unreachable/s,
+  );
+  assert.deepEqual(
+    reported.map((e) => e.code),
+    ["app_start_failed"],
+  );
+  assert.equal(machines.size, 0, "the unhealthy machine is removed");
+});
+
+test("a visit finds a Fly app with no supervisor, reports it and asks for a relaunch", async () => {
+  const reported: Array<{ code: string; message: string }> = [];
+  const { fetchImpl } = fakeFly({
+    existingMachines: ["machine-live"],
+    exec: (script) => (script.includes(".reported") ? { exit_code: 99, stdout: "down\nfatal: out of widgets" } : {}),
+  });
+  const d = { ...deployment(ID), endpoint: { host: `${APP}.flycast`, port: 8080 } };
+  const deploy = provider(fetchImpl, { onError: (e) => reported.push(e) });
+  assert.equal(await deploy.resolveEndpoint!(d, version(snapshot({}))), null);
+  assert.equal(reported[0]!.code, "app_down");
+  assert.match(reported[0]!.message, /out of widgets/);
 });
 
 test("apply: an app that stays up but never passes its service check reports the readiness window", async () => {

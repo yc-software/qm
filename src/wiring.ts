@@ -1691,13 +1691,14 @@ export function buildApp(
       : undefined;
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
     aws: buildAwsDeploy,
-    docker: createDockerDeployProvider,
+    docker: () => createDockerDeployProvider({ onError: sandboxOnError }),
     fly: () =>
       createFlyDeployProvider({
         ...config.flyDeploy,
         ...(flyTunnel ? { privateTransport: flyTunnel } : {}),
         configStore: artifactMap<FlyMachineConfig>("fly_deploy_configs"),
         portStore: artifactMap<string>("fly_deploy_ports"),
+        onError: sandboxOnError,
       }),
     porter: () =>
       createPorterDeployProvider({

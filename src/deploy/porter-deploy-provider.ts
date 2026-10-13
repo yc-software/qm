@@ -3,7 +3,7 @@ import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
-import { appGone, appReporter, supervised, waitAppReady, type AppErrorSink } from "./shared-deploy-provider.ts";
+import { appGone, appLaunch, appLogs, appReporter, waitAppReady, type AppErrorSink } from "./shared-deploy-provider.ts";
 import { normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import {
@@ -27,8 +27,6 @@ import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 const APP_DIR = "/app";
 const HOME_DIR = "/root";
 const DATA_DIR = "/data";
-const PID_PATH = "/tmp/qm-app.pid";
-const LOG_PATH = "/tmp/qm-app.log";
 const APP_PORT_DEFAULT = 8080;
 const ENDPOINT_PORT = 443;
 const APP_READY_WINDOW_SEC_DEFAULT = 60;
@@ -148,19 +146,16 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
 
   async function startApp(d: Deployment, sandboxId: string, version: DeploymentVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
-    const launch = `sh -c ${shq(supervised(inner, appPort, PID_PATH))} < /dev/null > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`;
     const script = [
       `mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}`,
       `export HOME=${shq(HOME_DIR)} PORT=${appPort} DATA_DIR=${shq(DATA_DIR)}`,
-      `if command -v setsid >/dev/null 2>&1; then setsid ${launch}; else ${launch}; fi`,
+      appLaunch(inner, appPort),
     ].join("; ");
     const r = await execRaw(sandboxId, script, APP_START_EXEC_TIMEOUT_SEC);
     if (r.code !== 0) throw new Error(`porter deploy app start failed: ${r.stderr.slice(0, 300)}`);
     await waitAppReady((script, timeoutSec) => execRaw(sandboxId, script, timeoutSec), {
       appPort,
       windowSec: readyWindowSec,
-      pidPath: PID_PATH,
-      logPath: LOG_PATH,
       report: appReporter(opts.onError, d, version.env),
     });
   }
@@ -255,7 +250,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       }
       const exec = (script: string, timeoutSec: number) => execRaw(stored.sandboxId, script, timeoutSec);
       const report = appReporter(opts.onError, d, version.env);
-      if (await appGone(exec, { appPort, pidPath: PID_PATH, logPath: LOG_PATH, report })) return null;
+      if (await appGone(exec, { appPort, report })) return null;
       const endpoint = endpointOf(stored);
       if (resolveCacheMs > 0) resolveCache.set(d.id, endpoint);
       return endpoint;
@@ -264,9 +259,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     async logs(d, logOpts): Promise<string | null> {
       const stored = await liveStored(d);
       if (!stored) return null;
-      const lines = Math.max(1, Math.min(2000, Math.floor(logOpts.tailLines)));
-      const r = await execRaw(stored.sandboxId, `tail -n ${lines} ${shq(LOG_PATH)} 2>/dev/null || true`, 30);
-      return r.stdout;
+      return appLogs((script, timeoutSec) => execRaw(stored.sandboxId, script, timeoutSec), logOpts.tailLines);
     },
 
     destroy: (d) =>

@@ -13,8 +13,10 @@ const REPORT_CONTEXT_LINES = 40;
 const READY_EXEC_GRACE_SEC = 30;
 const APP_PROBE_TIMEOUT_SEC = 5;
 const EXITED_MARK = "qm: entrypoint exited";
+export const APP_PID_PATH = "/tmp/qm-app.pid";
+const APP_LOG_PATH = "/tmp/qm-app.log";
 
-type Exec = (script: string, timeoutSec: number) => Promise<Pick<ExecResult, "stdout" | "stderr" | "code">>;
+export type Exec = (script: string, timeoutSec: number) => Promise<Pick<ExecResult, "stdout" | "stderr" | "code">>;
 
 export type AppErrorSink = (
   e: { category: string; code: string; message: string; scopeLabel: string },
@@ -34,41 +36,47 @@ export function appReporter(onError: AppErrorSink | undefined, d: Deployment, en
 export interface AppReadyOptions {
   appPort: number;
   windowSec: number;
-  pidPath: string;
-  logPath: string;
   report?: Report | undefined;
 }
 
 export const listeningOn = (port: number): string =>
   `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; [ "$?" != "7" ]; }`;
 
-const exitedPath = (pidPath: string): string => shq(`${pidPath}.exited`);
+const EXITED = shq(`${APP_PID_PATH}.exited`);
 
-export function supervised(inner: string, appPort: number, pidPath: string): string {
+function supervised(inner: string, appPort: number): string {
   return [
     listeningOn(appPort),
-    `rm -f ${exitedPath(pidPath)}`,
+    `rm -f ${EXITED}`,
     "n=1",
-    `while :; do s=$(date +%s); sh -c ${shq(inner)}; rc=$?; echo "$rc" >> ${exitedPath(pidPath)}`,
+    `while :; do s=$(date +%s); sh -c ${shq(inner)}; rc=$?; echo "$rc" >> ${EXITED}`,
     'echo "qm: entrypoint exited with status $rc, restarting"',
     "while listening; do sleep 5; done",
     `[ $(( $(date +%s) - s )) -lt 60 ] || n=1; sleep "$n"; [ "$n" -ge 30 ] || n=$((n * 2)); done`,
   ].join("; ");
 }
 
-export async function appGone(
-  exec: Exec,
-  opts: { appPort: number; pidPath: string; logPath: string; report?: Report | undefined },
-): Promise<boolean> {
-  const log = shq(opts.logPath);
-  const seen = shq(`${opts.logPath}.reported`);
+/** Starts `inner` under the restart loop in its own process group, logging to the app log. */
+export function appLaunch(inner: string, appPort: number): string {
+  const launch = `sh -c ${shq(supervised(inner, appPort))} < /dev/null > ${shq(APP_LOG_PATH)} 2>&1 & echo $! > ${shq(APP_PID_PATH)}`;
+  return `if command -v setsid >/dev/null 2>&1; then setsid ${launch}; else ${launch}; fi`;
+}
+
+export async function appLogs(exec: Exec, tailLines: number): Promise<string> {
+  const lines = Math.max(1, Math.min(2000, Math.floor(tailLines)));
+  return (await exec(`tail -n ${lines} ${shq(APP_LOG_PATH)} 2>/dev/null || true`, 30)).stdout;
+}
+
+export async function appGone(exec: Exec, opts: { appPort: number; report?: Report | undefined }): Promise<boolean> {
+  const log = shq(APP_LOG_PATH);
+  const seen = shq(`${APP_LOG_PATH}.reported`);
   const probe = [
     listeningOn(opts.appPort),
-    `pid=$(cat ${shq(opts.pidPath)} 2>/dev/null || true)`,
+    `pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true)`,
     `s=$(cat ${seen} 2>/dev/null || true)`,
     `if ! listening && ! { [ -n "$pid" ] && { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; }; }; then ` +
       `[ -n "$pid" ] && [ "$s" != "down $pid" ] && { echo "down $pid" > ${seen}; echo down; tail -c ${REPORT_LOG_BYTES} ${log} 2>/dev/null; }; exit ${EXIT_APP_GONE}; fi`,
-    `n=$(wc -l < ${exitedPath(opts.pidPath)} 2>/dev/null || echo 0); r=0`,
+    `n=$(wc -l < ${EXITED} 2>/dev/null || echo 0); r=0`,
     `[ "\${s% *}" = "$pid" ] && r=\${s#* }`,
     `[ "$n" -gt "$r" ] || exit 0`,
     `echo "$pid $n" > ${seen}; echo $((n - r)); grep -F -B ${REPORT_CONTEXT_LINES} ${shq(EXITED_MARK)} ${log} | tail -c ${REPORT_LOG_BYTES}`,
@@ -99,17 +107,17 @@ export async function appGone(
 
 export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<void> {
   const probe =
-    `pid=$(cat ${shq(opts.pidPath)} 2>/dev/null || true); died=0; ` +
+    `pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true); died=0; ` +
     `end=$(( $(date +%s) + ${opts.windowSec} )); ` +
     `while [ "$(date +%s)" -lt "$end" ]; do ` +
     `code=$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:${opts.appPort}/); ` +
     `[ "$code" != 000 ] && [ "$code" -lt 500 ] && exit 0; ` +
-    `{ kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${exitedPath(opts.pidPath)} ] || died=1; ` +
+    `{ kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${EXITED} ] || died=1; ` +
     `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; ` +
     `[ "$code" -ge 500 ] 2>/dev/null && { echo "$code"; exit ${EXIT_APP_SERVER_ERROR}; }; exit 1`;
   const r = await exec(probe, opts.windowSec + READY_EXEC_GRACE_SEC);
   if (r.code === 0) return;
-  const log = await exec(`tail -c ${REPORT_LOG_BYTES} ${shq(opts.logPath)} 2>/dev/null || true`, 30)
+  const log = await exec(`tail -c ${REPORT_LOG_BYTES} ${shq(APP_LOG_PATH)} 2>/dev/null || true`, 30)
     .then((out) => `${out.stdout}${out.stderr}`.trim())
     .catch((e: unknown) => `(the app log could not be read: ${errMessage(e)})`);
   let why = `app never listened on port ${opts.appPort} within ${opts.windowSec}s`;

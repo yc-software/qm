@@ -11,10 +11,12 @@ import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
 import { swallow } from "../util/errors.ts";
 import {
+  APP_PID_PATH,
   appGone,
+  appLaunch,
+  appLogs,
   appReporter,
   listeningOn,
-  supervised,
   waitAppReady,
   type AppErrorSink,
 } from "./shared-deploy-provider.ts";
@@ -36,8 +38,6 @@ const DATA_CREDS_RETRY_MS = 60_000;
 const failureBackoffStamp = (): number => Date.now() - DATA_CREDS_REFRESH_MS + DATA_CREDS_RETRY_MS;
 const MAX_DATA_TAR_BYTES = 180 * 1024 * 1024;
 const READY_PATH = `${APP_DIR}/.qm-ready`;
-const PID_PATH = "/tmp/qm-app.pid";
-const LOG_PATH = "/tmp/qm-app.log";
 const APP_READY_WINDOW_SEC = 60;
 const APP_PORT_RELEASE_TICKS = 40;
 const APP_START_EXEC_TIMEOUT_SEC = 60;
@@ -440,9 +440,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
     const script = [
       listeningOn(appPort),
-      `old=$(cat ${shq(PID_PATH)} 2>/dev/null || true)`,
+      `old=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true)`,
       `if [ -n "$old" ]; then kill -TERM "-$old" 2>/dev/null || true; sleep 0.5; kill -KILL "-$old" 2>/dev/null || true; fi`,
-      `rm -f ${shq(PID_PATH)}`,
+      `rm -f ${shq(APP_PID_PATH)}`,
       `for i in $(seq 1 ${APP_PORT_RELEASE_TICKS}); do listening || break; sleep 0.25; done`,
       `listening && exit ${EXIT_APP_PORT_HELD}`,
       ...(s3 ? [`mkdir -p ${shq(DATA_DIR)}`] : []),
@@ -450,7 +450,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       `export PORT=${appPort}`,
       ...(s3 ? [`export DATA_DIR=${shq(DATA_DIR)}`] : []),
       ...(envExports ? [envExports] : []),
-      `setsid sh -c ${shq(supervised(inner, appPort, PID_PATH))} > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`,
+      appLaunch(inner, appPort),
     ].join("; ");
     const r = await execRaw(id, endpoint, script, APP_START_EXEC_TIMEOUT_SEC);
     if (r.code === EXIT_APP_PORT_HELD) {
@@ -462,8 +462,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     await waitAppReady((script, timeoutSec) => execRaw(id, endpoint, script, timeoutSec), {
       appPort,
       windowSec: APP_READY_WINDOW_SEC,
-      pidPath: PID_PATH,
-      logPath: LOG_PATH,
       report: appReporter(opts.onError, d, version.env),
     });
   }
@@ -561,7 +559,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       const exec = (script: string, timeoutSec: number) =>
         execRaw(stored.microvmId, stored.endpoint, script, timeoutSec);
       const report = appReporter(opts.onError, d, version.env);
-      if (await appGone(exec, { appPort, pidPath: PID_PATH, logPath: LOG_PATH, report })) return null;
+      if (await appGone(exec, { appPort, report })) return null;
     } catch (e) {
       if (!(e instanceof AwsApiError && (e.status >= 500 || e.status === 429))) throw e;
     }
@@ -658,14 +656,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       const stored = await store.get(d.id);
       if (!stored) return null;
       await ensureRunning(stored.microvmId, stored.endpoint);
-      const lines = Math.max(1, Math.min(2000, Math.floor(opts.tailLines)));
-      const r = await execRaw(
-        stored.microvmId,
-        stored.endpoint,
-        `tail -n ${lines} ${shq(LOG_PATH)} 2>/dev/null || true`,
-        30,
+      return appLogs(
+        (script, timeoutSec) => execRaw(stored.microvmId, stored.endpoint, script, timeoutSec),
+        opts.tailLines,
       );
-      return r.stdout;
     },
 
     async destroy(d): Promise<void> {
