@@ -45,6 +45,10 @@ describe("agent memory history and restore", () => {
       headers: { "content-type": "application/json", "x-agent-capability": token },
       body: JSON.stringify(body),
     });
+  const rewrite = async (content: string, token: string, query = "") => {
+    const { revision } = (await (await get(`/v1/memory/self${query}`, token)).json()) as { revision: string };
+    return put("/v1/memory/self", { content, revision, ...(query ? { scope: "org" } : {}) }, token);
+  };
 
   before(async () => {
     built = buildApp(
@@ -53,7 +57,11 @@ describe("agent memory history and restore", () => {
     const revisions = new Map<ScopeId, MemoryRevision[]>();
     memory = {
       ...built.memory,
-      replaceIfRevision: undefined,
+      async replaceIfRevision(scope, content, revision, author) {
+        if (String((revisions.get(scope) ?? []).length) !== revision) return false;
+        await this.replace(scope, content, author);
+        return true;
+      },
       async readHead(scope) {
         return { content: await built.memory.read(scope), revision: String((revisions.get(scope) ?? []).length) };
       },
@@ -93,8 +101,8 @@ describe("agent memory history and restore", () => {
   it("lists versions after writes and restores a prior version", async () => {
     const mine = scopeId("personal", "U1");
     const token = await capFor("U1", mine);
-    assert.equal((await put("/v1/memory/self", { content: "first version" }, token)).status, 200);
-    assert.equal((await put("/v1/memory/self", { content: "second version" }, token)).status, 200);
+    assert.equal((await rewrite("first version", token, "")).status, 200);
+    assert.equal((await rewrite("second version", token, "")).status, 200);
 
     const history = await get("/v1/memory/history", token);
     assert.equal(history.status, 200);
@@ -127,8 +135,8 @@ describe("agent memory history and restore", () => {
     const mine = scopeId("personal", "A1");
     const org = scopeId("org", "default-org");
     const token = await capFor("A1", mine, org);
-    assert.equal((await put("/v1/memory/self", { content: "first org version", scope: "org" }, token)).status, 200);
-    assert.equal((await put("/v1/memory/self", { content: "second org version", scope: "org" }, token)).status, 200);
+    assert.equal((await rewrite("first org version", token, "?scope=org")).status, 200);
+    assert.equal((await rewrite("second org version", token, "?scope=org")).status, 200);
 
     const history = await get("/v1/memory/history?scope=org", token);
     assert.equal(history.status, 200);

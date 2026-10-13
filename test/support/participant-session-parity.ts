@@ -54,6 +54,11 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
 
   for (const principalId of [owner, guest, stranger]) {
     const list = await store.listByParticipant(principalId);
+    assert.deepEqual(
+      [...(await store.participantScopes(principalId))].sort(),
+      [...new Set(list.map((session) => session.scopeId))].sort(),
+      `participantScopes matches the scopes of listByParticipant for ${principalId}`,
+    );
     let matched = 0;
     for (const id of ids) {
       const expected = list.find((session) => session.id === id) ?? null;

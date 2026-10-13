@@ -1,6 +1,6 @@
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, authorizeAdmin, orgScope } from "./shared.ts";
+import { audit, authorizeAdmin, orgScope, rejectNonObjectBody } from "./shared.ts";
 import type { NewSkillPack, SkillPack } from "../../skills/skill-pack-store.ts";
 import type { PackConfig } from "../../skills/normalize.ts";
 import { parseScopeId, type ScopeId } from "../../types.ts";
@@ -34,6 +34,12 @@ function asConfig(v: unknown): PackConfig | undefined {
   if (o.fieldOverrides && typeof o.fieldOverrides === "object")
     cfg.fieldOverrides = o.fieldOverrides as Record<string, string>;
   return cfg;
+}
+
+async function knownPack(ctx: ApiCtx): Promise<boolean> {
+  if (await ctx.app.getSkillPack(ctx.params.id!)) return true;
+  sendJson(ctx.res, 404, { error: "not_found", message: `unknown skill pack: ${ctx.params.id}` });
+  return false;
 }
 
 async function listPacks(ctx: ApiCtx): Promise<void> {
@@ -96,6 +102,7 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
 async function packCatalog(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
+  if (!(await knownPack(ctx))) return;
   const plan = await ctx.app.skillPackCatalog(ctx.params.id!);
   audit(ctx.deps, {
     principalId: actor.id,
@@ -109,6 +116,7 @@ async function packCatalog(ctx: ApiCtx): Promise<void> {
 async function importPack(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
+  if (!(await knownPack(ctx))) return;
   const body = (ctx.body as Record<string, unknown> | null) ?? {};
   const subset = asSubset(body.selected);
   if (subset === undefined)
@@ -132,6 +140,7 @@ async function importPack(ctx: ApiCtx): Promise<void> {
 async function syncPack(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
+  if (!(await knownPack(ctx))) return;
   const result = await ctx.app.syncSkillPack(ctx.params.id!);
   audit(ctx.deps, {
     principalId: actor.id,
@@ -145,7 +154,9 @@ async function syncPack(ctx: ApiCtx): Promise<void> {
 async function patchPack(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
-  const b = (ctx.body ?? {}) as Record<string, unknown>;
+  if (!(await knownPack(ctx))) return;
+  if (rejectNonObjectBody(ctx)) return;
+  const b = ctx.body as Record<string, unknown>;
   const patch: Partial<Omit<SkillPack, "id" | "createdAt">> = {};
   if (typeof b.ref === "string" && b.ref.trim()) patch.ref = b.ref.trim();
   if (typeof b.url === "string" && b.url.trim()) patch.url = b.url.trim();

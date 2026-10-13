@@ -912,9 +912,32 @@ async function runAwsCandidateMigration(
     const task = stopped.tasks?.[0];
     const core = task?.containers?.find((container) => container.name === "core");
     if (stopped.failures?.length || core?.exitCode !== 0) {
-      throw new CliError(
-        `AWS migration task failed (${core?.reason ?? task?.stoppedReason ?? `exit ${core?.exitCode ?? "unknown"}`})`,
-      );
+      const reasons = [
+        `exit ${core?.exitCode ?? "unknown"}`,
+        core?.reason,
+        task?.stoppedReason,
+        ...(stopped.failures ?? []).map((failure) => `${failure.arn ?? "unknown"}: ${failure.reason ?? "unknown"}`),
+      ].filter(Boolean);
+      const logGroup = spec.logGroup ?? `/ecs/${spec.ecsService}`;
+      const logStream = `core/core/${taskArn.split("/").pop()}`;
+      let output: string;
+      try {
+        const events = awsJson<{ events?: Array<{ message?: string }> }>(aws, [
+          "logs",
+          "get-log-events",
+          "--log-group-name",
+          logGroup,
+          "--log-stream-name",
+          logStream,
+          "--limit",
+          "20",
+          "--no-start-from-head",
+        ]).events;
+        output = events?.length ? events.map((event) => event.message ?? "").join("\n") : "(no log output)";
+      } catch (error) {
+        output = `(could not read ${logGroup} ${logStream}: ${errMessage(error)})`;
+      }
+      throw new CliError(`AWS migration task failed (${reasons.join("; ")})\n${output}`);
     }
     ok(`candidate ${label} migrations applied`);
   } finally {
@@ -2655,7 +2678,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     throwAfterCompensation(error, compensationFailures);
   } finally {
     for (const service of staged) {
-      if (releaseSucceeded && !promotedServices.has(service)) continue;
+      if (!releaseSucceeded || !promotedServices.has(service)) continue;
       try {
         awsText(aws, [
           "ecr",
@@ -2754,7 +2777,8 @@ function firstRolledBackDbRestore(
     if (!manifest.previous) return undefined;
     try {
       manifest = deploymentManifest(aws, manifest.previous);
-    } catch {
+    } catch (error) {
+      warn(`Code rollback completed, but database restore history could not be read: ${errMessage(error)}`);
       return undefined;
     }
   }

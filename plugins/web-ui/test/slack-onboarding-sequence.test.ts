@@ -38,3 +38,25 @@ test("personal Slack linking appears beneath the confirmed company installation"
     await h.close();
   }
 });
+
+test("the cohort welcome speaks for the deployment, not for any one organization", async () => {
+  const h = await harness({ path: "/", welcome: true });
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === "/me")
+      return Response.json({ user: "tester", org: "test", welcomeCohort: "F26", companyName: "Acme" });
+    return previousFetch(input, init);
+  };
+  try {
+    h.releaseSessions();
+    await h.boot();
+    for (let i = 0; i < 100 && !h.mainText().includes("Welcome to F26"); i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(h.mainText(), /Welcome to F26/);
+    assert.match(h.mainText(), /running\s+Acme/);
+    assert.doesNotMatch(h.mainText(), /\bYC\b|Y Combinator/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    await h.close();
+  }
+});

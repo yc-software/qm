@@ -10,9 +10,14 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import type { RunStore } from "../src/runs/run-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 
-function start(overrides: Parameters<typeof testConfig>[0] = {}) {
+function start(
+  overrides: Parameters<typeof testConfig>[0] = {},
+  withRuns?: (built: ReturnType<typeof buildApp>) => ReturnType<typeof buildApp>["runs"],
+) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
   const built = buildApp(config);
   const server = createInsecureTestServer(built.app, {
@@ -20,7 +25,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
     sessions: built.sessions,
     auditLog: built.auditLog,
     errors: built.errors,
-    runs: built.runs,
+    runs: withRuns ? withRuns(built) : built.runs,
     workspace: built.workspace,
     files: built.files,
     config: built.config,
@@ -340,8 +345,20 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     assert.equal(event.sourceSession.scopeId, sourceScope);
     assert.equal(event.llmRequests.length, 2);
     assert.equal(event.llmRequests[0].turnSeq, sourceUser.seq);
-    assert.deepEqual(event.llmRequests[0].promptEnvelope.messages, [{ role: "user", content: "post the digest" }]);
+    assert.equal(event.llmRequests[0].request, null, "delivery context is metadata; bodies load per turn");
+    assert.equal(event.llmRequests[0].promptEnvelope, undefined);
     assert.equal(event.llmRequests[1].turnSeq, sourceResume.seq);
+    const turnBody = (await (
+      await get(
+        s.base,
+        `/v1/admin/sessions/${encodeURIComponent(source.id)}/llm?turnSeq=${sourceUser.seq}&scope=org:default-org`,
+      )
+    ).json()) as any;
+    assert.deepEqual(
+      turnBody.requests.map((r: any) => r.id),
+      [event.llmRequests[0].id],
+    );
+    assert.deepEqual(turnBody.requests[0].promptEnvelope.messages, [{ role: "user", content: "post the digest" }]);
 
     const scopedRead = await get(
       s.base,
@@ -1722,6 +1739,172 @@ test("admin errors paginate all retained records with scoped totals and bounded 
     for (const query of ["limit=-1", "offset=-1", "offset=1.5", "limit=Infinity", "offset=NaN"])
       assert.equal((await get(s.base, path + "&" + query)).status, 400);
     assert.equal((await getJson(s.base, path + "&count=1")).total, 260);
+  } finally {
+    await s.close();
+  }
+});
+
+test("admin transcripts page with a finite cap and an explicit beforeSeq cursor", async () => {
+  const s = start();
+  try {
+    const sessionScope = "personal:U-pager";
+    const session = await s.built.sessions.getOrCreateByThread("dm:D-pager", "dm", sessionScope, "paging");
+    const { lease } = await s.built.sessions.acquireLease(session.id);
+    assert.ok(lease);
+    for (let i = 0; i < 2105; i++) {
+      await s.built.sessions.append(lease, {
+        type: i % 2 ? "assistant" : "user",
+        payload: { text: `message ${i}` },
+        scopeLabel: sessionScope,
+      });
+    }
+    await s.built.sessions.releaseLease(lease);
+    const delivery = await s.built.deliveries.enqueue({
+      destination: { type: "principal", target: "U-pager", audienceScopeId: sessionScope, onBehalfOf: "U-pager" },
+      text: "latest delivery",
+      idempotencyKey: "paging-delivery",
+    });
+    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-pager");
+    const all = (await s.built.sessions.getEntries(session.id)).map((e) => e.seq);
+    const path = `/v1/admin/sessions/${encodeURIComponent(session.id)}?scope=org:default-org`;
+
+    const capped = await getJson(s.base, `${path}&limit=50000`);
+    assert.equal(capped.limit, 2000, "a huge limit is clamped, never treated as 'everything'");
+    assert.equal(capped.entries.length, 2000);
+    assert.equal(capped.hasMore, true);
+    assert.equal(capped.nextBeforeSeq, capped.entries[0].seq);
+
+    const seen: number[] = [];
+    let page = await getJson(s.base, `${path}&limit=700`);
+    assert.deepEqual(
+      page.deliveryEvents.map((d: { text: string }) => d.text),
+      ["latest delivery"],
+    );
+    for (;;) {
+      seen.unshift(...page.entries.map((e: { seq: number }) => e.seq));
+      if (!page.hasMore) break;
+      page = await getJson(s.base, `${path}&limit=700&beforeSeq=${page.nextBeforeSeq}`);
+      assert.ok(page.entries.length <= 700);
+      assert.deepEqual(page.deliveryEvents, [], "older pages do not repeat the latest delivery events");
+    }
+    assert.deepEqual(seen, all, "pages tile the transcript exactly once, oldest first");
+    assert.equal(page.nextBeforeSeq, undefined);
+
+    for (const bad of ["0", "-3", "1.5", "x"]) {
+      assert.equal((await get(s.base, `${path}&beforeSeq=${bad}`)).status, 400, bad);
+    }
+  } finally {
+    await s.close();
+  }
+});
+
+test("a delivery without an assistant bound keeps every later turn's metadata as its context", async () => {
+  const s = start();
+  try {
+    const sourceScope = "channel:C-open-turn";
+    const source = await s.built.sessions.getOrCreateByThread("cron:open:1", "channel", sourceScope, "open");
+    const { lease } = await s.built.sessions.acquireLease(source.id);
+    assert.ok(lease);
+    const first = await s.built.sessions.append(lease, {
+      type: "user",
+      payload: { text: "start" },
+      scopeLabel: sourceScope,
+    });
+    const later = await s.built.sessions.append(lease, {
+      type: "user",
+      payload: { text: "continue" },
+      scopeLabel: sourceScope,
+    });
+    await s.built.sessions.releaseLease(lease);
+    for (const turnSeq of [first.seq, later.seq]) {
+      await s.built.sessions.recordLlmRequest(source.id, {
+        turnSeq,
+        step: 0,
+        model: "mock",
+        scopeLabel: sourceScope,
+        promptEnvelope: { model: "mock", messages: [{ role: "user", content: "x".repeat(10_000) }] },
+        truncated: false,
+      });
+    }
+    const delivery = await s.built.deliveries.enqueue({
+      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
+      text: "Open-turn result.",
+      idempotencyKey: "delivery:open-turn",
+      provenance: {
+        trigger: "cron",
+        surface: "cron",
+        fireKey: "cron:open:1",
+        sourceScopeId: sourceScope,
+        sourceThreadRef: "cron:open:1",
+        sourceSessionId: source.id,
+        sourceUserSeq: first.seq,
+      },
+    });
+    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-open-turn");
+    const recipient = await s.built.sessions.getByThread("dm:D-open-turn");
+    const response = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
+    const body = (await response.json()) as any;
+    const requests = body.deliveryEvents[0].llmRequests;
+    assert.deepEqual(
+      requests.map((r: { turnSeq: number }) => r.turnSeq),
+      [first.seq, later.seq],
+    );
+    assert.ok(requests.every((r: { request: unknown }) => r.request === null));
+  } finally {
+    await s.close();
+  }
+});
+
+test("admin audit rows keep their reason, with secrets redacted", async () => {
+  const s = start();
+  try {
+    s.built.auditLog.record({
+      at: Date.now(),
+      principalId: "U1",
+      action: "deployment.reach_denied",
+      resource: "app-1",
+      scopeLabel: scopeId("personal", "U1"),
+      status: "denied",
+      detail: JSON.stringify({ reason: "not_shared", token: "sk-live-abcdef0123456789" }),
+    });
+    const body = await getJson(s.base, "/v1/admin/audit?scope=org:default-org&action=deployment.reach_denied");
+    assert.equal(body.events.length, 1);
+    assert.match(body.events[0].detail, /not_shared/);
+    assert.doesNotMatch(body.events[0].detail, /sk-live-abcdef0123456789/);
+  } finally {
+    await s.close();
+  }
+});
+
+test("Active now counts an old running run that newer finished runs push out of the recent page", async () => {
+  let runs!: RunStore;
+  const s = start({}, (built) => (runs = createMemoryRunStore({ sessions: built.sessions }).runs));
+  try {
+    const scope = "channel:C-busy";
+    const thread = "channel:C-busy:slow";
+    const busy = "channel:C-busy:fast";
+    await s.built.sessions.getOrCreateByThread(thread, "channel", scope, "busy");
+    await s.built.sessions.getOrCreateByThread(busy, "channel", scope, "busy");
+    const request = {
+      surface: "slack",
+      actor: { externalId: "U1" },
+      conversation: { kind: "channel", threadRef: thread },
+      text: "x",
+    };
+    const old = (await runs.enqueue({ sessionId: thread, request: request as never })).run;
+    await runs.claimForSession(thread, "w-old", 600_000);
+    await new Promise((r) => setTimeout(r, 2));
+    for (let i = 0; i < 201; i++) {
+      const run = (await runs.enqueue({ sessionId: busy, request: request as never })).run;
+      const claimed = await runs.claimForSession(busy, `w-${i}`, 600_000);
+      assert.ok(claimed);
+      await runs.complete(run.id, claimed.leaseToken ?? "", { status: "ok", reply: "done" });
+    }
+    const body = await getJson(s.base, `/v1/admin/runs?scope=${encodeURIComponent(scope)}`);
+    assert.equal(body.active, 1);
+    assert.equal(body.runs[0].id, old.id, "the active run is listed first");
+    assert.equal(body.runs[0].status, "running");
+    assert.equal(body.activeTruncated, undefined);
   } finally {
     await s.close();
   }

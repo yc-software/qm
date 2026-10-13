@@ -3,7 +3,7 @@ import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, orgScope, rejectNonObjectBody } from "../shared.ts";
 
 const VALIDATION_REQUESTS: Record<
   ModelProvider,
@@ -81,6 +81,7 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const provider = ctx.params.provider;
   if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (rejectNonObjectBody(ctx)) return;
   const apiKey = (ctx.body as { apiKey?: unknown }).apiKey;
   if (typeof apiKey !== "string" || !apiKey.trim()) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "API key is required" });

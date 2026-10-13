@@ -51,8 +51,8 @@ test("two servers seeding the same catalog at boot install each skill once", asy
   const leftServer = (await import(`${seedModule}?server=left`)) as Seed;
   const rightServer = (await import(`${seedModule}?server=right`)) as Seed;
   await Promise.all([
-    leftServer.installSeedSkills(left, { dir, scopeId: org }),
-    rightServer.installSeedSkills(right, { dir, scopeId: org }),
+    leftServer.installSeedSkills(left, { dirs: [dir], scopeId: org }),
+    rightServer.installSeedSkills(right, { dirs: [dir], scopeId: org }),
   ]);
 
   const rows = (await backing.all()).filter((s) => s.manifest.name === "hello");

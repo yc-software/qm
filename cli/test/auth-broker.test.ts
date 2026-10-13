@@ -9,7 +9,7 @@ import { derivedTomlFor } from "../src/backends/fly.ts";
 import { serviceEnvironment } from "../src/backends/aws.ts";
 import { dockerServiceEnv } from "../src/backends/docker.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../src/secrets.ts";
-import { stageFlyEmailAllowlist } from "../src/backends/fly.ts";
+import { stageFlyOperatorSecrets } from "../src/backends/fly.ts";
 import { isReservedContainerName, SERVICE_NAMES, serviceDef } from "../src/services.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -259,7 +259,7 @@ const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.a
   const prior = process.env.FLY_BIN;
   process.env.FLY_BIN = fly;
   try {
-    stageFlyEmailAllowlist(config, dir, new Set(["core", "auth", "portal"]));
+    stageFlyOperatorSecrets(config, dir, new Set(["core", "auth", "portal"]));
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;

@@ -62,7 +62,7 @@ function hclAssignment(source: string, name: string): string | undefined {
     else if (char === open) depth++;
     else if (char === close && --depth === 0) return source.slice(match.index, i + 1);
   }
-  return undefined;
+  throw new CliError(`infra/terraform.tfvars has an unterminated ${name} value`);
 }
 
 function hclString(source: string, name: string): string | undefined {
@@ -82,16 +82,21 @@ function hclJson(source: string, name: string): unknown {
   try {
     return raw === undefined ? undefined : JSON.parse(raw);
   } catch {
-    return undefined;
+    throw new CliError(`infra/terraform.tfvars has an invalid ${name} JSON value`);
   }
 }
 
 function assertSafeAssumeRoleTransition(config: QmConfig, existing: string): void {
   if (!config.aws) return;
   const previous = hclJson(existing, "services");
-  if (typeof previous !== "object" || previous === null || Array.isArray(previous)) return;
+  if (previous === undefined) return;
+  if (typeof previous !== "object" || previous === null || Array.isArray(previous))
+    throw new CliError("infra/terraform.tfvars services must be an object before task-role safety can be checked");
   for (const [name, prior] of Object.entries(previous)) {
-    if (typeof prior !== "object" || prior === null || Array.isArray(prior)) continue;
+    if (typeof prior !== "object" || prior === null || Array.isArray(prior))
+      throw new CliError(
+        `infra/terraform.tfvars services.${name} must be an object before task-role safety can be checked`,
+      );
     const next = config.aws.services[name];
     if (!next) continue;
     const managedArn = `arn:aws:iam::${config.aws.accountId}:role/${config.aws.cluster}-${name === "core" ? "core" : name}-task`;

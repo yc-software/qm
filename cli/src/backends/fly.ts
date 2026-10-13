@@ -182,6 +182,7 @@ export interface FlyUpOpts {
   buildFrom?: boolean;
   buildFromPath?: string;
   configPath?: string;
+  envFile?: string;
   only?: string[];
   imageFrom?: string;
   imageLabel?: string;
@@ -293,27 +294,35 @@ function stageSecret(app: string, name: string, value: string): void {
   if (result.status !== 0) throw new CliError(`failed to stage ${name} on ${app}`);
 }
 
-export function stageFlyEmailAllowlist(
+export function stageFlyOperatorSecrets(
   config: QmConfig,
   configDir: string,
   selectedWorkloads: ReadonlySet<string>,
-): void {
-  const values = readEnvFile(join(configDir, ".env"));
-  const value = deploymentSecretValue("AUTH_ALLOWED_EMAILS", values.get("AUTH_ALLOWED_EMAILS"));
-  if (value === undefined) return;
-  if (isInvalidSecret("AUTH_ALLOWED_EMAILS", value)) {
-    throw new CliError("required secret AUTH_ALLOWED_EMAILS is missing or invalid");
+  opts: { envFile?: string; dryRun?: boolean } = {},
+): Map<string, Set<string>> {
+  const values = readEnvFile(opts.envFile ?? join(configDir, ".env"), opts.envFile !== undefined);
+  const plugins = discoverPlugins(configDir, config)
+    .plugins.filter((plugin) => plugin.coreAccess !== false)
+    .map((plugin) => plugin.name);
+  const supplied = new Map<string, Map<string, string>>();
+  for (const secret of validatedSecrets(config).filter((secret) => secret.managedBy === "operator")) {
+    const value = values.get(secret.name);
+    if (value === undefined || value.trim() === "") continue;
+    if (isInvalidSecret(secret.name, value))
+      throw new CliError(`supplied secret ${secret.name} is missing, a placeholder, or too short`);
+    for (const [workload, names] of secretDestinations(secret, plugins)) {
+      if (!selectedWorkloads.has(workload)) continue;
+      const app = `${appPrefixOf(config)}-${workload}`;
+      const entries = supplied.get(app) ?? new Map<string, string>();
+      for (const name of names) entries.set(name, value);
+      supplied.set(app, entries);
+    }
   }
-  const secret = computedSecrets(config).find((candidate) => candidate.name === "AUTH_ALLOWED_EMAILS");
-  if (!secret) return;
-  const staged: string[] = [];
-  for (const [workload, names] of secretDestinations(secret)) {
-    if (!selectedWorkloads.has(workload)) continue;
-    const app = `${appPrefixOf(config)}-${workload}`;
-    for (const name of names) stageSecret(app, name, value);
-    staged.push(app);
+  for (const [app, entries] of supplied) {
+    if (!opts.dryRun) for (const [name, value] of entries) stageSecret(app, name, value);
+    step(`${app}: ${opts.dryRun ? "would stage" : "staged"} ${[...entries.keys()].join(", ")}`);
   }
-  if (staged.length) step(`AUTH_ALLOWED_EMAILS: staged from .env on ${staged.join(", ")}`);
+  return new Map([...supplied].map(([app, entries]) => [app, new Set(entries.keys())]));
 }
 
 function flySensitive(args: string[], failure: string): string {
@@ -1198,13 +1207,16 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
       return;
     }
 
-    if (!opts.dryRun) {
-      stageFlyEmailAllowlist(config, configDir, new Set([...services, ...plugins.map((plugin) => plugin.name)]));
-    }
+    const supplied = stageFlyOperatorSecrets(
+      config,
+      configDir,
+      new Set([...services, ...plugins.map((plugin) => plugin.name)]),
+      opts,
+    );
 
     const gateSecrets = (app: string, header: string, path: string, required: string[], timingKey: string): boolean => {
       const existing = timing.time(timingKey, "secret checks", () => secretNames(app)) ?? new Set<string>();
-      const missing = required.filter((sec) => !existing.has(sec));
+      const missing = required.filter((sec) => !existing.has(sec) && !supplied.get(app)?.has(sec));
       note(`\n=== ${header} ===`);
       note(`config: ${path}`);
       if (missing.length) {
@@ -1740,7 +1752,7 @@ export async function flyCheckLive(
 export async function flySecretsPush(config: QmConfig, configDir: string, envFile?: string): Promise<void> {
   validatedSecrets(config);
   const path = resolve(envFile ?? join(configDir, ".env"));
-  const values = existsSync(path) ? readEnvFile(path) : new Map<string, string>();
+  const values = readEnvFile(path, envFile !== undefined);
   const prefix = appPrefixOf(config);
   const plugins = discoverPlugins(configDir, config).plugins;
   const pluginNames = plugins.map((plugin) => plugin.name);

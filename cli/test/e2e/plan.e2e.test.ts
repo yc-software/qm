@@ -165,8 +165,8 @@ test("plan --env-file: a missing one errors, an existing one is accepted", () =>
   try {
     writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"] });
     const missing = runCli(["plan", "--env-file", join(dir, "nope.env")], { cwd: dir });
-    assert.equal(missing.code, 1, missing.out);
-    assert.match(missing.out, /--env-file not found/);
+    assert.equal(missing.code, 2, missing.out);
+    assert.match(missing.out, /environment file not found/);
 
     const envPath = join(dir, "operator.env");
     writeFileSync(envPath, "CORE_SIGNING_SECRET=test\nSKILL_SIGNING_SECRET=test\n");

@@ -757,6 +757,20 @@ test("skill-pack routes are admin-only and audited", async () => {
   }
 });
 
+test("skill-pack routes answer 404 for a pack id that doesn't exist", async () => {
+  const s = start();
+  try {
+    const base = `${s.base}/v1/admin/skill-packs/no-such-pack`;
+    const post = { method: "POST", headers: { ...ADMIN, "content-type": "application/json" }, body: "{}" };
+    assert.equal((await fetch(`${base}/catalog`, { headers: ADMIN })).status, 404);
+    assert.equal((await fetch(`${base}/import`, post)).status, 404);
+    assert.equal((await fetch(`${base}/sync`, post)).status, 404);
+    assert.equal((await fetch(base, { ...post, method: "PATCH" })).status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
 const packSkillsIn = async (base: string, scope: string, packId: string): Promise<string[]> =>
   (await json(await fetch(`${base}/v1/admin/skills?scope=${encodeURIComponent(scope)}`, { headers: ADMIN }))).skills
     .filter((k: any) => k.status === "published" && k.ownerScopeId === scope && k.pack?.id === packId)

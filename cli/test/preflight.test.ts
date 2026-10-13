@@ -243,3 +243,13 @@ test("email preflight rejects conflicting aliases and resolves settings supplied
   assert.equal(emailTransportConfigured(direct, new Map([["RESEND_API_KEY", "re_configured"]])), true);
   await assert.doesNotReject(emailTransportPreflight(direct, new Map([["RESEND_API_KEY", "re_configured"]])));
 });
+
+test("absent local email settings are unchecked while explicit incomplete settings are disabled", async () => {
+  const unchecked = await quietAsync(() => emailTransportPreflight(CONFIG, new Map()));
+  assert.ok(unchecked.some((line) => line.includes("not checked here")));
+  assert.ok(unchecked.every((line) => !line.includes("sign-in email: disabled")));
+  const disabled = await quietAsync(() => emailTransportPreflight(CONFIG, new Map([["AUTH_EMAIL_FROM", ""]])));
+  assert.ok(disabled.some((line) => line.includes("sign-in email: disabled")));
+  const quiet = await quietAsync(() => emailTransportPreflight(CONFIG, new Map(), false));
+  assert.deepEqual(quiet, []);
+});

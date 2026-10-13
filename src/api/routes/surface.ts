@@ -21,7 +21,7 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, orgScope, rejectNonObjectBody } from "./shared.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -62,6 +62,7 @@ function isConversationColor(value: unknown): value is string | null {
 }
 
 async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
   const principalId = (body as { principalId?: unknown }).principalId;
@@ -74,6 +75,7 @@ async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
 }
 
 async function detachSession(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
   const principalId = (body as { principalId?: unknown }).principalId;
@@ -86,6 +88,7 @@ async function detachSession(ctx: ApiCtx): Promise<void> {
 }
 
 async function adoptSession(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { principalId, parentSessionId } = ctx.body as { principalId?: unknown; parentSessionId?: unknown };
   if (typeof principalId !== "string" || typeof parentSessionId !== "string" || !principalId || !parentSessionId)
     return sendJson(ctx.res, 400, { error: "bad_request" });
@@ -94,6 +97,7 @@ async function adoptSession(ctx: ApiCtx): Promise<void> {
 }
 
 async function forkSession(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
   const b = body as { principalId?: unknown; upToSeq?: unknown };
@@ -329,6 +333,7 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
 }
 
 async function patchSession(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
   const b = body as {
@@ -548,6 +553,7 @@ async function getUiState(ctx: ApiCtx): Promise<void> {
 }
 
 async function putUiState(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { res, deps, body } = ctx;
   const b = body as { principalId?: unknown; key?: unknown; value?: unknown; updatedAt?: unknown };
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
@@ -577,6 +583,7 @@ async function getSelfMemory(ctx: ApiCtx): Promise<void> {
 }
 
 async function putSelfMemory(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { res, deps, body } = ctx;
   const b = body as { principalId?: unknown; content?: unknown; revision?: unknown };
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
@@ -624,6 +631,7 @@ async function restoreSelfMemory(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability, actor } = ctx;
   const viewer = capability?.actorId ?? actor?.p;
   if (!viewer) return sendJson(res, 401, { error: "capability_required" });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as { principalId?: unknown; revision?: unknown; expectedRevision?: unknown; scope?: unknown };
   const principalId = capability ? viewer : b.principalId;
   if (typeof principalId !== "string" || typeof b.revision !== "string" || typeof b.expectedRevision !== "string") {
@@ -700,6 +708,7 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
   const { res, deps, pathname, method, body, capability } = ctx;
   if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
   if (!memory) return sendJson(res, 404, { error: "not_found" });
+  if (method !== "GET" && rejectNonObjectBody(ctx)) return;
 
   if (isObj(body) && ["recipient", "channel", "participants"].some((key) => key in body)) {
     return sendJson(res, 400, {
@@ -737,9 +746,7 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
   }
 
   const requestedScope =
-    method === "GET"
-      ? (ctx.url.searchParams.get("scope") ?? undefined)
-      : (body as { scope?: unknown } | undefined)?.scope;
+    method === "GET" ? (ctx.url.searchParams.get("scope") ?? undefined) : (body as { scope?: unknown }).scope;
   if (requestedScope !== undefined && requestedScope !== "org") {
     return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
   }
@@ -778,13 +785,28 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       resource: "memory",
       scopeLabel: write,
     });
-    return sendJson(res, 200, { scopeId: write, content: await memory.read(write) });
+    const head = (await memory.readHead?.(write)) ?? { content: await memory.read(write), revision: "" };
+    return sendJson(res, 200, { scopeId: write, content: head.content, revision: head.revision });
   }
   if (method === "PUT" && pathname === "/v1/memory/self") {
-    const b = body as { content?: unknown };
-    if (typeof b.content !== "string")
-      return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    await memory.replace(write, b.content, capability.actorId);
+    const b = body as { content?: unknown; revision?: unknown };
+    if (typeof b.content !== "string" || typeof b.revision !== "string")
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "content (string) and revision (string, from GET /v1/memory/self) required",
+      });
+    let replaced = false;
+    if (b.revision)
+      replaced = (await memory.replaceIfRevision?.(write, b.content, b.revision, capability.actorId)) === true;
+    else if (!(await memory.readHead?.(write))?.revision) {
+      await memory.replace(write, b.content, capability.actorId);
+      replaced = true;
+    }
+    if (!replaced)
+      return sendJson(res, 409, {
+        error: "revision_conflict",
+        message: "The notebook changed since it was read; GET it again and rewrite from the current version.",
+      });
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.curate",
@@ -887,7 +909,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
 async function updateSkill(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   const id = ctx.params.id!;
-  const b = (body ?? {}) as { principalId?: unknown; description?: unknown; body?: unknown };
+  const b = (body ?? {}) as { principalId?: unknown; description?: unknown; body?: unknown; baseVersion?: unknown };
 
   let principalId: string;
   if (capability) {
@@ -897,6 +919,9 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
     }
     principalId = b.principalId;
+  }
+  if (b.baseVersion !== undefined && !Number.isInteger(b.baseVersion)) {
+    return sendJson(res, 400, { error: "bad_request", message: "baseVersion must be an integer" });
   }
   if (b.description !== undefined && typeof b.description !== "string") {
     return sendJson(res, 400, { error: "bad_request", message: "description must be a string" });
@@ -908,7 +933,15 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   if (typeof b.description === "string") patch.description = b.description;
   if (typeof b.body === "string") patch.body = b.body;
   const liveActor = capability ? livePersonCapability(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
+  const updated = await app.updateOwnedSkill(id, principalId, patch, {
+    liveActor,
+    ...(typeof b.baseVersion === "number" ? { baseVersion: b.baseVersion } : {}),
+  });
+  if (updated === "version_conflict")
+    return sendJson(res, 409, {
+      error: "conflict",
+      message: "This skill changed since you opened it. Reload it and reapply your edit.",
+    });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1029,6 +1062,7 @@ async function createGrant(ctx: ApiCtx): Promise<void> {
 }
 
 async function revokeGrant(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { res, app, body } = ctx;
   const b = body as { ownerScopeId?: string; ref?: string; granteeScopeId?: string; revokedBy?: string };
   if (!b.ownerScopeId || !b.ref || !b.granteeScopeId || typeof b.revokedBy !== "string" || !b.revokedBy) {
@@ -1302,6 +1336,7 @@ function getSoul(ctx: ApiCtx): void {
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
+  if (rejectNonObjectBody(ctx)) return;
   const { res, app, body, capability } = ctx;
   let scopeIdVal: string;
   let content: string;

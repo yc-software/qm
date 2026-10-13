@@ -30,7 +30,8 @@ import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../../persi
 import { collectNamedOutbound, type ArtifactRegistration } from "../attachments.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errDetail, errMessage, errorAlreadyReported, markErrorReported } from "../../util/errors.ts";
+import { redactSecrets } from "../../harness/redact-secrets.ts";
 import { adminSessionUrl } from "../../util/admin-links.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
@@ -90,6 +91,26 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     spine,
   } = ctx;
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
+  const failure = (code: string, error: unknown) => {
+    const message = redactSecrets(errDetail(error));
+    const reported = Object.assign(new Error(message), {
+      name: error instanceof Error ? redactSecrets(error.name) : "Error",
+      ...(error instanceof Error && error.stack ? { stack: redactSecrets(error.stack) } : {}),
+    });
+    if (errorAlreadyReported(error)) markErrorReported(reported);
+    deps.errors?.record(
+      {
+        category: "surface_tool",
+        code,
+        message,
+        scopeLabel: scopeId,
+        sessionId: session.id,
+      },
+      reported,
+    );
+    if (deps.errors) markErrorReported(error);
+    return { ok: false as const, message: redactSecrets(errMessage(error)) };
+  };
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
   const rateLimitRecipient =
@@ -168,7 +189,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
       return { ok: true, deliveryId: delivery.id };
     } catch (e) {
-      return { ok: false, message: errMessage(e) };
+      return failure("enqueue_failed", e);
     }
   };
   const buildDebugFooter = (): string | undefined => {
@@ -464,7 +485,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       try {
         blob = await blobTransfer.open(id);
       } catch (e) {
-        return { ok: false, message: errMessage(e) };
+        return failure("file_read_failed", e);
       }
       if (!blob) return { ok: false, message: "I can't find that file — it may have expired." };
       if (blob.sizeBytes > MAX_BLOB_BYTES) {
@@ -519,7 +540,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
           expectedOrders,
         });
       } catch (error) {
-        return { ok: false, message: errMessage(error) };
+        return failure("policy_write_failed", error);
       }
       deps.auditLog.record({
         at: Date.now(),

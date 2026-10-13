@@ -21,7 +21,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { audit } from "./shared.ts";
+import { audit, rejectNonObjectBody } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60_000;
@@ -278,6 +278,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as {
     provider?: unknown;
     accountType?: unknown;
@@ -425,6 +426,7 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as Record<string, unknown>;
   let principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (capability) {
@@ -464,6 +466,7 @@ async function setToken(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as Record<string, unknown>;
   const host = typeof b.host === "string" ? b.host : "";
   const principalId = typeof b.principalId === "string" ? b.principalId : "";

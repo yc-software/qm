@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -164,4 +164,41 @@ test("port ownership excludes clients connected to the listener", async () => {
     await child.stop();
     rmSync(lock, { recursive: true, force: true });
   }
+});
+
+test("readiness follows byte offsets after multibyte log output", async (t) => {
+  const lock = mkdtempSync(join(tmpdir(), "qm-child-unicode-"));
+  t.after(() => rmSync(lock, { recursive: true, force: true }));
+  const port = await freeTcpPort();
+  writeFileSync(join(lock, "web.log"), "é".repeat(4096) + "\n");
+  const child = new Child(
+    spec(lock, port),
+    lock,
+    () => {},
+    () => {},
+  );
+  t.after(() => child.stop());
+  assert.equal((await child.start()).ok, true);
+});
+
+test("a restart racing supervisor shutdown never relaunches the child; restarts outside shutdown still do", async () => {
+  const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
+  const port = await freeTcpPort();
+  const child = new Child(
+    spec(lock, port),
+    lock,
+    () => {},
+    () => {},
+  );
+  assert.equal((await child.start()).ok, true);
+  await child.stop();
+  assert.equal((await child.restart()).ok, true);
+  const restarting = child.restart();
+  await child.stop({ retire: true });
+  assert.equal((await restarting).ok, false);
+  await sleep(500);
+  assert.equal(child.status().pid, null);
+  assert.equal(await tcpPortOpen(port), false);
+  await child.stop();
+  rmSync(lock, { recursive: true, force: true });
 });

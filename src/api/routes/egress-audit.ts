@@ -43,14 +43,9 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
       message: `records must be a non-empty array of at most ${MAX_BATCH}`,
     });
   }
-  let accepted = 0;
-  for (const raw of records) {
-    const parsed = parseRecord(raw);
-    if (!parsed) continue;
-    deps.egressAudit.record(parsed);
-    accepted++;
-  }
-  return sendJson(res, 200, { accepted, rejected: records.length - accepted });
+  const parsed = records.map(parseRecord).filter((record) => record !== null);
+  await Promise.all(parsed.map((record) => deps.egressAudit!.record(record)));
+  return sendJson(res, 200, { accepted: parsed.length, rejected: records.length - parsed.length });
 }
 
 export const egressAuditRoutes: ReadonlyArray<Route<ApiCtx>> = [

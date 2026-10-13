@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { accessSync, constants, chmodSync, existsSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { CliError, errMessage } from "./log.ts";
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -233,6 +233,10 @@ export function waitForLog(file: string, pattern: RegExp, timeoutSec: number): P
   }, timeoutSec);
 }
 
+export const QUICK_TUNNEL_ANNOUNCEMENT = /^.*\|\s+(https:\/\/[a-z0-9-]+\.trycloudflare\.com)\s+\|\s*$/m;
+
+export const quickTunnelUrl = (log: string): string | undefined => log.match(QUICK_TUNNEL_ANNOUNCEMENT)?.[1];
+
 export const tailString = (s: string, lines: number): string => s.split("\n").slice(-lines).join("\n");
 
 export function canonicalJson(value: unknown): string {
@@ -310,9 +314,12 @@ function parseEnvLine(raw: string): [key: string, value: string] | undefined {
   return [key, value];
 }
 
-export function readEnvFile(path: string): Map<string, string> {
+export function readEnvFile(path: string, required = false): Map<string, string> {
   const out = new Map<string, string>();
-  if (!existsSync(path)) return out;
+  if (!existsSync(path)) {
+    if (required) throw new CliError(`environment file not found: ${path}`, { clause: "cli.invocation" });
+    return out;
+  }
   for (const raw of readFileSync(path, "utf8").split("\n")) {
     const entry = parseEnvLine(raw);
     if (entry && isEnvVarName(entry[0])) out.set(entry[0], entry[1]);
@@ -327,12 +334,7 @@ export function writeEnvValue(path: string, key: string, value: string): void {
   const mode = existing ? statSync(path).mode & 0o777 : 0o600;
   const lines = existing ? readFileSync(path, "utf8").split("\n") : [];
   if (lines.at(-1) === "") lines.pop();
-  const matches = (line: string): boolean => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) return false;
-    const eq = trimmed.indexOf("=");
-    return eq > 0 && trimmed.slice(0, eq).trim() === key;
-  };
+  const matches = (line: string): boolean => parseEnvLine(line)?.[0] === key;
   const entry = `${key}=${value}`;
   const next: string[] = [];
   let placed = false;
@@ -353,13 +355,29 @@ export function deploymentSecretValue(name: string, fileValue: string | undefine
   return fileValue === undefined || fileValue.trim() === "" ? process.env[name] : fileValue;
 }
 
-export function which(bin: string): boolean {
-  try {
-    execFileSync("/bin/sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+export function which(bin: string, env: NodeJS.ProcessEnv = process.env, platform = process.platform): boolean {
+  const windows = platform === "win32";
+  const extensions = windows
+    ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").flatMap((ext) => [ext, ext.toLowerCase()])]
+    : [""];
+  const paths =
+    isAbsolute(bin) || bin.includes("/") || bin.includes("\\")
+      ? [resolve(bin)]
+      : (env.PATH ?? env.Path ?? "")
+          .split(windows ? ";" : ":")
+          .filter(Boolean)
+          .map((dir) => join(dir, bin));
+  return paths.some((path) =>
+    extensions.some((extension) => {
+      try {
+        if (!statSync(path + extension).isFile()) return false;
+        accessSync(path + extension, windows ? constants.F_OK : constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    }),
+  );
 }
 
 export const flyBin = (): string => process.env.FLY_BIN ?? (which("flyctl") ? "flyctl" : "fly");

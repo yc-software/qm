@@ -13,7 +13,7 @@ import { errMessage } from "../../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope, rejectNonObjectBody } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
@@ -443,6 +443,7 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  if (rejectNonObjectBody(ctx)) return;
   const status = (body as { status?: unknown }).status;
   if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus)) {
     return sendJson(res, 400, {
@@ -497,6 +498,7 @@ export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as { principalId?: string; role?: string; scopeId?: string };
   try {
     const grant = await deps.admin!.createGrant(actor, {

@@ -180,10 +180,14 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
-      const rows = await q(
-        "SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL ORDER BY created_at DESC LIMIT $1",
-        [limit],
-      );
+      const rows = opts?.sourceScopeId
+        ? await q(
+            "SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL AND provenance->>'sourceScopeId' = $2 ORDER BY created_at DESC LIMIT $1",
+            [limit, opts.sourceScopeId],
+          )
+        : await q("SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL ORDER BY created_at DESC LIMIT $1", [
+            limit,
+          ]);
       return rows.map(rowToDelivery);
     },
     async ack(id, at, slackApiMs) {

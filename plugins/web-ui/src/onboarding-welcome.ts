@@ -452,7 +452,7 @@ export class OnboardingWelcome extends LitElement {
               ${
                 cohort
                   ? html`<p class="welcome-beat" style="--welcome-delay:2400ms">
-                        And welcome to QM, the agent harness we use to run YC.
+                        And welcome to QM, your agent harness.
                       </p>
                       <p class="welcome-beat" style="--welcome-delay:2600ms">
                         Use it to research customers and investors, fundraise, and automate the everyday work of running
@@ -460,8 +460,8 @@ export class OnboardingWelcome extends LitElement {
                         ${this.onMoreIdeas ? html`<button type="button" class="welcome-more-ideas" ?disabled=${this.ideasDisabled} @click=${this.onMoreIdeas}>More ideas</button>` : nothing}
                       </p>
                       <p class="welcome-beat" style="--welcome-delay:2800ms">
-                        Think of it as your YC partner in a box. The more you use QM, the more context we have, the more
-                        we can help.
+                        Think of it as a teammate who learns how you work. The more you use QM, the more context it has,
+                        the more it can help.
                       </p>`
                   : html`<p class="welcome-beat" style="--welcome-delay:400ms">
                         Welcome to QM, your agent harness. Use it to research customers, build tools, and automate the

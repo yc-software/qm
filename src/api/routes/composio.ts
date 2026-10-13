@@ -12,7 +12,7 @@ import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../harness/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
-import { activePrincipal, audit } from "./shared.ts";
+import { activePrincipal, audit, rejectNonObjectBody } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 export function composioUserId(org: string, principal: string): string {
@@ -184,7 +184,8 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
     return sendJson(ctx.res, 403, { error: "human_consent_required" });
   const access = await credential(ctx);
   if (!access) return;
-  const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
+  if (rejectNonObjectBody(ctx)) return;
+  const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown }).toolkit;
   if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principalLinks || ctx.actor?.imp))
     return sendJson(ctx.res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   if (typeof toolkit !== "string" || !/^[a-z0-9_-]{1,100}$/.test(toolkit))

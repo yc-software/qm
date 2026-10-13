@@ -1,6 +1,8 @@
 import type { ScopeId } from "../types.ts";
 import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { reportFailure } from "../util/errors.ts";
+import { errDetail } from "../../plugins/chassis/src/errors.ts";
+import { redactSecrets } from "../harness/redact-secrets.ts";
 
 export interface ScopedEvent {
   scopeLabel: ScopeId;
@@ -112,7 +114,7 @@ export interface PostgresEventSinkConfig<E> {
 
 export interface PostgresEventSink<E> {
   q: PgPool["q"];
-  record(input: Omit<E, "ts">): void;
+  record(input: Omit<E, "ts">): Promise<void>;
   flush(): Promise<void>;
   list(opts?: object): Promise<E[]>;
   count(opts?: object): Promise<number>;
@@ -192,10 +194,19 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
     record(input) {
       const s = input as Record<string, unknown>;
       const values = cfg.columns.map(([, js]) => (js === "ts" ? Date.now() : (s[js] ?? null)));
-      const write = q(insertSql, values)
-        .catch(reportFailureAs(cfg.persistErrorMessage, undefined))
+      const persisted = q(insertSql, values).then(() => {});
+      // Register first so this rejection is marked before an awaiting HTTP handler can report it.
+      const write = persisted
+        .catch((error) =>
+          reportFailure(
+            cfg.persistErrorMessage,
+            new Error(redactSecrets(errDetail(error))),
+            redactSecrets(JSON.stringify(Object.fromEntries(cfg.columns.map(([, key], i) => [key, values[i]])))),
+          ),
+        )
         .finally(() => pendingWrites.delete(write));
       pendingWrites.add(write);
+      return persisted;
     },
     async flush() {
       await settleWrites();

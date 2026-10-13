@@ -103,3 +103,26 @@ test("concurrentIndexName recognizes retryable concurrent index creation", () =>
 function pathToUrl(p: string): string {
   return new URL(`file://${p}`).href;
 }
+
+test("committed migrations survive an unlock failure while the broken connection is discarded", async (t) => {
+  const { EventEmitter } = await import("node:events");
+  const { applyPgMigrations } = await import("../src/persistence/pg-pool.ts");
+  const releases: boolean[] = [];
+  let recorded = false;
+  const client = Object.assign(new EventEmitter(), {
+    query: async (sql: string) => {
+      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }] };
+      if (sql.includes("INSERT INTO qm_schema_migrations")) recorded = true;
+      if (sql.includes("pg_advisory_unlock")) throw new Error("unlock connection reset");
+      return { rows: [] };
+    },
+    release: (broken: boolean) => releases.push(broken),
+  });
+  const log = t.mock.method(console, "error", () => {});
+  await applyPgMigrations({ connect: async () => client } as unknown as import("pg").Pool, [
+    definePgMigration("test/unlock/0001", ["SELECT 1"]),
+  ]);
+  assert.equal(recorded, true);
+  assert.deepEqual(releases, [true]);
+  assert.ok(log.mock.calls.some(({ arguments: args }) => String(args[0]).includes("unlock connection reset")));
+});

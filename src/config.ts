@@ -1432,6 +1432,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
+  if (runStore === "postgres" && env.SESSION_STORE !== "postgres") {
+    throw new Error("RUN_STORE=postgres requires SESSION_STORE=postgres (runs are read joined to their sessions)");
+  }
   const codexEnv = { ...env };
   if (codexOAuthConfigured && codexAuthCandidate) codexEnv.CODEX_AUTH_FILE = codexAuthCandidate;
   else delete codexEnv.CODEX_AUTH_FILE;

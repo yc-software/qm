@@ -354,7 +354,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   let durableAdminPrincipal = "";
   if (!databaseUrl) {
     try {
-      const pg = await ensureLocalPostgres(worktree, log);
+      const pg = await ensureLocalPostgres(worktree, assembled.env, log);
       databaseUrl = pg.url;
       localPg = true;
     } catch (err) {
@@ -429,6 +429,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
 async function startChildren(inputs: SpecInputs): Promise<{ ok: boolean; failedChild?: ChildName; detail?: string }> {
   const specs = buildChildSpecs(inputs);
   for (const spec of specs) {
+    if (shuttingDown) return { ok: false, failedChild: spec.name, detail: "supervisor is shutting down" };
     phase(spec.name, "start");
     let child = children.get(spec.name);
     if (child) child.update(spec);
@@ -590,13 +591,19 @@ function startLoops(): void {
   }
 }
 
-async function teardown(reason: string): Promise<void> {
-  if (shuttingDown) return;
+let tearingDown: Promise<void> | null = null;
+
+function teardown(reason: string): Promise<void> {
+  tearingDown ??= stopEverything(reason);
+  return tearingDown;
+}
+
+async function stopEverything(reason: string): Promise<void> {
   shuttingDown = true;
   log(`teardown: ${reason}`);
   for (const name of [...CHILD_ORDER].reverse()) {
     const child = children.get(name);
-    if (child) await child.stop();
+    if (child) await child.stop({ retire: true });
   }
   for (const aux of ["tunnel.pid"]) {
     const pid = readPidFile(lock, aux);
@@ -709,6 +716,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       allowMock: callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
       log,
     });
+    completeDevSecuritySecrets(assembled.env, durability.databaseUrl || worktree);
     const dryEnvSha = computeEnvSha(assembled.env);
     const allHealthy =
       children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&

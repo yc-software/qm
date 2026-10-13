@@ -705,3 +705,71 @@ test("doctor without required local values warns-and-skips the live Slack check 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("doctor distinguishes Resend sending-only credentials from invalid keys using its error name", async (t) => {
+  const brokerConfig: QmConfig = {
+    ...config,
+    sandbox: undefined,
+    services: ["core", "portal", "auth"],
+    env: {
+      core: { HARNESS: "mock" },
+      auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" },
+    },
+  };
+  const previous = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previous;
+  });
+  const secrets = new Map([
+    ["RESEND_API_KEY", "re_example"],
+    ["AUTH_EMAIL_FROM", "test@example.com"],
+  ]);
+  for (const [name, status] of [
+    ["restricted_api_key", 401],
+    ["validation_error", 401],
+    ["restricted_api_key", 403],
+  ] as const) {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ name, message: "restricted_api_key" }), { status })) as typeof fetch;
+    if (name === "restricted_api_key" && status === 401)
+      await assert.doesNotReject(doctorCommon(brokerConfig, secrets));
+    else await assert.rejects(doctorCommon(brokerConfig, secrets), /Resend rejected/);
+  }
+});
+
+test("doctor negotiates implicit TLS by default on SMTP port 465", async (t) => {
+  const tls = (await import("node:tls")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const { readFileSync } = await import("node:fs");
+  const cert = readFileSync(new URL("./fixtures/smtp-cert.pem", import.meta.url));
+  const server = tls.createServer(
+    {
+      key: readFileSync(new URL("./fixtures/smtp-key.pem", import.meta.url)),
+      cert,
+    },
+    (socket) => socket.end("220 localhost ESMTP ready\r\n"),
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const port = (server.address() as import("node:net").AddressInfo).port;
+  const connect = tls.connect;
+  const redirected = t.mock.method(tls, "connect", (options: import("node:tls").ConnectionOptions) => {
+    assert.equal(options.port, 465);
+    return connect({ ...options, host: "127.0.0.1", port, ca: cert });
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    redirected.mock.restore();
+    syncBuiltinESMExports();
+  });
+  await doctorCommon(
+    {
+      ...config,
+      services: ["auth"],
+      sandbox: undefined,
+      env: { core: { HARNESS: "mock" }, auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: "465" } },
+    },
+    new Map([["SMTP_HOST", "localhost"]]),
+  );
+  assert.equal(redirected.mock.callCount(), 1);
+});

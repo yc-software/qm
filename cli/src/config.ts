@@ -18,6 +18,9 @@ import {
   isTarget,
   type Target,
   SANDBOX_BACKEND_POLICY,
+  SANDBOX_BACKEND_IDS,
+  isSandboxBackendId,
+  type SandboxBackendId,
   targetsAllowingSandboxBackend,
 } from "./providers.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
@@ -46,7 +49,7 @@ export interface PluginEntry {
 }
 
 export interface SandboxConfig {
-  backend?: "local" | "sprites" | "aws" | "agent37" | "superserve";
+  backend?: SandboxBackendId;
   app?: string;
   image?: string;
   baseImage?: string;
@@ -210,7 +213,7 @@ export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT
 
 export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.test(ref);
 
-const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
+export const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
   config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
 
 export const localSandboxActive = (config: QmConfig): boolean =>
@@ -236,7 +239,7 @@ export function sandboxCoreEnv(
     sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
       ? effectiveSandboxBackend(config)
       : sb.backend;
-  if (backend === "agent37" || backend === "superserve") {
+  if (backend && !["local", "sprites", "aws"].includes(backend)) {
     env.SANDBOX_BACKEND = backend;
     return { env, missingSecrets };
   }
@@ -1500,16 +1503,8 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   };
   const out: SandboxConfig = {};
   if (o["backend"] !== undefined) {
-    if (
-      o["backend"] !== "local" &&
-      o["backend"] !== "sprites" &&
-      o["backend"] !== "aws" &&
-      o["backend"] !== "agent37" &&
-      o["backend"] !== "superserve"
-    ) {
-      throw new CliError(
-        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), "agent37", or "superserve" (Superserve sandboxes)`,
-      );
+    if (!isSandboxBackendId(o["backend"])) {
+      throw new CliError(`${path}: "sandbox.backend" must be one of ${SANDBOX_BACKEND_IDS.join(", ")}`);
     }
     out.backend = o["backend"];
   }
@@ -1572,7 +1567,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
-  if (out.backend === "agent37" || out.backend === "superserve") {
+  if (out.backend && !["local", "sprites", "aws"].includes(out.backend)) {
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(

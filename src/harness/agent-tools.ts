@@ -1332,8 +1332,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "one-off trivia, or anything already recorded somewhere you can look up. " +
       'action="read" returns the whole notebook. ' +
       'action="rewrite" REPLACES the whole notebook with `content` — for curation (merge ' +
-      "duplicates, update or delete stale and wrong lines): read first, then write back the full " +
-      "corrected notebook, never a fragment.",
+      "duplicates, update or delete stale and wrong lines): read first in the same turn, then write back the full " +
+      "corrected notebook, never a fragment; if it changed since your read, read again and redo the edit.",
     parameters: Type.Object({
       action: Type.Union(
         [Type.Literal("search"), Type.Literal("remember"), Type.Literal("read"), Type.Literal("rewrite")],

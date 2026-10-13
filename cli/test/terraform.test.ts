@@ -892,3 +892,17 @@ test("dedicated ALBs retain direct core app routing when portal declares the sam
     /core_public_hosts\s+= \[\s+"\*\.apps\.agent\.acme\.example",\s+"api\.agent\.acme\.example"\s+\]/,
   );
 });
+
+test("task-role safety refuses unreadable or malformed previous services instead of treating them as absent", () => {
+  for (const prior of [
+    "services = { invalid }",
+    "services = {",
+    "services = null",
+    "services = []",
+    'services = {"core": null}',
+  ]) {
+    assert.throws(() => terraformVars(config, prior, declared), /services/);
+  }
+  assert.doesNotThrow(() => terraformVars(config, "", declared));
+  assert.doesNotThrow(() => terraformVars(config, terraformVars(config, "", declared), declared));
+});

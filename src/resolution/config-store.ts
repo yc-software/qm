@@ -1286,36 +1286,31 @@ export function createMemoryConfigStore(
       else channelHeaderPin.delete(id);
     },
     async flushScope(id) {
-      const keys = [
+      const keys = new Set([
         `soul:${id}`,
-        `policy:${id}`,
         `securityPosture:${id}`,
         `sharingPosture:${id}`,
         `approvalGrantModes:${id}`,
-        `egress:${id}`,
-        `externalSlack:${id}`,
         `model:${id}`,
         `turnWallClock:${id}`,
-        `branding:${id}`,
-        ...(id === org
-          ? [
-              `approvedHarnesses:${org}`,
-              `orgAmbient:${org}`,
-              `interactiveFastMode:${org}`,
-              `individualModelAuth:${org}`,
-              `autoFlagger:${org}`,
-            ]
-          : []),
         `channelHeaderPin:${id}`,
-        `ackEmoji:${id}`,
-      ];
-      await Promise.all(
-        keys.map(async (key) => {
+        ...[...pendingWrites.keys()].filter((key) => key.slice(key.indexOf(":") + 1) === id),
+      ]);
+      const results = await Promise.allSettled(
+        [...keys].map(async (key) => {
           const pending = pendingWrites.get(key);
-          if (pending) await pending;
+          try {
+            if (pending) await pending;
+          } catch (error) {
+            if (pendingWrites.get(key) === pending) pendingWrites.delete(key);
+            throw error;
+          }
           await writeQueue(key, async () => undefined);
         }),
       );
+      const failures = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, `config: ${failures.length} writes failed for ${id}`);
     },
   };
 }

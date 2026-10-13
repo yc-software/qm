@@ -7,7 +7,7 @@
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, orgScope, rejectNonObjectBody } from "../shared.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials"];
 
@@ -57,6 +57,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "id must be 2-40 chars: lowercase letters, digits, hyphens, starting with a letter",
     });
   }
+  if (rejectNonObjectBody(ctx)) return;
   const b = ctx.body as Partial<McpServer> & { validate?: boolean };
   const url = typeof b.url === "string" ? b.url.trim() : "";
   let parsed: URL;

@@ -392,3 +392,36 @@ test("multi-key locks retain unawaited nested work until it finishes", async () 
   await outer;
   assert.equal(await lock.tryWithLock!("nested", async () => true), true);
 });
+
+test("a terminated lock backend cannot poison the next lease", { skip, timeout: 10000 }, async () => {
+  const { Pool } = await import("pg");
+  const pool = new Pool({ connectionString: URL, max: 1 });
+  const admin = new Pool({ connectionString: URL, max: 1 });
+  const pg = createPgPool(URL!);
+  let borrowed: import("pg").PoolClient | undefined;
+  pool.on("acquire", (client) => {
+    borrowed = client;
+  });
+  const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool });
+  const primary = new Error("work failed after losing its lock");
+  try {
+    await assert.rejects(
+      lock.withLock("backend-loss", async () => {
+        const { pid } = (await borrowed!.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!;
+        await admin.query("SELECT pg_terminate_backend($1)", [pid]);
+        await assert.rejects(borrowed!.query("SELECT 1"));
+        throw primary;
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors[0], primary);
+        assert.equal(error.errors.length, 2);
+        return true;
+      },
+    );
+    assert.equal(pool.totalCount, 0);
+    assert.equal(await lock.withLock("backend-loss", async () => "recovered"), "recovered");
+  } finally {
+    await Promise.all([pool.end(), admin.end(), pg.close()]);
+  }
+});

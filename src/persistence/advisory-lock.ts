@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PgPool, PoolClient } from "./pg-pool.ts";
 import { sleep } from "../util/async.ts";
+import { reportFailure, withCleanup } from "../util/errors.ts";
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
@@ -107,21 +108,40 @@ export function createPostgresAdvisoryLock(
   type Context = {
     client: PoolClient;
     references: number;
+    broken: boolean;
+    brokenBy?: unknown;
+    onError: () => void;
     keys: Map<string, { shared: boolean; count: number }>;
   };
   const sessions = new AsyncLocalStorage<{ context: Context; active: boolean }>();
   const withClient = async <T>(action: (context: Context) => Promise<T>): Promise<T> => {
     const parent = sessions.getStore();
-    const context = parent?.active
-      ? parent.context
-      : { client: await (await pg.sessionPool()).connect(), references: 0, keys: new Map() };
+    let context: Context;
+    if (parent?.active) context = parent.context;
+    else {
+      context = {
+        client: await (await pg.sessionPool()).connect(),
+        references: 0,
+        broken: false,
+        onError: (error?: unknown) => {
+          context.broken = true;
+          context.brokenBy = error;
+        },
+        keys: new Map(),
+      };
+      context.client.on("error", context.onError);
+    }
+    if (context.broken) throw new Error("advisory lock session is no longer available", { cause: context.brokenBy });
     context.references++;
     const lease = { context, active: true };
     try {
       return await sessions.run(lease, () => action(context));
     } finally {
       lease.active = false;
-      if (--context.references === 0) context.client.release();
+      if (--context.references === 0) {
+        context.client.removeListener("error", context.onError);
+        context.client.release(context.broken);
+      }
     }
   };
   const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean, wait: boolean): Promise<T | null> => {
@@ -135,16 +155,40 @@ export function createPostgresAdvisoryLock(
         reservation.count++;
         keys.set(key, reservation);
         try {
-          const res = await client.query<{ locked: boolean }>(
-            `SELECT pg_try_advisory_lock${shared ? "_shared" : ""}(hashtextextended($1, 0)) AS locked`,
-            [key],
+          let acquired = false;
+          let completed = false;
+          return await withCleanup(
+            async () => {
+              try {
+                const res = await client.query<{ locked: boolean }>(
+                  `SELECT pg_try_advisory_lock${shared ? "_shared" : ""}(hashtextextended($1, 0)) AS locked`,
+                  [key],
+                );
+                acquired = res.rows[0]?.locked === true;
+              } catch (error) {
+                context.broken = true;
+                context.brokenBy = error;
+                throw error;
+              }
+              if (!acquired) return { acquired: false };
+              const value = await fn();
+              completed = true;
+              return { acquired: true, value };
+            },
+            async () => {
+              if (!acquired) return;
+              try {
+                await client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [
+                  key,
+                ]);
+              } catch (error) {
+                context.broken = true;
+                context.brokenBy = error;
+                if (!completed) throw error;
+                reportFailure("advisory-lock: unlock", error);
+              }
+            },
           );
-          if (res.rows[0]?.locked !== true) return { acquired: false };
-          try {
-            return { acquired: true, value: await fn() };
-          } finally {
-            await client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [key]);
-          }
         } finally {
           if (--reservation.count === 0) keys.delete(key);
         }

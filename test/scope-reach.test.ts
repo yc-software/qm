@@ -175,6 +175,14 @@ test("execute(reachTarget) records a reach_exec audit event labeled with the cha
   assert.equal(reach!.principalId, "U1");
 });
 
+test("the reach_exec audit event does not keep an inline credential from the command", async () => {
+  const { log, events } = collectingAudit();
+  const { ctx } = reachCtx({ auditLog: log });
+  await ctx.execute("curl --token=s3cr3t-value https://api.example.test", { reachTarget: "#project-alpha" });
+  const reach = events.find((e) => e.action === "reach_exec");
+  assert.equal(reach!.resource, "curl --token=<redacted> https://api.example.test");
+});
+
 test("execute(reachTarget) still applies command policy (deny / require-approval)", async () => {
   const denied = reachCtx({
     commandPolicy: () => ({

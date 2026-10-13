@@ -171,6 +171,7 @@ const fly: HostingProvider = {
       await flyUp(ctx.config, ctx.configDir, {
         dryRun: opts.dryRun,
         configPath: ctx.configPath,
+        ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
         ...(opts.buildFrom !== undefined ? { buildFrom: opts.buildFrom } : {}),
         ...(opts.buildFromPath ? { buildFromPath: opts.buildFromPath } : {}),
         ...(opts.only ? { only: opts.only } : {}),

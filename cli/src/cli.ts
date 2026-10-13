@@ -25,7 +25,7 @@ import { hostingProvider, hostingProviderUpFlags, type DeployContext } from "./b
 import { runConformance } from "./commands/conformance.ts";
 import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
-import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
+import { readEnvFile, gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
 import { runAdminLogin } from "./commands/admin-login.ts";
 import { syncDeploymentLayer } from "./deployment-layer.ts";
@@ -186,6 +186,7 @@ function deployContext(flags: Flags, dir?: string): DeployContext {
   const configDir = dirname(loaded.path);
   const sandboxDir = resolve(strFlag(flags, "sandbox-dir") ?? join(configDir, "sandbox"));
   const envFile = strFlag(flags, "env-file");
+  if (envFile !== undefined) readEnvFile(envFile, true);
   return {
     config: loaded.config,
     configPath: loaded.path,
@@ -233,6 +234,11 @@ function logOpts(flags: Flags): LogOpts {
 async function dispatch(argv: string[]): Promise<void> {
   const cmd = argv[0];
   const { positionals, flags } = parse(argv.slice(1));
+
+  if (cmd !== undefined && (flags.help !== undefined || flags.h !== undefined)) {
+    note(HELP);
+    return;
+  }
 
   switch (cmd) {
     case undefined:
@@ -623,6 +629,7 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from"]);
       const ctx = deployContext(flags);
       const from = strFlag(flags, "from") ?? ctx.envFile;
+      if (from !== undefined) readEnvFile(from, true);
       return deploymentBackend(ctx).secretsPush(from);
     }
 

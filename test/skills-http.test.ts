@@ -141,6 +141,30 @@ test("PUT /v1/skills/:id edits an owned personal skill in place and keeps it liv
   }
 });
 
+test("PUT /v1/skills/:id refuses an edit opened before someone else's save", async () => {
+  const srv = start();
+  try {
+    await publish(srv.skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
+    const listed = (await (await fetch(`${srv.base}/v1/skills?principalId=U1`)).json()) as { skills: SkillView[] };
+    const id = listed.skills.find((s) => s.name === "make-digest")!.id;
+    const opened = (await (await fetch(`${srv.base}/v1/skills/${id}?principalId=U1`)).json()) as {
+      skill: { version: number };
+    };
+    const save = (body: string) =>
+      fetch(`${srv.base}/v1/skills/${id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ principalId: "U1", body, baseVersion: opened.skill.version }),
+      });
+    assert.equal((await save("# first tab")).status, 200);
+    assert.equal((await save("# second tab")).status, 409);
+    const after = (await (await fetch(`${srv.base}/v1/skills/${id}?principalId=U1`)).json()) as { skill: SkillView };
+    assert.equal(after.skill.body, "# first tab");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("PUT /v1/skills/:id refuses to edit a skill the caller doesn't own", async () => {
   const srv = start();
   try {
@@ -376,6 +400,29 @@ test("POST /v1/skills rejects a duplicate name in the caller's personal scope wi
     assert.equal(res.status, 409);
     const err = (await res.json()) as { error: string };
     assert.equal(err.error, "exists");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("POST /v1/skills refuses a name that is live even when an archived copy sorts first", async () => {
+  const srv = start();
+  try {
+    await publish(srv.skills, scopeId("personal", "U1"), "watch-ci", "live");
+    const live = (await srv.skills.list()).find((s) => s.manifest.name === "watch-ci")!;
+    const old = structuredClone(live);
+    await srv.skills.restore({ ...old, id: "0-archived", status: "archived" });
+    const res = await fetch(`${srv.base}/v1/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", name: "watch-ci", description: "d", body: "# watch" }),
+    });
+    assert.equal(res.status, 409);
+    const named = (await srv.skills.list()).filter((s) => s.manifest.name === "watch-ci" && s.status !== "archived");
+    assert.deepEqual(
+      named.map((s) => s.id),
+      [live.id],
+    );
   } finally {
     await srv.close();
   }

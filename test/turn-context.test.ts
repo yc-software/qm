@@ -221,3 +221,15 @@ test("source selection precedes name shadowing and preserves skill-level grants"
   await context.listSkills(["personal:stranger"]);
   assert.deepEqual(seen[2], { scopes: [], grants: [] });
 });
+
+test("memory search keeps every readable notebook in reach when one notebook alone fills the limit", async () => {
+  const { input, memory } = await fixture();
+  await memory.replace(
+    "personal:alice",
+    "# Memory\n\n- deploy on Fridays\n- deploy with a canary\n- deploy pages on-call",
+  );
+  await memory.replace("channel:eng", "# Memory\n\n- deploy freeze in December");
+  const hits = (await (await resolveTurnContext(input)).searchMemory("deploy", 2)) ?? [];
+  assert.equal(hits.length, 2);
+  assert.ok(hits.includes("[channel:eng] deploy freeze in December"));
+});

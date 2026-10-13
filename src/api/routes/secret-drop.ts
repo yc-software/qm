@@ -12,7 +12,7 @@ import { samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
+import { audit, rejectNonObjectBody, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
@@ -181,6 +181,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   if (!capSecret)
     return sendJson(res, 500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
   if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: TRIGGERED });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as {
     service?: unknown;
     envKey?: unknown;
@@ -284,6 +285,7 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
 async function redeemDrop(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params, req } = ctx;
   if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  if (rejectNonObjectBody(ctx)) return;
   const { secret, values } = body as { secret?: unknown; values?: unknown };
   const peeked = await deps.secretDrops.peek(params.id!);
   if (!peeked.ok) {

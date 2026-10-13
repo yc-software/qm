@@ -17,7 +17,7 @@ import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope, rejectNonObjectBody } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
@@ -1426,6 +1426,7 @@ async function rollbackDeployment(ctx: ApiCtx): Promise<void> {
   const id = await deploymentId(app, params.id!);
   if (!id) return sendJson(res, 404, { error: "not_found" });
   if (!(await callerMayManageDeployment(ctx, id))) return sendJson(res, 403, { error: "forbidden" });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as { version?: unknown };
   if (typeof b.version !== "number")
     return sendJson(res, 400, { error: "bad_request", message: "version (number) required" });
@@ -1500,6 +1501,7 @@ export async function renameDeployment(ctx: ApiCtx): Promise<void> {
   if (!id) return sendJson(res, 404, { error: "not_found" });
   if (!(await callerMayManageDeployment(ctx, id)))
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can rename it" });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as { name?: unknown };
   if (typeof b.name !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
@@ -1516,6 +1518,7 @@ export async function setDeploymentDisplayName(ctx: ApiCtx): Promise<void> {
   if (!id) return sendJson(res, 404, { error: "not_found" });
   if (!(await callerMayManageDeployment(ctx, id)))
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can rename it" });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as { displayName?: unknown };
   if (typeof b.displayName !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "displayName (string) required" });
@@ -1532,6 +1535,7 @@ async function setDeploymentEmbedAncestors(ctx: ApiCtx): Promise<void> {
   if (!id) return sendJson(res, 404, { error: "not_found" });
   if (!(await callerMayManageDeployment(ctx, id)))
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can change this" });
+  if (rejectNonObjectBody(ctx)) return;
   const ancestors = parseEmbedAncestors((body as { embedAncestors?: unknown }).embedAncestors);
   if (!ancestors)
     return sendJson(res, 400, { error: "bad_request", message: `embedAncestors (${EMBED_ANCESTORS_HINT}) required` });
@@ -1548,6 +1552,7 @@ async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
   if (!id) return sendJson(res, 404, { error: "not_found" });
   if (!(await callerMayManageDeployment(ctx, id)))
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can change this" });
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as { alwaysOn?: unknown };
   if (typeof b.alwaysOn !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "alwaysOn (boolean) required" });

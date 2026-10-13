@@ -23,6 +23,7 @@ export class Child {
   lastSpawnAt = 0;
   private backoffMs = BACKOFF_START_MS;
   private stopRequested = false;
+  private retired = false;
   private restartTimer: NodeJS.Timeout | null = null;
   private logOffset = 0;
 
@@ -46,6 +47,7 @@ export class Child {
   }
 
   async start(): Promise<{ ok: boolean; detail?: string }> {
+    if (this.retired) return { ok: false, detail: `${this.spec.name} was stopped for shutdown` };
     this.stopRequested = false;
     this.state = "starting";
     this.lastSpawnAt = Date.now();
@@ -94,7 +96,9 @@ export class Child {
       if (this.spec.readiness.kind === "log") {
         const pattern = this.spec.readiness.pattern;
         const offset = this.logOffset;
-        const seen = bestEffortValue(() => readFileSync(this.logFile(), "utf8").slice(offset).includes(pattern));
+        const seen = bestEffortValue(() =>
+          readFileSync(this.logFile()).subarray(offset).toString("utf8").includes(pattern),
+        );
         if (seen) return { ok: true };
       } else {
         const url = this.spec.readiness.url;
@@ -142,7 +146,8 @@ export class Child {
     this.restartTimer.unref();
   }
 
-  async stop(): Promise<void> {
+  async stop(opts?: { retire?: boolean }): Promise<void> {
+    if (opts?.retire) this.retired = true;
     this.stopRequested = true;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);

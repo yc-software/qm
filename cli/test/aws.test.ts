@@ -428,6 +428,7 @@ else if (a.includes("ecs describe-tasks") && a.includes("task/old-core-")) conso
 else if (a.includes("ecs describe-tasks") && a.includes("task/live-core")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/live-core", taskDefinitionArn: process.env.AWS_FAKE_STALE_CORE ? "stale-task-definition" : s.services["acme-core"].taskDefinition, lastStatus: "RUNNING", healthStatus: "HEALTHY", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
 else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
 else if (a.includes("ecs wait tasks-stopped")) console.log("");
+else if (a.includes("logs get-log-events")) console.log(JSON.stringify({ events: process.env.AWS_FAKE_TASK_LOG ? [{ message: process.env.AWS_FAKE_TASK_LOG }] : [] }));
 else if (a.includes("ecs describe-tasks")) { const exitCode = Number(process.env.AWS_FAKE_CANARY_EXIT || "0") || ${JSON.stringify(opts.migrationExitCode ?? 0)}; console.log(JSON.stringify({ tasks: [{ stoppedReason: "Essential container in task exited", containers: [{ name: "core", exitCode, reason: process.env.AWS_FAKE_CANARY_REASON ?? (exitCode && ${JSON.stringify(Boolean(opts.migrationExitCode ?? 0))} ? "migration failed" : undefined) }] }], failures: [] })); }
 else if (a.includes("ecs describe-task-definition")) {
   const id = after("--task-definition");
@@ -3222,6 +3223,44 @@ test("AWS migration failure deregisters the candidate task and releases the depl
   }
 });
 
+test("AWS migration failure reports the exit code, every stop reason and the task's log output", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-migrate-evidence-"));
+  const candidatePath = join(dir, "candidate.json");
+  writeFileSync(
+    candidatePath,
+    JSON.stringify({
+      contract: 1,
+      accountId: "123456789012",
+      region: "us-west-2",
+      label: "candidate-deadbeef",
+      images: {
+        core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`,
+      },
+      imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      architectures: { core: "amd64" },
+    }),
+  );
+  const fake = statefulAws(dir, oneServiceConfig(), {}, { migrationExitCode: 3 });
+  process.env.AWS_FAKE_TASK_LOG = "relation widgets already exists";
+  try {
+    await assert.rejects(
+      () => awsMigrateCandidate(oneServiceConfig(), dir, candidatePath),
+      (error: Error) => {
+        assert.match(error.message, /migration task failed/);
+        assert.match(error.message, /exit 3/);
+        assert.match(error.message, /migration failed/);
+        assert.match(error.message, /Essential container in task exited/);
+        assert.match(error.message, /relation widgets already exists/);
+        return true;
+      },
+    );
+  } finally {
+    delete process.env.AWS_FAKE_TASK_LOG;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS candidate deploy migration failure preserves the runtime and releases the lease", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-migrate-failure-"));
   const candidatePath = join(dir, "candidate.json");
@@ -4508,7 +4547,7 @@ test("AWS up can introduce a selected workload onto a trusted deployment baselin
   }
 });
 
-test("AWS up cleans staging tags when ECS deployment fails", async () => {
+test("AWS up retains staging tags when ECS deployment fails", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-cleanup-"));
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
@@ -4519,9 +4558,9 @@ test("AWS up cleans staging tags when ECS deployment fails", async () => {
   try {
     await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), /did not reach the requested state/);
     const calls = readFileSync(fake.log, "utf8");
-    assert.match(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
+    assert.doesNotMatch(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
     assert.doesNotMatch(calls, /imageTag=release/);
-    assert.ok(calls.indexOf("ecr batch-delete-image") < calls.indexOf("dynamodb delete-item"));
+    assert.ok(calls.includes("dynamodb delete-item"), "failure still releases the deployment lease");
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
@@ -6202,3 +6241,39 @@ for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] 
     }
   });
 }
+
+test("AWS rollback reports a missing restore-history manifest without undoing the completed code rollback", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-history-"));
+  const single = oneServiceConfig();
+  const fake = statefulAws(
+    dir,
+    single,
+    manifestItems(
+      [
+        { id: "old", tasks: { core: "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:7" } },
+        {
+          id: "current",
+          previous: "missing-history",
+          tasks: { core: "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:9" },
+        },
+      ],
+      "current",
+    ),
+  );
+  const lines: string[] = [];
+  const warn = console.warn;
+  console.warn = (...parts: unknown[]): void => void lines.push(parts.join(" "));
+  try {
+    await awsRollback(single, "old");
+    assert.match(lines.join("\n"), /restore history.*AWS deployment manifest missing-history is missing/);
+    const state = JSON.parse(readFileSync(fake.state, "utf8"));
+    assert.equal(
+      state.services["acme-core"].taskDefinition,
+      "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:7",
+    );
+  } finally {
+    console.warn = warn;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

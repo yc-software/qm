@@ -135,6 +135,23 @@ test("resolveRef resolves a branch ref to that branch's HEAD", async () => {
   }
 });
 
+test("fetches a pack pinned to a branch other than the repo's default", async () => {
+  const { dir } = makeSourceRepo();
+  try {
+    gitOut(dir, "checkout", "-q", "-b", "skills-next");
+    writeFileSync(join(dir, "skills", "demo", "next.md"), "next");
+    gitOut(dir, "add", "-A");
+    gitOut(dir, "commit", "-q", "-m", "next");
+    const head = gitOut(dir, "rev-parse", "HEAD");
+    gitOut(dir, "checkout", "-q", "-");
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(src({ url: dir, ref: "skills-next" }));
+    assert.equal(repo.commit, head);
+    assert.ok(repo.files.some((f) => f.path === "skills/demo/next.md"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("resolveRef rejects an arg-smuggling ref before invoking git", async () => {
   await assert.rejects(
     () => createGitFetcher().resolveRef(src({ url: "https://example.com/repo", ref: "--upload-pack=evil" })),

@@ -52,6 +52,7 @@ export interface ProjectStore {
     channelName?: string,
     effect?: ProjectMutationEffect,
   ): Promise<ProjectMutation>;
+  list(): Promise<Project[]>;
   listLinked(): Promise<Project[]>;
   slackChannel(groupRef: string): Promise<ProjectSlackChannel | undefined>;
   recognizes(groupRef: string): boolean;
@@ -116,6 +117,12 @@ export function createProjectStore(
     if (!id) return undefined;
     const project = await backing.get(id);
     return project?.orgId === configOrgId() ? project : undefined;
+  }
+
+  async function listCurrent(): Promise<Project[]> {
+    return (await backing.all())
+      .filter((project) => project.orgId === configOrgId() && isActiveMember(project.ownerId))
+      .map(visible);
   }
 
   function effectiveMemberIds(project: Project): string[] {
@@ -298,10 +305,9 @@ export function createProjectStore(
         return result;
       });
     },
+    list: listCurrent,
     async listLinked() {
-      return (await backing.all())
-        .filter((project) => project.orgId === configOrgId() && project.slackChannel && isActiveMember(project.ownerId))
-        .map(visible);
+      return (await listCurrent()).filter((project) => project.slackChannel);
     },
     async slackChannel(groupRef) {
       const project = await projectForGroup(groupRef);

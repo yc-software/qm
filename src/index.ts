@@ -36,7 +36,9 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
         config.backgroundWorkEnabled || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
     })
   : undefined;
+let shuttingDown = false;
 const server = createServer(built.app, {
+  isShuttingDown: () => shuttingDown,
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
 });
@@ -179,7 +181,6 @@ if (built.backgroundOwnership) {
   backgroundController.start();
 }
 
-let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;

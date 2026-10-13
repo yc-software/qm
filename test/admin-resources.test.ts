@@ -895,3 +895,40 @@ test("org purpose runtimes round-trip, validate, and clear independently", async
     await srv.close();
   }
 });
+
+test("boolean admin resources reject invalid on values without changing saved settings", async () => {
+  const srv = start("pi", false);
+  const scope = "org:default-org";
+  const send = (id: string, body: Record<string, unknown>) =>
+    fetch(`${srv.base}/v1/admin/scopes/${scope}/${id}`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify(body),
+    });
+  try {
+    const resources = ADMIN_RESOURCES.filter((resource) => resource.kind === "boolean").map((resource) => ({
+      id: resource.id,
+      extra: {},
+      read: () => resource.get!({ config: srv.built.config } as never, scope),
+    }));
+    resources.push({
+      id: "feature-flags",
+      extra: { featureName: "app_annotations", scopeId: "personal:alice" },
+      read: () => srv.built.featureFlags.enabled("app_annotations", "personal:alice"),
+    });
+    for (const resource of resources) {
+      for (const on of [true, false]) {
+        assert.equal((await send(resource.id, { ...resource.extra, on })).status, 200);
+        assert.equal(await resource.read(), on, `${resource.id} accepts literal ${on}`);
+        for (const invalid of [{}, ...[null, "false", "true", 0, 1, [], {}].map((on) => ({ on }))]) {
+          const response = await send(resource.id, { ...resource.extra, ...invalid });
+          assert.equal(response.status, 400, `${resource.id} rejects ${JSON.stringify(invalid)}`);
+          assert.deepEqual(await response.json(), { error: "bad_request", message: "on must be a boolean" });
+          assert.equal(await resource.read(), on, `${resource.id} did not mutate`);
+        }
+      }
+    }
+  } finally {
+    await srv.close();
+  }
+});

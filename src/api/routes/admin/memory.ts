@@ -1,5 +1,5 @@
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.ts";
+import { audit, authorizeAdmin, orgScope, rejectNonObjectBody, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes } from "./common.ts";
 
@@ -59,6 +59,7 @@ export async function putAdminMemory(ctx: ApiCtx): Promise<void> {
   if (!authz) return;
   const { actor, scope } = authz;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+  if (rejectNonObjectBody(ctx)) return;
   const content = (body as { content?: unknown }).content;
   if (typeof content !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "memory requires { content: string }" });

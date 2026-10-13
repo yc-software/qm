@@ -1,7 +1,18 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { die, note, ok } from "../log.ts";
-import { envNum, gitTopLevel, runInherit, spawnBackground, stopPid, tail, waitForLog, which } from "../util.ts";
+import {
+  QUICK_TUNNEL_ANNOUNCEMENT,
+  envNum,
+  gitTopLevel,
+  quickTunnelUrl,
+  runInherit,
+  spawnBackground,
+  stopPid,
+  tail,
+  waitForLog,
+  which,
+} from "../util.ts";
 import { serviceDef } from "../services.ts";
 
 const ciDir = (root: string): string => join(root, process.env.CI_INSTANCE_DIR ?? ".ci-instance");
@@ -18,14 +29,13 @@ const writePid = (dir: string, name: string, pid: number): void => writeFileSync
 async function startTunnel(port: number, dir: string): Promise<string | undefined> {
   if (!which("cloudflared")) return undefined;
   const logFile = join(dir, "tunnel.log");
-  const url = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
   writePid(
     dir,
     "tunnel",
     spawnBackground("cloudflared", ["tunnel", "--url", `http://localhost:${port}`, "--no-autoupdate"], { logFile }),
   );
-  if (!(await waitForLog(logFile, url, 30))) return undefined;
-  return readFileSync(logFile, "utf8").match(url)?.[0];
+  if (!(await waitForLog(logFile, QUICK_TUNNEL_ANNOUNCEMENT, 30))) return undefined;
+  return quickTunnelUrl(readFileSync(logFile, "utf8"));
 }
 
 function requireEnv(): void {

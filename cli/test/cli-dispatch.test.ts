@@ -423,8 +423,8 @@ test("--env-file that does not exist is an error", async () => {
   process.env.XDG_CONFIG_HOME = xdg;
   try {
     const { out, exitCode } = await run(["plan", "--env-file", join(dir, "nope.env")], dir);
-    assert.equal(exitCode, 1);
-    assert.match(out, /--env-file not found/);
+    assert.equal(exitCode, 2);
+    assert.match(out, /environment file not found/);
   } finally {
     if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = prevXdg;

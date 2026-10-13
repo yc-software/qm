@@ -21,7 +21,7 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
-import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope, rejectNonObjectBody } from "../shared.ts";
 import {
   ADMIN_RESOURCES,
   ADMIN_RESOURCE_BY_ID,
@@ -37,6 +37,7 @@ import {
 } from "../../../policy/command-policy.ts";
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
 import { discoverScopes } from "./common.ts";
+import { projectScopeId } from "../../../projects/project-store.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
@@ -63,6 +64,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
 
   if (resource === "command-policy-simulate") {
+    if (rejectNonObjectBody(ctx)) return;
     const command = (body as { command?: unknown }).command;
     if (typeof command !== "string" || !command.trim())
       return sendJson(res, 400, { error: "bad_request", message: "command is required" });
@@ -152,12 +154,13 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
-  const [crons, deployments, skills, environmentRows, rollups] = await Promise.all([
+  const [crons, deployments, skills, environmentRows, rollups, projects] = await Promise.all([
     app.listCrons(),
     app.listDeployments(),
     app.listSkills(),
     app.listEnvironments(),
     deps.sessions?.scopeSessionRollups(scope, true) ?? [],
+    deps.projects?.list() ?? [],
   ]);
   const environments = environmentRows.map(({ environment, attachments }) => ({
     id: environment.id,
@@ -177,6 +180,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     ...skills.map((s) => s.scopeId),
     ...environments.map((environment) => environment.id),
     ...environments.flatMap((environment) => environment.attachedScopes),
+    ...projects.map((project) => projectScopeId(project.id)),
   ];
   const previewIds = rollups.flatMap((r) => (r.previewSessionId ? [r.previewSessionId] : []));
   const [labels, previews] = await Promise.all([

@@ -319,6 +319,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const log = entries.get(sessionId) ?? [];
       const since = opts?.sinceSeq ?? 0;
       const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
+      if (opts?.limit === 0) return [];
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
@@ -404,6 +405,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const log = tape.get(sessionId) ?? [];
       const since = opts?.sinceSeq;
       const filtered = since !== undefined ? log.filter((r) => r.seq > since) : log;
+      if (opts?.limit === 0) return [];
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : [...filtered];
     },
 
@@ -459,13 +461,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async listLlmRequests(sessionId, opts) {
       const all = llmRequests.get(sessionId) ?? [];
       const want = opts?.turnSeqs ? new Set(opts.turnSeqs) : null;
-      const filtered =
+      const ranges = opts?.turnSeqRanges;
+      const filtered = (
         want || opts?.orphans
           ? all.filter(
               (r) =>
                 (want != null && r.turnSeq !== null && want.has(r.turnSeq)) || (!!opts?.orphans && r.turnSeq === null),
             )
-          : all;
+          : all
+      ).filter((r) => !ranges || ranges.some(([lo, hi]) => r.turnSeq !== null && r.turnSeq >= lo && r.turnSeq <= hi));
       return filtered.map((r) => {
         if (opts?.omitRequest) return { ...r, request: null };
         const body = r.promptHash != null ? promptEnvelopes.get(r.promptHash) : undefined;
@@ -541,6 +545,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       }
     },
 
+    async participantScopes(principalId) {
+      const scopes = new Set<ScopeId>();
+      for (const id of participants.get(principalId) ?? []) {
+        const scope = sessions.get(id)?.scopeId;
+        if (scope) scopes.add(scope);
+      }
+      return [...scopes];
+    },
+
     async listByParticipant(principalId, opts) {
       const ids = participants.get(principalId);
       if (!ids) return [];
@@ -593,11 +606,20 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return true;
     },
 
-    async visibleEntries(sessionId, principalId) {
+    async visibleEntries(sessionId, principalId, opts) {
       const win = windows.get(sessionId)?.get(principalId);
-      if (!win) return [];
+      if (!win || opts?.limit === 0) return [];
       const log = entries.get(sessionId) ?? [];
-      return log.filter((e) => entryWithinTenure(e, win));
+      const visible = log.filter(
+        (e) => entryWithinTenure(e, win) && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
+      );
+      return opts?.limit === undefined ? visible : visible.slice(-opts.limit);
+    },
+
+    async visibleEntryCount(sessionId, principalId, beforeSeq) {
+      const win = windows.get(sessionId)?.get(principalId);
+      if (!win) return 0;
+      return (entries.get(sessionId) ?? []).filter((e) => e.seq < beforeSeq && entryWithinTenure(e, win)).length;
     },
 
     async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {

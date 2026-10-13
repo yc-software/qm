@@ -57,8 +57,7 @@ describe("runTrigger home-scope gate when the directory snapshot dropped the cha
   it("falls back to session participation and runs", async () => {
     let ranTurn = false;
     const sessions = {
-      listByParticipant: async (pid: string): Promise<readonly { scopeId: ScopeId }[]> =>
-        pid === OWNER ? [{ scopeId: SCOPE }] : [],
+      participantScopes: async (pid: string): Promise<readonly ScopeId[]> => (pid === OWNER ? [SCOPE] : []),
     };
     const d = deps(unknownChannelDirectory(), { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, spec("participant"));
@@ -69,7 +68,7 @@ describe("runTrigger home-scope gate when the directory snapshot dropped the cha
 
   it("skips with a note naming the snapshot gap, not lost membership, when there is no session either", async () => {
     let ranTurn = false;
-    const sessions = { listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [] };
+    const sessions = { participantScopes: async (): Promise<readonly ScopeId[]> => [] };
     const d = deps(unknownChannelDirectory(), { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, spec("stranger"));
     assert.equal(ranTurn, false);
@@ -94,7 +93,7 @@ describe("runTrigger home-scope gate when the directory snapshot dropped the cha
     };
     let ranTurn = false;
     const sessions = {
-      listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: SCOPE }],
+      participantScopes: async (): Promise<readonly ScopeId[]> => [SCOPE],
     };
     const d = deps(dir, { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, spec("kicked"));
@@ -122,8 +121,7 @@ describe("runTrigger home-scope gate for group homes", () => {
     let ranTurn = false;
     const dir = unknownChannelDirectory();
     const sessions = {
-      listByParticipant: async (pid: string): Promise<readonly { scopeId: ScopeId }[]> =>
-        pid === OWNER ? [{ scopeId: GSCOPE }] : [],
+      participantScopes: async (pid: string): Promise<readonly ScopeId[]> => (pid === OWNER ? [GSCOPE] : []),
     };
     const d = deps(dir, { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, groupSpec("gap"));
@@ -142,7 +140,7 @@ describe("runTrigger home-scope gate for group homes", () => {
       ],
     };
     const sessions = {
-      listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],
+      participantScopes: async (): Promise<readonly ScopeId[]> => [GSCOPE],
     };
     const d = deps(dir, { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, groupSpec("kicked"));
@@ -157,7 +155,7 @@ describe("runTrigger home-scope gate for group homes", () => {
       groupMembership: async (): Promise<boolean | undefined> => false,
     };
     const sessions = {
-      listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],
+      participantScopes: async (): Promise<readonly ScopeId[]> => [GSCOPE],
     };
     const d: TriggerDeps = {
       deliveries: createDeliveryStore(),

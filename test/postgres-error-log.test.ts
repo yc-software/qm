@@ -96,3 +96,30 @@ test("pg error log pages equal-timestamp records deterministically beyond 200", 
     await pool.end();
   }
 });
+
+test("failed diagnostic inserts retain the original event without its secret", { skip }, async (t) => {
+  const pg = (await import("pg")).default;
+  const db = new pg.Pool({ connectionString: URL });
+  const log = createPostgresErrorLog(URL!);
+  const output = t.mock.method(console, "error", () => {});
+  const secret = "hidden-diagnostic-12345678901234567890123";
+  try {
+    await db.query("ALTER TABLE error_events ADD CONSTRAINT error_reject_test CHECK (category <> 'rejected-test')");
+    log.record({
+      category: "rejected-test",
+      code: "original_failure",
+      message: `Bearer ${secret}`,
+      scopeLabel: scopeId("personal", "U1"),
+    });
+    await log.flush();
+    const diagnostic = output.mock.calls.map((call) => call.arguments.map(String).join(" ")).join("\n");
+    assert.match(diagnostic, /original_failure/);
+    assert.match(diagnostic, /error_reject_test/);
+    assert.match(diagnostic, /23514/);
+    assert.ok(!diagnostic.includes(secret));
+    assert.match(diagnostic, /redacted/);
+  } finally {
+    await db.query("ALTER TABLE error_events DROP CONSTRAINT error_reject_test");
+    await db.end();
+  }
+});

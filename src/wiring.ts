@@ -740,7 +740,7 @@ export function buildApp(
       ? {
           seedFallback: () =>
             installSeedSkills(skills, {
-              dir: layerSkillsDir,
+              dirs: [layerSkillsDir],
               scopeId: orgScope,
               createdBy: LAYER_CREATED_BY,
               reviewer: LAYER_REVIEWER,
@@ -755,16 +755,13 @@ export function buildApp(
   let skillsReady: Promise<void>;
   if (config.seedSkills) {
     const installCatalogs = async (): Promise<void> => {
-      await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope });
-      for (const dir of config.pluginSkillDirs) {
-        if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-        await installSeedSkills(skills, {
-          dir,
-          scopeId: orgScope,
-          createdBy: "system:plugin-skills",
-          reviewer: "system:plugin-skills-reviewer",
-        });
-      }
+      await installSeedSkills(skills, { dirs: [config.skillsSeedDir], scopeId: orgScope });
+      await installSeedSkills(skills, {
+        dirs: config.pluginSkillDirs.filter((dir) => !layerSkillsDir || resolve(dir) !== layerSkillsDir),
+        scopeId: orgScope,
+        createdBy: "system:plugin-skills",
+        reviewer: "system:plugin-skills-reviewer",
+      });
     };
     skillsReady = Promise.all([
       installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
@@ -1305,7 +1302,10 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
       : createMemoryRunSignalStore();
-  const tasks = config.databaseUrl ? createPostgresTaskStore(config.databaseUrl) : createMemoryTaskStore();
+  const tasks =
+    config.sessionStore === "postgres"
+      ? createPostgresTaskStore(requireDbUrl("SESSION_STORE"))
+      : createMemoryTaskStore();
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
       await refreshModels();
@@ -1501,7 +1501,7 @@ export function buildApp(
   const runStore =
     runStoreKind === "postgres"
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
-      : createMemoryRunStore({ maxClaims: config.maxClaims });
+      : createMemoryRunStore({ maxClaims: config.maxClaims, sessions });
   const blockingApprovalSessions = async (): Promise<Set<string>> =>
     new Set(
       (await approvals.entries())
@@ -3016,6 +3016,7 @@ export function serverDeps(
     metrics: built.metrics,
     crons: built.crons,
     loops: built.loops,
+    projects: built.projects,
     deploymentLayer: built.deploymentLayerStore,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),

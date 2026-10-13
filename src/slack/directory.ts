@@ -156,7 +156,13 @@ export function createDirectory(deps: {
           u.profile?.email,
           overrides,
         );
-        if (ids.identityMode === "email" && !u.is_bot && actor.externalId === u.id && u.team_id === ids.ownTeamId)
+        if (
+          ids.identityMode === "email" &&
+          !u.is_bot &&
+          !u.deleted &&
+          actor.externalId === u.id &&
+          u.team_id === ids.ownTeamId
+        )
           missingEmails++;
         const timezone = slackUserTimezone(u);
         byId.set(u.id, { actor, ...(timezone ? { timezone } : {}) });

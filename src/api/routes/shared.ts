@@ -7,10 +7,21 @@ import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
 import { headerValue, sendJson } from "../http.ts";
+import { isObj } from "../../util/objects.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
 export { isObj } from "../../util/objects.ts";
+
+export const NON_OBJECT_BODY = "expected a JSON object body";
+
+export const isObjectBody = (body: unknown): body is Record<string, unknown> => isObj(body) && !Array.isArray(body);
+
+export function rejectNonObjectBody(ctx: Pick<ApiCtx, "body" | "res">): boolean {
+  if (isObjectBody(ctx.body)) return false;
+  sendJson(ctx.res, 400, { error: "bad_request", message: NON_OBJECT_BODY });
+  return true;
+}
 
 export function audit(deps: ServerDeps, e: Omit<AuditEvent, "at">): void {
   deps.auditLog?.record({ at: Date.now(), ...e });

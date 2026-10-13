@@ -330,6 +330,27 @@ test("connector token keys are Postgres-safe (no NUL byte) — round-trip throug
       store.delete(k);
       return v;
     },
+    async insertIfAbsent(k: string, v: KeychainCredential) {
+      rejectNul(k);
+      if (store.has(k)) return false;
+      store.set(k, v);
+      return true;
+    },
+    async update(k: string, fn: (value: KeychainCredential) => KeychainCredential) {
+      rejectNul(k);
+      const v = store.get(k);
+      if (!v) return null;
+      const next = fn(v);
+      store.set(k, next);
+      return next;
+    },
+    async deleteIf(k: string, predicate: (value: KeychainCredential) => boolean) {
+      rejectNul(k);
+      const v = store.get(k);
+      if (!v || !predicate(v)) return false;
+      store.delete(k);
+      return true;
+    },
   };
   const keychain = makeKeychain({ creds });
 

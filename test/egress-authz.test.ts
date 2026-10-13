@@ -23,7 +23,14 @@ const close = (s: Server): Promise<void> => new Promise((r) => s.close(() => r()
 
 function recordingSink() {
   const records: Omit<EgressAuditRecord, "ts">[] = [];
-  return { records, sink: { record: (s: Omit<EgressAuditRecord, "ts">) => records.push(s) } };
+  return {
+    records,
+    sink: {
+      record: (s: Omit<EgressAuditRecord, "ts">) => {
+        records.push(s);
+      },
+    },
+  };
 }
 
 function egressToken(

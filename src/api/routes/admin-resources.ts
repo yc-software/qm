@@ -35,7 +35,7 @@ import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
-import { audit } from "./shared.ts";
+import { audit, isObjectBody, NON_OBJECT_BODY } from "./shared.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
@@ -125,6 +125,7 @@ function generic<V>(
   set: (deps: ServerDeps, scope: string, value: V) => unknown,
 ): AdminResource["apply"] {
   return async (ctx, _actor, scope) => {
+    if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
     const parsed = parse(ctx.body, { scope, deps: ctx.deps });
     if ("error" in parsed) return parsed;
     await Promise.resolve(set(ctx.deps, scope, parsed.value));
@@ -135,7 +136,10 @@ function generic<V>(
 const orgOnly = (scope: string, label: string): { error: string } | null =>
   parseScopeId(scope).kind === "org" ? null : { error: `${label}; target an org scope` };
 
-const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
+const boolBody = (body: unknown): { value: boolean } | { error: string } => {
+  const on = (body as { on?: unknown }).on;
+  return typeof on === "boolean" ? { value: on } : { error: "on must be a boolean" };
+};
 
 const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
@@ -197,6 +201,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "the Auto flagger is org-wide");
       if (bad) return bad;
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
       const body = ctx.body as { reset?: unknown };
       if (body.reset === true) {
         ctx.deps.config!.setAutoFlaggerConfig(null);
@@ -246,6 +251,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "soul",
     get: (deps, scope) => deps.config!.getSoul(scope),
     apply: async (ctx, actor, scope) => {
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
       const body = ctx.body as { content?: unknown; expectedVersion?: unknown };
       if (typeof body.content !== "string") return { error: "soul requires { content: string }" };
       if (body.content.length > MAX_SOUL_CHARS) return { error: `SOUL must be at most ${MAX_SOUL_CHARS} characters` };
@@ -287,7 +293,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (!deps.channelPolicy) return { error: "not available on this deployment", status: 404 };
       const ref = channelContainer(scope);
       if (!ref) return { error: "ambient policy applies to channel and group scopes only" };
-      const b = (ctx.body ?? {}) as {
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
+      const b = ctx.body as {
         orders?: unknown;
         bots?: unknown;
         ambientEnabled?: unknown;
@@ -341,24 +348,27 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get: (deps) => deps.featureFlags?.list(),
     apply: async (ctx, actor, scope) => {
       if (!ctx.deps.featureFlags) return { error: "not available on this deployment", status: 404 };
-      const body = (ctx.body ?? {}) as { featureName?: unknown; scopeId?: unknown; on?: unknown };
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
+      const body = ctx.body as { featureName?: unknown; scopeId?: unknown; on?: unknown };
       if (typeof body.featureName !== "string" || !(FEATURE_NAMES as readonly string[]).includes(body.featureName)) {
         return { error: `feature-flags requires featureName: ${FEATURE_NAMES.join(" | ")}` };
       }
       if (typeof body.scopeId !== "string" || !body.scopeId.trim()) {
         return { error: "feature-flags requires scopeId" };
       }
+      const parsed = boolBody(body);
+      if ("error" in parsed) return parsed;
       const before = await ctx.deps.featureFlags.enabled(body.featureName as FeatureName, body.scopeId as ScopeId);
       await ctx.deps.featureFlags.setEnabled(
         body.featureName as FeatureName,
         body.scopeId as ScopeId,
-        body.on === true,
+        parsed.value,
         actor.id,
       );
       audit(ctx.deps, {
         principalId: actor.id,
         action: "feature-flag.update",
-        resource: `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
+        resource: `${body.featureName}:${body.scopeId}:${before}->${parsed.value}`,
         scopeLabel: scope,
       });
       return { ok: true };
@@ -422,6 +432,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, actor, scope) => {
       const bad = orgOnly(scope, "internal member overrides are org-wide");
       if (bad) return bad;
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
       const raw = (ctx.body as { members?: unknown }).members;
       if (!Array.isArray(raw)) return { error: "internal-member-overrides requires { members: string[] }" };
       if (raw.length > 500) return { error: "internal-member-overrides accepts at most 500 entries" };
@@ -518,6 +529,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
     get: (deps, scope) => deps.config!.getBaseModel(scope),
     apply: async (ctx, _actor, scope) => {
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
       const raw = (ctx.body as { modelId?: unknown }).modelId;
       if (raw !== undefined && raw !== null && typeof raw !== "string")
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
@@ -593,11 +605,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const bad = orgOnly(scope, `${purpose} runtime defaults are org-wide`);
         if (bad) return bad;
       }
-      if ((ctx.body as { inherit?: unknown } | null)?.inherit === true || (purpose && ctx.body === null)) {
+      if ((purpose && ctx.body === null) || (isObjectBody(ctx.body) && ctx.body.inherit === true)) {
         if (purpose) await ctx.deps.config!.clearPurposeRuntime(purpose);
         else await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
         return { ok: true };
       }
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
       const harnessId = (ctx.body as { harnessId?: unknown }).harnessId;
       const modelId = (ctx.body as { modelId?: unknown }).modelId;
       const effortLevel = (ctx.body as { effortLevel?: unknown }).effortLevel ?? (purpose ? undefined : "auto");
@@ -749,7 +762,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "branding is org-wide");
       if (bad) return bad;
-      const body = (ctx.body ?? {}) as {
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
+      const body = ctx.body as {
         accent?: unknown;
         mark?: unknown;
         markUrl?: unknown;
@@ -809,6 +823,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "the browse model is org-wide");
       if (bad) return bad;
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
       const raw = (ctx.body as { modelId?: unknown }).modelId;
       if (raw !== undefined && raw !== null && typeof raw !== "string") {
         return { error: "browse-model requires { modelId: string } (empty string clears the override)" };
@@ -857,6 +872,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get: (deps, scope) => deps.config!.listConnectorClients(scope),
     apply: async (ctx, actor, scope) => {
       const { deps } = ctx;
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
       const b = ctx.body as {
         provider?: unknown;
         clientId?: unknown;
@@ -911,6 +927,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (!deps.serviceCreds) return { error: "credential store not wired", code: "not_found", status: 404 };
       const bad = orgOnly(scope, "service credentials are org-scoped");
       if (bad) return bad;
+      if (!isObjectBody(ctx.body)) return { error: NON_OBJECT_BODY };
       const b = ctx.body as {
         slug?: unknown;
         name?: unknown;

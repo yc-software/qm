@@ -1,20 +1,35 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, TurnOrigin, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
+import { pgTextSafe } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
+const turnText = z.string().refine((value) => !value.includes("\u0000"));
+const turnRequestSchema = z.looseObject({
+  text: z.string(),
+  actor: z.looseObject({ externalId: turnText.min(1) }),
+  conversation: z.looseObject({
+    kind: z.enum(["dm", "channel", "group"]),
+    threadRef: turnText.min(1),
+    channelRef: turnText.optional(),
+  }),
+  attachments: z
+    .array(
+      z.looseObject({
+        name: turnText,
+        mimetype: turnText.min(1),
+        sizeBytes: z.number().int().nonnegative(),
+        blobId: turnText.min(1),
+      }),
+    )
+    .optional(),
+});
+
 function isTurnRequest(body: unknown): body is TurnRequest {
-  return (
-    isObj(body) &&
-    typeof body.text === "string" &&
-    isObj(body.actor) &&
-    typeof body.actor.externalId === "string" &&
-    body.actor.externalId !== "" &&
-    isObj(body.conversation)
-  );
+  return turnRequestSchema.safeParse(body).success;
 }
 
 const MAX_CLIENT_TOOL_SCHEMA_CHARS = 16_000;
@@ -109,7 +124,14 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
-  return { request: { ...rest, ...(origin ? { origin } : {}), ...(clientTools?.length ? { clientTools } : {}) } };
+  return {
+    request: {
+      ...rest,
+      text: pgTextSafe(rest.text),
+      ...(origin ? { origin } : {}),
+      ...(clientTools?.length ? { clientTools } : {}),
+    },
+  };
 }
 
 async function postTurn(ctx: ApiCtx): Promise<void> {

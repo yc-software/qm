@@ -592,7 +592,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET|PUT",
         path: "/v1/memory/self",
-        summary: "read or rewrite (curate) this conversation's whole notebook; rewriting is destructive",
+        summary:
+          "read or rewrite (curate) this conversation's whole notebook; PUT sends back the revision from GET and gets 409 if the notebook changed",
       },
       { method: "GET", path: "/v1/memory/history", summary: "list notebook versions available to undo a rewrite" },
       {

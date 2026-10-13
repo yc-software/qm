@@ -6,6 +6,7 @@ import { writePidFile } from "./lease.ts";
 import { run } from "./proc.ts";
 import { ensureDockerDaemon } from "./postgres.ts";
 import { bestEffortValue, sleep } from "./util.ts";
+import { quickTunnelUrl } from "../../../cli/src/util.ts";
 import type { DevSandboxBackend, DevSandboxChoice } from "./types.ts";
 
 export interface SandboxResolution {
@@ -300,7 +301,7 @@ export async function resolveSandbox(opts: {
 async function startQuickTunnel(corePort: number, lock: string, log: (msg: string) => void): Promise<string | null> {
   if ((await run("cloudflared", ["--version"], { timeoutMs: 15_000 })).code !== 0) return null;
   const logPath = join(lock, "tunnel.log");
-  const fd = openSync(logPath, "a");
+  const fd = openSync(logPath, "w");
   const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${corePort}`, "--no-autoupdate"], {
     detached: true,
     stdio: ["ignore", fd, fd],
@@ -309,9 +310,7 @@ async function startQuickTunnel(corePort: number, lock: string, log: (msg: strin
   if (!child.pid) return null;
   writePidFile(lock, "tunnel.pid", child.pid);
   for (let i = 0; i < 20; i++) {
-    const url = bestEffortValue(
-      () => readFileSync(logPath, "utf8").match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0] ?? "",
-    );
+    const url = bestEffortValue(() => quickTunnelUrl(readFileSync(logPath, "utf8")) ?? "");
     if (url) {
       log(`agent self-API tunnel: ${url} -> :${corePort} (lets the sandbox reach this core for crons/sends)`);
       return url;

@@ -300,6 +300,7 @@ export type SessionOriginFilter = SessionOrigin | "other_background";
 
 interface ListLlmRequestsOptions {
   turnSeqs?: number[];
+  turnSeqRanges?: readonly (readonly [number, number])[];
   orphans?: boolean;
   omitRequest?: boolean;
 }
@@ -753,6 +754,7 @@ export interface SessionStore {
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
+  participantScopes(principalId: string): Promise<ScopeId[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 
   deleteSession(sessionId: string): Promise<void>;
@@ -764,7 +766,12 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
-  visibleEntries(sessionId: string, principalId: string): Promise<SessionEntry[]>;
+  visibleEntries(
+    sessionId: string,
+    principalId: string,
+    opts?: Pick<GetEntriesOptions, "beforeSeq" | "limit">,
+  ): Promise<SessionEntry[]>;
+  visibleEntryCount(sessionId: string, principalId: string, beforeSeq: number): Promise<number>;
 
   searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
 

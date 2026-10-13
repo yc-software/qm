@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import {
   MODEL_PROVIDER_KEYS,
   effectiveModelProvider,
+  effectiveSandboxBackend,
   localSandboxActive,
   mockHarnessWarning,
   validatePortalTrust,
@@ -12,7 +13,7 @@ import {
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets, serviceSecretValue } from "../secrets.ts";
-import { emailTransportConfigured } from "../preflight.ts";
+import { emailTransportConfigured, smtpTlsMode } from "../preflight.ts";
 
 export function slackManifestBotScopes(manifest: string): string[] {
   try {
@@ -159,15 +160,11 @@ export async function doctorCommon(
       );
     step("required local secret values: ok");
   }
-  if (localSandboxActive(config)) {
-    step("local Docker sandbox: configured");
-  } else if (config.target === "aws") {
-    step("AWS Lambda MicroVM sandbox: configured");
-  } else if (config.sandbox) {
-    step("sandbox: sprites boot the platform's stock image");
-  } else {
-    step("sandbox: not configured — agents cannot execute commands (HARNESS=mock turns only)");
-  }
+  const fallbackBackend = config.sandbox ? "sprites" : undefined;
+  const backend = effectiveSandboxBackend(config) ?? (config.target === "aws" ? "aws" : fallbackBackend);
+  if (localSandboxActive(config)) step("local Docker sandbox: configured");
+  else if (backend) step(`sandbox: ${backend} configured`);
+  else step("sandbox: not configured — agents cannot execute commands (HARNESS=mock turns only)");
 
   if (config.services.includes("slack")) {
     const bot = deploymentSecretValue("SLACK_BOT_TOKEN", secrets.get("SLACK_BOT_TOKEN"));
@@ -274,15 +271,20 @@ async function resendCheck(apiKey: string): Promise<void> {
       `could not reach the Resend API: ${errMessage(e)} — check network access (and any proxy) and retry`,
     );
   }
+  if (res.status === 401) {
+    const error = (await res.json().catch(() => null)) as { name?: unknown } | null;
+    if (error?.name === "restricted_api_key") return;
+  }
   if (res.status === 401 || res.status === 403)
     throw new CliError("Resend rejected RESEND_API_KEY — mint a key with send access at https://resend.com/api-keys");
   if (!res.ok) throw new CliError(`the Resend API returned HTTP ${res.status}; retry when it recovers`);
 }
 
-async function smtpReachable(host: string, port: number): Promise<string> {
+async function smtpReachable(host: string, port: number, implicitTls: boolean): Promise<string> {
   const { connect } = await import("node:net");
+  const { connect: tlsConnect } = await import("node:tls");
   return new Promise<string>((resolve, reject) => {
-    const socket = connect({ host, port });
+    const socket = implicitTls ? tlsConnect({ host, port, servername: host }) : connect({ host, port });
     const done = (error?: Error, greeting?: string): void => {
       socket.destroy();
       if (error) reject(error);
@@ -329,7 +331,7 @@ async function authBrokerCheck(config: QmConfig, secrets: Map<string, string>, h
   const port = Number(config.env.auth?.SMTP_PORT ?? 587);
   let greeting: string;
   try {
-    greeting = await smtpReachable(host, port);
+    greeting = await smtpReachable(host, port, smtpTlsMode(config.env.auth?.SMTP_TLS, port) === "implicit");
   } catch (e) {
     throw new CliError(
       `SMTP relay ${host}:${port} is unreachable: ${errMessage(e)} — the broker cannot send sign-in links`,

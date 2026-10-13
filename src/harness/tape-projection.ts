@@ -398,7 +398,7 @@ type TranscriptStore = Pick<
   SessionStore,
   "getEntries" | "visibleEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
 > &
-  Partial<Pick<SessionStore, "getTranscriptEntries" | "canReadTranscriptSuffix">>;
+  Partial<Pick<SessionStore, "getTranscriptEntries" | "canReadTranscriptSuffix" | "visibleEntryCount">>;
 
 interface TranscriptRead {
   entries: SessionEntry[];
@@ -441,6 +441,7 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
         }
       }
       if (beforeSeq !== undefined) {
+        if (limit !== undefined) return null;
         const full = await projected(sessionId);
         return full ? { ...full, entries: full.entries.filter((entry) => entry.seq < beforeSeq) } : null;
       }
@@ -476,19 +477,23 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
         return { entries, earlier: (rows[0]?.seq ?? 0) + earlier.length };
       }
       const since = opts?.sinceSeq !== undefined ? read.entries.filter((e) => e.seq >= opts.sinceSeq!) : read.entries;
-      const limit = opts?.beforeSeq !== undefined && !read.anchored ? undefined : opts?.limit;
-      const entries = limit !== undefined ? since.slice(-limit) : since;
+      const entries = opts?.limit !== undefined ? since.slice(-opts.limit) : since;
       const below = read.anchored ? read.base + 1 : 0;
       const earlier = read.entries.slice(0, read.entries.length - entries.length).filter((e) => e.type !== "soul");
       return { entries, earlier: earlier.length + below };
     },
     async forViewer(sessionId, principalId, opts?): Promise<TranscriptRead> {
-      const fallback = async (): Promise<TranscriptRead> => ({
-        entries: (await sessions.visibleEntries(sessionId, principalId)).filter(
-          (entry) => opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq,
-        ),
-        earlier: 0,
-      });
+      const fallback = async (): Promise<TranscriptRead> => {
+        const limit = opts?.limit;
+        const rows = await sessions.visibleEntries(sessionId, principalId, {
+          ...(opts?.beforeSeq !== undefined ? { beforeSeq: opts.beforeSeq } : {}),
+          ...(limit !== undefined ? { limit: limit + 1 } : {}),
+        });
+        if (limit === undefined || rows.length <= limit) return { entries: rows, earlier: 0 };
+        const entries = rows.slice(1);
+        const earlier = await sessions.visibleEntryCount?.(sessionId, principalId, entries[0]!.seq);
+        return { entries, earlier: earlier ?? 1 };
+      };
       let windows;
       try {
         windows = await sessions.participantWindowsOf(sessionId);

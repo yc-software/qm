@@ -170,9 +170,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-          {{- if $svc.startupProbe }}
+          {{- with $svc.startupProbe }}
           startupProbe:
-            {{- toYaml $svc.startupProbe | nindent 12 }}
+            {{- toYaml (ternary (omit . "httpGet") . (or (hasKey . "exec") (hasKey . "tcpSocket") (hasKey . "grpc"))) | nindent 12 }}
           {{- end }}
           {{- if $svc.healthPath }}
           readinessProbe:

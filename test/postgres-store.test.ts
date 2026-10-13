@@ -1453,6 +1453,31 @@ test(
       );
       const emptyRow = all.find((r) => r.id === empty.id)!;
       assert.deepEqual([emptyRow.firstMessage, emptyRow.lastMessage], ["", ""], "an entry-less legacy row is blank");
+      assert.deepEqual(
+        [...(await s.lastUserMessages([ids[1]!, empty.id, junk.id]))],
+        [[ids[1]!, "close 1"]],
+        "lastUserMessages derives legacy previews and omits rows without a usable user turn",
+      );
+      const query = pg.Client.prototype.query;
+      const sent: string[] = [];
+      pg.Client.prototype.query = function (...args: any[]): any {
+        sent.push(typeof args[0] === "string" ? args[0] : String(args[0]?.text ?? ""));
+        return Reflect.apply(query, this, args);
+      };
+      try {
+        assert.equal((await s.lastUserMessages([ids[2]!])).get(ids[2]!), "close 2");
+      } finally {
+        pg.Client.prototype.query = query;
+      }
+      assert.ok(
+        sent.some((sql) => sql.includes("session_entries")),
+        "the legacy row derives its last preview",
+      );
+      assert.equal(
+        sent.some((sql) => sql.includes("first_user")),
+        false,
+        "lastUserMessages never fetches the opening user payload",
+      );
 
       const { lease } = await s.acquireLease(ids[0]!);
       await s.append(lease!, { type: "user", payload: { text: "fresh" }, scopeLabel: scope });
@@ -1684,7 +1709,7 @@ test("pg scopeHasSessions + listByScope answer scope questions without a table s
   assert.deepEqual(new Set(listed.map((x) => x.id)), new Set([a.id, b.id]), "only the asked-for scope comes back");
 });
 
-test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => {
+test("pg JSON function repair runs once and preserves dependent indexes", { skip }, async () => {
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -1694,9 +1719,9 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
       LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $safe_jsonb$
       BEGIN RETURN t::jsonb; EXCEPTION WHEN others THEN RETURN NULL; END $safe_jsonb$`);
     await raw.query("CREATE INDEX safe_jsonb_parallel_repair_test ON session_entries ((safe_jsonb(payload) ->> 'ts'))");
-
-    const s = createPostgresSessionStore(URL!);
-    await s.scanAll();
+    await raw.query("ALTER FUNCTION entry_search_text(text) PARALLEL SAFE");
+    await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0026-json-functions-parallel'");
+    await migrateRegisteredPgSchemas(URL!);
 
     const result = await raw.query(
       `SELECT proname, proparallel
@@ -1719,6 +1744,16 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
       (await raw.query("SELECT to_regclass('safe_jsonb_parallel_repair_test') AS index")).rows[0]!.index,
       "safe_jsonb_parallel_repair_test",
     );
+    const versions = async () =>
+      (
+        await raw.query(
+          "SELECT oid, xmin::text FROM pg_proc WHERE oid IN ('safe_jsonb(text)'::regprocedure, 'entry_search_text(text)'::regprocedure) ORDER BY oid",
+        )
+      ).rows;
+    const before = await versions();
+    await createPostgresSessionStore(URL!).scanAll();
+    await migrateRegisteredPgSchemas(URL!);
+    assert.deepEqual(await versions(), before, "later startups and migrations do not touch the function catalog");
   } finally {
     await raw.query("DROP INDEX IF EXISTS safe_jsonb_parallel_repair_test");
     await raw.query("DROP FUNCTION IF EXISTS safe_jsonb(text)");
@@ -3197,6 +3232,30 @@ test(
   },
 );
 
+test("pg clearing a security taint keeps overheard entries out of user turns", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const owner = `taint-overheard-${randomUUID()}`;
+  const scope = scopeId("personal", owner);
+  const session = await s.getOrCreateByThread(owner, "dm", scope);
+  await s.addParticipant(session.id, owner);
+  const { lease } = await s.acquireLease(session.id);
+  assert.ok(lease);
+  await s.append(lease, { type: "user", payload: { text: "ask" }, scopeLabel: scope });
+  await s.append(lease, {
+    type: "user",
+    payload: { text: "aside", overheard: true, securityTainted: true },
+    scopeLabel: scope,
+  });
+  await s.releaseLease(lease);
+  const turns = async () =>
+    (await s.attributedTurns()).filter((row) => row.sessionId === session.id).reduce((sum, row) => sum + row.turns, 0);
+  assert.equal(await turns(), 1);
+  assert.equal(await s.clearSecurityTaint(session.id), true);
+  assert.equal(await turns(), 1);
+  const entries = await s.getEntries(session.id);
+  assert.deepEqual(entries[1]!.payload, { text: "aside", overheard: true });
+});
+
 test("pg transcript write failure rolls back the entry and its counters", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "canonical-failure");
@@ -3541,3 +3600,126 @@ test(
     }
   },
 );
+
+test("pg legacy preview fallback seeks the user-turn index instead of walking a long tool tail", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("channel", `pvw-tail-${randomUUID()}`);
+  const session = await s.getOrCreateByThread(`pvwTail-${randomUUID()}`, "channel", scope);
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  try {
+    await raw.query(
+      `INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at)
+       SELECT $1, n, NULLIF(n - 1, -1), CASE WHEN n < 2 THEN 'user' ELSE 'tool_result' END,
+              CASE WHEN n < 2 THEN '{"text":"turn ' || n || '"}' ELSE '{"output":"' || repeat('x', 200) || '"}' END,
+              $2, 1000 + n
+         FROM generate_series(0, 5000) n`,
+      [session.id, scope],
+    );
+    await raw.query(
+      "UPDATE sessions SET first_user_preview = NULL, last_user_preview = NULL, turns = 2 WHERE id = $1",
+      [session.id],
+    );
+    await raw.query("ANALYZE session_entries");
+    const query = pg.Client.prototype.query;
+    const sent: string[] = [];
+    pg.Client.prototype.query = function (...args: any[]): any {
+      sent.push(typeof args[0] === "string" ? args[0] : String(args[0]?.text ?? ""));
+      return Reflect.apply(query, this, args);
+    };
+    let page;
+    try {
+      page = await s.scopeSessionSummaries(scope, false, { limit: 5 });
+    } finally {
+      pg.Client.prototype.query = query;
+    }
+    assert.deepEqual(
+      page.map((r) => [r.firstMessage, r.lastMessage]),
+      [["turn 0", "turn 1"]],
+    );
+    const fallback = sent.find((sql) => sql.includes("FROM session_entries e") && sql.includes("_user"));
+    assert.ok(fallback, "the legacy row took the derived-preview fallback");
+    const plan = JSON.stringify(
+      (await raw.query(`EXPLAIN (FORMAT JSON) ${fallback}`, [[session.id]])).rows[0]["QUERY PLAN"],
+    );
+    assert.match(plan, /session_entries_user_attributed/);
+    assert.doesNotMatch(plan, /session_entries_pkey/, "no walk over the tool tail by entry seq");
+  } finally {
+    await raw.end();
+  }
+});
+
+test("pg scoped run list filters by session scope before the limit", { skip }, async () => {
+  const sessions = createPostgresSessionStore(URL!);
+  const { runs, close } = createPostgresRunStore(URL!);
+  try {
+    const tag = randomUUID();
+    const mine = await sessions.getOrCreateByThread(`dm:mine-${tag}`, "dm", scopeId("personal", `mine-${tag}`));
+    const busy = await sessions.getOrCreateByThread(`dm:busy-${tag}`, "dm", scopeId("personal", `busy-${tag}`));
+    await runs.enqueue({ sessionId: mine.threadRef, request: turn("old") });
+    await new Promise((r) => setTimeout(r, 5));
+    for (let i = 0; i < 5; i++) await runs.enqueue({ sessionId: busy.threadRef, request: turn(`noise ${i}`) });
+    assert.deepEqual(
+      (await runs.list({ limit: 2, scopeId: mine.scopeId })).map((run) => run.sessionId),
+      [mine.threadRef],
+    );
+    assert.equal((await runs.list({ scopeId: busy.scopeId, active: true })).length, 5);
+    const claimed = await runs.claimForSession(mine.threadRef, "w", 60_000);
+    assert.ok(claimed);
+    await runs.complete(claimed.id, claimed.leaseToken ?? "", { status: "ok", reply: "done" });
+    assert.deepEqual(await runs.list({ scopeId: mine.scopeId, active: true }), []);
+  } finally {
+    await close();
+  }
+});
+
+test("pg llm request turn-seq ranges return only requests inside a delivery's range", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("channel", `ranges-${randomUUID()}`);
+  const session = await s.getOrCreateByThread(`ranges-${randomUUID()}`, "channel", scope);
+  for (const turnSeq of [3, 90_000, 200_000]) {
+    await s.recordLlmRequest(session.id, {
+      turnSeq,
+      step: 0,
+      model: "mock",
+      scopeLabel: scope,
+      promptEnvelope: { model: "mock", messages: [] },
+      truncated: false,
+    });
+  }
+  const rows = await s.listLlmRequests(session.id, { turnSeqRanges: [[0, 100_000]], omitRequest: true });
+  assert.deepEqual(
+    rows.map((r) => r.turnSeq),
+    [3, 90_000],
+  );
+  assert.ok(rows.every((r) => r.request === null));
+  const split = await s.listLlmRequests(session.id, {
+    turnSeqRanges: [
+      [4, 89_999],
+      [150_000, 250_000],
+    ],
+  });
+  assert.deepEqual(
+    split.map((r) => r.turnSeq),
+    [200_000],
+  );
+});
+
+test("pg bounded visibleEntries pages within the viewer's window", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("channel", `visible-${randomUUID()}`);
+  const session = await s.getOrCreateByThread(`visible-${randomUUID()}`, "channel", scope);
+  const { lease } = await s.acquireLease(session.id);
+  await s.append(lease!, { type: "user", payload: { text: "before join" }, scopeLabel: scope });
+  await s.releaseLease(lease!);
+  await s.addParticipant(session.id, "viewer");
+  const again = (await s.acquireLease(session.id)).lease!;
+  for (let i = 0; i < 6; i++) await s.append(again, { type: "user", payload: { text: `m${i}` }, scopeLabel: scope });
+  await s.releaseLease(again);
+  const all = await s.visibleEntries(session.id, "viewer");
+  assert.equal(all.length, 6, "the pre-join entry stays hidden");
+  assert.deepEqual(await s.visibleEntries(session.id, "viewer", { beforeSeq: all[4]!.seq, limit: 2 }), all.slice(2, 4));
+  assert.deepEqual(await s.visibleEntries(session.id, "viewer", { beforeSeq: all[1]!.seq, limit: 5 }), all.slice(0, 1));
+  assert.equal(await s.visibleEntryCount(session.id, "viewer", all[4]!.seq), 4);
+  assert.equal(await s.visibleEntryCount(session.id, "stranger", all[4]!.seq), 0);
+});

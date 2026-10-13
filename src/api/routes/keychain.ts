@@ -11,7 +11,7 @@ import { approvalCardDestination } from "../../credentials/keychain-approval.ts"
 import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, resolveCapabilityDestination } from "./shared.ts";
+import { audit, rejectNonObjectBody, resolveCapabilityDestination } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 
@@ -72,6 +72,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "unauthorized", message: "keychain routes require an agent capability token" });
   const kc = deps.keychain;
   const actorId = capability.actorId;
+  if (method !== "GET" && rejectNonObjectBody(ctx)) return;
   try {
     if (method === "POST" && pathname === "/v1/keychain/credentials") {
       const b = body as {

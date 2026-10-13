@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readlinkSync } from "node:fs";
 import { killTree } from "./proc.ts";
 
 function nodePids(): Array<{ pid: number; command: string }> {
@@ -31,7 +31,7 @@ function processEnv(pid: number): string {
 function processCwd(pid: number): string {
   if (process.platform === "linux") {
     try {
-      return readFileSync(`/proc/${pid}/cwd`, "utf8");
+      return readlinkSync(`/proc/${pid}/cwd`);
     } catch {
       return "";
     }

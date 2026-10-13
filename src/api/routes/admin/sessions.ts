@@ -32,7 +32,7 @@ import {
 
 const SESSIONS_PAGE_LIMIT_MAX = 200;
 const SESSIONS_PAGE_LIMIT_DEFAULT = 50;
-const TRANSCRIPT_LIMIT_MAX = 50000;
+const TRANSCRIPT_LIMIT_MAX = 2000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
 const SCOPE_AGGREGATE_TTL_MS = 15_000;
 
@@ -114,33 +114,23 @@ async function deliveryProvenanceSidecars(
         for (const d of group) out.set(d.id, { provenance: d.provenance! });
         return;
       }
-      const seqBounds = group.map((d) => d.provenance!.sourceUserSeq).filter((s): s is number => s !== undefined);
-      const sourceEntries =
-        seqBounds.length && deps.sessions
-          ? (
-              await createTranscriptSource(deps.sessions).forRender(sourceSession.id, {
-                sinceSeq: Math.min(...seqBounds),
-              })
-            ).entries
-          : [];
-      const turnSeqsFor = (p: DeliveryProvenance): Set<number> => {
-        const seqs = new Set<number>();
-        if (p.sourceUserSeq === undefined) return seqs;
-        for (const e of sourceEntries) {
-          if (e.seq < p.sourceUserSeq) continue;
-          if (p.sourceAssistantEntrySeq !== undefined && e.seq > p.sourceAssistantEntrySeq) continue;
-          if (e.type === "user") seqs.add(e.seq);
-        }
-        seqs.add(p.sourceUserSeq);
-        return seqs;
-      };
-      const perDelivery = group.map((d) => ({ d, turnSeqs: turnSeqsFor(d.provenance!) }));
-      const allTurnSeqs = new Set(perDelivery.flatMap(({ turnSeqs }) => [...turnSeqs]));
-      const requests = allTurnSeqs.size
-        ? ((await deps.sessions?.listLlmRequests(sourceSession.id, { turnSeqs: [...allTurnSeqs] })) ?? [])
+      const unbounded = group.some(
+        (d) => d.provenance!.sourceUserSeq !== undefined && d.provenance!.sourceAssistantEntrySeq === undefined,
+      );
+      const latest = unbounded && deps.sessions ? await deps.sessions.latestEntrySeq(sourceSession.id) : -1;
+      const turnRange = (p: DeliveryProvenance): [number, number] | null =>
+        p.sourceUserSeq === undefined
+          ? null
+          : [p.sourceUserSeq, Math.max(p.sourceUserSeq, p.sourceAssistantEntrySeq ?? latest)];
+      const perDelivery = group.map((d) => ({ d, range: turnRange(d.provenance!) }));
+      const ranges = perDelivery.flatMap(({ range }) => (range ? [range] : []));
+      const requests = ranges.length
+        ? ((await deps.sessions?.listLlmRequests(sourceSession.id, { turnSeqRanges: ranges, omitRequest: true })) ?? [])
         : [];
-      for (const { d, turnSeqs } of perDelivery) {
-        const own = requests.filter((r) => r.turnSeq !== null && turnSeqs.has(r.turnSeq));
+      for (const { d, range } of perDelivery) {
+        const own = range
+          ? requests.filter((r) => r.turnSeq !== null && r.turnSeq >= range[0] && r.turnSeq <= range[1])
+          : [];
         out.set(d.id, {
           provenance: d.provenance!,
           sourceSession,
@@ -356,25 +346,27 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   if (!scoped) return;
   const { actor, scope, record: session } = scoped;
   audit(deps, { principalId: actor.id, action: "session.read", resource: id, scopeLabel: session.scopeId });
-  const want = Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || TRANSCRIPT_LIMIT_DEFAULT);
-  const all = want >= TRANSCRIPT_LIMIT_MAX;
-  const limit = Math.min(want, TRANSCRIPT_LIMIT_MAX);
-  const raw = deps.sessions
-    ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).entries
-    : [];
-  const hasMore = !all && raw.length > limit;
-  const entries = await labelTranscriptEntries(
-    app,
-    deps,
-    session,
-    transcriptEntries(hasMore ? raw.slice(raw.length - limit) : raw),
+  const limit = Math.min(
+    TRANSCRIPT_LIMIT_MAX,
+    Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || TRANSCRIPT_LIMIT_DEFAULT),
   );
-  const recipientDeliveries = deps.deliveries
-    ? await deps.deliveries.listByRecipientThread(session.threadRef, { limit: 100 })
+  const beforeParam = url.searchParams.get("beforeSeq");
+  const beforeSeq = beforeParam === null || beforeParam === "" ? undefined : Number(beforeParam);
+  if (beforeSeq !== undefined && !(Number.isInteger(beforeSeq) && beforeSeq > 0))
+    return sendJson(res, 400, { error: "bad_request", message: "beforeSeq must be a positive integer" });
+  const raw = deps.sessions
+    ? (await createTranscriptSource(deps.sessions).forRender(id, { limit: limit + 1, beforeSeq })).entries
     : [];
-  const sourceDeliveries = deps.deliveries
-    ? await deps.deliveries.listBySourceSession(session.id, session.threadRef, { limit: 100 })
-    : [];
+  const hasMore = raw.length > limit;
+  const page = hasMore ? raw.slice(raw.length - limit) : raw;
+  const entries = await labelTranscriptEntries(app, deps, session, transcriptEntries(page));
+  const olderPage = beforeSeq !== undefined;
+  const recipientDeliveries =
+    deps.deliveries && !olderPage ? await deps.deliveries.listByRecipientThread(session.threadRef, { limit: 100 }) : [];
+  const sourceDeliveries =
+    deps.deliveries && !olderPage
+      ? await deps.deliveries.listBySourceSession(session.id, session.threadRef, { limit: 100 })
+      : [];
   const sidecars = await deliveryProvenanceSidecars(deps, recipientDeliveries, scope);
   const recipientDeliveryEvents = await Promise.all(
     recipientDeliveries.map(async (d) => {
@@ -417,6 +409,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
     entries,
     deliveryEvents,
     hasMore,
+    ...(hasMore ? { nextBeforeSeq: page[0]!.seq } : {}),
     limit,
     origin: await sessionOrigin(app, session, scope),
   });
@@ -434,20 +427,18 @@ export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {
     scopeLabel: scope,
   });
   const orgWide = parseScopeId(scope).kind === "org";
-  const rows = (await deps.deliveries?.listShadow({ limit: 200 })) ?? [];
+  const rows = (await deps.deliveries?.listShadow({ limit: 200, ...(orgWide ? {} : { sourceScopeId: scope }) })) ?? [];
   const shadow = await Promise.all(
-    rows
-      .filter((d) => orgWide || d.provenance?.sourceScopeId === scope)
-      .map(async (d) => ({
-        deliveryId: d.id,
-        text: d.text,
-        destination: d.destination,
-        createdAt: d.createdAt,
-        idempotencyKey: d.idempotencyKey,
-        provenance: d.provenance ?? null,
-        shadow: true as const,
-        origin: await deliveryOrigin(app, d, scope),
-      })),
+    rows.map(async (d) => ({
+      deliveryId: d.id,
+      text: d.text,
+      destination: d.destination,
+      createdAt: d.createdAt,
+      idempotencyKey: d.idempotencyKey,
+      provenance: d.provenance ?? null,
+      shadow: true as const,
+      origin: await deliveryOrigin(app, d, scope),
+    })),
   );
   return sendJson(res, 200, { scopeId: scope, shadow });
 }

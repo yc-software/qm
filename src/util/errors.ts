@@ -2,7 +2,13 @@ import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts
 import { errChain as errMessage, errDetail, failureCode } from "../../plugins/chassis/src/errors.ts";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
 
-export { errChain as errMessage, failureCode, swallow, swallowAs } from "../../plugins/chassis/src/errors.ts";
+export {
+  errChain as errMessage,
+  errDetail,
+  failureCode,
+  swallow,
+  swallowAs,
+} from "../../plugins/chassis/src/errors.ts";
 
 export function asError(e: unknown): Error {
   return e instanceof Error ? e : new Error(errMessage(e), { cause: e });

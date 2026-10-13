@@ -22,7 +22,7 @@ interface EgressAuditQuery {
 }
 
 export interface EgressAuditSink {
-  record(r: Omit<EgressAuditRecord, "ts">): void;
+  record(r: Omit<EgressAuditRecord, "ts">): void | Promise<void>;
   list(opts?: EgressAuditQuery): Promise<EgressAuditRecord[]>;
 }
 

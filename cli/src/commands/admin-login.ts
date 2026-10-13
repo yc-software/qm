@@ -71,7 +71,10 @@ export function runAdminLogin(options: { configPath?: string; envFile?: string; 
   if (loaded && (!loaded.config.services.includes("portal") || !loaded.config.services.includes("admin"))) {
     throw new CliError("admin-login requires the portal and admin services");
   }
-  const env = readEnvFile(options.envFile ?? join(loaded ? dirname(loaded.path) : process.cwd(), ".env"));
+  const env = readEnvFile(
+    options.envFile ?? join(loaded ? dirname(loaded.path) : process.cwd(), ".env"),
+    options.envFile !== undefined,
+  );
   const secretValue = (name: string): string | undefined => deploymentSecretValue(name, env.get(name));
   const config = loaded?.config;
   note(

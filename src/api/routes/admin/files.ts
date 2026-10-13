@@ -3,7 +3,7 @@ import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
+import { audit, authorizeAdmin, rejectNonObjectBody, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
 
@@ -132,6 +132,7 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
   if (!deps.blobTransfer)
     return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
   const { actor, scope } = authz;
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as { blobId?: unknown; name?: unknown; mimetype?: unknown };
   const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
   const name = safeAttachmentName(typeof b.name === "string" ? b.name : "");

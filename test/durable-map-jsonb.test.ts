@@ -29,3 +29,40 @@ test("keys are sanitized too", () => {
   const out = jsonbStringify({ ["k\u0000ey"]: 1 });
   assert.equal(out, '{"key":1}');
 });
+
+for (const [name, value] of [
+  ["dates", new Date("2026-01-01T00:00:00Z")],
+  ["URLs", new URL("https://example.com/path")],
+  ["custom toJSON", { toJSON: () => ({ text: "a\u0000b\ud800" }) }],
+] as const) {
+  test(`jsonb preserves JSON serialization for ${name}`, () => {
+    const expected = JSON.parse(JSON.stringify(value));
+    if (name === "custom toJSON") expected.text = "ab\ufffd";
+    assert.deepEqual(JSON.parse(jsonbStringify({ value })).value, expected);
+  });
+}
+
+test("jsonb retains native cycle rejection for sanitized object keys", () => {
+  const value: Record<string, unknown> = { "bad\u0000key": 1 };
+  value.self = value;
+  assert.throws(() => jsonbStringify(value), TypeError);
+});
+
+test(
+  "both JSON boundaries round-trip provider values through real Postgres",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const { createPgPool } = await import("../src/persistence/pg-pool.ts");
+    const { jsonbSafeStringify } = await import("../src/util/text.ts");
+    const pg = createPgPool(process.env.DATABASE_URL!);
+    const value = { "bad\u0000key": "half\ud800", when: new Date("2026-01-01T00:00:00Z"), nested: ["😀"] };
+    try {
+      for (const stringify of [jsonbStringify, jsonbSafeStringify]) {
+        const [row] = await pg.q("SELECT $1::jsonb AS value", [stringify(value)]);
+        assert.deepEqual(row!.value, { badkey: "half�", when: "2026-01-01T00:00:00.000Z", nested: ["😀"] });
+      }
+    } finally {
+      await pg.close();
+    }
+  },
+);

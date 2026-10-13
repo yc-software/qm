@@ -117,7 +117,7 @@ export interface SmtpVerifyOptions {
 
 export class SmtpRejectedError extends Error {}
 
-function smtpTlsMode(declared: string | undefined, port: number): SmtpTlsMode {
+export function smtpTlsMode(declared: string | undefined, port: number): SmtpTlsMode {
   const mode = declared?.trim().toLowerCase();
   if (mode === "implicit" || mode === "none" || mode === "starttls") return mode;
   return port === 465 ? "implicit" : "starttls";
@@ -276,8 +276,20 @@ export async function emailTransportPreflight(
   report = true,
 ): Promise<void> {
   if (!config.services.includes("auth")) return;
+  const locallyDeclared = emailSecretNames(config).some(
+    (name) =>
+      secrets.has(name) ||
+      config.env.auth?.[name] !== undefined ||
+      serviceSecretValue(config, "auth", name, secrets) !== undefined,
+  );
   const configured = emailTransportConfigured(config, secrets);
-  if (!configured) step("sign-in email: disabled; use qm admin-login for administrator access");
+  if (!configured && report) {
+    step(
+      locallyDeclared
+        ? "sign-in email: disabled; use qm admin-login for administrator access"
+        : "sign-in email: not checked here (no local email values; the deployment's secrets decide)",
+    );
+  }
   const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   const value = (name: string): string | undefined =>
     (serviceSecretValue(config, "auth", name, secrets) ?? deploymentSecretValue(name, secrets.get(name)))?.trim();

@@ -59,3 +59,10 @@ export function memoryBlocks(body: string): string[] {
   flush();
   return result;
 }
+
+export function interleaveHits(perNotebook: readonly string[][], limit: number): string[] {
+  const out: string[] = [];
+  for (let i = 0; out.length < limit && perNotebook.some((hits) => i < hits.length); i++)
+    for (const hits of perNotebook) if (i < hits.length && out.length < limit) out.push(hits[i]!);
+  return out;
+}

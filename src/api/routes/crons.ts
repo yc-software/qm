@@ -6,7 +6,7 @@ import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody } from "../../cron/schedule
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, rejectNonObjectBody } from "./shared.ts";
 import { decideRecipientConsent } from "../../triggers/trigger-store.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
@@ -176,6 +176,7 @@ const CRON_ERROR_STATUS: Record<string, number> = {
 
 async function createCron(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
+  if (rejectNonObjectBody(ctx)) return;
   if (capability) {
     const b = body as CapabilityCronBody;
     if (

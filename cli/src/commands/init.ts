@@ -206,7 +206,9 @@ function packageContent(dir: string, orgId: string): string {
   const engines = { ...objectField("engines"), node: ">=24.0.0" };
   const packageName = cliPackageName();
   const dependencies = objectField("dependencies");
-  const installedPackage = typeof dependencies[packageName] === "string" ? dependencies[packageName] : cliVersion();
+  const existingSpec = dependencies[packageName];
+  const installedPackage =
+    typeof existingSpec === "string" && /[:/]|^\./.test(existingSpec) ? existingSpec : cliVersion();
   delete dependencies["qm-cli"];
   delete dependencies[packageName];
   for (const group of ["devDependencies", "optionalDependencies"] as const) {

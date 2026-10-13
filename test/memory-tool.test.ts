@@ -109,6 +109,29 @@ test("memoryRemember/memoryRead/memoryRewrite hit the durable MemoryService, att
   assert.doesNotMatch(body, /terse replies/, "rewrite replaces the whole notebook");
 });
 
+test("a rewrite never drops facts captured after the agent read the notebook", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-stale-")));
+  const memory = createMemoryService(workspace);
+  const personal = scopeId("personal", "U1");
+  await workspace.ensureScope(personal);
+  await memory.capture(personal, ["Ships on Fridays"], at);
+
+  const unread = ctxFor({ scope: personal, workspace, memory });
+  await assert.rejects(unread.memoryRewrite("# Memory\n\n- from the prompt copy\n"), /Read the notebook/);
+
+  const ctx = ctxFor({ scope: personal, workspace, memory });
+  const read = (await ctx.memoryRead()) ?? "";
+  await memory.capture(personal, ["Captured by another conversation"], at);
+  await assert.rejects(ctx.memoryRewrite(`${read}\n- curated\n`), /changed since you read it/);
+  assert.match(await memory.read(personal), /Captured by another conversation/);
+
+  const fresh = (await ctx.memoryRead()) ?? "";
+  assert.equal(await ctx.memoryRewrite(`${fresh}\n- curated\n`), true);
+  const body = await memory.read(personal);
+  assert.match(body, /Captured by another conversation/);
+  assert.match(body, /curated/);
+});
+
 type Emitted = { type: string; payload: any; scopeLabel: string };
 const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
   assert.ok(tool);

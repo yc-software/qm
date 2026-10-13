@@ -130,3 +130,9 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
 
   assert.deepEqual(await app.searchSessions("U1", ""), [], "empty query is empty, not an error");
 });
+
+test("app.searchSessions treats a non-finite limit as the default", async () => {
+  const { app, sessions } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-limit-")) }));
+  await seed(sessions, "web:U1:limit", "U1", ["the quartermaster ledger"]);
+  assert.equal((await app.searchSessions("U1", "quartermaster", Number.NaN)).length, 1);
+});

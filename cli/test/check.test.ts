@@ -537,3 +537,31 @@ test("only public PostHog ingestion tokens may be configured as plaintext", () =
     }
   }
 });
+
+test("sandbox Dockerfile diagnostics reflect the effective backend, not the hosting target alone", (t) => {
+  const run = (env: QmConfig["env"]): string => {
+    const d = deployment(
+      (dir) => {
+        mkdirSync(join(dir, "sandbox"));
+        writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM scratch\n");
+      },
+      { target: "aws", sandbox: undefined, env },
+    );
+    t.after(() => rmSync(d.dir, { recursive: true, force: true }));
+    const lines: string[] = [];
+    const log = console.log,
+      warn = console.warn;
+    console.log = console.warn = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    try {
+      runChecks(d.config, d.dir, join(d.dir, "sandbox"));
+    } finally {
+      console.log = log;
+      console.warn = warn;
+    }
+    return lines.join("\n");
+  };
+  assert.match(run({}), /Dockerfile is ignored on AWS MicroVM/);
+  assert.doesNotMatch(run({ core: { SANDBOX_BACKEND: "modal" } }), /Dockerfile is ignored on AWS MicroVM/);
+});

@@ -4,7 +4,8 @@ import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import type { Principal } from "../src/types.ts";
+import { scopeId, type Principal } from "../src/types.ts";
+import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 function turn(text: string, surface?: string): OrchestratorInput {
@@ -477,4 +478,19 @@ test("editing pending text preserves identity, order, attachments and rejects st
   assert.equal(await runs.editPendingText(first.id, "late", "revised"), false);
   await runs.fail(first.id, claimed!.leaseToken!, "retry", { retry: true });
   assert.equal(await runs.editPendingText(first.id, "retry edit", "revised"), false);
+});
+
+test("a scoped run list filters by session scope before applying the limit", async () => {
+  const sessions = createMemorySessionStore();
+  const mine = await sessions.getOrCreateByThread("dm:mine", "dm", scopeId("personal", "U-mine"));
+  await sessions.getOrCreateByThread("dm:busy", "dm", scopeId("personal", "U-busy"));
+  const { runs } = createMemoryRunStore({ sessions });
+  await runs.enqueue({ sessionId: mine.threadRef, request: turn("old") });
+  await sleep(2);
+  for (let i = 0; i < 5; i++) await runs.enqueue({ sessionId: "dm:busy", request: turn(`noise ${i}`) });
+  assert.deepEqual(
+    (await runs.list({ limit: 2, scopeId: "personal:U-mine" })).map((run) => run.sessionId),
+    ["dm:mine"],
+  );
+  assert.equal((await runs.list({ limit: 2 })).length, 2);
 });

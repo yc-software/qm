@@ -3,7 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHmac } from "node:crypto";
@@ -37,7 +37,7 @@ Run the thing.
 
 test("installSeedSkills publishes the repository starter catalog into org scope", async () => {
   const skills = createSkillStore({ signingSecret: "seed-test-secret" });
-  const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
+  const result = await installSeedSkills(skills, { dirs: ["skills-seed"], scopeId: scopeId("org", "default-org") });
   assert.deepEqual(result.skipped, []);
   assert.ok(result.installed.includes("cloud-cli"));
   assert.ok(result.installed.includes("composio"));
@@ -57,7 +57,7 @@ test("installSeedSkills publishes the repository starter catalog into org scope"
   assert.equal(published.length, result.installed.length);
   assert.ok(published.every((s) => s.scopeId === scopeId("org", "default-org")));
   assert.ok(published.every((s) => skills.verify(s)));
-  const rerun = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
+  const rerun = await installSeedSkills(skills, { dirs: ["skills-seed"], scopeId: scopeId("org", "default-org") });
   assert.deepEqual(rerun.skipped.sort(), result.installed.sort());
   assert.deepEqual(rerun.updated, []);
 });
@@ -104,15 +104,36 @@ function writeSeedAsset(dir: string, name: string, relPath: string, content: str
   writeFileSync(abs, content);
 }
 
+test("a skill whose seed directory was removed stops resolving after the next install", async () => {
+  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const org = scopeId("org", "default-org");
+  const dir = mkdtempSync(join(tmpdir(), "seed-retire-"));
+  const plugin = mkdtempSync(join(tmpdir(), "seed-retire-plugin-"));
+  writeSeedSkill(dir, "kept", "kept", "# Kept");
+  writeSeedSkill(dir, "retired", "retired", "# Retired");
+  writeSeedSkill(plugin, "plugin-skill", "plugin", "# Plugin");
+  const pluginOpts = { scopeId: org, createdBy: "system:plugin-skills", reviewer: "system:plugin-skills-reviewer" };
+  await installSeedSkills(skills, { dirs: [dir], scopeId: org });
+  await installSeedSkills(skills, { dirs: [plugin], ...pluginOpts });
+
+  rmSync(join(dir, "retired"), { recursive: true });
+  await installSeedSkills(skills, { dirs: [dir], scopeId: org });
+  await installSeedSkills(skills, { dirs: [plugin, join(plugin, "unmounted")], ...pluginOpts });
+
+  assert.equal((await skills.resolve("retired", [org])).skill, null);
+  assert.ok((await skills.resolve("kept", [org])).skill);
+  assert.ok((await skills.resolve("plugin-skill", [org])).skill, "a missing catalog directory archives nothing");
+});
+
 test("installSeedSkills re-seeds a changed manifest over its own prior install, never over another author's", async () => {
   const skills = createSkillStore({ signingSecret: "seed-test-secret" });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-update-"));
   writeSeedSkill(dir, "demo", "old description", "# Demo v1");
 
-  await installSeedSkills(skills, { dir, scopeId: org });
+  await installSeedSkills(skills, { dirs: [dir], scopeId: org });
   writeSeedSkill(dir, "demo", "new description", "# Demo v2");
-  const result = await installSeedSkills(skills, { dir, scopeId: org });
+  const result = await installSeedSkills(skills, { dirs: [dir], scopeId: org });
   assert.deepEqual(result, { installed: [], updated: ["demo"], skipped: [] });
 
   const skill = (await skills.list()).find((s) => s.manifest.name === "demo")!;
@@ -128,7 +149,7 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
   });
   const strandedDir = mkdtempSync(join(tmpdir(), "seed-stranded-"));
   writeSeedSkill(strandedDir, "stuck", "stranded", "# Stuck");
-  const repaired = await installSeedSkills(skills, { dir: strandedDir, scopeId: org });
+  const repaired = await installSeedSkills(skills, { dirs: [strandedDir], scopeId: org });
   assert.deepEqual(repaired, { installed: [], updated: ["stuck"], skipped: [] });
   assert.equal((await skills.get(stranded.id))!.status, "published");
 
@@ -142,7 +163,7 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
   await skills.review(mine.id, "reviewer:r1", []);
   await skills.publish(mine.id);
   writeSeedSkill(userDir, "mine", "catalog tries to take over", "# Catalog");
-  const guarded = await installSeedSkills(skills, { dir: userDir, scopeId: org });
+  const guarded = await installSeedSkills(skills, { dirs: [userDir], scopeId: org });
   assert.deepEqual(guarded, { installed: [], updated: [], skipped: ["mine"] });
   assert.equal((await skills.get(mine.id))!.manifest.description, "user authored");
 });
@@ -242,7 +263,7 @@ test("a bundled skill round-trips seed → store → materialize, assets land be
   writeSeedAsset(dir, "tooled", "references/notes.md", "# notes\n");
   writeSeedSkill(dir, "plain", "no helpers", "# Plain");
 
-  const result = await installSeedSkills(skills, { dir, scopeId: org });
+  const result = await installSeedSkills(skills, { dirs: [dir], scopeId: org });
   assert.deepEqual(result.installed.sort(), ["plain", "tooled"]);
 
   const tooled = (await skills.list()).find((s) => s.manifest.name === "tooled")!;
@@ -268,7 +289,7 @@ test("a tampered bundled asset fails skill verification", async () => {
   const dir = mkdtempSync(join(tmpdir(), "seed-tamper-"));
   writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled");
   writeSeedAsset(dir, "tooled", "scripts/hello.py", "print('hi')\n");
-  await installSeedSkills(skills, { dir, scopeId: org });
+  await installSeedSkills(skills, { dirs: [dir], scopeId: org });
 
   const tooled = (await skills.list()).find((s) => s.manifest.name === "tooled")!;
   assert.ok(skills.verify(tooled));
@@ -313,10 +334,10 @@ test("installSeedSkills re-seeds when only a bundled asset changes", async () =>
   const dir = mkdtempSync(join(tmpdir(), "seed-asset-change-"));
   writeSeedSkill(dir, "tooled", "helpers", "# Tooled");
   writeSeedAsset(dir, "tooled", "scripts/hello.py", "v1\n");
-  await installSeedSkills(skills, { dir, scopeId: org });
+  await installSeedSkills(skills, { dirs: [dir], scopeId: org });
 
   writeSeedAsset(dir, "tooled", "scripts/hello.py", "v2\n");
-  const rerun = await installSeedSkills(skills, { dir, scopeId: org });
+  const rerun = await installSeedSkills(skills, { dirs: [dir], scopeId: org });
   assert.deepEqual(rerun, { installed: [], updated: ["tooled"], skipped: [] });
   const tooled = (await skills.list()).find((s) => s.manifest.name === "tooled")!;
   assert.equal(tooled.manifest.files?.find((f) => f.path === "scripts/hello.py")?.content, "v2\n");

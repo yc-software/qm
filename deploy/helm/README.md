@@ -167,8 +167,8 @@ requests no storage class. Existing-claim size and class are managed externally.
 Core liveness uses `healthPath: /healthz`; readiness uses
 `readinessPath: /readyz`. Its startup probe allows five minutes for initialization
 before liveness begins. Override `startupProbe` fields as needed, or set it to null
-to disable. Helm merges probe maps, so set `startupProbe.httpGet: null` when
-switching to an `exec` or `tcpSocket` handler. When overriding endpoint paths,
+to disable. An `exec`, `tcpSocket` or `grpc` handler replaces the default
+`httpGet` check. When overriding endpoint paths,
 update the startup probe too. Database unavailability should remove core from
 endpoints, not restart it through liveness.
 

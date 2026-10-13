@@ -4,7 +4,7 @@ import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
 import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, rejectNonObjectBody } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
 function isCreateWebhook(b: unknown): b is CreateWebhookInput {
@@ -88,6 +88,7 @@ const WEBHOOK_ERROR_STATUS: Record<string, number> = {
 
 async function createWebhook(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body, capability } = ctx;
+  if (rejectNonObjectBody(ctx)) return;
   if (capability) {
     const b = body as { verification?: unknown; action?: unknown; filters?: unknown; destinationKey?: unknown };
     const ver = isObj(b.verification) ? (b.verification as { scheme?: unknown; secret?: unknown }) : undefined;

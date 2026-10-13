@@ -5,7 +5,7 @@ import { readEnvFile } from "../util.ts";
 import { CliError, errMessage, header, note, ok, step, warn } from "../log.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
-import { mockHarnessWarning, type QmConfig } from "../config.ts";
+import { effectiveSandboxBackend, mockHarnessWarning, type QmConfig } from "../config.ts";
 import { computedSecrets, runtimeSecretNames, type ComputedSecret } from "../secrets.ts";
 import { hostedServiceEnv, isVirtualService, runnableServices } from "../services.ts";
 import { serviceEnvironment } from "../backends/aws.ts";
@@ -128,7 +128,12 @@ export function runChecks(
         .join(", ");
       note(`     tools : ${toolDesc || "(none)"}`);
       note(`     skills: ${layer.skills.map((s) => s.frontmatter.name).join(", ") || "(none)"}`);
-      note(`     Dockerfile: ${layer.hasDockerfile ? "yes" : "no"}`);
+      if (layer.hasDockerfile && config.target === "aws" && (effectiveSandboxBackend(config) ?? "aws") === "aws") {
+        note("     Dockerfile: yes (not used by AWS MicroVM sandboxes)");
+        warn(
+          `${rel}/Dockerfile is ignored on AWS MicroVM sandboxes; build the packaged image with qm infra build-image`,
+        );
+      } else note(`     Dockerfile: ${layer.hasDockerfile ? "yes" : "no"}`);
     }
     const pluginDesc = plugins.map((p) => `${p.name} (${p.kind})`).join(", ");
     step(`plugins: ${pluginDesc || "(none)"}`);
@@ -172,7 +177,7 @@ export async function runCheckCommand(
   if (report) header(`qm check — ${config.orgId}`);
   assertNodeEngine(configDir);
   const result = runChecks(config, configDir, sandboxDir, { report });
-  const secrets = readEnvFile(envFile ?? join(configDir, ".env"));
+  const secrets = readEnvFile(envFile ?? join(configDir, ".env"), envFile !== undefined);
   await flySandboxTokenPreflight(config, secrets, fetch, report);
   await emailTransportPreflight(config, secrets, report);
   if (report) {

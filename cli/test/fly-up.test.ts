@@ -66,6 +66,7 @@ test("fly up provisions private object storage before enforcing provider secrets
   const fly = join(dir, "fly");
   const log = join(dir, "fly.log");
   const state = join(dir, "storage-created");
+  writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${"z".repeat(40)}\n`);
   const marker = "QM_OWNER_CD83933C6C53374D";
   writeFileSync(
     fly,
@@ -125,6 +126,7 @@ else console.log("ok");
   try {
     await flyUp(config, dir, { buildFrom: true, configPath });
     const calls = readFileSync(log, "utf8");
+    assert.match(calls, /secrets set --stage -a acme-core CORE_SIGNING_SECRET=-/);
     assert.match(calls, /storage create --name acme-data --app acme-core --org personal --yes/);
     assert.match(calls, /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN/);
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
@@ -165,4 +167,65 @@ test('--only "slack" explains the virtual service runs in-process on the core', 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("Fly staging uses supplied operator values, selected workloads and a read-only plan", async (t) => {
+  const { stageFlyOperatorSecrets } = await import("../src/backends/fly.ts");
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const fake = join(dir, "fly");
+  const calls = join(dir, "calls");
+  writeFileSync(
+    fake,
+    `#!${process.execPath}
+const fs=require('node:fs'); fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({args:process.argv.slice(2),input:fs.readFileSync(0,'utf8')})+'\\n');
+`,
+  );
+  chmodSync(fake, 0o755);
+  const old = process.env.FLY_BIN;
+  process.env.FLY_BIN = fake;
+  t.after(() => {
+    if (old === undefined) delete process.env.FLY_BIN;
+    else process.env.FLY_BIN = old;
+  });
+  const envFile = join(dir, "selected.env");
+  writeFileSync(envFile, `CORE_SIGNING_SECRET=${"x".repeat(40)}\n`);
+  const config: QmConfig = {
+    contract: 1,
+    orgId: "example",
+    target: "fly",
+    publicUrl: "https://example.test",
+    services: ["core", "web-ui"],
+    skills: [],
+    plugins: [],
+    env: {},
+    imageOverrides: {},
+  };
+  const priorKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "personal-key-not-for-this-deployment";
+  t.after(() => {
+    if (priorKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = priorKey;
+  });
+  const planned = stageFlyOperatorSecrets(config, dir, new Set(["core"]), { envFile, dryRun: true });
+  assert.ok(planned.get("example-core")?.has("CORE_SIGNING_SECRET"));
+  assert.ok(!planned.get("example-core")?.has("ANTHROPIC_API_KEY"));
+  assert.ok(!existsSync(calls));
+  stageFlyOperatorSecrets(config, dir, new Set(["core"]), { envFile });
+  const actual = readFileSync(calls, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(actual.length, 1);
+  assert.deepEqual(actual[0].args, ["secrets", "set", "--stage", "-a", "example-core", "CORE_SIGNING_SECRET=-"]);
+  assert.equal(actual[0].input, "x".repeat(40));
+  assert.ok(!actual[0].args.join(" ").includes("x".repeat(40)));
+  writeFileSync(envFile, "CORE_SIGNING_SECRET=\n");
+  assert.equal(stageFlyOperatorSecrets(config, dir, new Set(["core"]), { envFile }).size, 0);
+  writeFileSync(envFile, "CORE_SIGNING_SECRET=placeholder\n");
+  assert.throws(
+    () => stageFlyOperatorSecrets(config, dir, new Set(["core"]), { envFile }),
+    /supplied secret CORE_SIGNING_SECRET/,
+  );
+  assert.equal(readFileSync(calls, "utf8").trim().split("\n").length, 1);
 });

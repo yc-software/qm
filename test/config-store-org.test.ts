@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import {
   createMemoryConfigStore,
+  type PersistedBrowseModel,
   type PersistedDeploymentIdentity,
   type PersistedInternalMemberOverrides,
 } from "../src/resolution/config-store.ts";
@@ -63,4 +64,67 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
   await store.clearPurposeRuntime("subagent");
   assert.equal(await baseModels.get(org), null);
+});
+
+test("flushScope reports every failed config write for the scope once, with its cause", async () => {
+  const failing = <T>(message: string) => ({
+    ...createMemoryMap<T>(),
+    put: async () => {
+      throw new Error(message);
+    },
+  });
+  const config = createMemoryConfigStore("org-a", {
+    browseModels: failing("browse model write failed"),
+    commandPolicies: failing("policy write failed"),
+  });
+  config.setBrowseModel("org:org-a", "model-x");
+  await assert.rejects(config.flushScope("org:org-a"), /browse model write failed/);
+  config.setOrgAmbient(true);
+  await config.flushScope("org:org-a");
+
+  config.setBrowseModel("org:org-a", "model-y");
+  config.setCommandPolicy("org:org-a", { mode: "denylist", rules: [] });
+  await assert.rejects(config.flushScope("org:org-a"), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors.map((e: Error) => e.message).sort(), [
+      "browse model write failed",
+      "policy write failed",
+    ]);
+    return true;
+  });
+});
+
+test("a write that starts during a failing flush is still awaited by the next flush", async () => {
+  const stored = createMemoryMap<PersistedBrowseModel>();
+  const firstGate = Promise.withResolvers<void>();
+  const secondGate = Promise.withResolvers<void>();
+  let calls = 0;
+  const config = createMemoryConfigStore("org-a", {
+    browseModels: {
+      ...stored,
+      put: async (key, value) => {
+        if (calls++ === 0) {
+          await firstGate.promise;
+          throw new Error("first write failed");
+        }
+        await secondGate.promise;
+        await stored.put(key, value);
+      },
+    },
+  });
+  config.setBrowseModel("org:org-a", "model-x");
+  const first = config.flushScope("org:org-a");
+  config.setBrowseModel("org:org-a", "model-y");
+  firstGate.resolve();
+  await assert.rejects(first, /first write failed/);
+
+  let secondSettled = false;
+  const second = config.flushScope("org:org-a").finally(() => {
+    secondSettled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(secondSettled, false);
+  secondGate.resolve();
+  await second;
+  assert.equal((await stored.get("org:org-a"))?.modelId, "model-y");
 });

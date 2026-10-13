@@ -150,6 +150,12 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
   assert.equal(shadowList[0]!.text, "what the wake would have said");
   assert.equal(shadowList[0]!.provenance?.trigger, "cron", "shadow rows keep full provenance for admin");
   assert.equal((await store.get(shadow.id))?.shadow, true, "shadow flag round-trips through get()");
+  assert.deepEqual(
+    (await store.listShadow({ sourceScopeId: "personal:U-shadow" })).map((d) => d.id),
+    [shadow.id],
+    "a scoped shadow read keeps its own rows",
+  );
+  assert.deepEqual(await store.listShadow({ sourceScopeId: "personal:U-other" }), [], "and filters before the limit");
 
   await store.enqueue({
     destination: { type: "principal", target: "U-alice", onBehalfOf: "U-carol" },

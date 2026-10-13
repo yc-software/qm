@@ -2,11 +2,13 @@ import { brokerCredentialCall, realBrokerFetch } from "../credential-broker.ts";
 import { scopeId as makeScopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
+import { rejectNonObjectBody } from "./shared.ts";
 import { orgId as configOrgId } from "../../config.ts";
 
 async function brokerCredential(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!deps.serviceCreds) return sendJson(res, 404, { error: "not_found" });
+  if (rejectNonObjectBody(ctx)) return;
   const orgScope = makeScopeId("org", configOrgId());
   const result = await brokerCredentialCall({
     claims: capability!,

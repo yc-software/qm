@@ -55,6 +55,7 @@ import {
   tapeCheckpointPayload,
   tapeEntryMirrorRecord,
 } from "../sessions/session-store.ts";
+import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
@@ -2157,7 +2158,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               at: Date.now(),
               principalId: actor.id,
               action: `command_approval.${decision}`,
-              resource: p.command,
+              resource: redactCommand(p.command),
               scopeLabel: scopeId,
               status: "refused",
               detail: JSON.stringify({ approvalOutcome: "not_requester", requesterId: requesterId ?? null }),
@@ -2185,7 +2186,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               at: Date.now(),
               principalId: actor.id,
               action: "command_approval.deny",
-              resource: p.command,
+              resource: redactCommand(p.command),
               scopeLabel: scopeId,
               status: "refused",
               detail: JSON.stringify({ approvalOutcome: "denied" }),
@@ -2215,7 +2216,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 at: Date.now(),
                 principalId: actor.id,
                 action: `command_approval.${scope}`,
-                resource: p.command,
+                resource: redactCommand(p.command),
                 scopeLabel: scopeId,
                 status: "refused",
                 detail: JSON.stringify({ approvalOutcome: "grant_mode_disabled" }),
@@ -2326,7 +2327,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               at: Date.now(),
               principalId: actor.id,
               action: `command_approval.${scope}`,
-              resource: p.command,
+              resource: redactCommand(p.command),
               scopeLabel: scopeId,
               status: "ok",
             });

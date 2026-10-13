@@ -1,5 +1,5 @@
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, orgScope, rejectNonObjectBody } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
@@ -86,6 +86,7 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
+  if (rejectNonObjectBody(ctx)) return;
   const body = ctx.body as { botToken?: unknown; appToken?: unknown };
   const botToken = typeof body.botToken === "string" ? body.botToken.trim() : "";
   const appToken = typeof body.appToken === "string" ? body.appToken.trim() : "";

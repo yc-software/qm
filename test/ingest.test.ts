@@ -140,3 +140,30 @@ test("a shared bundle cannot clobber a skill record in another scope", async () 
   );
   assert.equal((await store.list()).length, 0);
 });
+
+test("a **/ pack glob also matches at the top level, like every other glob tool", () => {
+  const f = (path: string, name: string) => ({
+    path,
+    text: md(`name: ${name}\ndescription: d\nscope: company`),
+    binary: false,
+  });
+  const fetched: FetchedRepo = {
+    commit: "abc1234",
+    files: [
+      f("ops/SKILL.md", "ops"),
+      f("teams/infra/ops/SKILL.md", "infra-ops"),
+      f("drafts/SKILL.md", "draft"),
+      f("teams/drafts/SKILL.md", "team-draft"),
+      f("teams/sales/SKILL.md", "sales"),
+    ],
+  };
+  const { candidates } = planIngest(fetched, {
+    config: { skillGlobs: ["**/ops", "teams/**/sales", "**/drafts"], exclude: ["**/drafts"] },
+    nativeNames: new Set(),
+  });
+  assert.deepEqual(candidates.map((c) => c.skillPath).sort(), [
+    "ops/SKILL.md",
+    "teams/infra/ops/SKILL.md",
+    "teams/sales/SKILL.md",
+  ]);
+});

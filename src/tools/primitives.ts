@@ -1,6 +1,7 @@
 import type { AdminToolAccess } from "./admin.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
+import { interleaveHits } from "../memory/notebook.ts";
 import {
   prepareExecutionFiles,
   processCredentialFiles,
@@ -18,6 +19,7 @@ import type { SandboxAccessPlan, SandboxResources } from "../sandbox/sandbox-res
 import { join } from "node:path";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
+import { redactCommand } from "../sandbox/exec-process-session.ts";
 import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { CapabilityUnsupportedError, hasParentPathSegment, supportsAgentComputerExport } from "../sandbox/sandbox.ts";
 import type {
@@ -540,6 +542,7 @@ export interface ToolContextDeps {
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
+  let notebookReadRevision: string | undefined;
   const writableScopeId = deps.layers.find((l) => l.mode === "rw")?.scopeId ?? null;
   const memory =
     deps.context?.memory ??
@@ -884,7 +887,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             at: Date.now(),
             principalId: deps.createdBy,
             action: "reach_exec",
-            resource: command,
+            resource: redactCommand(command, handle.env),
             scopeLabel: reached.scopeId,
           });
         }
@@ -1189,14 +1192,19 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               read.length > 1 ? `[${scope}] ${fact}` : fact,
             ),
           ),
-        ).then((rows) => rows.flat().slice(0, limit ?? 20)),
+        ).then((rows) => interleaveHits(rows, limit ?? 20)),
       );
     },
 
     async memoryRead(): Promise<string | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
-      return timed("recall", () => memory!.read(write));
+      return timed("recall", async () => {
+        if (!memory!.readHead) return memory!.read(write);
+        const head = await memory!.readHead(write);
+        notebookReadRevision = head.revision;
+        return head.content;
+      });
     },
 
     async memoryRemember(facts: string[]): Promise<number | null> {
@@ -1219,7 +1227,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!memory || !write) return null;
       return once(() =>
         timed("memory_write", async () => {
-          await memory!.replace(write, content, deps.createdBy);
+          const revision = notebookReadRevision ?? (await memory!.readHead?.(write))?.revision;
+          if (!revision) {
+            await memory!.replace(write, content, deps.createdBy);
+            return true as const;
+          }
+          if (notebookReadRevision === undefined)
+            throw new Error("Read the notebook (action read) before rewriting it.");
+          notebookReadRevision = undefined;
+          if (!(await memory!.replaceIfRevision?.(write, content, revision, deps.createdBy)))
+            throw new Error(
+              "The notebook changed since you read it; read it again and rewrite from the current version.",
+            );
           return true as const;
         }),
       );

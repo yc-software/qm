@@ -6,18 +6,19 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import type { EgressAuditSink } from "../src/admin/egress-audit-sink.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 
-function start() {
+function start(egressAudit?: EgressAuditSink) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-")) }));
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
     credentialUsage: built.credentialUsage,
-    egressAudit: built.egressAudit,
+    egressAudit: egressAudit ?? built.egressAudit,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -252,6 +253,63 @@ test("egress-audit ingest: an oversized or empty batch is rejected", async () =>
       (await post({ records: Array.from({ length: 501 }, () => ({ host: "a.com", verdict: "ok" })) })).status,
       400,
     );
+  } finally {
+    await s.close();
+  }
+});
+
+test("egress: a clipped window says so, and every stat describes the returned records", async () => {
+  const s = start();
+  try {
+    for (let i = 0; i < 1001; i++) {
+      s.built.credentialUsage.record({
+        slug: "x-firehose",
+        host: "api.x.com",
+        status: "ok",
+        scopeLabel: "personal:U1",
+        principalId: "U1",
+      });
+    }
+    s.built.egressAudit.record({ source: "proxy", host: "example.com", allowed: true, scopeLabel: "personal:U1" });
+    const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
+    assert.equal(d.records.length, 1000);
+    assert.equal(d.total, 1000);
+    assert.equal(d.truncated, true);
+    assert.equal(d.bySource.broker + d.bySource.firewall, d.records.length);
+
+    const small = start();
+    try {
+      small.built.credentialUsage.record({
+        slug: "x-firehose",
+        host: "api.x.com",
+        status: "ok",
+        scopeLabel: "personal:U1",
+        principalId: "U1",
+      });
+      assert.equal((await getJson(small.base, "/v1/admin/egress?scope=org:default-org")).truncated, false);
+    } finally {
+      await small.close();
+    }
+  } finally {
+    await s.close();
+  }
+});
+
+test("audit ingestion does not acknowledge a rejected persistence write", async () => {
+  const s = start({
+    record: async () => {
+      throw new Error("persistence unavailable");
+    },
+    list: async () => [],
+  });
+  try {
+    const response = await fetch(s.base + "/v1/egress-audit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ records: [{ host: "example.com", verdict: "ok" }] }),
+    });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: "internal_error", message: "internal server error" });
   } finally {
     await s.close();
   }

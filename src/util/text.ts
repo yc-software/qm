@@ -13,7 +13,18 @@ export function tailSlice(s: string, n: number): string {
 }
 
 export function jsonbSafeStringify(value: unknown): string {
-  return JSON.stringify(value, (_k, v) => (typeof v === "string" ? v.replace(/\u0000/g, "") : v));
+  const normalized = new WeakMap<object, object>();
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (typeof item === "string") return pgTextSafe(item);
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const existing = normalized.get(item);
+    if (existing) return existing;
+    const keys = Object.keys(item);
+    if (keys.every((key) => key === pgTextSafe(key))) return item;
+    const result = Object.fromEntries(keys.map((key) => [pgTextSafe(key), (item as Record<string, unknown>)[key]]));
+    normalized.set(item, result);
+    return result;
+  });
 }
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;

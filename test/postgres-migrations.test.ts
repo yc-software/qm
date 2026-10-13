@@ -232,3 +232,35 @@ test("pre-migration maintenance can repair schema before a released migration", 
     await admin.end();
   }
 });
+
+test("a waiting migrator does not strand a concurrent index build", { skip, timeout: 10000 }, async () => {
+  const holder = new pg.Client({ connectionString: databaseUrl });
+  const application = `migration_waiter_${crypto.randomUUID()}`;
+  const waiter = new pg.Pool({ connectionString: databaseUrl, application_name: application });
+  const { id, table } = names();
+  let waiting: Promise<void> | undefined;
+  await holder.connect();
+  try {
+    await holder.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
+    await holder.query("SELECT pg_advisory_lock(hashtext('qm:schema-migrations'))");
+    waiting = applyPgMigrations(waiter, [definePgMigration(id, ["SELECT 1"])]);
+    void waiting.catch(() => {});
+    const deadline = Date.now() + 3000;
+    for (;;) {
+      const activity = await holder.query("SELECT query FROM pg_stat_activity WHERE application_name = $1", [
+        application,
+      ]);
+      if (activity.rows.some((row: { query: string }) => row.query.includes("advisory_lock"))) break;
+      assert.ok(Date.now() < deadline, "the second migrator connected");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await holder.query("SET statement_timeout = '3s'");
+    await holder.query(`CREATE INDEX CONCURRENTLY ${table}_idx ON ${table}(value)`);
+    await holder.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
+    await waiting;
+  } finally {
+    await holder.end();
+    await waiting?.catch(() => {});
+    await waiter.end();
+  }
+});

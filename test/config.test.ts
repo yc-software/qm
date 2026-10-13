@@ -80,6 +80,10 @@ test("store kinds default to memory and accept postgres", () => {
     () => loadConfig({ SESSION_STORE: "postgres" }),
     /missing or insecure required core secrets: DATABASE_URL/,
   );
+  assert.throws(
+    () => loadConfig({ RUN_STORE: "postgres", DATABASE_URL: "postgres://test" }),
+    /RUN_STORE=postgres requires SESSION_STORE=postgres/,
+  );
 });
 
 test("deploy provider defaults to docker and rejects unknown values", () => {

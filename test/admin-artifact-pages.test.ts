@@ -387,3 +387,28 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
     await s.close();
   }
 });
+
+test("admin errors honor since in both the page and the total", async () => {
+  const s = start();
+  try {
+    s.built.errors.record({ category: "turn", code: "old", message: "m", scopeLabel: "personal:U1" });
+    await new Promise((r) => setTimeout(r, 5));
+    const cutoff = Date.now();
+    await new Promise((r) => setTimeout(r, 5));
+    s.built.errors.record({ category: "turn", code: "new", message: "m", scopeLabel: "personal:U1" });
+    const path = `${s.base}/v1/admin/errors?scope=org:default-org`;
+    const recent = await json(await fetch(`${path}&since=${cutoff}`, { headers: ALICE_ADMIN }));
+    assert.deepEqual(
+      recent.errors.map((e: any) => e.code),
+      ["new"],
+    );
+    assert.equal(recent.total, 1);
+    assert.equal((await json(await fetch(`${path}&since=${cutoff}&count=1`, { headers: ALICE_ADMIN }))).total, 1);
+    assert.equal((await json(await fetch(`${path}&since=0`, { headers: ALICE_ADMIN }))).total, 2);
+    for (const bad of ["yesterday", "-1", "1.5"]) {
+      assert.equal((await fetch(`${path}&since=${bad}`, { headers: ALICE_ADMIN })).status, 400, bad);
+    }
+  } finally {
+    await s.close();
+  }
+});

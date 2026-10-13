@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import type { SkillManifest } from "../skills/skill-store.ts";
+import { SkillVersionConflict, type Skill, type SkillManifest } from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
@@ -272,7 +272,13 @@ export function createSkillMethods(
         description: patch.description ?? skill.manifest.description,
         body: patch.body ?? skill.manifest.body,
       };
-      const updated = await deps.skills.update(id, manifest);
+      let updated: Skill;
+      try {
+        updated = await deps.skills.update(id, manifest, opts?.baseVersion ?? skill.version);
+      } catch (e) {
+        if (e instanceof SkillVersionConflict) return "version_conflict";
+        throw e;
+      }
       const live = await republishIfShared(updated, principalId);
       deps.auditLog.record({
         at: Date.now(),
@@ -397,23 +403,27 @@ export function createSkillMethods(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );
       }
-      const existing = (await deps.skills.list()).find((s) => s.scopeId === homeScope && s.manifest.name === name);
-      if (existing && existing.status !== "archived") return null;
-      if (existing) await deps.skills.delete(existing.id);
       const manifest: SkillManifest = {
         name,
         description,
         requiredCapabilities: input.requiredCapabilities ?? [],
         body,
       };
-      const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
-      await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
-      const published = await deps.skills.publish(skill.id);
+      const create = async (): Promise<Skill | null> => {
+        const sameName = (await deps.skills.list()).filter((s) => s.scopeId === homeScope && s.manifest.name === name);
+        if (sameName.some((s) => s.status !== "archived")) return null;
+        for (const s of sameName) await deps.skills.delete(s.id);
+        const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
+        await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
+        return deps.skills.publish(skill.id);
+      };
+      const published = await deps.skills.withNameLock(homeScope, name, create);
+      if (!published) return null;
       deps.auditLog.record({
         at: Date.now(),
         principalId: input.principalId,
         action: "skill_create",
-        resource: skill.id,
+        resource: published.id,
         scopeLabel: homeScope,
       });
       return published;

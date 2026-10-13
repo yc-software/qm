@@ -15,8 +15,14 @@ export interface ErrorEvent {
 export interface ErrorLog {
   record(e: Omit<ErrorEvent, "ts">, error?: unknown): void;
   flush(): Promise<void>;
-  list(opts?: { scopeId?: string; sessionId?: string; limit?: number; offset?: number }): Promise<ErrorEvent[]>;
-  count(opts?: { scopeId?: string; sessionId?: string }): Promise<number>;
+  list(opts?: {
+    scopeId?: string;
+    sessionId?: string;
+    since?: number;
+    limit?: number;
+    offset?: number;
+  }): Promise<ErrorEvent[]>;
+  count(opts?: { scopeId?: string; sessionId?: string; since?: number }): Promise<number>;
 }
 
 const MAX = 5000;

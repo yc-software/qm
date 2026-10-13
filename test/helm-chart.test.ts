@@ -197,6 +197,12 @@ test("Helm separates core startup/readiness from liveness and allows probe overr
   assert.equal(custom.startupProbe, undefined);
 });
 
+test("Helm startup probe overrides with another handler replace the default HTTP check", options, () => {
+  const exec = { command: ["/bin/sh", "-c", "test -f /tmp/ready"] };
+  const core = container(render({ services: { core: { startupProbe: { exec } } } }));
+  assert.deepEqual(core.startupProbe, { exec, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 60 });
+});
+
 test("Helm ingress rejects embedded, missing, worker and disabled targets", options, () => {
   for (const service of ["auth", "admin", "egress-proxy", "missing"]) {
     assert.throws(() => render({ ingress: { enabled: true, service } }), /ingress.service must name/);

@@ -5,7 +5,7 @@ import {
 } from "../../../model/custom-providers.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, orgScope, rejectNonObjectBody } from "../shared.ts";
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -58,6 +58,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
   const id = ctx.params.provider;
   if (!id) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (rejectNonObjectBody(ctx)) return;
   const body = ctx.body as {
     name?: unknown;
     protocol?: unknown;

@@ -23,7 +23,8 @@ import {
 import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
-import { errMessage } from "../util/errors.ts";
+import { redactSecrets } from "../harness/redact-secrets.ts";
+import { errDetail, errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
@@ -372,7 +373,7 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
   return { req, res, ...wiring, url, pathname: url.pathname, method: req.method ?? "GET", params: {} };
 }
 
-function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+function respondError(req: IncomingMessage, res: ServerResponse, err: unknown, shuttingDown?: () => boolean): void {
   if (err instanceof MemoryDisclosureDenied) {
     if (!res.headersSent) sendJson(res, 403, { error: "forbidden", message: err.message });
     else res.destroy();
@@ -381,6 +382,14 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
   if (err instanceof PayloadTooLargeError) {
     if (!res.headersSent) sendJson(res, 413, { error: "payload_too_large", message: errMessage(err) });
     else res.destroy();
+    return;
+  }
+  if (shuttingDown?.()) {
+    console.error("[server] 503 %s %s: %s", req.method ?? "?", loggablePath(req.url), redactSecrets(errDetail(err)));
+    if (!res.headersSent) {
+      res.setHeader("Retry-After", "1");
+      sendJson(res, 503, { error: "shutting_down", message: "server is shutting down; retry the request" });
+    } else res.destroy();
     return;
   }
   reportBackendError(err);
@@ -428,7 +437,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       }
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
     } catch (err) {
-      respondError(req, res, err);
+      respondError(req, res, err, wiring.deps.isShuttingDown);
     }
   };
 
@@ -453,9 +462,8 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   fastify.decorateRequest("gate", undefined);
 
   fastify.setErrorHandler((err, request, reply) => {
-    reportBackendError(err);
-    console.error("%s", `[server] 500 ${request.raw.method ?? "?"} ${loggablePath(request.raw.url)}:`, errMessage(err));
-    return reply.code(500).send({ error: "internal_error", message: "internal server error" });
+    reply.hijack();
+    respondError(request.raw, reply.raw, err, wiring.deps.isShuttingDown);
   });
 
   const gateHook = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
@@ -491,7 +499,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
     try {
       await run(route, request.params as Record<string, string>, ctx);
     } catch (err) {
-      respondError(request.raw, reply.raw, err);
+      respondError(request.raw, reply.raw, err, wiring.deps.isShuttingDown);
     }
   };
 
@@ -546,7 +554,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       );
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
-    void front(req, res).catch((err: unknown) => respondError(req, res, err));
+    void front(req, res).catch((err: unknown) => respondError(req, res, err, wiring.deps.isShuttingDown));
   });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
@@ -561,6 +569,26 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       requestNames.set(req, "/deployment-proxy/*");
+      return;
+    }
+    const appPath = base.pathname.startsWith("/d/");
+    const path = appPath ? base.pathname.split("/").slice(0, 3).join("/") : base.pathname;
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(path);
+    } catch (error) {
+      if (!(error instanceof URIError)) throw error;
+      sendJson(res, 400, { error: "bad_request", message: "invalid URL encoding" });
+      req.resume();
+      return;
+    }
+    if (
+      decodedPath.includes("\u0000") ||
+      (!appPath &&
+        [...base.url.searchParams].some(([key, value]) => key.includes("\u0000") || value.includes("\u0000")))
+    ) {
+      sendJson(res, 400, { error: "bad_request", message: "URL parameters must not contain NUL" });
+      req.resume();
       return;
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);

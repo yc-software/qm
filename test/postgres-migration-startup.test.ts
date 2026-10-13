@@ -81,3 +81,24 @@ test("migration entrypoint exits after cold and repeat startup and rejects check
     });
   });
 });
+
+test("fresh database with memory sessions does not register durable dependent tasks", { skip }, async () => {
+  await withDatabase(async (url, admin) => {
+    await exec(process.execPath, ["src/migrate-main.ts"], {
+      cwd: new URL("..", import.meta.url),
+      timeout: 60_000,
+      env: {
+        PATH: process.env.PATH,
+        NODE_ENV: "test",
+        DATABASE_URL: url,
+        SANDBOX_BACKEND: "local",
+        SESSION_STORE: "memory",
+        RUN_STORE: "memory",
+        ORG_ID: "migration-test",
+        CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
+      },
+    });
+    const { rows } = await admin.query("SELECT to_regclass('sessions') AS sessions, to_regclass('tasks') AS tasks");
+    assert.deepEqual(rows, [{ sessions: null, tasks: null }]);
+  });
+});

@@ -2487,6 +2487,26 @@ test("a pending command approval blocks unrelated follow-up input in the same th
   assert.equal(approved.status, "ok");
 });
 
+test("an approved command is audited without its inline credential", async () => {
+  const { app, auditLog } = freshApp();
+  const command = "git push --force --token=s3cr3t-value origin main";
+  const first = await app.turn(dm(`!run ${command}`));
+  assert.equal(first.status, "pending_approval");
+  await app.turn(
+    dm(`!run ${command}`, {
+      approval: { requestId: first.pendingApprovals![0]!.requestId, approved: true, scope: "session" },
+    }),
+  );
+  const resources = (await auditLog.events())
+    .filter((event) => event.action.startsWith("command_approval."))
+    .map((event) => event.resource);
+  assert.ok(resources.length > 0);
+  assert.ok(
+    resources.every((resource) => !resource.includes("s3cr3t-value")),
+    resources.join(" | "),
+  );
+});
+
 test("a second click on an already-consumed approval refuses instead of re-running the command", async () => {
   const { app, auditLog } = freshApp();
   const first = await app.turn(dm("!run git push --force origin main"));

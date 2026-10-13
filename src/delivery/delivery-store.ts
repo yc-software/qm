@@ -45,7 +45,7 @@ export interface DeliveryStore {
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
-  listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
+  listShadow(opts?: { limit?: number; sourceScopeId?: string }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   ackByKey(idempotencyKey: string, at: number): Promise<void>;
   setEditRefByKey(idempotencyKey: string, editRef: string): Promise<void>;
@@ -135,7 +135,12 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       return [...deliveries.values()]
-        .filter((d) => d.shadow && d.deliveredAt === null)
+        .filter(
+          (d) =>
+            d.shadow &&
+            d.deliveredAt === null &&
+            (opts?.sourceScopeId === undefined || d.provenance?.sourceScopeId === opts.sourceScopeId),
+        )
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, limit);
     },

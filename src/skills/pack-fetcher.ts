@@ -255,8 +255,9 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
       const work = await mkdtemp(join(tmpdir(), "qm-skill-src-"));
       const repoDir = join(work, "repo");
       try {
-        await git(["clone", "--no-checkout", "--quiet", repo.url, "repo"], work, auth, repo.gitConfig);
-        await git(["checkout", "--detach", "--quiet", ref || "HEAD"], repoDir, undefined);
+        const named = ref && !SHA_RE.test(ref) ? ["--branch", ref] : [];
+        await git(["clone", "--no-checkout", "--quiet", ...named, repo.url, "repo"], work, auth, repo.gitConfig);
+        await git(["checkout", "--detach", "--quiet", ref && !named.length ? ref : "HEAD"], repoDir, undefined);
         const commit = (await git(["rev-parse", "HEAD"], repoDir, undefined)).trim();
         const files = await readTree(repoDir);
         return { commit, files };

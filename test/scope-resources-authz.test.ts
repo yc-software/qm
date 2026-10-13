@@ -31,8 +31,12 @@ function makeDeps() {
     channelMember: async (channelId: string, principalId: string) => principalId === U1 && channelId === C1,
     channelPrivacy: async (channelId: string): Promise<boolean | undefined> => (channelId === C1 ? true : undefined),
   };
-  const sessions: { listByParticipant: (principalId: string) => Promise<unknown[]> } = {
+  const sessions: {
+    listByParticipant: (principalId: string) => Promise<unknown[]>;
+    participantScopes: (principalId: string) => Promise<string[]>;
+  } = {
     listByParticipant: async (_p: string) => [],
+    participantScopes: async (_p: string) => [],
   };
   const skills = createSkillStore();
   const deployRows: Deployment[] = [];
@@ -218,6 +222,7 @@ test("historical participation grants neither context listing nor current scope 
           },
         ]
       : [];
+  deps.sessions.participantScopes = async (principalId: string) => (principalId === "U2" ? [channelScope] : []);
   await deps.skills.create({
     scopeId: channelScope,
     manifest: { name: "private", description: "private", requiredCapabilities: [], body: "# Private" },

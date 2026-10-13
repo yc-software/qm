@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
 import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 
 export interface MemoryRuntime {
   runs: RunStore;
@@ -11,7 +12,10 @@ export interface MemoryRuntime {
 
 const FENCE_HOLD_MS = 600_000;
 
-export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRuntime {
+export function createMemoryRunStore(opts?: {
+  maxClaims?: number;
+  sessions?: Pick<SessionStore, "sessionsByThreadRefs">;
+}): MemoryRuntime {
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
   const runs = new Map<string, Run>();
   const retryAfter = new Map<string, number>();
@@ -285,14 +289,31 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return [...ids];
     },
 
-    async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}) {
+    async list({
+      limit = 200,
+      threadRef,
+      scopeId,
+      active,
+    }: { limit?: number; threadRef?: string; scopeId?: string; active?: boolean } = {}) {
+      const inScope = scopeId
+        ? new Set(
+            (
+              (await opts?.sessions?.sessionsByThreadRefs([...new Set([...runs.values()].map((r) => r.sessionId))])) ??
+              []
+            )
+              .filter((s) => s.scopeId === scopeId)
+              .map((s) => s.threadRef),
+          )
+        : null;
       return [...runs.values()]
         .filter(
           (run) =>
-            !threadRef ||
-            run.sessionId === threadRef ||
-            run.sessionId.startsWith(`${threadRef}:task:`) ||
-            run.sessionId.startsWith(`${threadRef}:status:`),
+            (!threadRef ||
+              run.sessionId === threadRef ||
+              run.sessionId.startsWith(`${threadRef}:task:`) ||
+              run.sessionId.startsWith(`${threadRef}:status:`)) &&
+            (!inScope || inScope.has(run.sessionId)) &&
+            (!active || !isTerminal(run.status)),
         )
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, limit);

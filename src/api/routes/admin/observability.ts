@@ -1,4 +1,5 @@
 import { parseScopeId, type ScopeId } from "../../../types.ts";
+import { redactSecrets } from "../../../harness/redact-secrets.ts";
 import { cacheHitRatio, isStablePrefixMiss, type TurnMetricSample } from "../../../admin/metrics-sink.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
@@ -238,7 +239,7 @@ export async function egress(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   audit(deps, { principalId: actor.id, action: "egress.read", resource: "egress", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
-  const q = orgWide ? { limit: EGRESS_LIST_LIMIT } : { scopeId: scope, limit: EGRESS_LIST_LIMIT };
+  const q = orgWide ? { limit: EGRESS_LIST_LIMIT + 1 } : { scopeId: scope, limit: EGRESS_LIST_LIMIT + 1 };
   const brokerRows = ((await deps.credentialUsage?.list(q)) ?? []).map((s) => ({
     ts: s.ts,
     source: "broker" as string,
@@ -262,11 +263,14 @@ export async function egress(ctx: ApiCtx): Promise<void> {
     ...(e.via !== undefined ? { via: e.via } : {}),
     ...(e.peerIp !== undefined ? { peerIp: e.peerIp } : {}),
   }));
-  const records = [...brokerRows, ...firewallRows].sort((a, b) => b.ts - a.ts).slice(0, EGRESS_LIST_LIMIT);
+  const merged = [...brokerRows, ...firewallRows].sort((a, b) => b.ts - a.ts);
+  const records = merged.slice(0, EGRESS_LIST_LIMIT);
+  const truncated = merged.length > EGRESS_LIST_LIMIT;
   const denied = records.filter((r) => !r.allowed).length;
   const hosts = new Set(records.map((r) => r.host).filter(Boolean)).size;
-  const bySource = { broker: brokerRows.length, firewall: firewallRows.length };
-  return sendJson(res, 200, { scopeId: scope, records, total: records.length, denied, hosts, bySource });
+  const broker = records.filter((r) => r.source === "broker").length;
+  const bySource = { broker, firewall: records.length - broker };
+  return sendJson(res, 200, { scopeId: scope, records, total: records.length, truncated, denied, hosts, bySource });
 }
 
 export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
@@ -276,7 +280,13 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   audit(deps, { principalId: actor.id, action: "runs.read", resource: "runs", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
-  const rawRuns = (await deps.runs?.list({ limit: RUNS_LIST_LIMIT })) ?? [];
+  const filter = { limit: RUNS_LIST_LIMIT, ...(orgWide ? {} : { scopeId: scope }) };
+  const [activeRuns, recentRuns] = await Promise.all([
+    deps.runs?.list({ ...filter, active: true }) ?? [],
+    deps.runs?.list(filter) ?? [],
+  ]);
+  const activeIds = new Set(activeRuns.map((r) => r.id));
+  const rawRuns = [...activeRuns, ...recentRuns.filter((r) => !activeIds.has(r.id))];
   const byThread = new Map(
     ((await deps.sessions?.sessionsByThreadRefs(rawRuns.map((r) => r.sessionId))) ?? []).map((s) => [s.threadRef, s]),
   );
@@ -301,7 +311,12 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
     })
     .filter((r) => orgWide || r.sessionScope === scope)
     .sort((a, b) => Number(ACTIVE.has(b.status)) - Number(ACTIVE.has(a.status)) || b.createdAt - a.createdAt);
-  return sendJson(res, 200, { scopeId: scope, active: runs.filter((r) => ACTIVE.has(r.status)).length, runs });
+  return sendJson(res, 200, {
+    scopeId: scope,
+    active: runs.filter((r) => ACTIVE.has(r.status)).length,
+    ...(activeRuns.length >= RUNS_LIST_LIMIT ? { activeTruncated: true } : {}),
+    runs,
+  });
 }
 
 export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
@@ -312,16 +327,25 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: "errors.read", resource: "errors", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   const sessionId = url.searchParams.get("sessionId") || undefined;
+  const sinceParam = url.searchParams.get("since");
+  const since = sinceParam === null ? undefined : Number(sinceParam);
   const filters = {
     ...(orgWide ? {} : { scopeId: scope }),
     ...(sessionId ? { sessionId } : {}),
+    ...(since !== undefined ? { since } : {}),
   };
   const rawLimit = Number(url.searchParams.get("limit") ?? ERRORS_LIST_LIMIT);
   const rawOffset = Number(url.searchParams.get("offset") ?? 0);
-  if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || !Number.isSafeInteger(rawOffset) || rawOffset < 0) {
+  if (
+    !Number.isSafeInteger(rawLimit) ||
+    rawLimit < 1 ||
+    !Number.isSafeInteger(rawOffset) ||
+    rawOffset < 0 ||
+    (since !== undefined && !(Number.isSafeInteger(since) && since >= 0))
+  ) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "limit must be a positive integer and offset a non-negative integer.",
+      message: "limit must be a positive integer, offset and since (epoch ms) non-negative integers.",
     });
   }
   const limit = Math.min(rawLimit, ERRORS_LIST_LIMIT);
@@ -361,6 +385,7 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
     scopeLabel: e.scopeLabel,
     resource: e.resource,
     ...(e.status ? { status: e.status } : {}),
+    ...(e.detail ? { detail: redactSecrets(e.detail) } : {}),
   }));
   return sendJson(res, 200, { scopeId: scope, events });
 }

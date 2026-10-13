@@ -1,3 +1,4 @@
+import { createKeyedQueue } from "../util/async.ts";
 import { createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
@@ -75,6 +76,12 @@ export interface SkillResolution {
   shadowed: Skill[];
 }
 
+export class SkillVersionConflict extends Error {
+  constructor(id: string) {
+    super(`skill ${id} changed since it was read`);
+  }
+}
+
 export interface SkillStoreOptions {
   signingSecret?: string;
   backing?: DurableMap<Skill>;
@@ -83,8 +90,8 @@ export interface SkillStoreOptions {
 
 export interface SkillStore {
   create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
-  update(id: string, manifest: SkillManifest): Promise<Skill>;
-  withNameLock?<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
+  update(id: string, manifest: SkillManifest, expectedLiveVersion?: number): Promise<Skill>;
+  withNameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
   verify(skill: Skill): boolean;
@@ -171,6 +178,25 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   const skills = opts.backing ?? createMemoryMap<Skill>();
   const secret = opts.signingSecret ?? randomUUID();
 
+  const localNameQueue = createKeyedQueue<string>();
+  function nameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T> {
+    const key = `skill-name:${scopeId}:${name}`;
+    return localNameQueue(key, () => (opts.advisoryLock ? opts.advisoryLock.withLock(key, fn) : fn()));
+  }
+
+  async function mutate(id: string, edit: (s: Skill) => Skill): Promise<Skill> {
+    if (skills.update) {
+      const next = await skills.update(id, edit);
+      if (!next) throw new Error(`unknown skill: ${id}`);
+      return next;
+    }
+    const current = await skills.get(id);
+    if (!current) throw new Error(`unknown skill: ${id}`);
+    const next = edit(current);
+    await skills.put(next.id, next);
+    return next;
+  }
+
   function sign(manifest: SkillManifest): string {
     const files = canonicalFiles(manifest.files);
     const canonical = JSON.stringify({
@@ -184,8 +210,7 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   }
 
   return {
-    withNameLock: (scopeId, name, fn) =>
-      opts.advisoryLock ? opts.advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn) : fn(),
+    withNameLock: nameLock,
     async create(input) {
       assertSafeSkillName(input.manifest.name);
       const at = Date.now();
@@ -206,18 +231,20 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
       await skills.put(skill.id, skill);
       return skill;
     },
-    async update(id, manifest) {
+    async update(id, manifest, expectedLiveVersion) {
       assertSafeSkillName(manifest.name);
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      if (manifest.name !== s.manifest.name) throw new Error("skill update cannot rename — create a new skill instead");
-      s.manifest = manifest;
-      s.signature = sign(manifest);
-      if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
-      s.version += 1;
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (s) => {
+        if (manifest.name !== s.manifest.name)
+          throw new Error("skill update cannot rename — create a new skill instead");
+        if (expectedLiveVersion !== undefined && (s.status === "archived" || s.version !== expectedLiveVersion))
+          throw new SkillVersionConflict(id);
+        s.manifest = manifest;
+        s.signature = sign(manifest);
+        if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
+        s.version += 1;
+        s.updatedAt = Date.now();
+        return s;
+      });
     },
 
     get: (id) => skills.get(id),
@@ -228,39 +255,36 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async review(id, reviewer, grantCapabilities) {
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      assertSafeSkillName(s.manifest.name);
-      if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — manifest was tampered with");
-      s.grantedCapabilities = [...new Set([...s.grantedCapabilities, ...grantCapabilities])];
-      if (!s.approvals.includes(reviewer)) s.approvals.push(reviewer);
-      s.status = "reviewed";
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (s) => {
+        assertSafeSkillName(s.manifest.name);
+        if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — manifest was tampered with");
+        s.grantedCapabilities = [...new Set([...s.grantedCapabilities, ...grantCapabilities])];
+        if (!s.approvals.includes(reviewer)) s.approvals.push(reviewer);
+        s.status = "reviewed";
+        s.updatedAt = Date.now();
+        return s;
+      });
     },
 
     async publish(id) {
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      assertSafeSkillName(s.manifest.name);
-      if (s.status === "draft") throw new Error("skill must be reviewed before it is published");
-      const missing = s.manifest.requiredCapabilities.filter((c) => !s.grantedCapabilities.includes(c));
-      if (missing.length) throw new Error(`skill requires ungranted capabilities: ${missing.join(", ")}`);
-      s.status = "published";
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (s) => {
+        assertSafeSkillName(s.manifest.name);
+        if (s.status === "draft") throw new Error("skill must be reviewed before it is published");
+        const missing = s.manifest.requiredCapabilities.filter((c) => !s.grantedCapabilities.includes(c));
+        if (missing.length) throw new Error(`skill requires ungranted capabilities: ${missing.join(", ")}`);
+        s.status = "published";
+        s.updatedAt = Date.now();
+        return s;
+      });
     },
 
     async archive(id) {
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      if (s.status === "archived") return s;
-      s.status = "archived";
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (s) => {
+        if (s.status === "archived") return s;
+        s.status = "archived";
+        s.updatedAt = Date.now();
+        return s;
+      });
     },
 
     async restore(skill) {
@@ -313,16 +337,26 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async move(id, toScopeId) {
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      assertSafeSkillName(s.manifest.name);
+      const current = await skills.get(id);
+      if (!current) throw new Error(`unknown skill: ${id}`);
+      const name = current.manifest.name;
+      assertSafeSkillName(name);
       if (scopeKind(toScopeId) === "org") {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");
       }
-      s.scopeId = toScopeId;
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      const run = async () => {
+        const clash = (await skills.all()).some(
+          (x) => x.id !== id && x.scopeId === toScopeId && x.status !== "archived" && x.manifest.name === name,
+        );
+        if (clash) throw new Error(`${toScopeId} already has a skill named "${name}" — rename or archive one first`);
+        return mutate(id, (s) => {
+          if (s.manifest.name !== name) throw new Error(`skill ${id} was renamed while moving`);
+          s.scopeId = toScopeId;
+          s.updatedAt = Date.now();
+          return s;
+        });
+      };
+      return nameLock(toScopeId, name, run);
     },
   };
 }

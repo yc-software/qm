@@ -1,7 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { ScopeId } from "../types.ts";
-import { createKeyedQueue } from "../util/async.ts";
 import { parseSeedSkillFrontmatter } from "./frontmatter.ts";
 import { safeSkillFilePath, type Skill, type SkillFile, type SkillManifest, type SkillStore } from "./skill-store.ts";
 
@@ -83,16 +82,11 @@ export function foreignSkillCollision(
   );
 }
 
-const upsertQueue = createKeyedQueue<string>();
-
 export function upsertSeedSkill(
   skills: SkillStore,
   input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; reviewer: string; pack?: Skill["pack"] },
 ): Promise<UpsertOutcome> {
-  const run = () => upsertSeedSkillUnsafe(skills, input);
-  return upsertQueue(`${input.scopeId}\0${input.manifest.name}`, () =>
-    skills.withNameLock ? skills.withNameLock(input.scopeId, input.manifest.name, run) : run(),
-  );
+  return skills.withNameLock(input.scopeId, input.manifest.name, () => upsertSeedSkillUnsafe(skills, input));
 }
 
 async function upsertSeedSkillUnsafe(
@@ -121,15 +115,18 @@ async function upsertSeedSkillUnsafe(
 
 export async function installSeedSkills(
   skills: SkillStore,
-  opts: { dir: string; scopeId: ScopeId; createdBy?: string; reviewer?: string },
+  opts: { dirs: readonly string[]; scopeId: ScopeId; createdBy?: string; reviewer?: string },
 ): Promise<SeedInstallResult> {
-  if (!existsSync(opts.dir)) return { installed: [], updated: [], skipped: [] };
+  const present = opts.dirs.filter((dir) => existsSync(dir));
   const createdBy = opts.createdBy ?? "system:skills-seed";
   const reviewer = opts.reviewer ?? "system:skills-reviewer";
   const result: SeedInstallResult = { installed: [], updated: [], skipped: [] };
 
-  for (const entry of readdirSync(opts.dir).sort()) {
-    const skillDir = join(opts.dir, entry);
+  for (const skillDir of present.flatMap((dir) =>
+    readdirSync(dir)
+      .sort()
+      .map((entry) => join(dir, entry)),
+  )) {
     const skillPath = join(skillDir, "SKILL.md");
     if (!existsSync(skillPath) || !statSync(skillPath).isFile()) continue;
     const manifest = parseSeedSkill(readFileSync(skillPath, "utf8"));
@@ -138,5 +135,11 @@ export async function installSeedSkills(
     result[outcome === "foreign" ? "skipped" : outcome].push(manifest.name);
   }
 
+  if (present.length < opts.dirs.length) return result;
+  const seeded = new Set([...result.installed, ...result.updated, ...result.skipped]);
+  for (const s of await skills.list()) {
+    if (s.scopeId !== opts.scopeId || s.createdBy !== createdBy || s.status === "archived") continue;
+    if (!seeded.has(s.manifest.name)) await skills.archive(s.id);
+  }
   return result;
 }

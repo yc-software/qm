@@ -2,7 +2,7 @@ import { isPrincipalType, PRINCIPAL_TYPES, type PrincipalType } from "../../type
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, orgScope, rejectNonObjectBody } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -37,6 +37,7 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
 
 async function pushDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
+  if (rejectNonObjectBody(ctx)) return;
   const b = body as {
     members?: unknown;
     channels?: unknown;

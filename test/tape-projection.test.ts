@@ -1044,7 +1044,7 @@ test("forViewer with a limit reads a bounded tape suffix for an active participa
   );
 });
 
-test("an earlier-page tape fallback keeps its full prefix without repeated dense-turn reads", async () => {
+test("a limited earlier page never falls back to reading the whole tape", async () => {
   const sim = await simSession();
   await sim.store.addParticipant(sim.session.id, "viewer", undefined, { includeHistory: true });
   await simTurn(sim, {
@@ -1064,16 +1064,13 @@ test("an earlier-page tape fallback keeps its full prefix without repeated dense
   const expected = (await sim.store.getEntries(sim.session.id)).filter((entry) => entry.seq < 181);
   const { store, calls } = tapeSpy(sim);
   const source = createTranscriptSource(store);
-  for (const read of [
-    () => source.forRender(sim.session.id, { beforeSeq: 181, limit: 40 }),
-    () => source.forViewer(sim.session.id, "viewer", { beforeSeq: 181, limit: 40 }),
-  ]) {
-    calls.length = 0;
-    const page = await read();
-    assert.deepEqual(page.entries, expected);
-    assert.equal(page.earlier, 0);
-    assert.deepEqual(calls, [undefined]);
-  }
+  const page = await source.forRender(sim.session.id, { beforeSeq: 181, limit: 40 });
+  assert.deepEqual(page.entries, expected.slice(-40));
+  assert.equal(page.earlier, expected.length - 40);
+  const viewer = await source.forViewer(sim.session.id, "viewer", { beforeSeq: 181, limit: 40 });
+  assert.deepEqual(viewer.entries, expected.slice(-40));
+  assert.equal(viewer.earlier, expected.length - 40);
+  assert.deepEqual(calls, []);
 });
 
 test("forViewer refetches in full when a late joiner's window under-fills the limit", async () => {
@@ -1170,7 +1167,10 @@ for (const failed of [false, true]) {
     assert.deepEqual((await source.forRender(sim.session.id)).entries, expected);
     assert.deepEqual((await source.forRender(sim.session.id, { limit: 3 })).entries, expected.slice(-3));
     assert.deepEqual((await source.forRender(sim.session.id, { sinceSeq: 2 })).entries, expected.slice(2));
-    assert.deepEqual((await source.forViewer(sim.session.id, "viewer@example.com", { limit: 3 })).entries, expected);
+    assert.deepEqual(
+      (await source.forViewer(sim.session.id, "viewer@example.com", { limit: 3 })).entries,
+      expected.slice(-3),
+    );
     assert.deepEqual((await source.forViewer(sim.session.id, "stranger@example.com")).entries, []);
   });
 }
@@ -1203,9 +1203,31 @@ test("attachment fallback preserves participant windows and repeated calls in an
     await sim.store.getEntries(sim.session.id, { limit: 8 }),
   );
   for (const viewer of ["early", "late", "stranger"]) {
-    assert.deepEqual(
-      (await source.forViewer(sim.session.id, viewer, { limit: 8 })).entries,
-      await sim.store.visibleEntries(sim.session.id, viewer),
-    );
+    const visible = await sim.store.visibleEntries(sim.session.id, viewer);
+    const page = await source.forViewer(sim.session.id, viewer, { limit: 8 });
+    assert.ok(page.entries.length >= Math.min(8, visible.length));
+    assert.deepEqual(page.entries, visible.slice(visible.length - page.entries.length));
+    assert.equal(page.earlier, visible.length - page.entries.length);
   }
+});
+
+test("forViewer's visible-entries fallback returns the page before the cursor with an exact earlier count", async () => {
+  const sim = await simSession();
+  await sim.store.addParticipant(sim.session.id, "viewer", undefined, { includeHistory: true });
+  for (let i = 0; i < 30; i++) await simTurn(sim, { input: `question ${i}`, reply: `answer ${i}` });
+  const visible = await sim.store.visibleEntries(sim.session.id, "viewer");
+  const store = {
+    ...sim.store,
+    participantWindowsOf: async () => {
+      throw new Error("windows unavailable");
+    },
+  } as SessionStore;
+  const source = createTranscriptSource(store);
+  const before = visible.at(-10)!.seq;
+  const page = await source.forViewer(sim.session.id, "viewer", { beforeSeq: before, limit: 5 });
+  assert.deepEqual(page.entries, visible.filter((e) => e.seq < before).slice(-5));
+  assert.equal(page.earlier, visible.filter((e) => e.seq < before).length - 5);
+  const first = await source.forViewer(sim.session.id, "viewer", { beforeSeq: visible[3]!.seq, limit: 5 });
+  assert.deepEqual(first.entries, visible.slice(0, 3));
+  assert.equal(first.earlier, 0);
 });

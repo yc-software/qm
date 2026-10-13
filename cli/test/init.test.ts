@@ -460,6 +460,44 @@ test("init preflights package.json and completes an install-first package manife
   }
 });
 
+test("init pins a registry range to the running CLI version", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-init-registry-range-"));
+  try {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ dependencies: { "@yc-software/qm": "^0.1.0", other: "^2.0.0" } }),
+    );
+    quiet(() => runInit({ dir, org: "acme" }));
+    const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    assert.equal(manifest.dependencies?.["@yc-software/qm"], cliVersion());
+    assert.equal(manifest.dependencies?.other, "^2.0.0");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("init pins a tilde range but keeps a home-relative path", () => {
+  for (const [spec, expected] of [
+    ["~0.1.0", cliVersion()],
+    ["~1", cliVersion()],
+    ["~/packages/qm", "~/packages/qm"],
+  ] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "qm-init-tilde-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@yc-software/qm": spec } }));
+      quiet(() => runInit({ dir, org: "acme" }));
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      assert.equal(manifest.dependencies?.["@yc-software/qm"], expected, spec);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test("init preserves an installed local package artifact", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-init-local-package-"));
   try {

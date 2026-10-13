@@ -514,13 +514,23 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rows.map((r) => r.session_id as string);
     },
 
-    async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}): Promise<Run[]> {
-      const { rows } = threadRef
-        ? await q(
-            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC LIMIT $2",
-            [threadRef, limit],
-          )
-        : await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
+    async list({
+      limit = 200,
+      threadRef,
+      scopeId,
+      active,
+    }: { limit?: number; threadRef?: string; scopeId?: string; active?: boolean } = {}): Promise<Run[]> {
+      const activeOnly = active ? " AND r.status IN ('pending','running')" : "";
+      let sql = `SELECT r.* FROM runs r WHERE TRUE${activeOnly} ORDER BY r.created_at DESC LIMIT $1`;
+      let params: unknown[] = [limit];
+      if (threadRef) {
+        sql = `SELECT r.* FROM runs r WHERE (r.session_id = $1 OR starts_with(r.session_id, $1 || ':task:') OR starts_with(r.session_id, $1 || ':status:'))${activeOnly} ORDER BY r.created_at DESC LIMIT $2`;
+        params = [threadRef, limit];
+      } else if (scopeId) {
+        sql = `SELECT r.* FROM runs r JOIN sessions s ON s.thread_ref = r.session_id WHERE s.scope_id = $1${activeOnly} ORDER BY r.created_at DESC LIMIT $2`;
+        params = [scopeId, limit];
+      }
+      const { rows } = await q(sql, params);
       return rows.map(rowToRun);
     },
 

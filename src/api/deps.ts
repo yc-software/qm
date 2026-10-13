@@ -80,8 +80,11 @@ import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
+import type { ProjectStore } from "../projects/project-store.ts";
 
 export interface ServerDeps {
+  projects?: ProjectStore;
+  isShuttingDown?: () => boolean;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   browserModelGateway?: ModelGatewayTransportConfig;
