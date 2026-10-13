@@ -259,17 +259,17 @@ const ADMIN_PROBE_ATTEMPTS = 2;
 const ADMIN_PROBE_RETRY_DELAY_MS = 250;
 const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_MS });
 
+function portalIdentityHeaders(sub: string): Record<string, string> {
+  return PORTAL_IDENTITY_SECRET
+    ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: sub, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
+    : {};
+}
+
 async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
-    const headers: Record<string, string> = { cookie: `admin=${encodeURIComponent(sub)}` };
-    if (PORTAL_IDENTITY_SECRET) {
-      headers[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-        { p: sub, exp: Date.now() + 60_000 },
-        PORTAL_IDENTITY_SECRET,
-      );
-    }
+    const headers = { cookie: `admin=${encodeURIComponent(sub)}`, ...portalIdentityHeaders(sub) };
     const r = await fetch(`${UPSTREAMS.admin}/api/whoami`, { headers, signal: ctrl.signal });
     if (!r.ok) {
       console.warn(`[portal] admin probe returned HTTP ${r.status}`);
@@ -783,17 +783,7 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
   );
   try {
     const r = await fetch(`${CORE}${path}`, {
-      headers: {
-        ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-        ...(PORTAL_IDENTITY_SECRET
-          ? {
-              [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
-                { p: o.session.sub, exp: Date.now() + 60_000 },
-                PORTAL_IDENTITY_SECRET,
-              ),
-            }
-          : {}),
-      },
+      headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(o.session.sub) },
     });
     const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string; message?: string };
     if (data.authorizeUrl) {
@@ -824,9 +814,7 @@ async function coreImpersonate(
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
     "x-admin-actor": `${admin}@${ORG}`,
-    ...(PORTAL_IDENTITY_SECRET
-      ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: admin, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
-      : {}),
+    ...portalIdentityHeaders(admin),
   };
   try {
     const r = await fetch(`${CORE}${path}`, { method: "POST", headers, body });
@@ -1082,10 +1070,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           method: "POST",
           headers: {
             ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
-            [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
-              { p: session.sub, exp: Date.now() + 60_000 },
-              PORTAL_IDENTITY_SECRET,
-            ),
+            ...portalIdentityHeaders(session.sub),
           },
           body,
           signal: AbortSignal.timeout(4_000),
