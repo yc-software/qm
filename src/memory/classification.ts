@@ -1,6 +1,6 @@
 import type { HarnessModelUtilities } from "../harness/harness.ts";
 import type { MemoryService } from "./memory-service.ts";
-import type { MemoryCaptureMetadata } from "./records.ts";
+import type { MemoryCaptureMetadata } from "./facts.ts";
 
 type Sensitivity = NonNullable<MemoryCaptureMetadata["sensitivity"]>;
 const levels: Sensitivity[] = ["ordinary", "unknown", "sensitive", "restricted"];
@@ -19,30 +19,49 @@ export function parseSensitivity(value: string | undefined): Sensitivity {
   return levels.includes(value as Sensitivity) ? (value as Sensitivity) : "unknown";
 }
 
+async function classify(harness: HarnessModelUtilities, texts: string[]): Promise<Sensitivity> {
+  try {
+    return parseSensitivity(
+      await harness.oneShot?.(
+        `${SENSITIVITY_PROMPT}\nOutput ONLY one label for the entire list.`,
+        JSON.stringify(texts),
+      ),
+    );
+  } catch {
+    return "unknown";
+  }
+}
+
+function stricter(a: Sensitivity | undefined, b: Sensitivity): Sensitivity {
+  return levels[Math.max(levels.indexOf(a ?? "ordinary"), levels.indexOf(b))]!;
+}
+
 export function classifiedMemory(base: MemoryService, harness: HarnessModelUtilities): MemoryService {
   return {
     ...base,
     async capture(scope, facts, at, author, context) {
       let sensitivity = context?.sensitivity;
-      if (context?.mode !== "automatic" || sensitivity === undefined) {
-        let classified: Sensitivity;
-        try {
-          classified = parseSensitivity(
-            await harness.oneShot?.(
-              `${SENSITIVITY_PROMPT}\nOutput ONLY one label for the entire list.`,
-              JSON.stringify(facts),
-            ),
-          );
-        } catch {
-          classified = "unknown";
-        }
-        sensitivity = levels[Math.max(levels.indexOf(sensitivity ?? "ordinary"), levels.indexOf(classified))]!;
-      }
+      if (context?.mode !== "automatic" || sensitivity === undefined)
+        sensitivity = stricter(sensitivity, await classify(harness, facts));
       return base.capture(scope, facts, at, author, {
         ...context,
         mode: context?.mode ?? "explicit",
         sensitivity,
       });
     },
+    ...(base.edit
+      ? {
+          async edit(scope, edits, author, context) {
+            const sensitivity = stricter(
+              context?.sensitivity,
+              await classify(
+                harness,
+                edits.map((edit) => edit.text),
+              ),
+            );
+            return base.edit!(scope, edits, author, { ...context, sensitivity });
+          },
+        }
+      : {}),
   };
 }

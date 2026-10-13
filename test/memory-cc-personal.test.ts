@@ -4,9 +4,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, readMemory, ccCaptureToPersonal } from "../src/memory/memory-service.ts";
+import { createMemoryService, ccCaptureToPersonal } from "../src/memory/memory-service.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
-import { createConsolidatingMemory } from "../src/memory/strategies/consolidation.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import type { HarnessModelUtilities } from "../src/harness/harness.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
@@ -19,53 +18,53 @@ const PERSONAL = scopeId("personal", ACTOR);
 
 function freshMemory() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mcc-")));
-  return { workspace, memory: createMemoryService(workspace) };
+  return { memory: createMemoryService(workspace) };
 }
 
 const INPUT = "remember that my task list is ship the launch";
 const REPLY = "Noted.";
 
 test("channel turn cc's the actor's captured facts into their personal scope, and the channel still receives them", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR });
 
-  const channelBody = (await readMemory(workspace, CHANNEL)) ?? "";
-  const personalBody = (await readMemory(workspace, PERSONAL)) ?? "";
+  const channelBody = await memory.read(CHANNEL);
+  const personalBody = await memory.read(PERSONAL);
   assert.match(channelBody, /task list is ship the launch/, "channel (origin) scope still receives the fact");
   assert.match(personalBody, /task list is ship the launch/, "fact was cc'd into the actor's personal scope");
 });
 
 test("group turn also cc's into the speaker's personal scope", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: GROUP, input: INPUT, reply: REPLY, actorId: ACTOR });
 
-  assert.match((await readMemory(workspace, GROUP)) ?? "", /task list is ship the launch/);
-  assert.match((await readMemory(workspace, PERSONAL)) ?? "", /task list is ship the launch/);
+  assert.match(await memory.read(GROUP), /task list is ship the launch/);
+  assert.match(await memory.read(PERSONAL), /task list is ship the launch/);
 });
 
 test("DM/personal turn does NOT cc — only the one drawer is written", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: DM, input: INPUT, reply: REPLY, actorId: ACTOR });
 
-  const body = (await readMemory(workspace, DM)) ?? "";
+  const body = await memory.read(DM);
   const occurrences = body.split("task list is ship the launch").length - 1;
   assert.equal(occurrences, 1, "the fact appears exactly once — no duplicate cc write");
 });
 
 test("a channel turn with no actorId does not cc", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY });
 
-  assert.match((await readMemory(workspace, CHANNEL)) ?? "", /task list is ship the launch/);
-  assert.equal(await readMemory(workspace, PERSONAL), null, "no personal-scope write without an actor");
+  assert.match(await memory.read(CHANNEL), /task list is ship the launch/);
+  assert.equal(await memory.read(PERSONAL), "", "no personal-scope write without an actor");
 });
 
 test("cc gates on the conversation scope, not the (environment-redirected) write scope", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const REDIRECTED_WRITE = scopeId("personal", "U2");
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({
@@ -77,12 +76,12 @@ test("cc gates on the conversation scope, not the (environment-redirected) write
   });
 
   assert.match(
-    (await readMemory(workspace, REDIRECTED_WRITE)) ?? "",
+    await memory.read(REDIRECTED_WRITE),
     /task list is ship the launch/,
     "facts captured into the redirected write scope",
   );
   assert.match(
-    (await readMemory(workspace, PERSONAL)) ?? "",
+    await memory.read(PERSONAL),
     /task list is ship the launch/,
     "cc still fired because the conversation is a channel",
   );
@@ -92,7 +91,7 @@ test("the cc'd copy is tagged with where it was said; the channel's own copy sta
   const harness: HarnessModelUtilities = {
     oneShot: () => Promise.resolve("- Prefers all lowercase replies"),
   };
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness, memory });
   await strategy.onTurnEnd!({
     scopeId: CHANNEL,
@@ -102,8 +101,8 @@ test("the cc'd copy is tagged with where it was said; the channel's own copy sta
     conversationLabel: "#eng-dev",
   });
 
-  const channelBody = (await readMemory(workspace, CHANNEL)) ?? "";
-  const personalBody = (await readMemory(workspace, PERSONAL)) ?? "";
+  const channelBody = await memory.read(CHANNEL);
+  const personalBody = await memory.read(PERSONAL);
   assert.match(channelBody, /Prefers all lowercase replies$/m, "channel drawer keeps the fact untagged");
   assert.match(
     personalBody,
@@ -202,20 +201,20 @@ test("conversationLabelFor prefers the surface channel name, falls back to the d
 });
 
 test("burst debounce: turns within the quiet window flush as one extraction after it elapses", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory, captureQuietMs: 30 });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
-  assert.equal((await readMemory(workspace, DM)) ?? "", "", "nothing captured before the quiet window elapses");
+  assert.equal(await memory.read(DM), "", "nothing captured before the quiet window elapses");
   await new Promise((r) => setTimeout(r, 120));
-  const body = (await readMemory(workspace, DM)) ?? "";
+  const body = await memory.read(DM);
   assert.match(body, /fact one is alpha/);
   assert.match(body, /fact two is beta/);
 });
 
 test("burst debounce: a full burst flushes immediately at captureMaxTurns", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({
     harness: createMockHarness().models,
     memory,
@@ -225,13 +224,13 @@ test("burst debounce: a full burst flushes immediately at captureMaxTurns", asyn
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
-  const body = (await readMemory(workspace, DM)) ?? "";
+  const body = await memory.read(DM);
   assert.match(body, /fact one is alpha/, "cap reached — no waiting on the quiet window");
   assert.match(body, /fact two is beta/);
 });
 
 test("burst debounce: different speakers in one channel keep separate bursts (cc lands per speaker)", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory, captureQuietMs: 30 });
   await strategy.onTurnEnd!({
     scopeId: CHANNEL,
@@ -247,45 +246,29 @@ test("burst debounce: different speakers in one channel keep separate bursts (cc
   });
   await new Promise((r) => setTimeout(r, 120));
 
-  assert.match((await readMemory(workspace, PERSONAL)) ?? "", /ship the launch/);
-  assert.doesNotMatch((await readMemory(workspace, PERSONAL)) ?? "", /write the memo/);
-  assert.match((await readMemory(workspace, scopeId("personal", "U2"))) ?? "", /write the memo/);
-});
-
-test("every capture path runs the after-N consolidation trigger on the scope it wrote to (cc target included)", async () => {
-  const { memory } = freshMemory();
-  const checked: string[] = [];
-  const consolidator = {
-    async maintain() {},
-    async maybeMaintain(scope: ScopeId) {
-      checked.push(scope);
-    },
-  };
-  const { memory: consolidating } = createConsolidatingMemory(memory, consolidator);
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory: consolidating });
-  await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR });
-
-  assert.deepEqual(checked.sort(), [CHANNEL, PERSONAL].sort(), "both the turn scope and the cc target are checked");
+  assert.match(await memory.read(PERSONAL), /ship the launch/);
+  assert.doesNotMatch(await memory.read(PERSONAL), /write the memo/);
+  assert.match(await memory.read(scopeId("personal", "U2")), /write the memo/);
 });
 
 test("a channel turn by a system actor captures nothing anywhere", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: "system:ambient:acme" });
 
-  assert.equal(await readMemory(workspace, CHANNEL), null, "origin scope receives nothing");
+  assert.equal(await memory.read(CHANNEL), "", "origin scope receives nothing");
   assert.equal(
-    await readMemory(workspace, scopeId("personal", "system:ambient:acme")),
-    null,
+    await memory.read(scopeId("personal", "system:ambient:acme")),
+    "",
     "no personal drawer for the platform actor",
   );
 });
 
 test("an autonomous (triggered) channel turn captures nothing, even for a human actor", async () => {
-  const { workspace, memory } = freshMemory();
+  const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR, autonomous: true });
 
-  assert.equal(await readMemory(workspace, CHANNEL), null, "origin scope receives nothing on a triggered wake");
-  assert.equal(await readMemory(workspace, PERSONAL), null, "no cc into the owner's drawer on a triggered wake");
+  assert.equal(await memory.read(CHANNEL), "", "origin scope receives nothing on a triggered wake");
+  assert.equal(await memory.read(PERSONAL), "", "no cc into the owner's drawer on a triggered wake");
 });

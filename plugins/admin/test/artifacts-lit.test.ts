@@ -49,10 +49,6 @@ function fixture() {
     pageShell: (value: any) => {
       c.shell = value;
     },
-    memoryDraft: () => c.draft ?? null,
-    setMemoryDraft: (draft: string | null) => {
-      c.draft = draft;
-    },
     api: async () => ({ ok: true, data: {} }),
     go: () => {},
     reload: () => {},
@@ -82,30 +78,26 @@ function fixture() {
 }
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-test("memory drafts preserve newer edits through an in-flight save", async () => {
+test("memory edits one fact by id and redraws from the server's facts", async () => {
   const { dom, root, c, ui } = fixture();
-  let complete: (value: any) => void = () => {};
   const calls: any[] = [];
-  c.api = (...args: any[]) => {
+  c.api = async (...args: any[]) => {
     calls.push(args);
-    return new Promise((resolve) => {
-      complete = resolve;
-    });
+    return { ok: true, data: { facts: [{ id: "7", text: "- (2026-01-02) edited" }] } };
   };
-  ui.memory(root, { content: "saved" }, c);
+  ui.memory(root, { facts: [{ id: "7", text: "- (2026-01-02) original" }] }, c);
+  [...root.querySelectorAll("button")].find((b) => b.textContent!.trim() === "Edit")!.click();
   const input = root.querySelector("textarea")!;
-  input.value = "submitted";
+  input.value = "edited";
   input.dispatchEvent(new dom.window.Event("input"));
-  root.querySelector("button")!.click();
-  input.value = "newer draft";
-  input.dispatchEvent(new dom.window.Event("input"));
-  complete({ ok: true });
+  [...root.querySelectorAll("button")].find((b) => b.textContent!.trim() === "Save")!.click();
   await tick();
-  assert.equal(calls[0][1], "/api/memory?scope=personal%3Aalice");
-  assert.equal(calls[0][2].content, "submitted");
-  assert.equal(c.draft, "newer draft");
-  assert.equal(root.querySelector("textarea"), input);
-  assert.equal(root.querySelector("#st-memory")!.textContent, "Unsaved changes");
+  assert.equal(
+    JSON.stringify(calls[0]),
+    JSON.stringify(["PATCH", "/api/memory?scope=personal%3Aalice", { facts: [{ id: "7", text: "edited" }] }]),
+  );
+  assert.match(root.querySelector(".memory-facts")!.textContent!, /edited/);
+  assert.equal(root.querySelector("#st-memory")!.textContent, "Saved ✓");
   dom.window.close();
 });
 

@@ -9,7 +9,7 @@ import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
 import { parseSensitivity, SENSITIVITY_PROMPT } from "../classification.ts";
-import type { MemoryCaptureMetadata } from "../records.ts";
+import { UNTRACKED_PROVENANCE, type MemoryCaptureMetadata } from "../facts.ts";
 
 export const DEFAULT_CAPTURE_QUIET_MS = 180_000;
 export const DEFAULT_CAPTURE_MAX_TURNS = 10;
@@ -102,14 +102,14 @@ export function createBurstBuffer(
     conversationLabel,
     sessionId,
     idempotencyKey,
-    inheritedRecords,
+    inheritedFacts,
   }) => {
     if (autonomous === true || isSystemActor(actorId)) return;
     const burst: Burst = {
       scopeId,
       conversationScopeId: conversationScopeId ?? scopeId,
       turns: [{ input, reply }],
-      ...(inheritedRecords !== undefined ? { inheritedRecords: structuredClone(inheritedRecords) } : {}),
+      ...(inheritedFacts !== undefined ? { inheritedFacts: structuredClone(inheritedFacts) } : {}),
       ...(actorId !== undefined ? { actorId } : {}),
       ...(conversationLabel !== undefined ? { conversationLabel } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
@@ -121,8 +121,10 @@ export function createBurstBuffer(
     const pending = bursts.get(key);
     if (pending) {
       pending.turns.push({ input, reply });
-      const unknown = [{ id: "unknown", text: "", sensitivity: "unknown" as const, sources: [], sourceUnknown: true }];
-      pending.inheritedRecords = [...(pending.inheritedRecords ?? unknown), ...(burst.inheritedRecords ?? unknown)];
+      pending.inheritedFacts = [
+        ...(pending.inheritedFacts ?? [UNTRACKED_PROVENANCE]),
+        ...(burst.inheritedFacts ?? [UNTRACKED_PROVENANCE]),
+      ];
       clearTimeout(pending.timer);
     } else {
       bursts.set(key, burst);
@@ -144,7 +146,7 @@ export function createBurstBuffer(
 export function burstCaptureContext(burst: Burst): MemoryCaptureContext {
   return {
     mode: "automatic",
-    ...(burst.inheritedRecords !== undefined ? { inheritedRecords: burst.inheritedRecords } : {}),
+    ...(burst.inheritedFacts !== undefined ? { inheritedFacts: burst.inheritedFacts } : {}),
     ...(burst.actorId ? { actorId: burst.actorId } : {}),
     conversationScopeId: burst.conversationScopeId,
     input: burst.turns.map((turn) => turn.input).join("\n\n"),
@@ -157,7 +159,6 @@ export function burstCaptureContext(burst: Burst): MemoryCaptureContext {
 export function createPerTurnStrategy(deps: {
   harness: HarnessModelUtilities;
   memory: MemoryService;
-  maintain?: (scopeId: ScopeId) => Promise<void>;
   captureQuietMs?: number;
   captureMaxTurns?: number;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
@@ -189,6 +190,5 @@ export function createPerTurnStrategy(deps: {
       flush,
       (e, burst) => deps.onCaptureError?.(e, burst.scopeId),
     ),
-    ...(deps.maintain ? { maintain: deps.maintain } : {}),
   };
 }

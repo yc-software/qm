@@ -1,4 +1,5 @@
 import { memoryForRequest } from "./memory-access.ts";
+import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
@@ -564,89 +565,54 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, result);
 }
 
-async function getSelfMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+async function memoryFacts(memory: MemoryService, scope: ScopeId) {
+  return ((await memory.facts?.(scope)) ?? []).map(({ id, text, createdAt, updatedAt }) => ({
+    id,
+    text,
+    createdAt,
+    updatedAt,
+  }));
+}
+
+function parseEdits(body: unknown): MemoryEdit[] | string {
+  const facts = (isObj(body) ? body : {}).facts;
+  if (!Array.isArray(facts) || !facts.length) return "facts (non-empty array of {id, text}) required";
+  const edits = facts.flatMap((fact): MemoryEdit[] =>
+    isObj(fact) && typeof fact.id === "string" && typeof fact.text === "string" && fact.text.trim()
+      ? [{ id: fact.id, text: fact.text }]
+      : [],
+  );
+  return edits.length === facts.length ? edits : "every fact needs a string id and non-empty text";
+}
+
+function parseIds(body: unknown): string[] | string {
+  const ids = (isObj(body) ? body : {}).ids;
+  return Array.isArray(ids) && ids.length && ids.every((id) => typeof id === "string" && id.trim())
+    ? (ids as string[])
+    : "ids (non-empty string array) required";
+}
+
+async function selfMemory(ctx: ApiCtx): Promise<void> {
+  const { res, deps, url, method, body } = ctx;
+  const principalId =
+    method === "GET" ? url.searchParams.get("principalId") : (body as { principalId?: unknown }).principalId;
+  if (typeof principalId !== "string" || !principalId)
+    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const memory = memoryForRequest(ctx, principalId);
   if (!memory) return sendJson(res, 404, { error: "not_found" });
   const scope = makeScopeId("personal", principalId);
-  audit(deps, { principalId, action: "memory.self.read", resource: "memory", scopeLabel: scope });
-  const head = await memory.readHead?.(scope);
-  return sendJson(res, 200, head ?? { content: await memory.read(scope), revision: "" });
-}
-
-async function putSelfMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  const b = body as { principalId?: unknown; content?: unknown; revision?: unknown };
-  const principalId = typeof b.principalId === "string" ? b.principalId : "";
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const memory = memoryForRequest(ctx, principalId);
-  if (typeof b.content !== "string") return sendJson(res, 400, { error: "bad_request", message: "content required" });
-  if (!memory) return sendJson(res, 404, { error: "not_found" });
-  const scope = makeScopeId("personal", principalId);
-  const saved =
-    typeof b.revision === "string" && b.revision !== "" && memory.replaceIfRevision
-      ? await memory.replaceIfRevision(scope, b.content, b.revision, principalId)
-      : (await memory.replace(scope, b.content, principalId), true);
-  if (!saved) {
-    const head = await memory.readHead?.(scope);
-    return sendJson(res, 409, { error: "conflict", message: "Memory changed while you were editing.", ...head });
+  if (method === "PATCH") {
+    const edits = parseEdits(body);
+    if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
+    await memory.edit?.(scope, edits, principalId);
+  } else if (method === "DELETE") {
+    const ids = parseIds(body);
+    if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
+    await memory.delete?.(scope, ids, principalId);
   }
-  audit(deps, { principalId, action: "memory.self.update", resource: "memory", scopeLabel: scope });
-  const head = await memory.readHead?.(scope);
-  return sendJson(res, 200, { ok: true, ...head });
-}
-
-async function getSelfMemoryHistory(ctx: ApiCtx): Promise<void> {
-  const memory = memoryForRequest(ctx);
-  const { res, url, capability, actor } = ctx;
-  const viewer = capability?.actorId ?? actor?.p;
-  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
-  const principalId = capability ? viewer : url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  if (url.searchParams.has("principalId") && url.searchParams.get("principalId") !== viewer) {
-    return sendJson(res, 404, { error: "not_found" });
-  }
-  const requestedScope = capability ? (url.searchParams.get("scope") ?? undefined) : undefined;
-  if (requestedScope !== undefined && requestedScope !== "org") {
-    return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
-  }
-  let scope: ScopeId | undefined = makeScopeId("personal", principalId);
-  if (capability) scope = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
-  if (!scope) return sendJson(res, 404, { error: "not_found" });
-  if (!memory?.history) return sendJson(res, 200, { revisions: [] });
-  return sendJson(res, 200, { revisions: await memory.history(scope, 30) });
-}
-
-async function restoreSelfMemory(ctx: ApiCtx): Promise<void> {
-  const memory = memoryForRequest(ctx);
-  const { res, deps, body, capability, actor } = ctx;
-  const viewer = capability?.actorId ?? actor?.p;
-  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
-  const b = body as { principalId?: unknown; revision?: unknown; expectedRevision?: unknown; scope?: unknown };
-  const principalId = capability ? viewer : b.principalId;
-  if (typeof principalId !== "string" || typeof b.revision !== "string" || typeof b.expectedRevision !== "string") {
-    return sendJson(res, 400, { error: "bad_request", message: "revision and expectedRevision required" });
-  }
-  if (b.principalId !== undefined && b.principalId !== viewer) return sendJson(res, 404, { error: "not_found" });
-  const requestedScope = capability ? b.scope : undefined;
-  if (requestedScope !== undefined && requestedScope !== "org") {
-    return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
-  }
-  let scope: ScopeId | undefined = makeScopeId("personal", principalId);
-  if (capability) scope = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
-  if (!scope) return sendJson(res, 404, { error: "not_found" });
-  const restored = await memory?.restore?.(scope, b.revision, b.expectedRevision, viewer);
-  if (!restored)
-    return sendJson(res, 409, { error: "conflict", message: "Memory changed, or that revision no longer exists." });
-  audit(deps, {
-    principalId: viewer,
-    action: "memory.self.restore",
-    resource: `memory:${b.revision}`,
-    scopeLabel: scope,
-  });
-  return sendJson(res, 200, { ok: true, ...(await memory?.readHead?.(scope)) });
+  const action = method === "GET" ? "memory.self.read" : "memory.self.update";
+  audit(deps, { principalId, action, resource: "memory", scopeLabel: scope });
+  return sendJson(res, 200, { scopeId: scope, facts: await memoryFacts(memory, scope) });
 }
 
 async function sessionCapability(ctx: ApiCtx): Promise<void> {
@@ -771,6 +737,30 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(res, 200, { ok: true, added, scopeId: write });
   }
+  if (method === "PATCH" && pathname === "/v1/memory/facts") {
+    const edits = parseEdits(body);
+    if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
+    await memory.edit?.(write, edits, capability.actorId, { conversationScopeId: capability.scopeId });
+    audit(deps, {
+      principalId: capability.actorId,
+      action: "memory.agent.edit",
+      resource: "memory",
+      scopeLabel: write,
+    });
+    return sendJson(res, 200, { ok: true, scopeId: write });
+  }
+  if (method === "DELETE" && pathname === "/v1/memory/facts") {
+    const ids = parseIds(body);
+    if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
+    await memory.delete?.(write, ids, capability.actorId);
+    audit(deps, {
+      principalId: capability.actorId,
+      action: "memory.agent.delete",
+      resource: "memory",
+      scopeLabel: write,
+    });
+    return sendJson(res, 200, { ok: true, scopeId: write });
+  }
   if (method === "GET" && pathname === "/v1/memory/self") {
     audit(deps, {
       principalId: capability.actorId,
@@ -778,20 +768,7 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       resource: "memory",
       scopeLabel: write,
     });
-    return sendJson(res, 200, { scopeId: write, content: await memory.read(write) });
-  }
-  if (method === "PUT" && pathname === "/v1/memory/self") {
-    const b = body as { content?: unknown };
-    if (typeof b.content !== "string")
-      return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    await memory.replace(write, b.content, capability.actorId);
-    audit(deps, {
-      principalId: capability.actorId,
-      action: "memory.agent.curate",
-      resource: "memory",
-      scopeLabel: write,
-    });
-    return sendJson(res, 200, { ok: true, scopeId: write });
+    return sendJson(res, 200, { scopeId: write, facts: await memoryFacts(memory, write) });
   }
 
   return sendJson(res, 404, { error: "not_found", message: `${method} ${pathname}` });
@@ -1372,15 +1349,15 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
   { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
   { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
-  { method: "GET", path: "/v1/memory", auth: "source", handle: getSelfMemory },
-  { method: "PUT", path: "/v1/memory", auth: "source", handle: putSelfMemory },
-  { method: "GET", path: "/v1/memory/history", auth: "either", handle: getSelfMemoryHistory },
-  { method: "POST", path: "/v1/memory/restore", auth: "either", handle: restoreSelfMemory },
+  { method: "GET", path: "/v1/memory", auth: "source", handle: selfMemory },
+  { method: "PATCH", path: "/v1/memory", auth: "source", handle: selfMemory },
+  { method: "DELETE", path: "/v1/memory", auth: "source", handle: selfMemory },
   { method: "GET", path: "/v1/apis", auth: "either", handle: listAgentApis },
   {
     match: (m, p) =>
-      (p === "/v1/memory/self" && (m === "GET" || m === "PUT")) ||
-      (m === "POST" && (p === "/v1/memory/search" || p === "/v1/memory/facts")),
+      (p === "/v1/memory/self" && m === "GET") ||
+      (p === "/v1/memory/facts" && m !== "GET") ||
+      (m === "POST" && p === "/v1/memory/search"),
     auth: "either",
     handle: agentMemory,
   },

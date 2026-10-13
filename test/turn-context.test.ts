@@ -48,8 +48,8 @@ async function fixture() {
     files,
     auditLog,
   };
-  await memory.replace("personal:alice", "# Memory\n\n- LOCAL_FACT");
-  await memory.replace("channel:eng", `# Memory\n\n- SHARED_FACT\n- ${"long fact ".repeat(1500)}\n- LAST_FACT`);
+  await memory.capture("personal:alice", ["LOCAL_FACT"], Date.now());
+  await memory.capture("channel:eng", ["SHARED_FACT", "long fact ".repeat(1500), "LAST_FACT"], Date.now());
   await workspace.write("channel:eng", "plan.txt", "PLAN_CONTENT");
   return {
     input,

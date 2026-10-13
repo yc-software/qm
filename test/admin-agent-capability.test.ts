@@ -635,7 +635,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
       const headers = { "x-agent-capability": cap, "content-type": "application/json" };
       const personal = scopeId("personal", "admin-alice");
       const target = scopeId("personal", "U1");
-      await s.built.memory.replace(target, "# Memory\n\n- private test sentinel");
+      await s.built.memory.capture(target, ["private test sentinel"], Date.now());
       const path = `/v1/admin/memory?scope=${encodeURIComponent(target)}`;
       const read = () => fetch(`${s.base}${path}`, { headers });
       const response = await read();

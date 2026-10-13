@@ -46,8 +46,8 @@ function redactCapture(capture: MemorableCapture, mask: (text: string) => string
  *
  * Recall shells out to `memorable inject` with the turn's task; capture ignores the extracted
  * facts and instead derives a tool-call trace from the session that produced the turn, then
- * relays it through `memorable record`. Everything else (query, read, replace) is a no-op:
- * procedures are not a notebook and are never surfaced for direct editing.
+ * relays it through `memorable record`. Query and read are no-ops: procedures are not a
+ * notebook and are never surfaced for direct editing.
  */
 export function createMemorableMemoryProvider(deps: MemorableProviderDeps): MemoryService {
   const inject = deps.inject ?? memorableInject;
@@ -80,10 +80,6 @@ export function createMemorableMemoryProvider(deps: MemorableProviderDeps): Memo
 
     async read() {
       return "";
-    },
-
-    async replace() {
-      throw new Error("Memorable procedures are not an editable notebook");
     },
   };
 }

@@ -18,16 +18,17 @@ auto-extracts facts after you reply. This skill is for what the automatic path m
   from. Matching is substring-based (all terms must match), so prefer distinctive terms
   (a name, a project) over sentences.
   An empty result is a real answer: you have nothing recorded, so don't assert a memory.
-- **Write now** (`action: "remember"`) — when the user corrects you or tells you
+- **Write now** (`action: "add"`, `facts: [{text}, …]`) — when the user corrects you or tells you
   something they'll expect you to know later, persist it immediately instead of hoping
   post-turn extraction catches it. Write self-contained facts (who/what, with enough
   context to be useful cold). Duplicates are dropped; `added` in the reply is the count
   actually new.
-- **Curate** (`action: "read"`, then `action: "rewrite"`) — read your whole notebook and
-  rewrite it without stale, duplicate, or wrong lines. A rewrite replaces the entire
-  notebook: read first, then write back the full corrected content, never a fragment.
-  Curation is for quality — merging duplicates, deleting disproven facts — not for
-  deleting things the user asked you to remember.
+- **Curate** (`action: "edit"` with `facts: [{id, text}, …]`, `action: "delete"` with
+  `ids`) — search or read to get each fact's `#id`, then fix facts that changed and delete
+  stale, duplicate, or wrong ones. A call naming any id that isn't in this conversation's
+  notebook changes nothing and lists the bad ids. Curation is for quality — merging
+  duplicates, deleting disproven facts — not for deleting things the user asked you to
+  remember.
 
 The notebook you write is this conversation's own (your personal one in a DM, the
 channel's in a channel). There is no way to reach anyone else's, by design.
@@ -53,7 +54,7 @@ Name a `channel` (core resolves the name — an ambiguous one comes back `409` w
 candidates), or a group DM by its `participants` (the other members' ids). Core checks the
 person you're helping may post there before writing: any internal teammate may write to a
 public channel; a private channel or group DM requires they're a member (`403` otherwise).
-This appends only — you can't read or wholesale-rewrite another room's notebook this way. The
+This appends only — you can't read or edit another room's notebook this way. The
 reply echoes the resolved `channel`/`group` and the `scopeId` written to.
 
 ## Org-wide notebook (admins)
@@ -68,7 +69,8 @@ curl -fsS -X POST "$AGENT_API_URL/v1/memory/facts" \
   -d '{"scope":"org","facts":["..."]}'
 ```
 
-(`?scope=org` on `GET /v1/memory/self`, `"scope":"org"` on the PUT body to curate.)
+(`?scope=org` on `GET /v1/memory/self`; `"scope":"org"` in the body of `PATCH /v1/memory/facts`
+with `{"facts":[{"id","text"}]}` or `DELETE /v1/memory/facts` with `{"ids":[…]}` to curate.)
 Those writes land in the notebook every conversation in the org recalls, so confirm the
 wording with the admin before writing and keep personal facts out of it. A `403 org
 memory writes require an org admin` means the user isn't one — say so rather than

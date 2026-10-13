@@ -16,6 +16,8 @@ import { classifyScopeLabel } from "../classify/scope-classifier.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
+import { MemoryFactsMissing } from "../memory/facts.ts";
+import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { redactSecrets } from "./redact-secrets.ts";
@@ -166,44 +168,6 @@ function capPayloadStrings(v: unknown): unknown {
 
 function capText(t: string): string {
   return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
-}
-
-function contentFactLines(content: string): string[] {
-  return content
-    .split(/\r?\n/)
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^[-*]\s+/, "")
-        .trim(),
-    )
-    .filter(Boolean);
-}
-
-function passedRememberFields(params: { facts?: unknown; content?: unknown; query?: unknown }): string {
-  const fields = ["facts", "content", "query"].filter((field) => params[field as keyof typeof params] !== undefined);
-  return fields.length ? fields.join(", ") : "none";
-}
-
-function rememberFacts(params: { facts?: unknown; content?: unknown; query?: unknown }): {
-  facts: string[];
-  coercedFrom?: "facts" | "content" | "query";
-} {
-  if (typeof params.facts === "string") {
-    const fact = params.facts.trim();
-    if (fact) return { facts: [fact], coercedFrom: "facts" };
-  }
-  const facts = Array.isArray(params.facts) ? params.facts.map((fact) => String(fact).trim()).filter(Boolean) : [];
-  if (facts.length) return { facts };
-  if (typeof params.content === "string") {
-    const contentFacts = contentFactLines(params.content);
-    if (contentFacts.length) return { facts: contentFacts, coercedFrom: "content" };
-  }
-  if (typeof params.query === "string") {
-    const fact = params.query.trim();
-    if (fact) return { facts: [fact], coercedFrom: "query" };
-  }
-  return { facts: [] };
 }
 
 function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
@@ -1327,33 +1291,41 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "it holds. If a fact is a list that grows, it's a file. Files are this " +
       "conversation's own (a pointer read from another conversation is a hint of where state " +
       "lives, not a path you can open). " +
-      'action="remember" appends durable `facts` now — short, self-contained bullets (a preference, ' +
+      'action="add" saves new `facts` ([{text}, …]) now — short, self-contained facts (a preference, ' +
       "an identifier, an ongoing project, how they like to work); never secrets, credentials, " +
       "one-off trivia, or anything already recorded somewhere you can look up. " +
-      'action="read" returns the whole notebook. ' +
-      'action="rewrite" REPLACES the whole notebook with `content` — for curation (merge ' +
-      "duplicates, update or delete stale and wrong lines): read first, then write back the full " +
-      "corrected notebook, never a fragment.",
+      'action="read" lists this conversation\'s notebook, each fact with its #id. ' +
+      'action="edit" replaces the text of existing facts (`facts`: [{id, text}, …]); ' +
+      'action="delete" forgets facts by `ids`. Fix a fact that changed instead of adding a contradicting one, ' +
+      "and delete what is wrong or stale. Ids come from search or read; an edit or delete that names any id " +
+      "not in this conversation's notebook changes nothing and says which ids were bad.",
     parameters: Type.Object({
       action: Type.Union(
-        [Type.Literal("search"), Type.Literal("remember"), Type.Literal("read"), Type.Literal("rewrite")],
-        {
-          description: "search remembered facts, remember new facts, read the whole notebook, or rewrite (replace) it.",
-        },
+        [
+          Type.Literal("search"),
+          Type.Literal("read"),
+          Type.Literal("add"),
+          Type.Literal("edit"),
+          Type.Literal("delete"),
+        ],
+        { description: "search facts, read this notebook, or add, edit, or delete facts." },
       ),
       query: Type.Optional(
         Type.String({ description: "search only: words to look for among your remembered facts (all must match)." }),
       ),
       limit: Type.Optional(Type.Integer({ description: "search only: max facts to return (default 20)." })),
       facts: Type.Optional(
-        Type.Array(Type.String(), {
-          description:
-            "remember only: the durable facts to save, one short self-contained sentence each — pointers to data, never the data itself.",
-        }),
+        Type.Array(
+          Type.Object({
+            id: Type.Optional(Type.String({ description: "edit only: the fact's id, e.g. #42." })),
+            text: Type.String({
+              description: "one short self-contained fact — a pointer to data, never the data itself.",
+            }),
+          }),
+          { description: "add: [{text}, …]; edit: [{id, text}, …]." },
+        ),
       ),
-      content: Type.Optional(
-        Type.String({ description: "rewrite only: the FULL new notebook content (replaces the whole notebook)." }),
-      ),
+      ids: Type.Optional(Type.Array(Type.String(), { description: "delete only: ids of the facts to forget." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1365,8 +1337,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.query !== undefined ? { query: params.query } : {}),
         ...(params.limit !== undefined ? { limit: params.limit } : {}),
         ...(params.facts !== undefined ? { facts: params.facts } : {}),
-        ...(typeof params.content === "string" ? { chars: params.content.length } : {}),
+        ...(params.ids !== undefined ? { ids: params.ids } : {}),
       });
+      const fail = (error: string) =>
+        recordResult(callId, { tool: "memory", action, error }, text(`[error] ${error}`), true);
       const unavailable = () =>
         recordResult(
           callId,
@@ -1374,7 +1348,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           text("[memory isn't available in this conversation]"),
           true,
         );
-      if (opts?.readOnly && (action === "remember" || action === "rewrite")) {
+      if (opts?.readOnly && action !== "search" && action !== "read") {
         return recordResult(
           callId,
           { tool: "memory", action, readOnly: true },
@@ -1382,76 +1356,68 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
-      switch (action) {
-        case "search": {
-          const query = params.query ?? "";
-          if (!query.trim())
+      const facts = (params.facts ?? []).map((fact) => ({ id: fact.id?.trim() ?? "", text: fact.text.trim() }));
+      try {
+        switch (action) {
+          case "search": {
+            const query = params.query ?? "";
+            if (!query.trim()) return fail("memory search requires `query`.");
+            const hits = await tc.memorySearch(query, params.limit);
+            if (hits === null) return unavailable();
             return recordResult(
               callId,
-              { tool: "memory", action, error: "query required" },
-              text("[error] memory search requires `query`."),
-              true,
-            );
-          const hits = await tc.memorySearch(query, params.limit);
-          if (hits === null) return unavailable();
-          return recordResult(
-            callId,
-            { tool: "memory", action, query, count: hits.length },
-            text(hits.length ? hits.map((h) => `- ${h}`).join("\n") : `[no remembered facts match "${query}"]`),
-          );
-        }
-        case "read": {
-          const body = await tc.memoryRead();
-          if (body === null) return unavailable();
-          return recordResult(
-            callId,
-            { tool: "memory", action, chars: body.length },
-            text(body.trim() ? body : "(you have nothing remembered here yet)"),
-          );
-        }
-        case "remember": {
-          const resolved = rememberFacts(params);
-          const { facts } = resolved;
-          if (!facts.length)
-            return recordResult(
-              callId,
-              { tool: "memory", action, error: "facts required" },
-              text(
-                `[error] memory remember requires \`facts\` (a non-empty list). Received: ${passedRememberFields(
-                  params,
-                )} (use facts instead).`,
-              ),
-              true,
-            );
-          const added = await tc.memoryRemember(facts);
-          if (added === null) return unavailable();
-          return recordResult(
-            callId,
-            { tool: "memory", action, added, ...(resolved.coercedFrom ? { coercedFrom: resolved.coercedFrom } : {}) },
-            text(
-              added
-                ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
-                : "Already remembered — nothing new to save.",
-            ),
-          );
-        }
-        case "rewrite": {
-          if (typeof params.content !== "string") {
-            return recordResult(
-              callId,
-              { tool: "memory", action, error: "content required" },
-              text("[error] memory rewrite requires `content` (the full new notebook)."),
-              true,
+              { tool: "memory", action, query, count: hits.length },
+              text(hits.length ? hits.join("\n") : `[no remembered facts match "${query}"]`),
             );
           }
-          const ok = await tc.memoryRewrite(params.content);
-          if (ok === null) return unavailable();
-          return recordResult(
-            callId,
-            { tool: "memory", action, rewritten: true },
-            text("Rewrote your memory notebook."),
-          );
+          case "read": {
+            const body = await tc.memoryRead();
+            if (body === null) return unavailable();
+            return recordResult(
+              callId,
+              { tool: "memory", action, chars: body.length },
+              text(body.trim() ? body : "(you have nothing remembered here yet)"),
+            );
+          }
+          case "add": {
+            const texts = facts.map((fact) => fact.text).filter(Boolean);
+            if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
+            const added = await tc.memoryAdd(texts);
+            if (added === null) return unavailable();
+            return recordResult(
+              callId,
+              { tool: "memory", action, added },
+              text(
+                added
+                  ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
+                  : "Already remembered — nothing new to save.",
+              ),
+            );
+          }
+          case "edit": {
+            if (!facts.length || facts.some((fact) => !fact.id || !fact.text))
+              return fail("memory edit requires `facts` as a non-empty list of {id, text}.");
+            if ((await tc.memoryEdit(facts)) === null) return unavailable();
+            return recordResult(
+              callId,
+              { tool: "memory", action, edited: facts.length },
+              text(`Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`),
+            );
+          }
+          case "delete": {
+            const ids = (params.ids ?? []).map((id) => id.trim()).filter(Boolean);
+            if (!ids.length) return fail("memory delete requires `ids` (a non-empty list).");
+            if ((await tc.memoryDelete(ids)) === null) return unavailable();
+            return recordResult(
+              callId,
+              { tool: "memory", action, deleted: ids.length },
+              text(`Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`),
+            );
+          }
         }
+      } catch (e) {
+        if (e instanceof MemoryFactsMissing || e instanceof MemoryDisclosureDenied) return fail(e.message);
+        throw e;
       }
     },
   });

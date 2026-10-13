@@ -575,7 +575,7 @@ export function createMockHarness(): Harness {
           reply = hits?.join("\n") ?? "(memory unavailable)";
         } else if (command0.startsWith("!memoryremember ")) {
           const fact = command0.slice("!memoryremember ".length).trim();
-          const added = await turn.tools.memoryRemember([fact]);
+          const added = await turn.tools.memoryAdd([fact]);
           usedTool = true;
           reply = added === null ? "(memory unavailable)" : `remembered ${added}`;
         } else if (command0.startsWith("!skill-run ")) {

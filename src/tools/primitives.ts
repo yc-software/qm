@@ -6,7 +6,7 @@ import {
   processCredentialFiles,
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
-import type { MemoryCaptureMetadata } from "../memory/records.ts";
+import type { MemoryCaptureMetadata } from "../memory/facts.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -60,7 +60,8 @@ import { mimeFromName } from "../core/attachments.ts";
 import { swallow, errMessage, withCleanup } from "../util/errors.ts";
 import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
-import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
+import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
+import { factLine } from "../memory/facts.ts";
 import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
@@ -245,8 +246,9 @@ export interface ToolContext extends SurfaceToolDeps {
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
   memorySearch(q: string, limit?: number): Promise<string[] | null>;
   memoryRead(): Promise<string | null>;
-  memoryRemember(facts: string[]): Promise<number | null>;
-  memoryRewrite(content: string): Promise<true | null>;
+  memoryAdd(facts: string[]): Promise<number | null>;
+  memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
+  memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   mcpToolDefs(): McpToolDescriptor[];
@@ -1028,7 +1030,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       if (data !== undefined && deps.memory && deps.memoryScopeId && isUnderAnyDir(path, ["memory"])) {
         throw new Error(
-          `your durable memory isn't a file — use the \`memory\` tool instead (action "remember" to add facts, "rewrite" to curate the whole notebook)`,
+          `your durable memory isn't a file — use the \`memory\` tool instead (actions "add", "edit" and "delete")`,
         );
       }
       const handle = await deps.provision();
@@ -1196,10 +1198,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryRead(): Promise<string | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
-      return timed("recall", () => memory!.read(write));
+      return timed("recall", async () => {
+        const facts = await memory!.facts?.(write);
+        return facts ? facts.map(factLine).join("\n") : memory!.read(write);
+      });
     },
 
-    async memoryRemember(facts: string[]): Promise<number | null> {
+    async memoryAdd(facts: string[]): Promise<number | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
       return once(() =>
@@ -1214,12 +1219,26 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
-    async memoryRewrite(content: string): Promise<true | null> {
+    async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
-      if (!memory || !write) return null;
+      if (!memory?.edit || !write) return null;
       return once(() =>
         timed("memory_write", async () => {
-          await memory!.replace(write, content, deps.createdBy);
+          await memory!.edit!(write, edits, deps.createdBy, {
+            ...deps.memoryCaptureMetadata?.(),
+            conversationScopeId: writableScopeId ?? write,
+          });
+          return true as const;
+        }),
+      );
+    },
+
+    async memoryDelete(ids: string[]): Promise<true | null> {
+      const write = deps.memoryAccess?.write;
+      if (!memory?.delete || !write) return null;
+      return once(() =>
+        timed("memory_write", async () => {
+          await memory!.delete!(write, ids, deps.createdBy);
           return true as const;
         }),
       );

@@ -95,5 +95,5 @@ test("procedures are not an editable notebook", async () => {
   const provider = createMemorableMemoryProvider({ argv: ["memorable"], env: {}, loadEntries: async () => [] });
   assert.deepEqual(await provider.query(personal, "x"), []);
   assert.equal(await provider.read(personal), "");
-  await assert.rejects(provider.replace(personal, "content"), /not an editable notebook/);
+  assert.equal(provider.edit, undefined);
 });

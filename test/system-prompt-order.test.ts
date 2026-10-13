@@ -1173,14 +1173,16 @@ for (const surfaceTools of [false, true]) {
     };
     const { orchestrator, memory, sessions } = buildOrchestrator({ harness });
     const personal = scopeId("personal", actor.id);
-    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- BETA_MARKER");
+    await memory.capture(personal, ["ALPHA_MARKER", "BETA_MARKER"], Date.now());
     const input = slackDm("memory-once", "hello", { surfaceTools });
     const first = await orchestrator.handleTurn(input);
     assert.equal(first.status, "ok");
     assert.match(seen[0]!.environment!, /ALPHA_MARKER/);
     await orchestrator.handleTurn({ ...input, text: "next" });
     assert.doesNotMatch(seen[1]!.environment ?? "", /ALPHA_MARKER|BETA_MARKER|What you remember/);
-    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- GAMMA_MARKER");
+    const beta = (await memory.facts!(personal)).find((fact) => fact.text.includes("BETA_MARKER"))!;
+    await memory.delete!(personal, [beta.id]);
+    await memory.capture(personal, ["GAMMA_MARKER"], Date.now());
     await orchestrator.handleTurn({ ...input, text: "third" });
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);

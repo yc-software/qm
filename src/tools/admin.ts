@@ -12,7 +12,7 @@ const object = Type.Record(Type.String(), Type.Unknown());
 type Operation = {
   description: string;
   parameters: ReturnType<typeof Type.Object>;
-  method: "GET" | "POST" | "PUT" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
 };
 
@@ -50,9 +50,21 @@ export const adminOperations = {
   ),
   memory_scopes: operation("List notebook scopes and metadata.", "GET", "/memory/scopes"),
   memory: operation("Read a notebook.", "GET", "/memory", scope),
-  replace_memory: operation("Replace a notebook after reading it and confirming the full change.", "PUT", "/memory", {
+  edit_memory: operation(
+    "Edit notebook facts by id after reading them and confirming the change.",
+    "PATCH",
+    "/memory",
+    {
+      ...scope,
+      value: Type.Object(
+        { facts: Type.Array(Type.Object({ id: string, text: string }, { additionalProperties: false })) },
+        { additionalProperties: false },
+      ),
+    },
+  ),
+  delete_memory: operation("Forget notebook facts by id after confirming.", "DELETE", "/memory", {
     ...scope,
-    value: Type.Object({ content: string }, { additionalProperties: false }),
+    value: Type.Object({ ids: Type.Array(string) }, { additionalProperties: false }),
   }),
   sessions: operation("List conversations using the returned cursor for the next page.", "GET", "/sessions", {
     ...scope,

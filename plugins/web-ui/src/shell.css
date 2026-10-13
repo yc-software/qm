@@ -5672,12 +5672,6 @@ a.connector-widget:focus-visible {
   flex-direction: column;
   gap: 14px;
 }
-.memory-help {
-  margin: 0;
-  font-size: var(--font-13);
-  line-height: 1.55;
-  color: var(--muted-foreground);
-}
 .memory-text {
   font: inherit;
   font-size: var(--font-13);
@@ -5690,8 +5684,15 @@ a.connector-widget:focus-visible {
   color: var(--foreground);
   width: 100%;
   box-sizing: border-box;
-  min-height: 360px;
+  min-height: 80px;
   resize: vertical;
+}
+.memory-fact > div:first-child {
+  flex: 1;
+}
+.memory-fact.editing {
+  flex-direction: column;
+  align-items: stretch;
 }
 .memory-text:focus {
   outline: 2px solid var(--border);
@@ -5705,18 +5706,12 @@ a.connector-widget:focus-visible {
   align-items: center;
   gap: 12px;
 }
-.memory-hint {
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.memory-facts,
-.memory-history {
+.memory-facts {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
-.memory-fact,
-.memory-revision {
+.memory-fact {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5725,8 +5720,7 @@ a.connector-widget:focus-visible {
   border-bottom: 1px solid var(--border);
   font-size: var(--font-13);
 }
-.memory-fact:last-child,
-.memory-revision:last-child {
+.memory-fact:last-child {
   border-bottom: 0;
 }
 .memory-fact .icon-btn {
@@ -5734,12 +5728,6 @@ a.connector-widget:focus-visible {
   width: 32px;
   height: 32px;
   color: var(--muted-foreground);
-}
-.memory-history h2 {
-  margin: 0;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--font-14);
 }
 
 .resource-pane {

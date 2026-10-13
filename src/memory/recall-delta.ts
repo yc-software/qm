@@ -1,6 +1,5 @@
 import { retainedSnapshot } from "../harness/context-snapshot.ts";
 import type { SessionEntry } from "../types.ts";
-import { isMemoryBookkeeping } from "./notebook.ts";
 
 interface RecallRecord {
   body: string;
@@ -39,9 +38,9 @@ function facts(body: string): Map<string, Fact> {
       const level = heading[1]!.length;
       headings.length = level;
       headings[level - 1] = line;
-    } else if (!line.trim() || isMemoryBookkeeping(line) || /^[-*]\s/.test(line)) {
+    } else if (!line.trim() || /^[-*]\s/.test(line)) {
       flush();
-      if (line.trim() && !isMemoryBookkeeping(line)) pending.push(line);
+      if (line.trim()) pending.push(line);
     } else pending.push(line);
   }
   flush();

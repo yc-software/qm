@@ -1,4 +1,5 @@
-import type { TurnRequest } from "../types.ts";
+import type { ScopeId, TurnRequest } from "../types.ts";
+import type { MemoryService } from "../memory/memory-service.ts";
 
 const ONBOARDING_VERSION = "v2";
 
@@ -25,30 +26,27 @@ export function detectOnboardingStatus(memory: string, version = ONBOARDING_VERS
   return "not_started";
 }
 
-function markerLineRe(version: string): RegExp {
-  return new RegExp(
-    `^[ \\t]*[-*]?[ \\t]*(?:\\(\\d{4}-\\d\\d-\\d\\d\\)\\s*)?Onboarding:\\s*(?:completed|dismissed|pending)\\s+${escapeRegExp(version)}\\b.*$`,
-    "gim",
-  );
-}
-
-export function setOnboardingStatus(
-  memory: string,
+/** Replaces the onboarding marker fact in a personal notebook. */
+export async function setOnboardingStatus(
+  memory: MemoryService,
+  scope: ScopeId,
   status: OnboardingStatus,
   today: string,
+  author: string,
   version = ONBOARDING_VERSION,
-): string {
-  const base = memory
-    .replace(markerLineRe(version), "")
-    .replace(/[ \t]+$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s+$/, "");
-  if (status === "not_started") return base ? base + "\n" : "";
+): Promise<void> {
+  const marker = new RegExp(
+    `^[-*]?\\s*(?:\\(\\d{4}-\\d\\d-\\d\\d\\)\\s*)?Onboarding:\\s*(?:completed|dismissed|pending)\\s+${escapeRegExp(version)}\\b`,
+    "i",
+  );
+  const stale = ((await memory.facts?.(scope)) ?? []).filter((fact) => marker.test(fact.text)).map((fact) => fact.id);
+  if (stale.length) await memory.delete?.(scope, stale, author);
+  if (status === "not_started") return;
   const line =
     status === "pending"
-      ? `- Onboarding: pending ${version} since ${today}.`
-      : `- Onboarding: ${status} ${version} on ${today}.`;
-  return (base ? `${base}\n${line}` : line) + "\n";
+      ? `Onboarding: pending ${version} since ${today}.`
+      : `Onboarding: ${status} ${version} on ${today}.`;
+  await memory.capture(scope, [line], Date.now(), author, { mode: "explicit" });
 }
 
 export function isIdeasConversation(input: {

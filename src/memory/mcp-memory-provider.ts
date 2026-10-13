@@ -74,9 +74,5 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
     },
 
     read: (scopeId) => read(scopeId, ""),
-
-    async replace() {
-      throw new Error("MCP memory providers do not support notebook replacement");
-    },
   };
 }

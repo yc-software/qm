@@ -97,7 +97,6 @@ for (const change of ["source", "audience"] as const)
       query: async () => [content],
       recall: async () => content,
       capture: async () => 0,
-      replace: async () => {},
     };
     const seen: HarnessTurnInput[] = [];
     const reopened: unknown[] = [];
@@ -184,7 +183,6 @@ for (const operation of ["read", "search"] as const)
       query: async () => [content],
       recall: async () => content,
       capture: async () => 0,
-      replace: async () => {},
     };
     const base = createMockHarness();
     const seen: HarnessTurnInput[] = [];
@@ -257,7 +255,6 @@ test("a failed audience reset is retried before recording the new checkpoint", a
     query: async () => [],
     recall: async () => "",
     capture: async () => 0,
-    replace: async () => {},
   };
   const base = createMockHarness();
   let resets = 0;

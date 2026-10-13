@@ -10,6 +10,7 @@ import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
+import { renderFacts } from "../memory/facts.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
 import { parseScopeId, type Resolution, type ScopeId, type Principal } from "../types.ts";
@@ -80,20 +81,20 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     memory,
     memorySnapshot: async (auditReads = true) => {
-      const heads = await Promise.all(
-        read.map(async (scope) => ({
-          scope,
-          head: (await memory.readHead?.(scope)) ?? { content: await memory.read(scope), revision: "" },
-        })),
+      const notebooks = await Promise.all(
+        read.map(async (scope) => {
+          const facts = await memory.facts?.(scope);
+          return { scope, facts, content: facts ? renderFacts(facts) : await memory.read(scope) };
+        }),
       );
-      if (auditReads) for (const { scope } of heads) recordRead(scope, "memory");
+      if (auditReads) for (const { scope } of notebooks) recordRead(scope, "memory");
       return {
-        recalled: heads
-          .filter(({ head }) => head.content.trim())
-          .map(({ scope, head }) => `### ${scope}\n${head.content.trim()}`)
+        recalled: notebooks
+          .filter(({ content }) => content.trim())
+          .map(({ scope, content }) => `### ${scope}\n${content.trim()}`)
           .join("\n\n"),
-        records: heads.flatMap(({ head }) => head.records?.records ?? []),
-        complete: heads.every(({ head }) => !!head.records),
+        facts: notebooks.flatMap(({ facts }) => facts ?? []),
+        complete: notebooks.every(({ facts }) => !!facts),
         snapshot: buildMemoryContextSnapshot({
           targetScope: input.targetScope,
           audience: isProjectGroupRef(parseScopeId(input.targetScope).ref ?? "")
