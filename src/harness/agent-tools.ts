@@ -3273,7 +3273,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             `${actions.join("/")}: ${operation.description} Required fields: ${((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action").join(", ") || "none"}.`,
         )
         .join("\n\n"),
-      parameters: Type.Object(properties, { additionalProperties: name === "files" }),
+      parameters: Type.Object(properties, { additionalProperties: true }),
       async execute(callId, params, signal, onUpdate, ctx) {
         const index = groups.findIndex((group) => group.actions.includes(String(params.action)));
         if (index < 0 || !Check(variants[index]!, params)) {
@@ -3281,10 +3281,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             callId,
             { tool: name, action: params.action, error: "invalid_arguments" },
             text(
-              `[error] Invalid arguments for ${name} action ${String(params.action)}.` +
-                (name === "files" && params.action === "share"
-                  ? " Share a Files ID; put the file in Files first using POST /v1/files/uploads."
-                  : ""),
+              `[error] Invalid arguments for ${name} action ${String(params.action)}. ${groups[index]?.operation.description ?? ""}`,
             ),
             true,
           );

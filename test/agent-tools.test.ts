@@ -3679,8 +3679,13 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   const pathShare = { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" };
   assert.ok(Check(files.parameters, pathShare));
   const rejected = await call(files, pathShare);
-  assert.match(textOut(rejected), /put the file in Files first using POST \/v1\/files\/uploads/);
+  assert.match(textOut(rejected), /upload it with POST \/v1\/files\/uploads first/);
   assert.deepEqual(writes, [["notes", "", undefined]]);
+  const invalidAppShare = { action: "share", id: "app", toScope: "org", unknown: true };
+  const apps = tools.find((tool) => tool.name === "apps")!;
+  assert.ok(Check(apps.parameters, invalidAppShare));
+  assert.match(textOut(await call(apps, invalidAppShare)), /Invalid arguments/);
+  assert.deepEqual(shares, []);
   for (const [name, type, action] of [
     ["files", "file", "share"],
     ["apps", "deploy", "share"],
