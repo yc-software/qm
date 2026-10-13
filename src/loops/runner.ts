@@ -174,7 +174,6 @@ export async function runLoopFire(
         let autoShippedCount = 0;
         let autoOutputCount = 0;
         let openedOutputs = 0;
-        let promoted: LoopOutput[] = [];
         try {
           const { runId } = await effects.work({
             loop,
@@ -242,9 +241,7 @@ export async function runLoopFire(
             continue;
           }
           const ready = await stores.outputs.promoteAttempt(item.id, runId);
-          promoted = ready;
           openedOutputs = ready.length;
-          const autoShipped: string[] = [];
           autoOutputCount = ready.filter(
             (output) => decideShip(loop, outputCandidate(output), grants).outcome === "auto",
           ).length;
@@ -254,19 +251,18 @@ export async function runLoopFire(
             if (!currentLoop) continue;
             const shipped = await effects.ship({ loop: currentLoop, output });
             if (shipped?.state === "shipped") {
-              autoShipped.push(output.id);
               autoShippedCount += 1;
+              openedOutputs -= 1;
             }
           }
-          openedOutputs = ready.length - autoShipped.length;
-          if (autoShipped.length === ready.length) {
+          if (openedOutputs === 0) {
             await stores.items.markShipped(item.id);
             summary.shipped.push(item.id);
           } else {
             summary.ready.push(item.id);
           }
         } catch (error) {
-          openedOutputs = autoShippedCount > 0 ? Math.max(0, promoted.length - autoShippedCount) : 0;
+          if (autoShippedCount === 0) openedOutputs = 0;
           const reason = error instanceof Error ? error.message : String(error);
           summary.failures.push(`${item.sourceKey}: ${reason}`);
           if (autoShippedCount > 0) {
