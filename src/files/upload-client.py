@@ -4,10 +4,10 @@ import hashlib
 import json
 import mimetypes
 import os
+import subprocess
 import sys
+import tempfile
 import time
-import urllib.error
-import urllib.request
 import uuid
 import zlib
 from pathlib import Path
@@ -21,19 +21,36 @@ class RequestError(RuntimeError):
         self.status = status
 
 
+def quote(value):
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def request(method, url, data=None, headers=None):
+    failure = ""
     for attempt in range(5):
-        try:
-            req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
-            with urllib.request.urlopen(req, timeout=180) as response:
-                return response.read()
-        except urllib.error.HTTPError as error:
-            if error.code < 500 and error.code != 429:
-                raise RequestError(error.code, f"request failed ({error.code}): {error.read(4096).decode(errors='replace')}") from None
-        except (urllib.error.URLError, TimeoutError):
-            pass
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory, "request.conf")
+            body = Path(directory, "body")
+            lines = [f"url = {quote(url)}", f"request = {quote(method)}", f"output = {quote(body)}", "silent", "show-error", "max-time = 180", 'write-out = "%{http_code}"']
+            lines += [f"header = {quote(f'{name}: {value}')}" for name, value in (headers or {}).items()]
+            if data is not None:
+                lines.append('data-binary = "@-"')
+            fd = os.open(config, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w") as output:
+                output.write("\n".join(lines) + "\n")
+            result = subprocess.run(["curl", "-K", str(config)], input=data or b"", capture_output=True)
+            content = body.read_bytes() if body.exists() else b""
+            if result.returncode == 0:
+                status = int(result.stdout.decode() or "0")
+                if 200 <= status < 300:
+                    return content
+                if status < 500 and status != 429:
+                    raise RequestError(status, f"request failed ({status}): {content[:4096].decode(errors='replace')}")
+                failure = f"HTTP {status}"
+            else:
+                failure = result.stderr.decode(errors="replace").strip() or f"curl exited {result.returncode}"
         if attempt == 4:
-            raise RuntimeError("transfer failed after retries; rerun with the same state file")
+            raise RuntimeError(f"transfer failed after retries ({failure}); rerun with the same state file")
         time.sleep(2 ** attempt)
 
 
@@ -83,11 +100,17 @@ def main():
     manifest = {"name": args.name or args.file.name, "mimetype": mimetypes.guess_type(args.file.name)[0] or "application/octet-stream", "sizeBytes": size, "checksums": checksums}
     if args.scope:
         manifest["scopeId"] = args.scope
-    if state_path.exists():
-        state = json.loads(state_path.read_text())
-        if state["manifest"] != manifest or state.get("destination") != destination:
-            raise RuntimeError("file or destination changed; use another --state path for a new upload")
-    else:
+    state = json.loads(state_path.read_text()) if state_path.exists() else None
+    if state and state.get("destination") != destination:
+        raise RuntimeError("destination changed; use another --state path for a new upload")
+    if state and state["manifest"] != manifest:
+        if "file" not in state:
+            try:
+                api("DELETE", f"/v1/files/uploads/{state['id']}")
+            except (RequestError, RuntimeError) as error:
+                print(f"could not cancel the previous unfinished upload: {error}", file=sys.stderr)
+        state = None
+    if not state:
         state = {"id": uuid.uuid4().hex, "manifest": manifest, "destination": destination, "next": 1}
         save(state_path, state)
     try:
