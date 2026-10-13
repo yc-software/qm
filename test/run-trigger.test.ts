@@ -204,7 +204,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
-  it("threads grants for owner mode but omits them for scopeFloor and scopeShared", async () => {
+  it("threads grants for owner mode but omits them for scope-run and scopeShared", async () => {
     const requests: TurnRequest[] = [];
     const d = deps(async (request) => {
       requests.push(request);

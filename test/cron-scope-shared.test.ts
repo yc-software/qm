@@ -83,7 +83,7 @@ describe("runTrigger: scopeShared unions the owner's keychain into the scope run
     assert.equal(seen.length, 0);
   });
 
-  it("a scopeFloor cron does NOT set the union flag (it runs at the scope floor, not the owner's creds)", async () => {
+  it("a scope-run cron does NOT set the union flag (it runs at the scope floor, not the owner's creds)", async () => {
     const { deps, seen } = captureDeps();
     await runTrigger(deps, {
       owner: "U-carol",
@@ -390,7 +390,7 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
       editorId: "U-mate",
       changeSummary: ["title"],
     });
-    assert.equal(b.enqueued.length, 0, "scopeFloor edit → no notice");
+    assert.equal(b.enqueued.length, 0, "scope-run edit → no notice");
     const c = fakeSink();
     await notifyOwnerOfCronEdit(c.sink, {
       cron: cron({ runAs: "owner" }),

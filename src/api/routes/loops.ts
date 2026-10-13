@@ -265,7 +265,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     if (recipientId) recipientConsent = { recipientId, status: "pending" as const };
   }
   const runAs = b.runAs === "owner" || b.runAs === "scope" || b.runAs === "scopeShared" ? b.runAs : undefined;
-  if ((runAs === "scope" || runAs === "scopeShared") && acting.scopeId === undefined)
+  if ((runAs === "scope" || runAs === "scopeShared") && (acting.scopeId ?? "personal:").startsWith("personal:"))
     return sendJson(ctx.res, 400, {
       error: "bad_request",
       message: "team loops must be created through an agent capability",

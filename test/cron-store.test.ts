@@ -241,7 +241,7 @@ test("recordFire appends compact durable fire log entries and replaces duplicate
   assert.equal((await store.get(cron.id))?.fireLog, undefined, "the legacy json fireLog is never written");
 });
 
-test("create stores runAs + member snapshot for a scopeFloor cron", async () => {
+test("create stores runAs + member snapshot for a scope-run cron", async () => {
   const store = createCronStore();
   const members = [
     { id: "U1", type: "internal" as const },

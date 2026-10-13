@@ -198,6 +198,8 @@ async function createCron(ctx: ApiCtx): Promise<void> {
       });
     }
     if (!isCronRuntime(b.runtime)) return sendJson(res, 400, { error: "bad_request", message: "invalid cron runtime" });
+    if (b.runAs !== undefined && b.runAs !== "owner" && b.runAs !== "scope" && b.runAs !== "scopeShared")
+      return sendJson(res, 400, { error: "bad_request", message: "runAs must be owner, scope or scopeShared" });
     const result = await ctx.deps.control.createCron(
       {
         schedule,

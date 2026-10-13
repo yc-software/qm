@@ -1662,10 +1662,10 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
       assert.equal(
         claims!.members,
         undefined,
-        "withheld publishMembers must not mint a scopeFloor cron member snapshot",
+        "withheld publishMembers must not mint a scope-run cron member snapshot",
       );
     } else {
-      assert.deepEqual(claims!.members, [], "empty publishMembers stays an empty scopeFloor snapshot");
+      assert.deepEqual(claims!.members, [], "empty publishMembers stays an empty scope-run snapshot");
     }
     assert.deepEqual(
       claims!.keychainMembers?.map((p) => p.id),

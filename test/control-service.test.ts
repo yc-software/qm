@@ -432,7 +432,7 @@ test('scope:"personal" runs at the invoking user\'s personal scope and DMs them,
   assert.equal(r.channel, undefined);
 });
 
-test('scope:"personal" can\'t be combined with an addressed target, a destinationKey, or scopeFloor', async () => {
+test('scope:"personal" can\'t be combined with an addressed target, a destinationKey, or scope-run', async () => {
   const { control } = setup();
   const withChannel = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", channel: "eng" },
@@ -484,7 +484,7 @@ test("recipient AND channel together is rejected", async () => {
   assert.equal(r.ok ? "" : r.code, "bad_request");
 });
 
-test("runAs=scopeFloor needs the conversation member list; with it, the cron is a team cron", async () => {
+test("runAs=scope needs the conversation member list; with it, the cron is a team cron", async () => {
   const { control } = setup();
   const chanScope = scopeId("channel", "C9");
   const noMembers = await control.createCron(
@@ -511,6 +511,11 @@ test("runAs=scopeFloor needs the conversation member list; with it, the cron is 
   assert.ok(withMembers.ok, JSON.stringify(withMembers));
   assert.equal(withMembers.cron.runAs, "scope");
   assert.equal(withMembers.cron.ownerScopeId, chanScope);
+  const elsewhere = await control.createCron(
+    { schedule: { everyMs: 3_600_000 }, action: "team digest", runAs: "scope" },
+    claims("U1", scopeId("personal", "U1"), { members }),
+  );
+  assert.equal(elsewhere.ok ? "" : elsewhere.code, "bad_request");
 });
 
 test("authority follows the person, not the conversation: members administer a channel-made team cron from their DMs; an ex-member (even the creator) loses it", async () => {

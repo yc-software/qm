@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import { parseSuggestedActivities, type SuggestedActivity } from "../../plugins/chassis/src/suggested-activities.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
+import { claimManagedCron, nightlyAt } from "../cron/managed.ts";
 import { scopeId, type Cron } from "../types.ts";
 
 const SUGGESTED_ACTIVITIES_TASK = `Generate three suggested activities for the owner of this personal session's new-chat screen.
@@ -51,33 +51,35 @@ export function createSuggestedActivityService(deps: {
     `${SUGGESTED_ACTIVITIES_TASK}\n\nDeployment guidance:\n${deps.context ?? "No special deployment context."}\n\nFallback seed activities:\n${JSON.stringify(seeds)}`;
 
   return {
-    async get(principalId: string, seeds: SuggestedActivity[], timezone = "UTC"): Promise<SuggestedActivityResult> {
+    async get(
+      principalId: string,
+      seeds: SuggestedActivity[],
+      timezone = "UTC",
+      poll = false,
+    ): Promise<SuggestedActivityResult> {
       const fallback = { activities: seeds.slice(0, 3), pending: false };
       if (!deps.enabled) return fallback;
       new Intl.DateTimeFormat("en-US", { timeZone: timezone });
       let profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
-      await deps.store.merge(principalId, { lastSeenAt: now(), seeds });
-      profile = { ...profile, lastSeenAt: now(), seeds };
+      const seen = poll ? {} : { lastSeenAt: now() };
+      await deps.store.merge(principalId, { ...seen, seeds });
+      profile = { ...profile, ...seen, seeds };
       if (!profile.cronId) {
-        const cron = await deps.crons.create({
-          owner: principalId,
-          createdBy: principalId,
-          ownerScopeId: scopeId("personal", principalId),
-          title: "Refresh my suggested activities",
-          schedule: {
-            cron: `${createHash("sha256").update(principalId).digest()[0]! % 60} 2 * * *`,
-            timezone: profile.timezone,
+        profile = await claimManagedCron(
+          deps,
+          principalId,
+          profile,
+          {
+            owner: principalId,
+            createdBy: principalId,
+            ownerScopeId: scopeId("personal", principalId),
+            title: "Refresh my suggested activities",
+            schedule: { cron: nightlyAt(principalId, 2), timezone: profile.timezone },
+            runAs: "owner",
+            action: actionFor(seeds),
           },
-          runAs: "owner",
-          action: actionFor(seeds),
-        });
-        const stored = await deps.store.update?.(principalId, (value) =>
-          value.cronId ? value : { ...value, cronId: cron.id, managedAction: cron.action!, seeds },
+          (cron) => ({ managedAction: cron.action!, seeds }),
         );
-        if (!stored) throw new Error("Suggested activities require an atomic profile store");
-        if (stored.cronId !== cron.id) await deps.crons.setEnabled(cron.id, false);
-        profile = stored;
-        deps.scheduler.notifyChanged(profile.cronId!);
       }
       const cron = await deps.crons.get(profile.cronId!);
       if (!owned(cron, principalId) || cron.archived) return fallback;
@@ -114,11 +116,13 @@ export function createSuggestedActivityService(deps: {
         !pending &&
         cron.enabled &&
         latestAt <= now() - REFRESH_AFTER_MS &&
-        (profile.lastBootstrapAt ?? 0) <= now() - 5 * 60_000
+        (profile.lastBootstrapAt ?? 0) <= now() - REFRESH_AFTER_MS
       ) {
         const timestamp = now();
         const claimed = await deps.store.update?.(principalId, (value) =>
-          (value.lastBootstrapAt ?? 0) > timestamp - 5 * 60_000 ? value : { ...value, lastBootstrapAt: timestamp },
+          (value.lastBootstrapAt ?? 0) > timestamp - REFRESH_AFTER_MS
+            ? value
+            : { ...value, lastBootstrapAt: timestamp },
         );
         if (claimed?.lastBootstrapAt === timestamp) {
           const result = await deps.scheduler.runNow(cron.id);

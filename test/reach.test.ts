@@ -350,7 +350,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
     assert.equal(pending[0]!.destination.target, "U-alice");
   });
 
-  it("team cron (scopeFloor) → an individual's DM including a NON-member of the channel — gate passes, no withhold", async () => {
+  it("team cron (scope-run) → an individual's DM including a NON-member of the channel — gate passes, no withhold", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "team digest" }));
     const destination: Destination = {
       type: "principal",

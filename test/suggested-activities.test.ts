@@ -140,11 +140,14 @@ test("opening a new session refreshes stale suggestions; fresh ones are served a
   assert.equal(f.calls.length, 2);
 });
 
-test("the nightly fire skips when no new session was opened since the last refresh or the feature is off", async () => {
+test("the nightly fire skips when no new session was opened since the last refresh (polls do not count) or the feature is off", async () => {
   const f = fixture();
   await f.service.get("alice", []);
   await f.settle();
   const cron = (await f.crons.list())[0]!;
+  assert.equal(await f.service.skipFire(cron), "no new sessions opened since the last refresh");
+  f.advance(60_000);
+  await f.service.get("alice", [], "UTC", true);
   assert.equal(await f.service.skipFire(cron), "no new sessions opened since the last refresh");
   f.advance(60_000);
   await f.service.get("alice", []);
@@ -163,7 +166,7 @@ test("invalid first results retry after cooldown without creating another cron",
   await f.settle();
   assert.equal((await f.service.get("alice", [])).pending, false);
   assert.equal(f.calls.length, 1);
-  f.advance(5 * 60_000);
+  f.advance(4 * 60 * 60_000);
   f.output(JSON.stringify(activities));
   assert.equal((await f.service.get("alice", [])).pending, true);
   await f.settle();

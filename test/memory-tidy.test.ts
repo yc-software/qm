@@ -45,7 +45,7 @@ function fixture() {
       return { status: "silent" };
     },
   });
-  const cronOf = async (scope: ScopeId) => (await crons.get((await store.get(scope))!.cronId))!;
+  const cronOf = async (scope: ScopeId) => (await crons.get((await store.get(scope))!.cronId!))!;
   const fireAt = async (scope: ScopeId, at: number) => {
     const cron = await cronOf(scope);
     await crons.update(cron.id, { schedule: { everyMs: 60_000 } });
@@ -117,7 +117,7 @@ test("a scheduled fire runs the tidy only when the notebook changed since the la
   assert.equal(f.calls.length, 2);
 });
 
-test("a failed tidy does not count, an owner-rewritten task is never skipped, and run-now always runs", async () => {
+test("a failed tidy does not count, and run-now always runs", async () => {
   const f = fixture();
   f.notebooks.set(alice, [f.fact(1)]);
   await f.service.ensure(alice);
@@ -127,8 +127,6 @@ test("a failed tidy does not count, an owner-rewritten task is never skipped, an
 
   await f.crons.recordFire(id, { fireKey: "k2", threadRef: "t2", firedAt: 7, endedAt: 8, status: "ok" });
   assert.ok(await f.service.skipFire(await f.cronOf(alice)));
-  await f.crons.update(id, { action: "Only merge exact duplicates." });
-  assert.equal(await f.service.skipFire(await f.cronOf(alice)), undefined);
   const result = await f.scheduler.runNow(id);
   assert.ok(result.started);
   await result.settled;

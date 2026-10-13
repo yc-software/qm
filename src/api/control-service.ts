@@ -195,7 +195,8 @@ export async function canAdministerCron(
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   if (await app.membershipControlsScope(cron.ownerScopeId)) return app.managesScope(actorId, cron.ownerScopeId);
-  if (await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId))) return true;
+  if (cron.runAs !== "scope" && (await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId))))
+    return true;
   const team = cron.runAs === "scope" || cron.runAs === "scopeShared";
   if (team && cron.ownerScopeId === callerScopeId) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
   if (team && (await app.isOpenScopeMember(actorId, cron.ownerScopeId))) return true;
@@ -304,12 +305,15 @@ export async function resolveRunAsChange(
       message: "switching to a team mode needs this conversation's member list — do it from the cron's channel",
     };
   }
-  if (reqRunAs === "scopeShared" && !scopeIsMembershipControlled(before.ownerScopeId, capability) && !openShared) {
+  const sharedOk =
+    reqRunAs === "scope"
+      ? capability.scopeId === before.ownerScopeId
+      : scopeIsMembershipControlled(before.ownerScopeId, capability) || openShared;
+  if (!sharedOk) {
     return {
       ok: false,
       code: "bad_request",
-      message:
-        "scopeShared needs a private or Open shared conversation you belong to — change the mode from inside the cron's scope",
+      message: `${reqRunAs} can only be set from inside the cron's own shared conversation`,
     };
   }
   return {
@@ -532,12 +536,15 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
             "a team cron needs this conversation's member list, which isn't available here — create it as a personal cron instead",
         };
       }
-      if (runAs === "scopeShared" && !eligibleForShared) {
+      const sharedOk =
+        runAs === "scope"
+          ? ownerScopeId === capability.scopeId && !ownerScopeId.startsWith("personal:")
+          : eligibleForShared;
+      if (runAs !== "owner" && !sharedOk) {
         return {
           ok: false,
           code: "bad_request",
-          message:
-            "scopeShared needs a private or Open shared conversation you belong to — not a DM or a different named channel",
+          message: `${runAs} must be created from inside the shared conversation it runs as — not a DM or a different channel`,
         };
       }
       if (req.unattendedGrants !== undefined) {

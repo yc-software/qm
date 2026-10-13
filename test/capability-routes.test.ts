@@ -754,7 +754,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.match(((await empty.json()) as any).message, /nothing to change/);
   });
 
-  it("creates a scopeFloor cron when the token carries a member snapshot", async () => {
+  it("creates a scope-run cron when the token carries a member snapshot", async () => {
     const res = await post(
       "/v1/crons",
       { schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" }, action: "team standup", runAs: "scope" },
@@ -767,7 +767,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.deepEqual(cron.members.map((m: any) => m.id).sort(), ["U1", "U2"]);
   });
 
-  it("a scopeFloor create with no signed members is rejected (400)", async () => {
+  it("a scope-run create with no signed members is rejected (400)", async () => {
     const res = await post(
       "/v1/crons",
       { schedule: { everyMs: 60_000 }, action: "team standup", runAs: "scope" },
@@ -777,7 +777,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(((await res.json()) as any).error, "members_unavailable");
   });
 
-  it("any member of the scope can edit/disable a scopeFloor cron", async () => {
+  it("any member of the scope can edit/disable a scope-run cron", async () => {
     const created = (await (
       await post(
         "/v1/crons",
@@ -803,7 +803,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     );
   });
 
-  it("a scopeFloor cron from a different scope is readable by a snapshot member but never administrable (your boss's channel cron stays out of your DM's control)", async () => {
+  it("a scope-run cron from a different scope is readable by a snapshot member but never administrable (your boss's channel cron stays out of your DM's control)", async () => {
     const created = (await (
       await post(
         "/v1/crons",

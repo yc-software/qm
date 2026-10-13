@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { CronStore } from "../cron/cron-store.ts";
+import { claimManagedCron, nightlyAt } from "../cron/managed.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -16,7 +16,7 @@ const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read it with
 Batch your edits and deletes into list calls; each call changes everything or nothing. If nothing needs changing, change nothing. Do not message anyone; end with finish_silently.`;
 
 export interface MemoryTidyProfile {
-  cronId: string;
+  cronId?: string;
 }
 
 export function createMemoryTidyService(deps: {
@@ -32,26 +32,27 @@ export function createMemoryTidyService(deps: {
       if (kind !== "personal" && kind !== "channel" && kind !== "group") return;
       if (await deps.store.get(scope)) return;
       const owner = kind === "personal" ? ref : scopeActor(scope);
-      const cron = await deps.crons.create({
-        owner,
-        createdBy: owner,
-        ownerScopeId: scope,
-        title: "Tidy memory",
-        schedule: {
-          cron: `${createHash("sha256").update(scope).digest()[0]! % 60} 3 * * *`,
-          timezone: (kind === "personal" && (await deps.timezone(ref))) || DEFAULT_CRON_TIMEZONE,
+      await claimManagedCron(
+        deps,
+        scope,
+        {},
+        {
+          owner,
+          createdBy: owner,
+          ownerScopeId: scope,
+          title: "Tidy memory",
+          schedule: {
+            cron: nightlyAt(scope, 3),
+            timezone: (kind === "personal" && (await deps.timezone(ref))) || DEFAULT_CRON_TIMEZONE,
+          },
+          action: MEMORY_TIDY_TASK,
+          runAs: kind === "personal" ? "owner" : "scope",
         },
-        action: MEMORY_TIDY_TASK,
-        runAs: kind === "personal" ? "owner" : "scope",
-      });
-      const stored = await deps.store.putIfAbsent(scope, { cronId: cron.id });
-      if (stored.cronId !== cron.id) await deps.crons.delete(cron.id);
-      else deps.scheduler.notifyChanged(cron.id);
+      );
     },
 
     async skipFire(cron: Cron): Promise<string | undefined> {
-      if (cron.action !== MEMORY_TIDY_TASK || !deps.memory.facts) return undefined;
-      if ((await deps.store.get(cron.ownerScopeId))?.cronId !== cron.id) return undefined;
+      if (!deps.memory.facts || (await deps.store.get(cron.ownerScopeId))?.cronId !== cron.id) return undefined;
       const facts = await deps.memory.facts(cron.ownerScopeId);
       const changedAt = facts.reduce((latest, fact) => Math.max(latest, fact.updatedAt), 0);
       const { runs } = await deps.crons.listFires(cron.id, { limit: 10 });
