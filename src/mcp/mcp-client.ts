@@ -161,7 +161,7 @@ export function createMcpClient(opts: {
 
   async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
     const id = ++rpcId;
-    const res = await fetchImpl(`${base}/mcp`, {
+    const res = await fetchImpl(opts.url, {
       method: "POST",
       headers: {
         ...(await authHeaders()),
