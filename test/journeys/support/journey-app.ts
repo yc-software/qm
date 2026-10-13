@@ -18,6 +18,7 @@ import {
 
 export interface JourneyApp {
   built: BuiltApp;
+  config: Config;
   gateway: FakeGateway;
   upload(name: string, mimetype: string, bytes: Uint8Array): Promise<IncomingAttachment>;
   webTurn(actorId: string, threadRef: string, text: string, attachments?: IncomingAttachment[]): Promise<TurnResult>;
@@ -48,25 +49,25 @@ export async function waitFor<T>(
 
 export async function startJourneyApp(limits: GatewayLimits, overrides: Partial<Config> = {}): Promise<JourneyApp> {
   const gateway = await startFakeGateway(limits);
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "qm-journey-")),
-      databaseUrl: process.env.DATABASE_URL!,
-      sessionStore: "postgres",
-      runStore: "postgres",
-      harness: "pi",
-      modelId: GATEWAY_MODEL_ID,
-      modelGateway: { url: gateway.url, apiKey: GATEWAY_API_KEY, apiKeyHeader: GATEWAY_API_KEY_HEADER, models: {} },
-      backgroundWorkEnabled: true,
-      ...overrides,
-    }),
-  );
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "qm-journey-")),
+    databaseUrl: process.env.DATABASE_URL!,
+    sessionStore: "postgres",
+    runStore: "postgres",
+    harness: "pi",
+    modelId: GATEWAY_MODEL_ID,
+    modelGateway: { url: gateway.url, apiKey: GATEWAY_API_KEY, apiKeyHeader: GATEWAY_API_KEY_HEADER, models: {} },
+    backgroundWorkEnabled: true,
+    ...overrides,
+  });
+  const built = buildApp(config);
   await built.refreshModels();
   await built.identity.hydrate();
   built.runtime.start();
   const turn = (req: TurnRequest) => built.app.turn(req);
   return {
     built,
+    config,
     gateway,
     async upload(name, mimetype, bytes) {
       const info = await built.blobTransfer.put(bytes);

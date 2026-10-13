@@ -53,6 +53,15 @@ const GENERIC_TURN_FAILURE = "That turn failed and couldn't be completed. The de
 export const MODEL_BUDGET_TEXT =
   "This workspace has used up its model budget, so I can't run until it resets. An admin can raise the limit.";
 
+const PROVIDER_FAILURE_TEXT: Partial<Record<ProviderErrorCode, string>> = {
+  model_budget: MODEL_BUDGET_TEXT,
+  rate_limit: "The model provider is rate-limiting us right now, so I couldn't answer. Try again in a minute.",
+  transient: "The model provider is overloaded right now, so I couldn't answer. Try again in a minute.",
+  not_found: "The model this conversation uses isn't available right now. Try again, or pick another model.",
+  model_unavailable: "The model this conversation uses isn't available right now. Try again, or pick another model.",
+  auth: "The model provider rejected our credentials, so I couldn't answer. An admin needs to check the model key.",
+};
+
 export function isNonRetryable(err: unknown): boolean {
   return err instanceof NonRetryableTurnError || (err instanceof ProviderTurnError && !err.retryable);
 }
@@ -62,7 +71,8 @@ export function isModelBudget(err: unknown): err is ProviderTurnError {
 }
 
 export function turnFailureMessage(err: unknown): string {
-  if (isModelBudget(err)) return MODEL_BUDGET_TEXT;
+  const providerText = err instanceof ProviderTurnError ? PROVIDER_FAILURE_TEXT[err.code] : undefined;
+  if (providerText) return providerText;
   return (err instanceof NonRetryableTurnError || err instanceof ProviderTurnError) && err.message.trim()
     ? err.message
     : GENERIC_TURN_FAILURE;

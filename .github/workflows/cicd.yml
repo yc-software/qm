@@ -331,7 +331,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        journey: [c1-cron-delivery, c2-cron-resume, w1-long-web-session, s1-slack-reply-once]
+        journey:
+          [
+            c1-cron-delivery,
+            c2-cron-resume,
+            w1-long-web-session,
+            w2-csv-artifact,
+            w4-publish-app,
+            w5-status-mid-task,
+            w6-provider-failure,
+            s1-slack-reply-once,
+            x2-security-screen,
+          ]
     services:
       postgres:
         image: postgres:16

@@ -3967,6 +3967,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
           addUsage();
           while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
+            if ((segment.modelCalls ?? 0) > 1) runtimeHandoffs = 0;
             if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
             if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
               throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");

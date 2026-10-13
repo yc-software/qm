@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-export const JOURNEYS = ["c1-cron-delivery", "c2-cron-resume", "w1-long-web-session", "s1-slack-reply-once"];
+export const JOURNEYS = [
+  "c1-cron-delivery",
+  "c2-cron-resume",
+  "w1-long-web-session",
+  "w2-csv-artifact",
+  "w4-publish-app",
+  "w5-status-mid-task",
+  "w6-provider-failure",
+  "s1-slack-reply-once",
+  "x2-security-screen",
+];
 export const CI_JOBS = [
   "Core typecheck",
   ...Array.from({ length: 5 }, (_, i) => `Core tests (${i + 1}/5)`),

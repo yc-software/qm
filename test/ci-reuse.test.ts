@@ -308,7 +308,14 @@ test("all quality jobs keep successful names and missing proof runs full checks"
     for (const step of steps.slice(1)) assert.ok(step.includes("if: needs.reuse.outputs.reusable != 'true'"));
   }
   assert.deepEqual(names.sort(), [...CI_JOBS].sort());
-  assert.ok(jobs.journeys!.includes(`journey: [${JOURNEYS.join(", ")}]`));
+  const matrix = /journey:\s*\[([^\]]*)\]/.exec(jobs.journeys!)?.[1] ?? "";
+  assert.deepEqual(
+    matrix
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+    JOURNEYS,
+  );
   assert.ok(jobs.reuse!.includes("continue-on-error: true"));
   assert.ok(jobs.reuse!.includes("steps.proof.outcome == 'success' && steps.proof.outputs.reusable == 'true'"));
   assert.ok(jobs.reuse!.includes("if: github.event_name == 'push' && github.ref == 'refs/heads/main'"));

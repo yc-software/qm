@@ -33,7 +33,7 @@ function providerErrorCode(failed: AssistantMessage, usage?: ContextUsage): Prov
   if (type === "model_unavailable") return "model_unavailable";
   if (type === "request_too_large" || status === 413) return "context_too_long";
   if (type === "invalid_request_error" && status === 400 && nearWindow(usage)) return "context_too_long";
-  if (type === "budget_exceeded" || (code && QUOTA_CODES.has(code))) return "model_budget";
+  if (type === "budget_exceeded" || status === 402 || (code && QUOTA_CODES.has(code))) return "model_budget";
   if (code && CONTEXT_CODES.has(code)) return "context_too_long";
   if ((type && AUTH_TYPES.has(type)) || status === 401 || status === 403) return "auth";
   if (type === "rate_limit_error" || status === 429) return "rate_limit";

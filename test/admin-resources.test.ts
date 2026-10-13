@@ -59,11 +59,11 @@ test("security flags are visible and legacy session taint can be released by an 
     srv.built.auditLog.record({
       at: 123,
       principalId: "U1",
-      action: "security_posture.flagged",
-      resource: "slack",
+      action: "security_screen.classify",
+      resource: "model",
       scopeLabel: "channel:C1",
-      status: "pending_approval",
-      detail: JSON.stringify({ cause: "strict-verdict", source: ["overheard"] }),
+      status: "block",
+      detail: JSON.stringify({ hook: "user_input", sources: ["overheard"] }),
     });
     const flags = await fetch(`${srv.base}/v1/admin/security/flags?limit=1`, { headers: ADMIN });
     assert.equal(flags.status, 200);
@@ -73,8 +73,8 @@ test("security flags are visible and legacy session taint can be released by an 
           at: 123,
           principal: "U1",
           scope: "channel:C1",
-          surface: "slack",
-          detail: '{"cause":"strict-verdict","source":["overheard"]}',
+          status: "block",
+          detail: '{"hook":"user_input","sources":["overheard"]}',
         },
       ],
     });

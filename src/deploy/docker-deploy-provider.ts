@@ -22,7 +22,6 @@ const DAEMON_PROBE_TIMEOUT_MS = 10_000;
 export interface DockerDeployProviderOptions {
   image?: string;
   docker?: string;
-  basePort?: number;
   dockerExec?: DockerExec;
   onError?: AppErrorSink;
 }
@@ -48,24 +47,6 @@ export async function dockerDaemonFailure(opts: DockerDaemonProbeOptions = {}): 
 export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {}): DeployProvider {
   const docker = opts.docker ?? "docker";
   const image = opts.image ?? "node:24";
-  let nextPort = opts.basePort ?? 9200;
-  const ports = new Map<string, number>();
-  const freed: number[] = [];
-  const allocPort = (n: string): number => {
-    const existing = ports.get(n);
-    if (existing !== undefined) return existing;
-    const port = freed.pop() ?? nextPort++;
-    ports.set(n, port);
-    return port;
-  };
-  const freePort = (n: string): void => {
-    const p = ports.get(n);
-    if (p !== undefined) {
-      freed.push(p);
-      ports.delete(n);
-    }
-  };
-
   const dexec = opts.dockerExec ?? spawnDockerExec(docker);
 
   const name = (d: Deployment) => `agent-deploy-${d.id.slice(0, 12)}`;
@@ -124,7 +105,6 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
       const net = await ensureNetwork(network(d));
       await dexec(["rm", "-f", name(d)]);
-      const hostPort = allocPort(name(d));
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
       const r = await dexec(
         [
@@ -143,7 +123,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
           "--pids-limit",
           "256",
           "-p",
-          `127.0.0.1:${hostPort}:${APP_PORT}`,
+          `127.0.0.1::${APP_PORT}`,
           "-v",
           `${version.snapshotDir}:/app:ro`,
           "-w",
@@ -165,13 +145,21 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
           windowSec: APP_READY_WINDOW_SEC,
           report: appReporter(opts.onError, d, version.env),
         });
+        const bound = await dexec([
+          "inspect",
+          "--format",
+          `{{(index (index .NetworkSettings.Ports "${APP_PORT}/tcp") 0).HostPort}}`,
+          name(d),
+        ]);
+        const port = Number(bound.stdout.trim());
+        if (bound.code !== 0 || !Number.isInteger(port) || port <= 0)
+          throw new Error(`deploy port lookup failed: ${bound.stderr.trim() || bound.stdout.trim()}`);
+        return { host: "127.0.0.1", port };
       } catch (e) {
         await dexec(["rm", "-f", name(d)]);
         await dexec(["network", "rm", net]);
-        freePort(name(d));
         throw e;
       }
-      return { host: "127.0.0.1", port: hostPort };
     },
 
     async logs(d: Deployment, opts: { tailLines: number }): Promise<string | null> {
@@ -182,7 +170,6 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     async destroy(d: Deployment): Promise<void> {
       await dexec(["rm", "-f", name(d)]);
       await dexec(["network", "rm", network(d)]);
-      freePort(name(d));
     },
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {

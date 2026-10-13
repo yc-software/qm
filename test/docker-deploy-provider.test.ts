@@ -11,7 +11,7 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
     calls.push(args);
     return {
       code: args[1] === "inspect" ? 1 : 0,
-      stdout: "",
+      stdout: args[0] === "inspect" ? "49153\n" : "",
       stderr: args[1] === "inspect" ? "No such network" : "",
     };
   };
@@ -30,7 +30,7 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
   });
   const provider = createDockerDeployProvider({ dockerExec });
 
-  await provider.apply(first, first.versions[0]!);
+  assert.deepEqual(await provider.apply(first, first.versions[0]!), { host: "127.0.0.1", port: 49153 });
   await provider.apply(second, second.versions[0]!);
   await provider.destroy(first);
 
@@ -107,6 +107,7 @@ test("an unrelated legacy migration failure does not block a new deployment", as
     if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
       return { code: 0, stdout: "agent-deploy-broken\n", stderr: "" };
     }
+    if (args[0] === "inspect" && args[2]?.includes("HostPort")) return { code: 0, stdout: "49154\n", stderr: "" };
     if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "daemon unavailable" };
     if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
     return { code: 0, stdout: "", stderr: "" };
@@ -128,6 +129,7 @@ test("a transient target inspection failure does not report the deployment missi
     if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
       return { code: 1, stdout: "", stderr: "No such network" };
     }
+    if (args[0] === "inspect" && args[2]?.includes("HostPort")) return { code: 0, stdout: "49154\n", stderr: "" };
     if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "daemon unavailable" };
     return { code: 0, stdout: "", stderr: "" };
   };

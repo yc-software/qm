@@ -23,13 +23,14 @@ export const GATEWAY_API_KEY = "journey-gateway-key";
 export const GATEWAY_API_KEY_HEADER = "x-gateway-key";
 const PDF_BYTES_PER_TOKEN = 100;
 
-export type ModelReply = { text: string } | { tool: string; input: Record<string, unknown> };
+export type ModelReply =
+  { text: string } | { tool: string; input: Record<string, unknown> } | { failure: { status: number; body: unknown } };
 
 export interface FakeGateway {
   url: string;
   requests: ModelRequest[];
   rejected: Array<{ status: number; reason: string; bytes: number; inputTokens: number }>;
-  respond: (req: ModelRequest) => ModelReply;
+  respond: (req: ModelRequest) => ModelReply | Promise<ModelReply>;
   hold: Promise<void> | null;
   close(): Promise<void>;
 }
@@ -63,7 +64,12 @@ function sse(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-function streamReply(res: ServerResponse, model: string, inputTokens: number, reply: ModelReply): void {
+function streamReply(
+  res: ServerResponse,
+  model: string,
+  inputTokens: number,
+  reply: Exclude<ModelReply, { failure: unknown }>,
+): void {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   const id = `msg_${Math.random().toString(36).slice(2)}`;
   sse(res, "message_start", {
@@ -202,7 +208,13 @@ export async function startFakeGateway(
     }
     if (fake.hold) await fake.hold;
     if (res.destroyed) return;
-    streamReply(res, body.model, inputTokens, fake.respond(record));
+    const reply = await fake.respond(record);
+    if ("failure" in reply) {
+      res.writeHead(reply.failure.status, { "content-type": "application/json" });
+      res.end(JSON.stringify(reply.failure.body));
+      return;
+    }
+    streamReply(res, body.model, inputTokens, reply);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   fake.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
