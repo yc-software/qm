@@ -1,6 +1,7 @@
 import type { Destination, Monitor, ScopeId } from "../types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 export interface BackgroundWatchArmedResult {
   monitorId: string;
@@ -103,6 +104,8 @@ export interface MonitorBrokerDeps {
   threadRef: string;
   destination?: Destination;
   graceMs?: number;
+  advisoryLock?: AdvisoryLock;
+  isCancelled?: () => Promise<boolean>;
 }
 
 export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
@@ -131,32 +134,34 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
           throw new Error(`invalid pattern: ${e instanceof Error ? e.message : "unsafe regex"}`, { cause: e });
         }
       }
-      const existing = (await deps.store.list()).find(
-        (m) => m.enabled && m.processId === processId && m.threadRef === deps.threadRef,
-      );
-      if (existing) {
-        await deps.store.update(existing.id, {
+      const arm = async () => {
+        if (await deps.isCancelled?.()) throw new Error("turn stopped");
+        const existing = (await deps.store.enabled([deps.threadRef])).find((m) => m.processId === processId);
+        if (existing) {
+          await deps.store.update(existing.id, {
+            ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
+            ...(opts?.pattern !== undefined ? { pattern: opts.pattern } : {}),
+            ...(opts?.sinceCursor !== undefined ? { cursor: opts.sinceCursor } : {}),
+          });
+          return { monitorId: existing.id, processId, reattached: true, expiresAt: existing.expiresAt };
+        }
+        const monitor = await deps.store.create({
+          owner: deps.owner,
+          createdBy: deps.owner,
+          ownerScopeId: deps.ownerScopeId,
+          ...(deps.destination ? { destination: deps.destination } : {}),
+          processId,
+          command: rec.command,
+          ...(rec.purpose ? { purpose: rec.purpose } : {}),
+          threadRef: deps.threadRef,
           ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
           ...(opts?.pattern !== undefined ? { pattern: opts.pattern } : {}),
           ...(opts?.sinceCursor !== undefined ? { cursor: opts.sinceCursor } : {}),
+          expiresAt: rec.expiresAt + graceMs,
         });
-        return { monitorId: existing.id, processId, reattached: true, expiresAt: existing.expiresAt };
-      }
-      const monitor = await deps.store.create({
-        owner: deps.owner,
-        createdBy: deps.owner,
-        ownerScopeId: deps.ownerScopeId,
-        ...(deps.destination ? { destination: deps.destination } : {}),
-        processId,
-        command: rec.command,
-        ...(rec.purpose ? { purpose: rec.purpose } : {}),
-        threadRef: deps.threadRef,
-        ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
-        ...(opts?.pattern !== undefined ? { pattern: opts.pattern } : {}),
-        ...(opts?.sinceCursor !== undefined ? { cursor: opts.sinceCursor } : {}),
-        expiresAt: rec.expiresAt + graceMs,
-      });
-      return { monitorId: monitor.id, processId, reattached: false, expiresAt: monitor.expiresAt };
+        return { monitorId: monitor.id, processId, reattached: false, expiresAt: monitor.expiresAt };
+      };
+      return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", arm) : arm();
     },
     async unwatch(monitorId) {
       const m = await deps.store.get(monitorId);

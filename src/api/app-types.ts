@@ -277,7 +277,7 @@ export interface SessionSearchHit {
 
 export interface App {
   swarms?: SwarmService;
-  turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
+  turn(req: TurnRequest, admission?: { signalDedupKey?: string; monitorId?: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;

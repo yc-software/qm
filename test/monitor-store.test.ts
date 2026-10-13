@@ -34,6 +34,21 @@ test("create rejects assigning a different owner without consent (anti-escalatio
   await assert.rejects(() => store.create(input({ owner: "U2" })), /consent/);
 });
 
+test("enabled can select exact threads without including disabled or unrelated watches", async () => {
+  const store = createMonitorStore();
+  const selected = await store.create(input({ threadRef: "Thread-1" }));
+  const unicode = await store.create(input({ threadRef: "thread-α" }));
+  await store.create(input({ threadRef: "thread-1" }));
+  await store.create(input({ threadRef: "thread-β" }));
+  const disabled = await store.create(input({ threadRef: "Thread-1" }));
+  await store.setEnabled(disabled.id, false);
+  assert.deepEqual(
+    (await store.enabled(["Thread-1", "thread-α"])).map((m) => m.id).sort(),
+    [selected.id, unicode.id].sort(),
+  );
+  assert.deepEqual(await store.enabled([]), []);
+});
+
 test("advance moves the cursor, holds/clears the tail, and records the fire time", async () => {
   const store = createMonitorStore();
   const m = await store.create(input());

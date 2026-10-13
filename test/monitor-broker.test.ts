@@ -5,6 +5,8 @@ import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/m
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { scopeId } from "../src/types.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import type { MonitorBrokerDeps } from "../src/monitors/monitor-broker.ts";
 
 const SCOPE = "personal:U1";
 type ReadOutputTail = Parameters<typeof createMonitorBroker>[0]["readOutputTail"];
@@ -14,7 +16,10 @@ function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
   return r;
 }
 
-async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" })) {
+async function harness(
+  readOutputTail: ReadOutputTail = async () => ({ outputTail: "" }),
+  admission: Pick<MonitorBrokerDeps, "advisoryLock" | "isCancelled"> = {},
+) {
   const store = createMonitorStore();
   const registry = createMemoryProcessRegistry();
   const rec = await registry.register({
@@ -36,6 +41,7 @@ async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTai
     threadRef: "thread-1",
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
     graceMs: 1000,
+    ...admission,
   });
   return { store, registry, broker, rec };
 }
@@ -64,6 +70,36 @@ test("watching the same job in the same thread twice reattaches instead of doubl
   assert.equal(second.reattached, true);
   assert.equal(second.monitorId, first.monitorId);
   assert.equal((await store.list()).length, 1);
+});
+
+test("an in-flight watch cannot rearm after its turn is stopped", async () => {
+  const advisoryLock = createMemoryAdvisoryLock();
+  let cancelled = false;
+  const { broker, registry, store } = await harness(undefined, { advisoryLock, isCancelled: async () => cancelled });
+  const original = armed(await broker.watch("p-1"));
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const get = registry.get;
+  registry.get = async (id) => {
+    const rec = await get(id);
+    entered.resolve();
+    await release.promise;
+    return rec;
+  };
+  const watch = broker.watch("p-1");
+  const rejected = assert.rejects(watch, /turn stopped/);
+  await entered.promise;
+  await advisoryLock.withLock("session-tree-admission", async () => {
+    cancelled = true;
+    await store.setEnabled(original.monitorId, false);
+  });
+  release.resolve();
+  await rejected;
+  assert.equal((await store.enabled()).length, 0);
+  cancelled = false;
+  const fresh = armed(await broker.watch("p-1"));
+  assert.notEqual(fresh.monitorId, original.monitorId);
+  assert.equal((await store.get(original.monitorId))!.enabled, false);
 });
 
 test("a repeat watch re-arms with the new settings instead of silently keeping stale ones", async () => {

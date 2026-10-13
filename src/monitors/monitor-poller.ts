@@ -36,7 +36,7 @@ export interface MonitorPollerDeps {
   deliveries: DeliveryStore;
   idempotency: IdempotencyStore;
   identity: IdentityService;
-  run: (req: TurnRequest) => Promise<TurnResult>;
+  run: (req: TurnRequest, monitorId: string) => Promise<TurnResult>;
   directory?: TriggerDeps["directory"];
   currentScopeMembers?: CurrentScopeMembers;
   sessions?: TriggerDeps["sessions"];
@@ -132,11 +132,10 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   const minFireIntervalMs = deps.minFireIntervalMs ?? DEFAULT_MIN_FIRE_INTERVAL_MS;
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
 
-  const triggerDeps: TriggerDeps = {
+  const triggerDeps: Omit<TriggerDeps, "run"> = {
     deliveries: deps.deliveries,
     idempotency: deps.idempotency,
     identity: deps.identity,
-    run: deps.run,
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
     ...(deps.sessions ? { sessions: deps.sessions } : {}),
@@ -148,22 +147,25 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     event: { input: string; securityScreenData: string },
     withErrorNotice = false,
   ): Promise<TriggerOutcome> {
-    return runTrigger(triggerDeps, {
-      owner: m.owner,
-      ownerScopeId: m.ownerScopeId,
-      input: event.input,
-      securityScreenData: event.securityScreenData,
-      fireKey,
-      surface: "monitor",
-      threadRef: m.threadRef,
-      ...(m.destination ? { destination: m.destination } : {}),
-      ...(withErrorNotice
-        ? {
-            errorNotice: (s) =>
-              `⚠️ A background-job update (${m.purpose ? `“${m.purpose}”` : `\`${m.command}\``}) could not run: ${s}`,
-          }
-        : {}),
-    });
+    return runTrigger(
+      { ...triggerDeps, run: (req) => deps.run(req, m.id) },
+      {
+        owner: m.owner,
+        ownerScopeId: m.ownerScopeId,
+        input: event.input,
+        securityScreenData: event.securityScreenData,
+        fireKey,
+        surface: "monitor",
+        threadRef: m.threadRef,
+        ...(m.destination ? { destination: m.destination } : {}),
+        ...(withErrorNotice
+          ? {
+              errorNotice: (s) =>
+                `⚠️ A background-job update (${m.purpose ? `“${m.purpose}”` : `\`${m.command}\``}) could not run: ${s}`,
+            }
+          : {}),
+      },
+    );
   }
 
   async function reportLost(m: Monitor): Promise<void> {

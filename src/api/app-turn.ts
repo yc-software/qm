@@ -90,7 +90,8 @@ export function createTurnMethods(
     const signals = deps.signals;
     const stop = async () => {
       const session = await deps.sessions.getByThread(run.sessionId);
-      if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session);
+      if (session)
+        return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals, monitors: deps.monitors }, session);
       await signals.send(run.id, { kind: "abort" });
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
@@ -98,7 +99,7 @@ export function createTurnMethods(
     return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
   }
   return {
-    async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
+    async turn(req: TurnRequest, admission?: Parameters<App["turn"]>[1]): Promise<TurnResult> {
       const startedAt = performance.now();
       const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
         ? (await deps.sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
@@ -471,7 +472,7 @@ export function createTurnMethods(
         if (req.approval) dedupKey = `${dedupKey}:approval:${req.approval.requestId}:${req.approval.approved}`;
       }
 
-      if (replay) dedupKey = replay.signalDedupKey;
+      if (admission?.signalDedupKey !== undefined) dedupKey = admission.signalDedupKey;
 
       if (origin.kind === "human" && !req.approval) deps.reaperPoke?.();
 
@@ -631,7 +632,24 @@ export function createTurnMethods(
           ...(dedupKey ? { dedupKey } : {}),
         });
       const enqueueStartedAt = performance.now();
-      const enqueued = await withCurrentProjectRoster(enqueue);
+      const admit = async () => {
+        if (admission?.monitorId) {
+          const monitor = await deps.monitors?.get(admission.monitorId);
+          if (
+            !monitor?.enabled ||
+            monitor.threadRef !== conversation.threadRef ||
+            monitor.ownerScopeId !== conversationScope(conversation, actor.id)
+          )
+            return false as const;
+        }
+        return enqueue();
+      };
+      const enqueued = await withCurrentProjectRoster(() =>
+        admission?.monitorId && deps.advisoryLock
+          ? deps.advisoryLock.withLock("session-tree-admission", admit)
+          : admit(),
+      );
+      if (enqueued === false) return { status: "silent" };
       if (!enqueued) return { status: "refused", reason: "project membership changed; retry from the current project" };
       const { run, deduped } = enqueued;
       console.info("[turn] queued", {
@@ -789,7 +807,10 @@ export function createTurnMethods(
       const stop = async () => {
         const session = await deps.sessions.getByThread(threadRef);
         if (!session || !deps.signals || (viewer && !(await sessionForViewer(session.id, viewer)))) return false;
-        return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals: deps.signals }, session);
+        return stopSessionTree(
+          { sessions: deps.sessions, runs: deps.runs, signals: deps.signals, monitors: deps.monitors },
+          session,
+        );
       };
       return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
     },

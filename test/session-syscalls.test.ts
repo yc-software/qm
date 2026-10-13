@@ -24,6 +24,7 @@ import { scopeId, type Conversation, type Principal, type ScopeId, type Session 
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -1615,6 +1616,37 @@ test("stopping an idle coordinator cancels running and queued descendants and bl
   );
   assert.equal((await r.mailbox.pending(r.room.id)).length, 0);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
+});
+
+test("stopping an idle session tree disables its monitors without affecting other work", async () => {
+  const r = await rig();
+  const monitors = createMonitorStore();
+  const child = await r.sessions.getOrCreateByThread("child", "dm", scope);
+  await r.sessions.setParentSession(child.id, r.room.id);
+  const foreign = await r.sessions.getOrCreateByThread("foreign", "dm", scopeId("personal", "U2"));
+  await r.sessions.setParentSession(foreign.id, r.room.id);
+  const armed = await Promise.all(
+    [r.room, child, foreign, { threadRef: "unrelated", scopeId: scope }].map((session) =>
+      monitors.create({
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: session.scopeId,
+        threadRef: session.threadRef,
+        processId: session.threadRef,
+        command: "npm test",
+        expiresAt: Date.now() + 60_000,
+      }),
+    ),
+  );
+  const deps = { ...r, monitors };
+  assert.equal(await stopSessionTree(deps, r.room), true);
+  assert.deepEqual(await Promise.all(armed.map(async (m) => (await monitors.get(m.id))!.enabled)), [
+    false,
+    false,
+    true,
+    true,
+  ]);
+  assert.equal(await stopSessionTree(deps, r.room), false);
 });
 
 test("stop still signals a queued child claimed during withdrawal", async () => {

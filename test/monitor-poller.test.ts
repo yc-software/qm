@@ -105,7 +105,8 @@ async function harness(opts?: {
   const processes = createMemoryProcessRegistry();
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
-  const run = async (req: TurnRequest): Promise<TurnResult> => {
+  const run = async (req: TurnRequest, monitorId: string): Promise<TurnResult> => {
+    assert.equal((await monitors.get(monitorId))?.threadRef, req.conversation.threadRef);
     calls.push(req);
     await opts?.onRun?.();
     return opts?.result ?? { status: "ok", reply: opts?.reply ?? "MONITOR-REPLY" };
