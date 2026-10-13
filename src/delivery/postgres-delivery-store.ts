@@ -3,6 +3,7 @@ import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { cronIdOf, threadRefCronIdExpr } from "../sessions/session-store.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 const SOURCE_CRON_ID_EXPR = threadRefCronIdExpr("provenance->>'sourceThreadRef'");
@@ -135,7 +136,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
           randomUUID(),
           input.idempotencyKey,
           JSON.stringify(input.destination),
-          input.text,
+          pgTextSafe(input.text),
           input.attachments?.length ? JSON.stringify(input.attachments) : null,
           input.provenance ? JSON.stringify(input.provenance) : null,
           cronIdOf(input.provenance?.sourceThreadRef),
