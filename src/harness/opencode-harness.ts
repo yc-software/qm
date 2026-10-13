@@ -56,7 +56,7 @@ import { countTokens } from "../util/tokens.ts";
 
 const OPENCODE_VERSION = "1.18.31";
 const OPENCODE_IDLE_WAIT_MS = 30 * 60_000;
-export const OPENCODE_STARTUP_TIMEOUT_MS = 90_000;
+const OPENCODE_STARTUP_TIMEOUT_MS = 90_000;
 
 function customProviderNpm(protocol: CustomProviderProtocol): string {
   const api = customProviderApi(protocol);
@@ -137,7 +137,7 @@ type Runtime = {
   close(): Promise<void>;
 };
 
-export function bridgeToolName(name: string): string {
+function bridgeToolName(name: string): string {
   if (name === "execute") return "workspace_execute";
   if (name === "read") return "workspace_read";
   if (name === "write") return "workspace_write";
