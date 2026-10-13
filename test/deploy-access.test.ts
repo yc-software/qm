@@ -255,25 +255,3 @@ test("shared-home members can approve and decline, outsiders cannot", async (t) 
   assert.match(await f.decide("carol@example.com"), /^Approved\./);
   await assert.rejects(f.decide(requester, false), /owner/);
 });
-
-test("publish audiences notify once with final permissions, including subsequent direct shares", async (t) => {
-  const f = await fixture(t);
-  const d = await f.deploy.deployOrUpdate({
-    ...publishInput(owner, "published"),
-    share: [{ scope: person(requester), permission: "write" }],
-    defaultAudience: {
-      contextScopeId: person(owner),
-      granteeScopeIds: [person(requester), person("carol@example.com")],
-      snapshotAt: Date.now(),
-    },
-  });
-  const notices = await f.notices();
-  assert.equal(notices.length, 2);
-  const toRequester = notices.filter((n) => n.destination.target === requester);
-  assert.equal(toRequester.length, 1);
-  assert.match(toRequester[0]!.text, /manage it.*https:\/\/published.apps.example.com\//);
-  const value = JSON.stringify({ deploymentId: d.id, requesterId: requester });
-  await decideDeploymentAccess(f.app, f.identity, value, { externalId: owner }, true);
-  await f.app.shareDeployment(d.id, person(requester), "write", { createdBy: owner });
-  assert.equal((await f.notices()).length, 2);
-});

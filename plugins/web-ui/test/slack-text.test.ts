@@ -90,9 +90,9 @@ test("slackWireToPlain flattens tokens for copy and search", () => {
   assert.equal(slackWireToPlain("hi <@U9|alice> see <https://x|doc> and <#C1|eng>"), "hi @alice see doc and #eng");
 });
 
-test("reaction and ask-agent directives are stripped, whitespace tidied", () => {
+test("reaction directives are stripped, whitespace tidied", () => {
   assert.equal(stripSlackDirectives("thanks! [[react: tada eyes]]"), "thanks!");
-  assert.equal(stripSlackDirectives("done [[ask-agent: <@U9> | file the report]]\n\n\nnext"), "done\n\nnext");
+  assert.equal(stripSlackDirectives("done [[react: eyes]]\n\n\nnext"), "done\n\nnext");
 });
 
 test("a trailing unclosed directive is cut, matching the Slack plugin", () => {
@@ -101,7 +101,7 @@ test("a trailing unclosed directive is cut, matching the Slack plugin", () => {
 
 test("directives quoted in code stay visible", () => {
   assert.equal(stripSlackDirectives("use `[[react: eyes]]` to react"), "use `[[react: eyes]]` to react");
-  const fenced = "```\n[[ask-agent: <@U9> | x]]\n```";
+  const fenced = "```\n[[react: eyes]]\n```";
   assert.equal(stripSlackDirectives(fenced), fenced);
 });
 
@@ -110,15 +110,9 @@ test("text without directives is returned as-is", () => {
   assert.equal(stripSlackDirectives(text), text);
 });
 
-test("the bounded ask-agent grammar resists catastrophic backtracking", () => {
+test("the directive grammar resists catastrophic backtracking", () => {
   const pad = " ".repeat(100000);
-  for (const input of [
-    "[[ask-agent:" + pad,
-    "[[ask-agent: <@U9> |" + pad,
-    "thanks [[react:" + pad + "]x",
-    "[[react: eyes]] tail" + pad + "no newline",
-    "[[ask-agent: <@U9> | do it ]] tail" + pad + "x",
-  ]) {
+  for (const input of ["thanks [[react:" + pad + "]x", "[[react: eyes]] tail" + pad + "no newline"]) {
     const start = process.hrtime.bigint();
     stripSlackDirectives(input);
     const ms = Number(process.hrtime.bigint() - start) / 1e6;
@@ -128,23 +122,10 @@ test("the bounded ask-agent grammar resists catastrophic backtracking", () => {
 
 test("the local grammar mirrors the Slack plugin, ReDoS-hardened in lockstep with core", () => {
   const reactions = readFileSync(new URL("../../../src/slack/reactions.ts", import.meta.url), "utf8");
-  const requests = readFileSync(new URL("../../../src/slack/agent-requests.ts", import.meta.url), "utf8");
   const directives = readFileSync(new URL("../../../src/slack/directives.ts", import.meta.url), "utf8");
   const local = readFileSync(new URL("../src/slack-text.ts", import.meta.url), "utf8");
   assert.ok(reactions.includes("/\\[\\[react:([^\\]]*)\\]\\]/gi"));
   assert.ok(local.includes("/\\[\\[react:[^\\]]*\\]\\]/gi"));
-  assert.ok(requests.includes("/\\[\\[ask-agent:([^|\\]]{0,400})\\|([\\s\\S]*?)\\]\\]/gi"));
-  assert.ok(local.includes("/\\[\\[ask-agent:[^|\\]]{0,400}\\|[\\s\\S]*?\\]\\]/gi"));
-  const leftover = /function stripLeftoverAgentRequests\(text: string\): string \{[\s\S]*?\n\}/;
-  const serverBody = requests.match(leftover)?.[0];
-  assert.ok(
-    serverBody && local.match(leftover)?.[0] === serverBody,
-    "the positional leftover strip is byte-identical on both sides",
-  );
-  assert.ok(
-    requests.includes("/\\[\\[ask-agent:/gi") && local.includes("/\\[\\[ask-agent:/gi"),
-    "the opener regex keeps both flags on both sides",
-  );
   assert.ok(
     !directives.includes("[ \\t]+\\n") && !local.includes("[ \\t]+\\n"),
     "the tidy step is linear on both sides",
@@ -161,23 +142,6 @@ test("the local entity decode matches core's decodeSlackEntities", () => {
   assert.ok(local.includes(decode));
 });
 
-test("a closed directive with a newline or a long id is stripped whole, never truncating the reply", () => {
-  assert.match(stripSlackDirectives("hi [[ask-agent:\n<@U2> | task]] tail text"), /^hi\s+tail text$/);
-  const longId = "<@U2>" + " ".repeat(500);
-  assert.match(
-    stripSlackDirectives(`hi [[ask-agent:${longId}| task]] tail text`),
-    /^hi\s+tail text$/,
-    "an id past the bound is stripped without eating the rest of the reply",
-  );
-  assert.match(
-    stripSlackDirectives("I'll ask [[ask-agent: <@U2> no pipe here]] and also [[ask-agent: <@U3> | real]] done"),
-    /^I'll ask\s+and also\s+done$/,
-    "a malformed closed directive never leaks its syntax",
-  );
-  assert.equal(stripSlackDirectives("[[ask-agent: <@U2> | x]] then [docs](y)]] fine"), "then [docs](y)]] fine");
-  assert.equal(stripSlackDirectives("hi [[ask-agent: <@U2> | unterminated"), "hi");
-});
-
 test("a labeled user mention never doubles its at-sign", () => {
   assert.deepEqual(splitSlackWire("<@U1|@ada>"), [{ kind: "mention", handle: "ada" }]);
   assert.deepEqual(splitSlackWire("<@U1|@@ada>"), [{ kind: "mention", handle: "ada" }]);
@@ -188,17 +152,4 @@ test("a literally typed, escaped mention stays text even where plain @names are 
     { kind: "text", text: "<@U123> and " },
     { kind: "mention", handle: "ada" },
   ]);
-});
-
-test("the leftover strip finds openers case-insensitively without shifting indices on non-ASCII text", () => {
-  const turkish = "İstanbul plan: İİİ ok [[ask-agent: <@U2> | never closed";
-  assert.equal(stripSlackDirectives(turkish), "İstanbul plan: İİİ ok");
-  assert.match(stripSlackDirectives("x [[ASK-AGENT: <@U2> no pipe]] y"), /^x\s+y$/);
-});
-
-test("many directive openers with no close strip in linear time", () => {
-  const input = ("[[ask-agent:" + "x".repeat(88)).repeat(10000);
-  const start = process.hrtime.bigint();
-  stripSlackDirectives(input);
-  assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 100);
 });

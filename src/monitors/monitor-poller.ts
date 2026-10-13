@@ -43,6 +43,7 @@ export interface MonitorPollerDeps {
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
+  onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
 }
@@ -254,7 +255,10 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
       if (exited || expired) await deps.monitors.setEnabled(m.id, false);
     }
-    if (exited) await deps.processes.markStatus(m.processId, "exited");
+    if (exited) {
+      await deps.processes.markStatus(m.processId, "exited");
+      await deps.onProcessExit?.(handle, m.processId).catch((e) => deps.monitors.recordError(m.id, errMessage(e)));
+    }
     return true;
   }
 
@@ -274,19 +278,18 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           break;
         }
         const rec = await deps.processes.get(m.processId);
-        if (!rec) {
+        if (!rec?.sandboxId) {
           await reportLost(m);
           fires++;
           continue;
         }
-        const targetKey = rec.sandboxId ?? rec.scopeId;
+        const targetKey = rec.sandboxId;
         let handle = handles.get(targetKey);
         if (!handle) {
           try {
-            handle = await sandbox.provision(
-              [{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }],
-              rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
-            );
+            handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+              sandboxId: rec.sandboxId,
+            });
           } catch (e) {
             await deps.monitors.recordError(m.id, errMessage(e));
             continue;

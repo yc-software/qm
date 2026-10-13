@@ -95,7 +95,10 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
     if (!existsSync(pidFile)) return;
     const pid = readFileSync(pidFile, "utf8").trim();
     if (!/^\d+$/.test(pid)) return;
-    spawnSync("sh", ["-c", `pkill -TERM -P ${pid} 2>/dev/null; kill -TERM ${pid} 2>/dev/null; true`]);
+    spawnSync("sh", [
+      "-c",
+      `kill -TERM -${pid} 2>/dev/null; pkill -TERM -P ${pid} 2>/dev/null; kill -TERM ${pid} 2>/dev/null; true`,
+    ]);
   };
 
   const retire = (b: BodyRecord): void => {

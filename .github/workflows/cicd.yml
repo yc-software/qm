@@ -208,6 +208,21 @@ jobs:
           echo "use the contributor's real email, or drop the trailer." >&2
           exit 1
 
+  dependency-audit:
+    name: Production dependency audit
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .node-version
+      # Same gate the core image build runs. Never reused: advisories appear after a tree is tested.
+      - name: Audit production dependencies
+        run: npm run audit:prod
+
   lint:
     name: Lint
     needs: reuse
@@ -466,7 +481,7 @@ jobs:
     timeout-minutes: 3
     continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]
+    needs: [core, cli, lint, dependency-audit, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]
     runs-on: ubuntu-latest
     permissions: {}
     steps:

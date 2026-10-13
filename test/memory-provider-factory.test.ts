@@ -18,7 +18,6 @@ const defaultMemory: MemoryService = {
   async read() {
     return "personal notebook";
   },
-  async replace() {},
 };
 
 function response(body: unknown) {

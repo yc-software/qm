@@ -10,7 +10,8 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, MEMORY_FILE } from "../src/memory/memory-service.ts";
+import { createMemoryService } from "../src/memory/memory-service.ts";
+import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function freshApp(overrides: Partial<Config> = {}) {
@@ -23,21 +24,6 @@ function freshApp(overrides: Partial<Config> = {}) {
 }
 
 const actor = { externalId: "U1" };
-
-test("file memory compare-and-set permits only one writer for a revision", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memory-cas-")));
-  const memory = createMemoryService(workspace);
-  const target = scopeId("personal", "cas-user");
-  await memory.replace(target, "# Memory\n\n- original");
-  const head = await memory.readHead!(target);
-
-  const results = await Promise.all([
-    memory.replaceIfRevision!(target, "# Memory\n\n- first", head.revision),
-    memory.replaceIfRevision!(target, "# Memory\n\n- second", head.revision),
-  ]);
-
-  assert.deepEqual(results.sort(), [false, true]);
-});
 
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
@@ -87,7 +73,11 @@ test("default memory policy recalls visible org memory without crossing into per
   const ws = createLocalWorkspaceStore(dataDir);
   const org = scopeId("org", "default-org");
   await ws.ensureScope(org);
-  await ws.write(org, MEMORY_FILE, "# Memory\n\n- Org launch metric is revenue quality\n");
+  await createMemoryService(ws).capture(org, ["Org launch metric is revenue quality"], Date.now(), "admin", {
+    mode: "explicit",
+    inheritedFacts: [],
+    sensitivity: "ordinary",
+  });
 
   const inDm = await app.turn(dm("!sysprompt", "dm:U1:tOrg"));
   assert.equal(inDm.status, "ok");
@@ -103,7 +93,11 @@ test("memory recall policy can be tightened to writable scope only", async () =>
   const ws = createLocalWorkspaceStore(dataDir);
   const org = scopeId("org", "default-org");
   await ws.ensureScope(org);
-  await ws.write(org, MEMORY_FILE, "# Memory\n\n- Org launch metric is revenue quality\n");
+  await createMemoryService(ws).capture(org, ["Org launch metric is revenue quality"], Date.now(), "admin", {
+    mode: "explicit",
+    inheritedFacts: [],
+    sensitivity: "ordinary",
+  });
 
   const res = await app.turn(dm("!sysprompt", "dm:U1:tWritable"));
   assert.equal(res.status, "ok");
@@ -119,10 +113,10 @@ test("memory capture policy can disable automatic post-turn extraction", async (
   assert.doesNotMatch(res.reply ?? "", /billing service/);
 });
 
-test("the memory protocol is always present in the system prompt", async () => {
+test("memory discovery remains in the system orientation", async () => {
   const { app } = freshApp();
   const res = await app.turn(dm("!sysprompt", "dm:U1:tA"));
-  assert.match(res.reply ?? "", /## Memory/);
+  assert.match(res.reply ?? "", /search `memory`, use `history` for this conversation/);
 });
 
 test("capture dedupes, dates, and recall returns the stored memory", async () => {
@@ -140,47 +134,6 @@ test("capture dedupes, dates, and recall returns the stored memory", async () =>
   assert.match(recalled, /Prefers terse replies/);
   assert.match(recalled, /billing service/);
   assert.match(recalled, /\(2026-05-31\)/);
-
-  const raw = await ws.read(sid, MEMORY_FILE);
-  assert.ok(raw && raw.includes("# Memory"));
-});
-
-test("read() returns the full uncapped notebook; replace() round-trips and clears", async () => {
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-rw-")));
-  const mem = createMemoryService(ws);
-  const sid = scopeId("personal", "U1");
-  await ws.ensureScope(sid);
-
-  assert.equal(await mem.read(sid), "", "no notebook yet → empty");
-
-  await mem.replace(sid, "# Memory\n\n- I work in PT");
-  assert.equal(await mem.read(sid), "# Memory\n\n- I work in PT\n", "stored verbatim with one trailing newline");
-
-  await mem.replace(sid, "   \n");
-  assert.equal(await mem.read(sid), "");
-  assert.equal(await mem.recall(sid), "");
-});
-
-test("capture() PRESERVES hand-written prose written via replace() (no silent data-loss)", async () => {
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-preserve-")));
-  const mem = createMemoryService(ws);
-  const sid = scopeId("personal", "U1");
-  await ws.ensureScope(sid);
-  const at = Date.UTC(2026, 4, 31);
-
-  const note = "# Memory\n\nI prefer terse replies and I work in PT.\n\n## Quirks\n* uses vim\n- already a fact\n";
-  await mem.replace(sid, note);
-
-  assert.equal(await mem.capture(sid, ["Lives in Seattle"], at), 1);
-
-  const after = await mem.read(sid);
-  assert.match(after, /I prefer terse replies and I work in PT\./, "prose survives capture");
-  assert.match(after, /## Quirks/, "headers survive capture");
-  assert.match(after, /\* uses vim/, "star-bullets survive capture");
-  assert.match(after, /- already a fact/, "existing bullet survives");
-  assert.match(after, /- \(2026-05-31\) Lives in Seattle/, "the new fact is appended");
-
-  assert.equal(await mem.capture(sid, ["already a fact"], at), 0, "an existing bullet fact is not re-added");
 });
 
 test("capture cannot forge platform date or cross-scope provenance markers", async () => {
@@ -199,26 +152,6 @@ test("lossy scope names cannot share a local workspace directory", async () => {
   assert.notEqual(ws.scopeDir(scopeId("channel", "a/b")), ws.scopeDir(scopeId("channel", "a?b")));
 });
 
-test("'* fact' bullets participate in capture dedupe and query(); capture never evicts old facts", async () => {
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-star-")));
-  const mem = createMemoryService(ws);
-  const sid = scopeId("personal", "U1");
-  await ws.ensureScope(sid);
-  const at = Date.UTC(2026, 4, 31);
-
-  const stars = Array.from({ length: 300 }, (_, i) => `* (2026-05-01) star fact ${i}`);
-  await mem.replace(sid, `# Memory\n\n${stars.join("\n")}`);
-
-  assert.equal(await mem.capture(sid, ["star fact 7"], at), 0, "a '* ' bullet dedupes capture");
-  assert.deepEqual(await mem.query(sid, "star fact 299"), ["(2026-05-01) star fact 299"], "'* ' bullets are queryable");
-
-  assert.equal(await mem.capture(sid, ["Lives in Seattle"], at), 1);
-  const after = await mem.read(sid);
-  assert.match(after, /- \(2026-05-31\) Lives in Seattle/, "the new fact is appended");
-  assert.match(after, /star fact 0\n/, "the oldest fact survives — capture never drops");
-  assert.match(after, /star fact 1\n/);
-});
-
 test("query() retrieves matching facts and is scope-keyed (boundary-safe)", async () => {
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-q-")));
   const mem = createMemoryService(ws);
@@ -230,70 +163,42 @@ test("query() retrieves matching facts and is scope-keyed (boundary-safe)", asyn
   await mem.capture(personal, ["Owns the billing service", "Prefers terse replies"], at);
 
   const hits = await mem.query(personal, "billing");
-  assert.deepEqual(hits, ["(2026-05-31) Owns the billing service"]);
+  assert.deepEqual(hits, ["#1 (2026-05-31) Owns the billing service"]);
   assert.deepEqual(await mem.query(personal, "kubernetes"), []);
   assert.deepEqual(await mem.query(channel, "handle"), []);
 });
 
-test("file memory: legacy Markdown migrates lazily into one canonical records file", async () => {
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mig-")));
+test("file memory: duplicate capture tightens metadata without adding a fact", async () => {
+  const mem = createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-dup-"))));
   const sid = scopeId("personal", "U1");
-  await ws.ensureScope(sid);
-  await ws.write(sid, MEMORY_FILE, "# Memory\n\n- Prefers terse replies\n");
-  const mem = createMemoryService(ws);
-  const head = await mem.readHead!(sid);
-  assert.equal(head.content, "# Memory\n\n- Prefers terse replies\n");
-  assert.equal(head.records!.records[1]!.sourceUnknown, true);
-  assert.equal(await ws.read(sid, MEMORY_FILE), "# Memory\n\n- Prefers terse replies\n");
-  assert.equal(await mem.capture(sid, ["Owns billing"], Date.UTC(2026, 0, 2), undefined, { mode: "explicit" }), 1);
-  const stored = JSON.parse((await ws.read(sid, MEMORY_FILE))!);
-  assert.equal(stored.version, 1);
-  const reopened = createMemoryService(ws);
-  assert.match(await reopened.read(sid), /Prefers terse replies\n- \(2026-01-02\) Owns billing\n$/);
-  assert.equal((await reopened.readHead!(sid)).records!.records.length, 3);
-});
-
-test("file memory: malformed canonical records fail closed", async () => {
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-bad-")));
-  const sid = scopeId("personal", "U1");
-  await ws.ensureScope(sid);
-  await ws.write(sid, MEMORY_FILE, '{"version":1,"records":[');
-  const mem = createMemoryService(ws);
-  await assert.rejects(mem.read(sid), /Malformed memory records/);
-  await ws.write(sid, MEMORY_FILE, '{"version":2,"records":[]}');
-  await assert.rejects(mem.recall(sid), /Invalid memory records/);
-});
-
-test("file memory: duplicate capture tightens metadata without adding a bullet", async () => {
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-dup-")));
-  const sid = scopeId("personal", "U1");
-  await ws.ensureScope(sid);
-  const mem = createMemoryService(ws);
   const at = Date.UTC(2026, 0, 2);
-  await mem.capture(sid, ["Salary band is L5"], at, undefined, { mode: "explicit", inheritedRecords: [] });
+  await mem.capture(sid, ["Salary band is L5"], at, undefined, { mode: "explicit", inheritedFacts: [] });
   assert.equal(
     await mem.capture(sid, ["Salary band is L5"], at, undefined, { mode: "explicit", sensitivity: "restricted" }),
     0,
   );
-  const bullet = (await mem.readHead!(sid)).records!.records.find((r) => r.text.includes("Salary"))!;
-  assert.equal(bullet.sensitivity, "restricted");
-  assert.equal((await mem.read(sid)).split("Salary").length, 2);
+  const facts = await mem.facts!(sid);
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0]!.sensitivity, "restricted");
 });
 
-test("file memory: replaceRecordsIfRevision is revision-guarded and validates the snapshot", async () => {
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-cas-")));
+test("file memory: edit and delete are all-or-nothing and name the bad ids", async () => {
+  const mem = createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-edit-"))));
   const sid = scopeId("personal", "U1");
-  await ws.ensureScope(sid);
-  const mem = createMemoryService(ws);
-  await mem.capture(sid, ["Alpha fact"], Date.UTC(2026, 0, 2), undefined, { mode: "explicit" });
-  const head = await mem.readHead!(sid);
-  const next = { ...head.records!, records: head.records!.records.filter((r) => !r.text.startsWith("#")) };
+  await mem.capture(sid, ["Alpha fact", "Beta fact"], Date.UTC(2026, 0, 2));
+  const [alpha, beta] = await mem.facts!(sid);
+
   await assert.rejects(
-    mem.replaceRecordsIfRevision!(sid, { version: 1, records: [{ id: "" }] } as never, head.revision),
-    /Invalid memory records/,
+    mem.edit!(sid, [
+      { id: alpha!.id, text: "Alpha changed" },
+      { id: "#77", text: "nope" },
+    ]),
+    (e: unknown) => e instanceof MemoryFactsMissing && /#77/.test(e.message) && !e.message.includes(`#${alpha!.id}`),
   );
-  assert.equal(await mem.replaceRecordsIfRevision!(sid, next, head.revision), true);
-  assert.equal(await mem.replaceRecordsIfRevision!(sid, next, head.revision), false);
-  assert.equal(await mem.read(sid), "- (2026-01-02) Alpha fact\n");
-  assert.deepEqual((await mem.readHead!(sid)).records!.records[0]!.id, next.records[0]!.id);
+  await assert.rejects(mem.delete!(sid, [beta!.id, "78"]), MemoryFactsMissing);
+  assert.equal(await mem.read(sid), "- (2026-01-02) Alpha fact\n- (2026-01-02) Beta fact");
+
+  await mem.edit!(sid, [{ id: `#${alpha!.id}`, text: "Alpha changed" }]);
+  await mem.delete!(sid, [beta!.id]);
+  assert.equal(await mem.read(sid), "- (2026-01-02) Alpha changed", "an edit keeps the capture date");
 });

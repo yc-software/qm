@@ -1,3 +1,5 @@
+import { composeSoul } from "../resolution/resolution-service.ts";
+import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
@@ -375,7 +377,7 @@ export function createSessionMethods(
       if (createdInScope !== ownerScopeId) {
         await deps.acl.grant({
           ownerScopeId,
-          ref: path,
+          ref: artifact.id,
           granteeScopeId: createdInScope,
           permission: "read",
           grantedBy: principalId,
@@ -397,7 +399,7 @@ export function createSessionMethods(
       const myScopes = await currentResourceScopesForViewer(principalId);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
-        const grants = await deps.acl.grantsFor(art.ownerScopeId, art.path);
+        const grants = await deps.acl.grantsFor(art.ownerScopeId, art.id);
         allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
       }
       if (!allowed) return null;
@@ -466,7 +468,7 @@ export function createSessionMethods(
           goals.set(s.id, {
             objective: goal.objective,
             activeMs: goal.activeMs ?? 0,
-            ...(runningSince ? { runningSince: Math.max(runningSince, goal.createdAt) } : {}),
+            ...(runningSince ? { runningSince: Math.max(runningSince, goal.activeSince ?? goal.createdAt) } : {}),
             ...(goal.floor ? { floor: { ...goal.floor } } : {}),
           });
       }
@@ -502,9 +504,19 @@ export function createSessionMethods(
           ),
         ),
       );
+      const teamIds = [...new Set(hits.map((hit) => hit.entryScopeLabel))]
+        .map(parseScopeId)
+        .filter((label) => label.kind === "team")
+        .map((label) => label.ref);
+      const memberships = await Promise.all(
+        teamIds.map(async (id) => ((await deps.teams?.isMember(principalId, id)) ? id : null)),
+      );
+      const principal = { ...deps.identity.classify(principalId), teamIds: memberships.filter((id) => id !== null) };
       const terms = searchTerms(query);
       return hits.flatMap((hit) => {
         if (!allowed.get(hit.scopeId)) return [];
+        if (!principalEntitledToScope(principal, hit.entryScopeLabel, hit.scopeId, scopeId("org", orgIdOf())))
+          return [];
         const session = hit;
         return [
           {
@@ -1127,7 +1139,7 @@ export function createSessionMethods(
       if (type === "file") {
         const f = await deps.files.get(idOrName);
         return f
-          ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.path)) }
+          ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.id)) }
           : null;
       }
       const d = (await deps.deploy.listDeployments()).find((x) => x.id === idOrName || x.name === idOrName);
@@ -1158,19 +1170,6 @@ export function createSessionMethods(
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
       const soul = deps.config.getSoul(scopeIdValue);
-      const includeScopeSoul = scopeIdValue !== orgScopeId && soul;
-      const soulParts: string[] = [];
-      if (orgSoul) soulParts.push(orgSoul);
-      if (includeScopeSoul) {
-        soulParts.push(
-          `--- Lower-scope instructions (may add to, but MUST NOT override, the organization policy above) ---\n${includeScopeSoul}`,
-        );
-      }
-      if (orgSoul && includeScopeSoul) {
-        soulParts.push(
-          "--- The organization policy above is authoritative and cannot be overridden by the lower-scope instructions. ---",
-        );
-      }
       return {
         scopeId: scopeIdValue,
         soul,
@@ -1178,7 +1177,11 @@ export function createSessionMethods(
         orgScopeId,
         orgSoul,
         orgSoulVersion: deps.config.soulVersion(orgScopeId),
-        effectiveSoul: soulParts.join("\n\n"),
+        effectiveSoul: composeSoul(
+          orgSoul,
+          scopeIdValue === orgScopeId ? null : soul,
+          deps.config.getPeopleDirectoryUrl(orgScopeId),
+        ),
       };
     },
 

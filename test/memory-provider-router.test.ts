@@ -19,7 +19,6 @@ function provider(name: string, calls: string[]): MemoryService {
     async read() {
       return `${name} notebook`;
     },
-    async replace() {},
   };
 }
 
@@ -116,7 +115,7 @@ test("external capture failures degrade to the remaining provider", async () => 
 test("cross-origin capture only reaches providers that preserve structured provenance", async () => {
   const calls: string[] = [];
   const notebook = provider("notebook", calls);
-  notebook.readHead = async () => ({ content: "", revision: "0", records: { version: 1, records: [] } });
+  notebook.facts = async () => [];
   const memory = createRoutedMemoryService({
     providers: { notebook, opaque: provider("opaque", calls) },
     routes: [
@@ -128,7 +127,7 @@ test("cross-origin capture only reaches providers that preserve structured prove
     await memory.capture("personal:alice", ["Synthetic fact"], 1, "alice", {
       mode: "automatic",
       conversationScopeId: "group:private",
-      inheritedRecords: [],
+      inheritedFacts: [],
       sensitivity: "sensitive",
     }),
     1,
@@ -142,11 +141,18 @@ test("cross-origin capture only reaches providers that preserve structured prove
   assert.equal(calls.length, 2);
 });
 
-test("routers do not advertise record mutation for an opaque managing provider", () => {
+test("fact edits route to the managing provider and fail loudly when it can't edit", async () => {
   const calls: string[] = [];
+  const notebook = provider("notebook", calls);
+  notebook.edit = async (scope, edits) => void calls.push(`edit:${scope}:${edits.map((e) => e.id).join()}`);
   const memory = createRoutedMemoryService({
-    providers: { opaque: provider("opaque", calls) },
-    routes: [{ provider: "opaque", scopes: ["personal"] }],
+    providers: { notebook, opaque: provider("opaque", calls) },
+    routes: [
+      { provider: "notebook", scopes: ["personal"] },
+      { provider: "opaque", scopes: ["org"] },
+    ],
   });
-  assert.equal(memory.replaceRecordsIfRevision, undefined);
+  await memory.edit!("personal:u1", [{ id: "1", text: "x" }]);
+  assert.deepEqual(calls, ["edit:personal:u1:1"]);
+  await assert.rejects(memory.edit!("org:acme", [{ id: "1", text: "x" }]), /not directly editable/);
 });

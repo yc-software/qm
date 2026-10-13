@@ -612,9 +612,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (!session) continue;
         for (const row of indexed) {
           if (!entryWithinTenure(row, win)) continue;
+          const entry = entries.get(sessionId)?.[row.seq];
+          if (!entry) continue;
           if (!matchesSearchTerms(row.text, terms)) continue;
           hits.push({
             sessionId,
+            entryScopeLabel: entry.scopeLabel,
             scopeId: session.scopeId,
             ...((win.title ?? session.title) != null ? { title: win.title ?? session.title } : {}),
             ...(session.channelName ? { channelName: session.channelName } : {}),
@@ -689,41 +692,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
     async scopeHasSessions(scope) {
       return [...sessions.values()].some((s) => s.scopeId === scope);
-    },
-
-    async countPersonalConversations(scope, limit = 3) {
-      const boundedLimit = Math.max(0, Math.floor(limit));
-      if (!boundedLimit) return 0;
-      let count = 0;
-      for (const session of sessions.values()) {
-        if (
-          session.scopeId !== scope ||
-          session.type !== "dm" ||
-          session.parentSessionId ||
-          sessionOrigin(session.threadRef) !== "conversation"
-        )
-          continue;
-        const log = new Map((entries.get(session.id) ?? []).map((entry) => [entry.seq, entry]));
-        for (const row of tape.get(session.id) ?? []) {
-          const entry = transcriptEntryFromTape(row);
-          if (entry) log.set(entry.seq, entry);
-        }
-        if (
-          [...log.values()].some((entry) => {
-            const payload = entry.payload as { hidden?: unknown; overheard?: unknown } | null;
-            return (
-              entry.seq > (session.forkBoundarySeq ?? -1) &&
-              entry.type === "user" &&
-              payload?.hidden !== true &&
-              payload?.overheard !== true
-            );
-          })
-        ) {
-          count++;
-          if (count >= boundedLimit) break;
-        }
-      }
-      return count;
     },
 
     async sessionsByThreadRefs(threadRefs) {

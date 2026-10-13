@@ -339,40 +339,6 @@ test("delivery recovery routes private result only through its originating accou
   assert.deepEqual(acks, ["delivery"]);
 });
 
-test("external workspace refuses legacy personal-agent approval before reading its stored request", async () => {
-  const { createApprovals } = await import("../src/slack/approvals.ts");
-  const handlers: Array<{ pattern: RegExp; handler: (args: any) => Promise<void> }> = [];
-  const approvals = createApprovals({
-    externalAccess: true,
-    core: {
-      getAgentRequest: async () => {
-        throw new Error("legacy private request read");
-      },
-    } as never,
-    flow: {} as never,
-    directory: {} as never,
-    threads: {} as never,
-    ids: {} as never,
-  });
-  approvals.registerActions({
-    action: (pattern, handler) => {
-      handlers.push({ pattern, handler });
-    },
-  });
-  let acknowledged = false;
-  await handlers
-    .find(({ pattern }) => pattern.test("agent_request_run"))!
-    .handler({
-      ack: async () => {
-        acknowledged = true;
-      },
-      body: {},
-      action: { action_id: "agent_request_run", value: "legacy-private-bridge" },
-      client: {},
-    });
-  assert.equal(acknowledged, true);
-});
-
 test("external account poller neither claims default identity nor releases pre-policy answers", async () => {
   for (const [hasDefault, target, slackPolicyNamespace] of [
     [false, "CSHARED", undefined],

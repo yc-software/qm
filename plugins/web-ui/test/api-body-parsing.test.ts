@@ -67,8 +67,8 @@ test("an empty body on a strict route is refused, not read as a field-clearing o
   for (const [method, path] of [
     ["POST", "/api/deployments/d1/display-name"],
     ["POST", "/api/deployments/d1/name"],
-    ["POST", "/api/memory/restore"],
-    ["PUT", "/api/memory"],
+    ["PATCH", "/api/memory"],
+    ["DELETE", "/api/memory"],
     ["POST", "/api/sessions/s1"],
     ["POST", "/api/connectors/revoke"],
     ["POST", "/api/keychain/drops"],

@@ -465,8 +465,7 @@ test("OpenCode advertises aliases only for tools available on the turn", async (
     await harness.turns.runTurn(turnInput([], []));
     const { systemPrompt } = JSON.parse(readFileSync(captured, "utf8")) as { systemPrompt: string };
     assert.doesNotMatch(systemPrompt, /workspace_read|workspace_write/);
-    if (sandboxResources) assert.doesNotMatch(systemPrompt, /workspace_execute/);
-    else assert.match(systemPrompt, /workspace_execute is execute/);
+    assert.match(systemPrompt, /workspace_execute is execute/);
   }
 });
 

@@ -67,10 +67,11 @@ Each template includes an **Implementation Notes** block at the top with:
 </html>
 ```
 
-Write the file with `files` action `write`, verify the result locally (`curl -fsS http://localhost:<port>`,
-then `chromium --headless --no-sandbox --disable-gpu --screenshot=/tmp/page.png http://localhost:<port>`
-when a render check matters), and serve it with the `publish` skill to confirm visual
-accuracy and hand over a stable link.
+Write the file with `files` action `write`; use the same explicit `sandbox_id` for
+writing, building, previewing, and publishing. Verify locally with `execute` running
+`curl -fsS http://localhost:<port>`, then
+`chromium --headless --no-sandbox --disable-gpu --screenshot=/tmp/page.png http://localhost:<port>`
+when a render check matters. Use the `publish` skill to hand over a stable link.
 
 ## Font Substitution Reference
 

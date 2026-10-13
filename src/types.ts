@@ -55,6 +55,7 @@ export function isSharedScope(id: ScopeId | undefined): boolean {
 export type ConversationKind = "dm" | "channel" | "group";
 
 export interface Conversation {
+  teamIds?: string[];
   kind: ConversationKind;
   threadRef: string;
   channelRef?: string;
@@ -181,7 +182,7 @@ export interface GrantedHandle {
   carried?: true;
   handlePath: string;
   ownerScopeId: ScopeId;
-  ownerPath: string;
+  fileId: string;
   permission: Permission;
 }
 

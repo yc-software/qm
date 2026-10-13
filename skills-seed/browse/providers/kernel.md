@@ -89,8 +89,8 @@ can re-auth automatically when the session lapses (only an OTP still needs the p
    login with Kernel (our managed-browser provider) so it can sign in and re-sign-in for
    you_ — that storage is the point, and it needs their explicit OK. Redemption fires a
    wake back into this conversation, and since sign-ins are DM-only the person's own
-   credential injects straight into your env on that next turn (`EMAIL`/`PASSWORD` set —
-   no grant dance needed).
+   credential is usable on that next turn by naming its handle in `credentials` (which sets
+   `EMAIL`/`PASSWORD` for that command — no grant dance needed).
 2. **Store the credential at Kernel, then create the connection WITH it linked.** Linking
    only works at connection create — if an unlinked connection for the domain already
    exists (the create 409s with `existing_id`), DELETE it first and re-create. Names must

@@ -1,8 +1,16 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { parseSeedSkill } from "../src/skills/seed.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
-import { materializeSkillTree, renderSkillBody, safeSkillDirName } from "../src/skills/materialize.ts";
+import {
+  materializeSkillTree,
+  rankedSkills,
+  renderSkillBody,
+  safeSkillDirName,
+  skillsIndex,
+} from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
@@ -147,4 +155,45 @@ test("a pack bundle may ship a root SKILL.md of its own", async () => {
     bundle("s1", [{ path: "SKILL.md", content: "pack readme" }]),
   ]);
   assert.equal(files.get(`${root}/.packs/s1/SKILL.md`), "pack readme");
+});
+
+test("skill shortlist favors relevant and visibly used skills without global usage signals", () => {
+  const skills = Array.from({ length: 20 }, (_, i) => res(`skill-${String(i).padStart(2, "0")}`, "body"));
+  for (const r of skills) r.skill!.manifest.description = "General task";
+  skills[19]!.skill!.manifest.description = "Prepare telescope observations";
+  skills[18]!.skill!.lastUsedAt = Number.MAX_SAFE_INTEGER;
+  const duplicate = structuredClone(skills[0]!);
+  duplicate.skill!.manifest.description = "shadowed description";
+  const visible = [...skills, duplicate, { skill: null, shadowed: [] }];
+  const index = skillsIndex(visible, [], "telescope", ["skill-17"]);
+  assert.match(index, /Showing 12 of 20/);
+  assert.ok(index.indexOf("**skill-19**") < index.indexOf("**skill-17**"));
+  assert.doesNotMatch(index, /skill-18|shadowed description|lastUsedAt/);
+  assert.match(index, /skills action list/);
+  assert.equal(rankedSkills(visible).length, 20);
+  assert.deepEqual(
+    rankedSkills(visible, "telescope", [], true).map((r) => r.skill!.manifest.name),
+    ["skill-19"],
+  );
+  assert.deepEqual(rankedSkills(visible, "unmatched", [], true), []);
+  assert.equal(skillsIndex([{ skill: null, shadowed: [] }]), "");
+});
+
+test("a natural-language Gmail request keeps its relevant bundled skill in the shortlist", () => {
+  const entries = readdirSync(new URL("../skills-seed/", import.meta.url), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const path = new URL(`../skills-seed/${entry.name}/SKILL.md`, import.meta.url);
+      try {
+        const manifest = parseSeedSkill(readFileSync(path, "utf8"));
+        const result = res(manifest.name, manifest.body);
+        result.skill!.manifest = manifest;
+        return [result];
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      }
+    });
+  const shortlist = skillsIndex(entries, [], "Please check my Gmail inbox and tell me what I need to do today");
+  assert.match(shortlist, /\*\*google-workspace\*\*/);
 });

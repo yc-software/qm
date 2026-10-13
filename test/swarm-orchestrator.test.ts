@@ -136,7 +136,7 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
     });
     assert.equal(rootTurn.status, "ok");
     const root = (await built.sessions.get(rootTurn.sessionId!))!;
-    await built.memory.replace(root.scopeId, "# Memory\n- Root memory remains in the authorized notebook.");
+    await built.memory.capture(root.scopeId, ["Root memory remains in the authorized notebook."], Date.now());
     const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;
     const forum = await built.sandboxResources.create("U1", root.scopeId, "sprites", "Integration forum");
     const service = built.app.swarms!;

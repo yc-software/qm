@@ -1,4 +1,4 @@
-import { isStrongSigningSecret } from "../../auth/source-auth.ts";
+import { isBearerSecret, isStrongSigningSecret } from "../../auth/source-auth.ts";
 import { timingSafeEqual } from "node:crypto";
 import { BackgroundOwnershipConflict, type BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { sendJson } from "../http.ts";
@@ -25,7 +25,14 @@ function status(ctx: ApiCtx, state: BackgroundOwnership): void {
 export function requireDeploymentControl(ctx: ApiCtx): boolean {
   const control = ctx.deps.backgroundOwnership;
   const secret = ctx.deps.deploymentControlSecret;
-  if (!control || !ctx.secret || !ctx.auth || !isStrongSigningSecret(secret) || secret === ctx.secret) {
+  if (
+    !control ||
+    !ctx.secret ||
+    !ctx.auth ||
+    !isStrongSigningSecret(secret) ||
+    !isBearerSecret(secret) ||
+    secret === ctx.secret
+  ) {
     sendJson(ctx.res, 503, { error: "background_control_unavailable" });
     return false;
   }

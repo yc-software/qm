@@ -48,9 +48,9 @@ function registration(
     seed: "run-1",
     ...(grantees.length
       ? {
-          onRegistered: async ({ ownerScopeId, path }) => {
+          onRegistered: async ({ ownerScopeId, id }) => {
             for (const granteeScopeId of grantees) {
-              await acl.grant({ ownerScopeId, ref: path, granteeScopeId, permission: "read", grantedBy: initiator });
+              await acl.grant({ ownerScopeId, ref: id, granteeScopeId, permission: "read", grantedBy: initiator });
             }
           },
         }
@@ -64,7 +64,7 @@ function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore
 
 test("a file delivered in a PUBLIC channel is auto-shared (read) with the org — visible to other members", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   await collectNamedOutbound(
     memSandbox({ "flag.png": PNG }),
     HANDLE,
@@ -87,7 +87,7 @@ test("a file delivered in a PUBLIC channel is auto-shared (read) with the org �
 
 test("a file delivered in a DM stays owner-only — no auto-share", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   await collectNamedOutbound(
     memSandbox({ "note.txt": Buffer.from("private") }),
     HANDLE,

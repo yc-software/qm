@@ -29,7 +29,7 @@ async function fixture() {
     sharingPosture: "open",
     grantedHandles: [],
   } as unknown as Resolution;
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const input: Parameters<typeof resolveTurnContext>[0] = {
     actor: { id: "alice", type: "internal" },
     audience: [{ id: "alice", type: "internal" }],
@@ -43,14 +43,22 @@ async function fixture() {
     resolution,
     memoryPolicy: { recall: "visible", capture: "writable" },
     useMemory: true,
-    workspace,
     memory,
     files,
     auditLog,
   };
-  await memory.replace("personal:alice", "# Memory\n\n- LOCAL_FACT");
-  await memory.replace("channel:eng", `# Memory\n\n- SHARED_FACT\n- ${"long fact ".repeat(1500)}\n- LAST_FACT`);
-  await workspace.write("channel:eng", "plan.txt", "PLAN_CONTENT");
+  await memory.capture("personal:alice", ["LOCAL_FACT"], Date.now());
+  await memory.capture("channel:eng", ["SHARED_FACT", "long fact ".repeat(1500), "LAST_FACT"], Date.now());
+  await files.put({
+    id: "1".repeat(32),
+    ownerScopeId: "channel:eng",
+    createdBy: "alice",
+    name: "plan.txt",
+    path: "plan.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("PLAN_CONTENT"),
+    direction: "in",
+  });
   return {
     input,
     acl,
@@ -70,7 +78,10 @@ test("one context loads full source-labelled notebooks and shares authority with
   assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
   assert.match(recalled, /### channel:eng[\s\S]*SHARED_FACT[\s\S]*LAST_FACT/);
   assert.ok(recalled.length > 12000, "no relevance or per-notebook recall truncation");
-  assert.deepEqual(await context.searchMemory("LAST_FACT"), ["[channel:eng] LAST_FACT"]);
+  assert.match(
+    (await context.searchMemory("LAST_FACT"))!.join("\n"),
+    /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) LAST_FACT$/,
+  );
   assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
   assert.deepEqual(context.baseRecallScopes, ["personal:alice", "org:test"], "reusable tokens exclude carried sources");
   assert.equal(context.memoryAccess?.write, "personal:alice");
@@ -81,7 +92,7 @@ test("one context loads full source-labelled notebooks and shares authority with
   assert.equal(await context.readFile("shared/open-channel-other/plan.txt"), null);
   const events = await auditLog.events();
   assert.ok(events.some((e) => e.resource === "memory" && e.detail?.includes("channel:eng")));
-  assert.ok(events.some((e) => e.resource === "plan.txt" && e.detail?.includes("channel:eng")));
+  assert.ok(events.some((e) => e.resource === "1".repeat(32) && e.detail?.includes("channel:eng")));
 });
 
 for (const mode of [
@@ -157,10 +168,67 @@ test("skill discovery uses the same included scopes and audience-filtered explic
 test("ambiguous file aliases fail closed in the shared reader", async () => {
   const { input } = await fixture();
   input.resolution.grantedHandles = [
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", ownerPath: "one.txt", permission: "read" },
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", ownerPath: "two.txt", permission: "read" },
+    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "1".repeat(32), permission: "read" },
+    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "2".repeat(32), permission: "read" },
   ];
   const result = await (await resolveTurnContext(input)).readFile("shared/plan.txt");
   assert.ok(result && "error" in result);
   assert.match(result.error, /ambiguous shared handle/);
+});
+
+test("skill discovery refreshes carried membership and explicit grants in the same turn", async () => {
+  const { input, acl, removeMember } = await fixture();
+  const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
+  input.skills = {
+    visibleFor: async (scopes, grants) => {
+      seen.push({ scopes: [...scopes], grants });
+      return [];
+    },
+  } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
+  const context = await resolveTurnContext(input);
+  assert.deepEqual((await context.listSkills()).sharingSources, ["channel:eng"]);
+  await acl.grant(
+    {
+      ownerScopeId: "personal:owner",
+      ref: "skill:new",
+      granteeScopeId: "personal:alice",
+      permission: "read",
+      grantedBy: "owner",
+    },
+    "owner",
+  );
+  await context.listSkills();
+  assert.deepEqual(seen[1]!.grants, [{ id: "new", ownerScopeId: "personal:owner" }]);
+  await acl.revoke("personal:owner", "skill:new", "personal:alice", "owner");
+  removeMember();
+  assert.deepEqual((await context.listSkills()).sharingSources, []);
+  assert.deepEqual(seen[2], { scopes: ["personal:alice", "org:test"], grants: [] });
+});
+
+test("source selection precedes name shadowing and preserves skill-level grants", async () => {
+  const { input, acl } = await fixture();
+  await acl.grant(
+    {
+      ownerScopeId: "personal:owner",
+      ref: "skill:one",
+      granteeScopeId: "personal:alice",
+      permission: "read",
+      grantedBy: "owner",
+    },
+    "owner",
+  );
+  const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
+  input.skills = {
+    visibleFor: async (scopes, grants) => {
+      seen.push({ scopes: [...scopes], grants });
+      return [];
+    },
+  } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
+  const context = await resolveTurnContext(input);
+  await context.listSkills(["org:test"]);
+  assert.deepEqual(seen[0], { scopes: ["org:test"], grants: [] });
+  await context.listSkills(["personal:owner"]);
+  assert.deepEqual(seen[1], { scopes: [], grants: [{ id: "one", ownerScopeId: "personal:owner" }] });
+  await context.listSkills(["personal:stranger"]);
+  assert.deepEqual(seen[2], { scopes: [], grants: [] });
 });

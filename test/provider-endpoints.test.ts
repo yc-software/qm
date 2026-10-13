@@ -4,6 +4,7 @@ import {
   parseProviderBaseUrl,
   providerBaseUrl,
   providerBaseUrlsFromEnv,
+  modelGatewayRequest,
   setProviderBaseUrls,
 } from "../src/model/provider-endpoints.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
@@ -119,4 +120,23 @@ test("loadConfig accepts a complete model gateway and rejects partial or malform
       }),
     /invalid MODEL_GATEWAY_MODELS/,
   );
+});
+
+test("gateway-mapped built-in models send session-affinity headers", () => {
+  const gateway = {
+    url: "http://gateway.internal/v1",
+    apiKey: "k",
+    apiKeyHeader: "x-gateway-key",
+    models: { "claude-opus-5-5": "router/claude-opus-5-5", "gpt-5.6-sol": "router/gpt-5.6-sol" },
+  };
+  for (const id of Object.keys(gateway.models)) {
+    const model = resolveModel(id)!;
+    const routed = modelGatewayRequest(gateway, model)!;
+    assert.equal(
+      (routed.model.compat as { sendSessionAffinityHeaders?: boolean } | undefined)?.sendSessionAffinityHeaders,
+      true,
+    );
+    assert.equal(routed.model.baseUrl, gateway.url);
+    assert.equal(routed.model.id, model.id);
+  }
 });

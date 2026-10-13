@@ -14,6 +14,7 @@ import {
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
+import { materializeGrant } from "./support/materialize-grant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -368,8 +369,8 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
       purpose: "single use",
     });
     const results = await Promise.allSettled([
-      owner.materialize(grant.id, scopeId("channel", "C1"), "U2"),
-      peer.materialize(grant.id, scopeId("channel", "C1"), "U3"),
+      materializeGrant(owner, grant.id, scopeId("channel", "C1"), "U2"),
+      materializeGrant(peer, grant.id, scopeId("channel", "C1"), "U3"),
     ]);
     assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
     assert.equal(

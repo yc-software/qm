@@ -107,6 +107,7 @@ const ASTRA = getRequiredModel("gpt-6-astra", false) as Model<Api>;
 const SOL_61 = getRequiredModel("gpt-6.1-sol", false) as Model<Api>;
 const OPUS_55 = getRequiredModel("claude-opus-5-5", false);
 const SONNET_55 = getRequiredModel("claude-sonnet-5-5", false);
+const HAIKU_55 = getRequiredModel("claude-haiku-5-5", false);
 const OPUS = getRequiredModel("claude-opus-5", false) as Model<Api>;
 const ASTRA_TOKENS = { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000, totalTokens: 66_000 };
 
@@ -138,6 +139,19 @@ const pricingCases: Array<[string, Model<Api>, Partial<Usage>, number]> = [
   ["Opus 5.5 cache reads", OPUS_55, { cacheRead: 100_000 }, 0.02],
   ["Opus 5.5 1h writes", OPUS_55, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.032],
   ["Sonnet 5.5 1h writes", SONNET_55, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.016],
+  [
+    "Haiku 5.5 short prompt",
+    HAIKU_55,
+    { input: 10_000, output: 1_000, cacheRead: 40_000, cacheWrite: 16_000, cacheWrite1h: 8_000 },
+    0.0045,
+  ],
+  ["Haiku 5.5 prompt at the 100k boundary", HAIKU_55, { input: 100_000 }, 0.01],
+  [
+    "Haiku 5.5 long-prompt tier counts cached input",
+    HAIKU_55,
+    { input: 10_000, output: 1_000, cacheRead: 90_000, cacheWrite: 16_000, cacheWrite1h: 8_000 },
+    0.025,
+  ],
   ["all 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.04],
   ["clamped 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 40_000 }, 0.04],
 ];

@@ -1,9 +1,12 @@
 import type { OutgoingAttachment } from "../../types.ts";
-import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../../sandbox/sandbox.ts";
+import { type Sandbox, type SandboxHandle } from "../../sandbox/sandbox.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import type { AttachFiles, AttachResult } from "../../tools/primitives.ts";
 import {
   collectNamedOutbound,
+  parseOutboundFiles,
+  type OutboundFile,
+  type OpenStoredFile,
   discardOutbound,
   MAX_OUTBOUND_FILES,
   type ArtifactRegistration,
@@ -11,9 +14,10 @@ import {
 
 export interface AttachToolsContext {
   sandbox: Sandbox;
-  provision: () => Promise<SandboxHandle>;
+  provision: (sandboxId?: string) => Promise<SandboxHandle>;
   blobTransfer: BlobTransferStore;
   fileRegistration: ArtifactRegistration;
+  openStored?: OpenStoredFile;
 }
 
 export interface StagedAttachments {
@@ -29,28 +33,40 @@ interface StagedEntry {
 export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments {
   const staged = new Map<string, StagedEntry>();
   let calls = 0;
-  const attach = async (files: readonly string[]): Promise<AttachResult> => {
-    const paths = [...new Set(files.map((f) => String(f ?? "").trim()).filter(Boolean))];
-    if (!paths.length) return { ok: false, message: "attach needs at least one workspace file path" };
-    const invalid = paths.filter(hasParentPathSegment);
-    if (invalid.length)
-      return {
-        ok: false,
-        message: `couldn't attach: ${invalid.map((p) => `${p} (not found)`).join(", ")} — nothing was staged; fix the path(s) and retry`,
-      };
-    const resulting = new Set([...staged.keys(), ...paths]);
+  const attach = async (files: readonly OutboundFile[], sandboxId?: string): Promise<AttachResult> => {
+    const parsed = parseOutboundFiles(files);
+    if (!parsed.ok) return { ok: false, message: parsed.message };
+    const keyed = new Map(
+      parsed.files.map((file) => [
+        typeof file === "string"
+          ? JSON.stringify(["path", sandboxId ?? null, file])
+          : JSON.stringify(["file", file.file_id]),
+        file,
+      ]),
+    );
+    const paths = [...keyed.values()];
+    const keys = [...keyed.keys()];
+    if (!paths.length) return { ok: false, message: "attach needs at least one file" };
+    const resulting = new Set([...staged.keys(), ...keys]);
     if (resulting.size > MAX_OUTBOUND_FILES)
       return {
         ok: false,
         message: `too many files — a reply carries at most ${MAX_OUTBOUND_FILES}, and ${staged.size} ${staged.size === 1 ? "is" : "are"} already staged`,
       };
-    const handle = await ctx.provision();
     const register = { ...ctx.fileRegistration, seed: `${ctx.fileRegistration.seed}:attach:${calls}` };
     calls += 1;
     const keptNames = [...staged.entries()]
-      .filter(([path]) => !paths.includes(path))
+      .filter(([path]) => !keys.includes(path))
       .map(([, entry]) => entry.attachment.name);
-    const r = await collectNamedOutbound(ctx.sandbox, handle, paths, ctx.blobTransfer, register, keptNames);
+    const r = await collectNamedOutbound(
+      ctx.sandbox,
+      () => ctx.provision(sandboxId),
+      paths,
+      ctx.blobTransfer,
+      register,
+      keptNames,
+      ctx.openStored,
+    );
     const bad = [
       ...r.missing.map((p) => `${p} (not found)`),
       ...r.empty.map((p) => `${p} (empty)`),
@@ -62,10 +78,20 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
         message: `couldn't attach: ${bad.join(", ")} — nothing was staged; fix the path(s) and retry`,
       };
     for (const [i, attachment] of r.attachments.entries()) {
-      const path = paths[i]!;
+      const path = keys[i]!;
       const superseded = staged.get(path);
       staged.set(path, { attachment, created: r.createdArtifactIds });
-      if (superseded) await discardOutbound(superseded.attachment, ctx.blobTransfer, register, superseded.created);
+      if (superseded) {
+        const referenced = [...staged.values()].some(
+          (entry) => entry.attachment.artifactId === superseded.attachment.artifactId,
+        );
+        await discardOutbound(
+          superseded.attachment,
+          ctx.blobTransfer,
+          register,
+          referenced ? undefined : superseded.created,
+        );
+      }
     }
     return {
       ok: true,

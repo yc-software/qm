@@ -82,6 +82,7 @@ export function createMessagingMethods(
   | "listWebhooks"
   | "listWebhookEvents"
   | "setWebhookEnabled"
+  | "updateWebhook"
   | "setWebhookRecipientConsent"
   | "pendingDeliveries"
   | "enqueueDelivery"
@@ -327,6 +328,9 @@ export function createMessagingMethods(
     },
     setWebhookEnabled(id, enabled) {
       return deps.webhooks.setEnabled(id, enabled);
+    },
+    updateWebhook(id, patch) {
+      return deps.webhooks.update(id, patch);
     },
     setWebhookRecipientConsent(id, recipientConsent) {
       return deps.webhooks.setRecipientConsent(id, recipientConsent);

@@ -15,6 +15,7 @@ import {
   sentMailTpl,
 } from "./sent-mail";
 import { html, nothing, render, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import {
@@ -35,7 +36,7 @@ import type { ComposerSubmission } from "./composer";
 import { api, ApiError, putUiState } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
 import { createInboxEventCoalescer } from "./inbox-coalesce";
-import { charForName, ensureEmojiIndex } from "./emoji-picker";
+import { charForName } from "./emoji-picker";
 import type { DensityTier } from "./density";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { appState, can } from "./shell-state";
@@ -48,7 +49,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, menuSelect, icon, initials, relTime, sheenLabel, workingWave } from "./ui";
+import { brandName, fieldSelect, menuSelect, icon, initials, relTime, sheenLabel, slackMark, workingWave } from "./ui";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 
@@ -63,6 +64,8 @@ export interface InboxDraft {
 
 export interface InboxContextMessage {
   author: string;
+  authorId?: string;
+  avatarUrl?: string;
   at?: number;
   text: string;
   images?: string[];
@@ -119,6 +122,7 @@ export interface InboxItem {
   fromDetail?: string;
   snippet: string;
   context?: InboxContextMessage[];
+  participants?: Participant[];
   receivedAt: number;
   externalUrl?: string;
   draft?: InboxDraft;
@@ -127,7 +131,7 @@ export interface InboxItem {
   draftSessionId?: string;
   thread: LedgerThreadMessage[];
   gmail?: { threadId: string; subject?: string; to?: string[]; cc?: string[] };
-  slack?: { channelId: string; channelLabel?: string; ts: string; threadTs?: string };
+  slack?: { channelId: string; channelLabel?: string; ts: string; threadTs?: string; userId?: string };
   sentAt?: number;
   dismissedAt?: number;
   repliedAt?: number;
@@ -305,14 +309,6 @@ function showArchiveToast(item: InboxItem): void {
   schedule();
 }
 
-let emojiIndexRequested = false;
-
-function ensureEmojiChips(): void {
-  if (emojiIndexRequested) return;
-  emojiIndexRequested = true;
-  void ensureEmojiIndex().then(() => drawAll());
-}
-
 interface InboxSurface {
   host: HTMLElement;
   viewId: string;
@@ -436,6 +432,15 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     sourceContextFetched: payload.sourceContextFetched === true,
     sourceContextPartial: payload.sourceContextPartial === true,
     ...(typeof payload.sourceRefreshError === "string" ? { sourceRefreshError: payload.sourceRefreshError } : {}),
+    ...(source === "slack" && Array.isArray(payload.participants)
+      ? {
+          participants: payload.participants.flatMap((person) =>
+            person && typeof person.id === "string" && typeof person.name === "string"
+              ? [{ key: person.id, name: person.name, avatarUrl: str(person.avatarUrl) }]
+              : [],
+          ),
+        }
+      : {}),
     ...(Array.isArray(payload.context) ? { context: payload.context as InboxContextMessage[] } : {}),
     ...(str(payload.externalUrl) ? { externalUrl: payload.externalUrl as string } : {}),
     ...(draft ? { draft } : {}),
@@ -1127,6 +1132,7 @@ function fmtClock(ms: number): string {
 interface Participant {
   key: string;
   name: string;
+  avatarUrl?: string;
 }
 
 function participantName(raw: string): string {
@@ -1138,12 +1144,22 @@ function participantKey(raw: string): string {
 }
 
 function participantsOf(item: InboxItem): Participant[] {
-  const found = new Map<string, Participant>();
-  for (const raw of [item.from, ...(item.context ?? []).map((m) => m.author)]) {
-    const name = participantName(raw ?? "");
+  const slack = item.source === "slack";
+  const found = new Map<string, Participant>((slack ? (item.participants ?? []) : []).map((p) => [p.key, p]));
+  for (const message of [
+    {
+      author: item.from,
+      authorId: slack ? (item.slack?.userId ?? item.participants?.[0]?.key) : undefined,
+      avatarUrl: undefined,
+    },
+    ...(item.context ?? []),
+  ]) {
+    const name = participantName(message.author ?? "");
     if (!name) continue;
-    const key = participantKey(raw);
-    if (!found.has(key)) found.set(key, { key, name });
+    const id = slack ? message.authorId : undefined;
+    if (slack && !id && [...found.values()].some((person) => person.name === name)) continue;
+    const key = id ?? participantKey(message.author);
+    if (!found.has(key)) found.set(key, { key, name, avatarUrl: slack ? message.avatarUrl : undefined });
   }
   return [...found.values()];
 }
@@ -1154,6 +1170,35 @@ function avatarHue(key: string): number {
   return hash;
 }
 
+function avatarTpl(person: Participant): TemplateResult {
+  const photo = person.avatarUrl?.startsWith("https://") ? person.avatarUrl : undefined;
+  return html`<span
+    class="inbox-avatar"
+    style=${`--avatar-hue:${avatarHue(person.key)}`}
+    ${tip(person.name)}
+    aria-hidden="true"
+  >
+    ${initials(person.name)}
+    ${
+      photo
+        ? keyed(
+            photo,
+            html`<img
+              src=${photo}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              referrerpolicy="no-referrer"
+              @error=${(event: Event) => {
+                (event.currentTarget as HTMLImageElement).hidden = true;
+              }}
+            />`,
+          )
+        : nothing
+    }
+  </span>`;
+}
+
 const AVATARS_SHOWN = 4;
 
 export function participantsTpl(item: InboxItem): TemplateResult | typeof nothing {
@@ -1162,12 +1207,7 @@ export function participantsTpl(item: InboxItem): TemplateResult | typeof nothin
   const shown = people.length > AVATARS_SHOWN ? people.slice(0, AVATARS_SHOWN - 1) : people;
   const rest = people.slice(shown.length);
   return html`<span class="inbox-avatars" aria-label=${`In this conversation: ${people.map((p) => p.name).join(", ")}`}>
-    ${shown.map(
-      (p) =>
-        html`<span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(p.key)}`} ${tip(p.name)} aria-hidden="true"
-          >${initials(p.name)}</span
-        >`,
-    )}
+    ${shown.map(avatarTpl)}
     ${
       rest.length
         ? html`<span class="inbox-avatar more" ${tip(rest.map((p) => p.name).join(", "))} aria-hidden="true"
@@ -1253,6 +1293,7 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
         ...context.filter((m) => !item.slack || m.nearby === true),
         {
           author: item.from,
+          authorId: item.slack?.userId ?? (item.source === "slack" ? item.participants?.[0]?.key : undefined),
           at: item.receivedAt,
           text: item.snippet,
           images: item.images,
@@ -1277,12 +1318,13 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
     ${item.sourceRefreshError ? html`<div class="inbox-source-notice" role="status">${item.sourceRefreshError}</div>` : nothing}
     ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
     ${rows.slice(hidden).map((m) => {
-      const name = participantName(m.author) || m.author;
+      const participant = item.source === "slack" ? item.participants?.find((p) => p.key === m.authorId) : undefined;
+      const author = participant?.name ?? m.author;
+      const name = participantName(author) || author;
+      const avatarUrl = participant ? participant.avatarUrl : m.avatarUrl;
       return html`
         <div class="inbox-context-msg ${m.reply ? "inbox-thread-reply" : ""} ${m.nearby ? "inbox-nearby-context" : ""}">
-          <span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(participantKey(m.author))}`} aria-hidden="true"
-            >${initials(name)}</span
-          >
+          ${avatarTpl({ key: m.authorId ?? participantKey(m.author), name, avatarUrl: item.source === "slack" ? avatarUrl : undefined })}
           <div class="inbox-context-body">
             <div class="inbox-context-head">
               <span class="inbox-context-author">${name}</span>
@@ -1439,7 +1481,6 @@ export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothin
 }
 
 function reactionChipTpl(name: string): TemplateResult {
-  ensureEmojiChips();
   const char = charForName(name);
   return html`<span class="inbox-reaction-chip" title=${`:${name}:`}>${char ?? `:${name}:`}</span>`;
 }
@@ -1628,6 +1669,12 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
   const expandedAttr = inlineDetail ? String(open) : nothing;
   const handled = item.status !== "open";
   const gmail = item.source === "gmail";
+  const slack = item.source === "slack";
+  const senderId = item.slack?.userId ?? item.participants?.[0]?.key;
+  const sender = item.participants?.find((person) => person.key === senderId) ?? {
+    key: senderId ?? participantKey(item.from),
+    name: participantName(item.from) || "Slack",
+  };
   const heading = gmail ? item.from || item.title : (item.slack?.channelLabel ?? item.title);
   const sub = gmail ? item.title : item.from || inboxViewName(item.loopId);
   return html`
@@ -1649,7 +1696,17 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
             drawAll();
           }}
         >
-          <span class="inbox-item-glyph">${sourceGlyph(item)}</span>
+          <span class="inbox-item-glyph ${slack ? "inbox-sender-avatar" : ""}">
+            ${
+              slack
+                ? html`${participantsOf(item).length > 1 ? participantsTpl(item) : avatarTpl(sender)}<span
+                      class="inbox-sender-badge"
+                      aria-hidden="true"
+                      >${slackMark(10)}</span
+                    >`
+                : sourceGlyph(item)
+            }
+          </span>
           <span class="inbox-item-main">
             <span class="inbox-item-top">
               ${groupSize > 1 ? html`<span class="inbox-group-count">${groupSize} similar ·</span>` : nothing}
@@ -1659,7 +1716,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
             <span class="inbox-item-snippet">${slackTextTpl(item, item.snippet, { links: false })}</span>
           </span>
           <span class="inbox-item-side">
-            ${participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
+            ${slack ? nothing : participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
             <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
             ${icon(expanded ? ChevronDown : ChevronRight, 13)}
           </span>

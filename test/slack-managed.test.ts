@@ -228,3 +228,14 @@ test("explicit app pin still rejects another app at installation", async (t) => 
   assert.equal((await request("installation", { ...installation, appId: "AOTHER" })).status, 400);
   assert.equal(await store.get(), null);
 });
+
+test("managed Slack refuses a service credential that a bearer header cannot carry", () => {
+  const store = createSlackInstallationStore(
+    "company",
+    createMemoryMap() as Parameters<typeof createSlackInstallationStore>[1],
+    "test-encryption-key",
+  );
+  for (const token of ["", "company-token\n", " company-token"]) {
+    assert.throws(() => createManagedSlack({ serviceUrl: "https://slack.example.com", token, store }), /credential/);
+  }
+});
