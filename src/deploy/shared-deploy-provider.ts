@@ -45,6 +45,10 @@ export interface AppReadyOptions {
 export const listeningOn = (port: number): string =>
   `listening() { grep -q ':${port.toString(16).toUpperCase().padStart(4, "0")} [0-9A-F]*:[0-9A-F]* 0A' /proc/net/tcp /proc/net/tcp6 2>/dev/null; }`;
 
+const ALIVE =
+  'alive() { _t=$1; [ -n "$_t" ] || return 1; for _f in /proc/[0-9]*/stat; do read -r _s 2>/dev/null < "$_f" || continue; ' +
+  '_p=${_f#/proc/}; _s=${_s##*) }; set -- $_s; [ "$1" != Z ] && { [ "$3" = "$_t" ] || [ "${_p%/stat}" = "$_t" ]; } && return 0; done; return 1; }';
+
 const statusOn = (port: number): string =>
   `status() { if command -v curl >/dev/null 2>&1; then curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/; ` +
   `elif command -v wget >/dev/null 2>&1; then wget -S -q -T 2 -t 1 -O /dev/null http://127.0.0.1:${port}/ 2>&1 | awk '$1 ~ /^HTTP\\// { c = $2 } END { print c ? c : "000" }'; fi; }`;
@@ -95,9 +99,10 @@ export async function appGone(exec: Exec, opts: { appPort: number; report?: Repo
   const log = shq(APP_LOG_PATH);
   const probe = [
     listeningOn(opts.appPort),
+    ALIVE,
     `pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true)`,
     `s=$(cat ${REPORTED} 2>/dev/null || true)`,
-    `if ! listening && ! { [ -n "$pid" ] && { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; }; }; then ` +
+    `if ! listening && ! alive "$pid"; then ` +
       `[ -n "$pid" ] && [ "$s" != "down $pid" ] && { echo "down $pid" > ${REPORTED}; echo down; tail -c ${REPORT_LOG_BYTES} ${log} 2>/dev/null; }; exit ${EXIT_APP_GONE}; fi`,
     `n=$(wc -l < ${EXITED} 2>/dev/null || echo 0); r=0`,
     `[ "\${s% *}" = "$pid" ] && r=\${s#* }`,
@@ -130,11 +135,11 @@ export async function appGone(exec: Exec, opts: { appPort: number; report?: Repo
 
 export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<void> {
   const probe = (windowSec: number): string =>
-    `${listeningOn(opts.appPort)}; ${statusOn(opts.appPort)}; ` +
+    `${listeningOn(opts.appPort)}; ${statusOn(opts.appPort)}; ${ALIVE}; ` +
     `died=0; end=$(( $(date +%s) + ${windowSec} )); ` +
     `while [ "$(date +%s)" -lt "$end" ]; do pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true); ` +
     `code=; listening && { code=$(status); case "$code" in ""|[1-4]??) exit 0 ;; esac; }; ` +
-    `[ -z "$pid" ] || { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && [ ! -f ${EXITED} ] || died=1; ` +
+    `[ -z "$pid" ] || alive "$pid" && [ ! -f ${EXITED} ] || died=1; ` +
     `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; ` +
     `[ "$code" -ge 500 ] 2>/dev/null && { echo "$code"; exit ${EXIT_APP_SERVER_ERROR}; }; exit 1`;
   let left = opts.windowSec;
