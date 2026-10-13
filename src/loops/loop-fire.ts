@@ -100,7 +100,6 @@ function loopFireThreadRef(loopId: string, fireKey: string): string {
   return `loop:${loopId}:fire:${hashId([fireKey], 12)}`;
 }
 
-/** One conversation per item per fire: parallel items must not share a turn lease, and judge reads work's transcript. */
 function loopFireItemThreadRef(loopId: string, fireKey: string, itemId: string): string {
   return `${loopFireThreadRef(loopId, fireKey)}:item:${hashId([itemId], 12)}`;
 }

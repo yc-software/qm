@@ -287,7 +287,6 @@ export async function runLoopFire(
       }
     }),
   );
-  // the fire throws only once every worker has settled, so no work is still running when the caller sees it fail
   for (const worker of workers) if (worker.status === "rejected") throw worker.reason;
   if (capped && !drained) summary.throttled ??= budget.reason();
 
