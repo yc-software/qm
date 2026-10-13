@@ -825,6 +825,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `ALTER TABLE sessions DROP COLUMN IF EXISTS status`,
         ],
       },
+      {
+        id: "sessions/store/0027-agent-reply-index",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_agent_reply
+             ON session_entries(session_id, created_at DESC) WHERE type IN ('assistant', 'delivery')`,
+        ],
+      },
     ],
     [
       {
