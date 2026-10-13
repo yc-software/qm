@@ -589,7 +589,7 @@ a.chat-row-open {
   box-sizing: border-box;
   text-align: left;
 
-  padding: 5px calc(5px + var(--session-status-space, 0px)) 5px 11px;
+  padding: 5px 5px 5px 11px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -601,7 +601,7 @@ a.chat-row-open {
 .session-row:hover .session,
 .session-row:focus-within .session,
 .session-row.menu-open .session {
-  padding-right: calc(90px + var(--session-status-space, 0px));
+  padding-right: 90px;
 }
 .session:hover {
   background: var(--conversation-hover);
@@ -673,12 +673,21 @@ a.chat-row-open {
   line-height: 1;
 }
 
-.session-row:has(.session-status) {
-  --session-status-space: 22px;
+.unread-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--unread-dot, #2f81f7);
 }
-.session-menu > .session-status {
-  justify-content: center;
-  width: 20px;
+.session-row:hover .unread-dot,
+.session-row:focus-within .unread-dot,
+.session-row.menu-open .unread-dot {
+  visibility: hidden;
+}
+.session-row.unread .title .tl {
+  font-weight: 600;
 }
 .split-pane-title > .session-status {
   margin-inline-start: auto;
@@ -5988,7 +5997,7 @@ a.connector-widget:focus-visible {
   .session-row:hover .session,
   .session-row:focus-within .session,
   .session-row.menu-open .session {
-    padding-right: calc(136px + var(--session-status-space, 0px));
+    padding-right: 136px;
   }
   .session-menu {
     right: 0;
@@ -8957,17 +8966,6 @@ h3.ambient-field-label {
   align-self: anchor-center;
   position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
 }
-.qm-tooltip.sidebar-status {
-  position-area: right span-all;
-  left: anchor(--qm-sidebar right);
-  justify-self: normal;
-  align-self: anchor-center;
-  margin: 8px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  line-height: 1.5;
-  position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
-}
 @position-try --qm-tooltip-above {
   left: auto;
   position-area: top span-all;
@@ -11307,7 +11305,7 @@ h3.ambient-field-label {
   .session-row:hover .session,
   .session-row:focus-within .session,
   .session-row.menu-open .session {
-    padding-right: calc(48px + var(--session-status-space, 0px));
+    padding-right: 48px;
   }
   .user-pill {
     min-height: 44px;

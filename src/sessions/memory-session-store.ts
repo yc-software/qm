@@ -96,6 +96,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         archived?: boolean;
         pinned?: boolean;
         color?: string | null;
+        readAt?: number;
       }
     >
   >();
@@ -109,12 +110,17 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     const log = all.filter((e) => e.type === "user");
     const lastActivityAt = log.length ? Math.max(s.createdAt, ...log.map((e) => e.createdAt)) : s.createdAt;
     const visible = view ? all.some((e) => entryWithinTenure(e, view)) : false;
+    const replies = all.filter((e) => e.type === "assistant" || e.type === "delivery");
+    const lastReply = replies.length ? Math.max(...replies.map((e) => e.createdAt)) : null;
+    const slack = s.threadRef.startsWith("dm:") || s.threadRef.startsWith("ch:");
+    const unread = lastReply !== null && lastReply > (view?.readAt ?? 0) && !slack;
     return {
       ...s,
       ...(view?.title != null ? { title: view.title } : {}),
       ...(view?.archived ? { archived: true } : {}),
       ...(view?.pinned ? { pinned: true } : {}),
       ...(view?.color != null ? { color: view.color } : {}),
+      ...(unread ? { unread: true } : {}),
       lastActivityAt,
       hasEntries: visible,
     };
@@ -568,6 +574,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (patch.archived !== undefined) view.archived = patch.archived;
       if (patch.pinned !== undefined) view.pinned = patch.pinned;
       if (patch.color !== undefined) view.color = patch.color;
+      if (patch.readAt !== undefined) view.readAt = patch.readAt;
     },
 
     async addPin(sessionId, pin: NewSessionPin, maxPins?: number): Promise<SessionPin | null> {

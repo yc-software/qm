@@ -123,6 +123,7 @@ function agentConversation(session: Session) {
     archived: session.archived === true,
     pinned: session.pinned === true,
     color: session.color ?? null,
+    unread: session.unread === true,
     lastActivityAt: session.lastActivityAt ?? session.createdAt,
   };
 }
@@ -339,6 +340,7 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
     archived?: unknown;
     pinned?: unknown;
     color?: unknown;
+    unread?: unknown;
     status?: unknown;
   };
   const principalId = typeof b.principalId === "string" ? b.principalId : null;
@@ -348,8 +350,15 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
     archived?: boolean;
     pinned?: boolean;
     color?: string | null;
+    readAt?: number;
     status?: Session["status"];
   } = {};
+  if ("unread" in b) {
+    if (typeof b.unread !== "boolean") {
+      return sendJson(res, 400, { error: "bad_request", message: "unread must be a boolean" });
+    }
+    patch.readAt = b.unread ? 0 : Date.now();
+  }
   if ("title" in b) {
     if (b.title !== null && typeof b.title !== "string") {
       return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
@@ -389,9 +398,13 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
     patch.archived === undefined &&
     patch.pinned === undefined &&
     patch.color === undefined &&
+    patch.readAt === undefined &&
     patch.status === undefined
   ) {
-    return sendJson(res, 400, { error: "bad_request", message: "title, archived, pinned, color, or status required" });
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "title, archived, pinned, color, unread, or status required",
+    });
   }
   const session = await app.updateSession(id, principalId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });

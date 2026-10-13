@@ -2123,24 +2123,34 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       const id = c.params.id!;
-      const p = await readJson<{ title?: unknown; archived?: unknown; pinned?: unknown; color?: unknown }>(
-        req,
-        res,
-        false,
-      );
+      const p = await readJson<{
+        title?: unknown;
+        archived?: unknown;
+        pinned?: unknown;
+        color?: unknown;
+        unread?: unknown;
+      }>(req, res, false);
       if (!p) return;
-      const patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null } = {};
+      const patch: {
+        title?: string | null;
+        archived?: boolean;
+        pinned?: boolean;
+        color?: string | null;
+        unread?: boolean;
+      } = {};
       if (p.title === null || typeof p.title === "string") patch.title = p.title as string | null;
       if (typeof p.archived === "boolean") patch.archived = p.archived;
       if (typeof p.pinned === "boolean") patch.pinned = p.pinned;
       if (p.color === null || typeof p.color === "string") patch.color = p.color as string | null;
+      if (typeof p.unread === "boolean") patch.unread = p.unread;
       if (
         patch.title === undefined &&
         patch.archived === undefined &&
         patch.pinned === undefined &&
-        patch.color === undefined
+        patch.color === undefined &&
+        patch.unread === undefined
       ) {
-        return json(res, 400, { error: "bad_request", message: "title, archived, pinned, or color required" });
+        return json(res, 400, { error: "bad_request", message: "title, archived, pinned, color, or unread required" });
       }
       return relayCore(
         res,

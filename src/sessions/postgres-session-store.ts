@@ -95,12 +95,20 @@ export function rowToSession(r: Record<string, unknown>): Session {
   };
 }
 
+const isSlackThread = (threadRef: string): boolean => threadRef.startsWith("dm:") || threadRef.startsWith("ch:");
+
 function rowToParticipantSession(r: Record<string, unknown>): Session {
   const s = rowToSession(r);
   if (r.p_title != null) s.title = r.p_title as string;
   if (r.p_archived) s.archived = true;
   if (r.p_pinned) s.pinned = true;
   if (r.p_color != null) s.color = r.p_color as string;
+  if (
+    r.agent_last_reply != null &&
+    Number(r.agent_last_reply) > Number(r.p_read_at ?? 0) &&
+    !isSlackThread(s.threadRef)
+  )
+    s.unread = true;
   if (r.user_last_activity != null) s.lastActivityAt = Number(r.user_last_activity);
   if (r.has_entries != null) s.hasEntries = Boolean(r.has_entries);
   return s;
@@ -249,6 +257,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     .join(" UNION ALL ");
   const participantSessionsSql = (extraWhere: string): string =>
     `SELECT s.*, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
+            p.read_at AS p_read_at,
+            (SELECT MAX(e.created_at) FROM session_entries e
+              WHERE e.session_id = s.id AND e.type IN ('assistant', 'delivery')) AS agent_last_reply,
             COALESCE((SELECT MAX(e.created_at) FROM session_entries e
                        WHERE e.session_id = s.id AND e.type = 'user'), s.created_at) AS user_last_activity,
             EXISTS (${participantPresenceSql}) AS has_entries
@@ -810,6 +821,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         statements: [
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_by_activity
              ON sessions((COALESCE(last_activity, created_at)) DESC, id DESC)`,
+        ],
+      },
+      {
+        id: "sessions/store/0026-participant-read-at",
+        statements: [
+          `ALTER TABLE participants ADD COLUMN IF NOT EXISTS read_at BIGINT`,
+          `UPDATE participants SET read_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint WHERE read_at IS NULL`,
         ],
       },
     ],
@@ -1565,6 +1583,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           sessionId,
           principalId,
           patch.color,
+        ]);
+      }
+      if (patch.readAt !== undefined) {
+        await q("UPDATE participants SET read_at = $3 WHERE session_id = $1 AND principal_id = $2", [
+          sessionId,
+          principalId,
+          patch.readAt,
         ]);
       }
     },

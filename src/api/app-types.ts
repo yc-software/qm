@@ -390,6 +390,7 @@ export interface App {
       archived?: boolean;
       pinned?: boolean;
       color?: string | null;
+      readAt?: number;
       status?: Session["status"];
     },
   ): Promise<Session | null>;

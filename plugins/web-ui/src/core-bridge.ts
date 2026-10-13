@@ -137,6 +137,7 @@ export interface CoreSession {
   archived?: boolean;
   pinned?: boolean;
   color?: string | null;
+  unread?: boolean;
   lastActivityAt?: number;
   working?: boolean;
   awaitingInput?: boolean;
@@ -285,7 +286,7 @@ function browserTimezone(): string {
 
 export async function updateSession(
   id: string,
-  patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null },
+  patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null; unread?: boolean },
 ): Promise<{ session: CoreSession }> {
   return api<{ session: CoreSession }>(`/api/sessions/${encodeURIComponent(id)}`, {
     method: "POST",

@@ -133,6 +133,7 @@ interface ParticipantViewPatch {
   archived?: boolean;
   pinned?: boolean;
   color?: string | null;
+  readAt?: number;
 }
 
 export interface NewSessionPin {
