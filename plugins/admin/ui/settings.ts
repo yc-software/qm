@@ -13,8 +13,7 @@ export {
 import { mountProviders } from "./settings-providers.ts";
 export { configureProviders, openProvider, loadProviders } from "./settings-providers.ts";
 import { mountFlags } from "./settings-flags.ts";
-import { mountMemory } from "./settings-memory.ts";
-export { configureMemory, loadMemory } from "./settings-memory.ts";
+import { memoryCard } from "./settings-memory.ts";
 export { configureFlags, loadFlags } from "./settings-flags.ts";
 import { brandingCard } from "./settings-branding.ts";
 import { html } from "lit";
@@ -38,6 +37,7 @@ export class SettingsState extends SettingState {
       const { inherit: _inherit, ...selection } = this.draft;
       return structuredClone(selection);
     }
+    if (this.key === "memory-embedding-model") return { modelId: this.draft.modelId || null };
     if (this.key === "branding")
       return Object.fromEntries(Object.entries(this.draft).map(([key, value]) => [key, String(value).trim()]));
     return structuredClone(this.draft);
@@ -102,7 +102,10 @@ export class SettingsState extends SettingState {
   }
 }
 export const states = new Map(
-  [...runtimeKeys, "webui-models", "soul", "branding"].map((key) => [key, new SettingsState(key)]),
+  [...runtimeKeys, "webui-models", "memory-embedding-model", "soul", "branding"].map((key) => [
+    key,
+    new SettingsState(key),
+  ]),
 );
 export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
 export function load(data: Data, scope: string, only?: string) {
@@ -118,6 +121,13 @@ export function load(data: Data, scope: string, only?: string) {
         markUrl: data.branding?.markUrl || "",
       };
       s.available = scope.startsWith("org:") && "branding" in data;
+      s.saving = false;
+      capture(key);
+      continue;
+    }
+    if (key === "memory-embedding-model") {
+      s.draft = { modelId: data.memoryEmbeddingModel || "" };
+      s.available = scope.startsWith("org:") && "memoryEmbeddingModel" in data;
       s.saving = false;
       capture(key);
       continue;
@@ -182,6 +192,7 @@ const label = (s: SettingsState, id: string) => {
 function card(s: SettingsState) {
   if (s.key === "soul") return soulCard(s);
   if (s.key === "branding") return brandingCard(s);
+  if (s.key === "memory-embedding-model") return memoryCard(s);
   if (runtimeKeys.includes(s.key)) {
     const prefix = s.key === "runtime" ? "base" : s.key;
     const purpose = s.key !== "runtime";
@@ -349,7 +360,6 @@ function card(s: SettingsState) {
 export function mountCards() {
   mountFlags();
   mountProviders();
-  mountMemory();
   mountCredentials();
   const renderRuntimes = mountTemplate('template[data-settings-card="card-base-model"]', () =>
     runtimeKeys.map((key) => card(states.get(key)!)),
@@ -364,6 +374,7 @@ export function mountCards() {
         soul: "card-soul",
         branding: "card-branding",
         "webui-models": "card-webui-models",
+        "memory-embedding-model": "card-memory-recall",
       } as Record<string, string>
     )[key];
     s.render = mountTemplate(`template[data-settings-card="${id}"]`, () => card(s));

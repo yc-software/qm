@@ -3091,10 +3091,6 @@
         margin: 0;
         font-size: 12px;
       }
-      .memory-recall-mode small {
-        display: block;
-        color: var(--muted);
-      }
       .soul-revision small {
         display: block;
         color: var(--muted);
@@ -6671,6 +6667,7 @@
           $("card-fallback-runtime"),
           providers,
           $("card-webui-models"),
+          $("card-memory-recall"),
           $("card-soul"),
           $("card-branding"),
           $("card-feature-flags"),
@@ -8059,7 +8056,7 @@
           governanceUI.settings.load(r.data, scope, "subagent-runtime");
           governanceUI.settings.load(r.data, scope, "fallback-runtime");
           governanceUI.settings.load(r.data, scope, "webui-models");
-          void governanceUI.settings.loadMemory(r.data, scope);
+          governanceUI.settings.load(r.data, scope, "memory-embedding-model");
         }
         refreshModelChoices.push(() => governanceUI.settings.updateCatalog(r.data));
         if (requestedView === "customize") {
@@ -8388,7 +8385,6 @@
         return governanceUI.onboarding.load();
       }
 
-      governanceUI.settings.configureMemory({ api });
       governanceUI.settings.configureProviders({
         api,
         refresh: async () => {
@@ -8566,6 +8562,7 @@
         "subagent-runtime": "st-subagent-runtime",
         "fallback-runtime": "st-fallback-runtime",
         "webui-models": "st-webui-models",
+        "memory-embedding-model": "st-memory-embedding-model",
         "ack-emoji": "st-ack-emoji",
         branding: "st-branding",
       };

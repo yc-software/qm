@@ -6,6 +6,7 @@ import {
   harnessSupportsFastMode,
   HARNESS_IDS,
   selectableBaseModels,
+  embeddingModelCatalog,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   modelServiceable,
@@ -426,6 +427,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     fastModeHarnessIds: HARNESS_IDS.filter(harnessSupportsFastMode),
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
+    memoryEmbeddingOptions: embeddingModelCatalog(),
     browseModelOptions: selectableBaseModels().filter((m) =>
       modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
     ),

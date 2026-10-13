@@ -162,7 +162,9 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   const models = await fetch(url.replace(/\/memory-embedding-model$/, "?view=models"), {
     headers: { "x-admin-actor": "admin-alice@default-org" },
   });
-  assert.equal(((await models.json()) as { memoryEmbeddingModel: string }).memoryEmbeddingModel, definition.id);
+  const view = (await models.json()) as { memoryEmbeddingModel: string; memoryEmbeddingOptions: { id: string }[] };
+  assert.equal(view.memoryEmbeddingModel, definition.id);
+  assert.ok(view.memoryEmbeddingOptions.some((model) => model.id === definition.id));
   await built.memory.capture("personal:test", ["first fact"], Date.now());
   assert.match(recallText(await built.memory.recall("personal:test", { query: "first" })), /first fact/);
   assert.equal((await put({ modelId: "gpt-5.5" })).status, 400);
