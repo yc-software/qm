@@ -50,6 +50,10 @@ export const adminOperations = {
   ),
   memory_scopes: operation("List notebook scopes and metadata.", "GET", "/memory/scopes"),
   memory: operation("Read a notebook.", "GET", "/memory", scope),
+  add_memory: operation("Add notebook facts after confirming.", "POST", "/memory", {
+    ...scope,
+    value: Type.Object({ facts: Type.Array(string) }, { additionalProperties: false }),
+  }),
   edit_memory: operation(
     "Edit notebook facts by id after reading them and confirming the change.",
     "PATCH",

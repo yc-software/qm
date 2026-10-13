@@ -804,10 +804,10 @@ const FAMILIES: AgentApiFamily[] = [
           "govern a scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime ({ harnessId, modelId }) | approved-harnesses ({ ids })",
       },
       {
-        method: "GET|PATCH|DELETE",
+        method: "GET|POST|PATCH|DELETE",
         path: "/v1/admin/memory?scope=",
         summary:
-          "read any scope's notebook facts, or edit ({facts:[{id,text}]}) / forget ({ids}) them (e.g. fix poisoned memory; non-org reads: DM or effective Open sharing)",
+          "read any scope's notebook facts, add ({facts:[text]}), edit ({facts:[{id,text}]}) or forget ({ids}) them (e.g. fix poisoned memory; non-org reads: DM or effective Open sharing)",
       },
       {
         method: "GET",

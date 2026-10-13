@@ -80,6 +80,8 @@ test("an admin edits any scope's facts by id; non-admins are refused without a w
     assert.equal((await send(s.base, path, "PATCH", { facts: [{ id: fact.id, text: "evil" }] }, nobody)).status, 403);
     assert.equal((await fetch(`${s.base}/v1/admin/memory`, { headers: ALICE_ADMIN })).status, 400);
 
+    const added = await send(s.base, path, "POST", { facts: ["Retro is on Fridays"] }, ALICE_ADMIN);
+    assert.match((await json(added)).content, /Retro is on Fridays/);
     const edited = await send(
       s.base,
       path,
@@ -87,8 +89,11 @@ test("an admin edits any scope's facts by id; non-admins are refused without a w
       { facts: [{ id: fact.id, text: "Standup moved to 9:30" }] },
       ALICE_ADMIN,
     );
-    assert.equal((await json(edited)).content, "- (2026-05-31) Standup moved to 9:30");
-    assert.equal((await json(await send(s.base, path, "DELETE", { ids: [fact.id] }, ALICE_ADMIN))).content, "");
+    assert.match((await json(edited)).content, /^- \(2026-05-31\) Standup moved to 9:30\n/);
+    assert.equal(
+      (await json(await send(s.base, path, "DELETE", { ids: [fact.id] }, ALICE_ADMIN))).content,
+      `- (${new Date().toISOString().slice(0, 10)}) Retro is on Fridays`,
+    );
 
     const actions = (await s.built.auditLog.events()).map((e) => e.action);
     assert.ok(actions.includes("memory.read") && actions.includes("memory.update"), "admin memory access is audited");

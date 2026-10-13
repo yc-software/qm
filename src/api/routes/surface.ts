@@ -651,7 +651,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
   );
 }
 
-function parseFacts(body: unknown): string[] | string {
+export function parseFacts(body: unknown): string[] | string {
   const b = (isObj(body) ? body : {}) as { facts?: unknown };
   const facts = Array.isArray(b.facts)
     ? b.facts.filter((f): f is string => typeof f === "string" && f.trim() !== "")

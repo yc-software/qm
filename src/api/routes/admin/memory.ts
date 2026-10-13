@@ -1,7 +1,7 @@
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.ts";
 import { renderFacts } from "../../../memory/facts.ts";
-import { memoryFacts, parseEdits, parseIds } from "../surface.ts";
+import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes } from "./common.ts";
 
@@ -51,7 +51,11 @@ export async function adminMemory(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   const memory = deps.memory;
   if (!memory) return sendJson(res, 404, { error: "not_found" });
-  if (method === "PATCH") {
+  if (method === "POST") {
+    const facts = parseFacts(body);
+    if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
+    await memory.capture(scope, facts, Date.now(), actor.id, { mode: "explicit" });
+  } else if (method === "PATCH") {
     const edits = parseEdits(body);
     if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
     await memory.edit?.(scope, edits, actor.id);

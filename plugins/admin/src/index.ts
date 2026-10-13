@@ -300,7 +300,7 @@ const WRITES = new Map<string, string[]>([
   ["grants", ["POST", "DELETE"]],
   ["principal-links", ["POST", "DELETE"]],
   ["external-users", ["POST", "DELETE"]],
-  ["memory", ["PATCH", "DELETE"]],
+  ["memory", ["POST", "PATCH", "DELETE"]],
   ["crons", ["PUT"]],
   ["skills", ["DELETE"]],
   ["skill-packs", ["POST", "PATCH", "DELETE"]],

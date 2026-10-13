@@ -83,9 +83,9 @@ test("memory edits one fact by id and redraws from the server's facts", async ()
   const calls: any[] = [];
   c.api = async (...args: any[]) => {
     calls.push(args);
-    return { ok: true, data: { facts: [{ id: "7", text: "- (2026-01-02) edited" }] } };
+    return { ok: true, data: { facts: [{ id: "7", text: "edited" }] } };
   };
-  ui.memory(root, { facts: [{ id: "7", text: "- (2026-01-02) original" }] }, c);
+  ui.memory(root, { facts: [{ id: "7", text: "original" }] }, c);
   [...root.querySelectorAll("button")].find((b) => b.textContent!.trim() === "Edit")!.click();
   const input = root.querySelector("textarea")!;
   input.value = "edited";
@@ -98,6 +98,28 @@ test("memory edits one fact by id and redraws from the server's facts", async ()
   );
   assert.match(root.querySelector(".memory-facts")!.textContent!, /edited/);
   assert.equal(root.querySelector("#st-memory")!.textContent, "Saved ✓");
+  dom.window.close();
+});
+
+test("memory adds a new fact and clears the draft", async () => {
+  const { dom, root, c, ui } = fixture();
+  const calls: any[] = [];
+  c.api = async (...args: any[]) => {
+    calls.push(args);
+    return { ok: true, data: { facts: [{ id: "8", text: "new fact" }] } };
+  };
+  ui.memory(root, { facts: [] }, c);
+  const input = root.querySelector<HTMLTextAreaElement>('textarea[aria-label="New fact"]')!;
+  input.value = "new fact";
+  input.dispatchEvent(new dom.window.Event("input"));
+  [...root.querySelectorAll("button")].find((b) => b.textContent!.trim() === "Add")!.click();
+  await tick();
+  assert.equal(
+    JSON.stringify(calls[0]),
+    JSON.stringify(["POST", "/api/memory?scope=personal%3Aalice", { facts: ["new fact"] }]),
+  );
+  assert.match(root.querySelector(".memory-facts")!.textContent!, /new fact/);
+  assert.equal(root.querySelector<HTMLTextAreaElement>('textarea[aria-label="New fact"]')!.value, "");
   dom.window.close();
 });
 

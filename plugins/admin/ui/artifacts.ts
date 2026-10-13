@@ -370,10 +370,11 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
     });
   let facts: Array<{ id: string; text: string }> = d.facts || [];
   let editing: { id: string; text: string } | null = null;
+  let draft = "";
   let saving = false,
     message = "",
     tone = "";
-  const change = async (method: "PATCH" | "DELETE", body: object) => {
+  const change = async (method: "POST" | "PATCH" | "DELETE", body: object) => {
     if (saving) return;
     saving = true;
     draw();
@@ -382,6 +383,7 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
       if (response.ok) {
         facts = response.data?.facts || [];
         editing = null;
+        if (method === "POST") draft = "";
         message = "Saved ✓";
         tone = "ok";
       } else {
@@ -441,6 +443,24 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
                 </ul>`
               : html`<p class="empty">No memory stored for this scope yet.</p>`
           }
+          <div class="memory-add">
+            <textarea
+              aria-label="New fact"
+              placeholder="Add a fact"
+              .value=${draft}
+              @input=${(e: Event) => {
+                draft = (e.target as HTMLTextAreaElement).value;
+                draw();
+              }}
+            ></textarea>
+            <button
+              class="primary"
+              ?disabled=${saving || !draft.trim()}
+              @click=${() => change("POST", { facts: [draft] })}
+            >
+              Add
+            </button>
+          </div>
           <span class=${"status" + (tone ? " " + tone : "")} id="st-memory" role="status">${message}</span>
         </div>
       </section>`,

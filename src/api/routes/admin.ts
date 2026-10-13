@@ -148,6 +148,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "DELETE", path: "/v1/admin/skills/:id", auth: "either", handle: archiveAdminSkill },
   { method: "GET", path: "/v1/admin/memory/scopes", auth: "either", handle: listMemoryScopes },
   { method: "GET", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
+  { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
   { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
   { method: "DELETE", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
   { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
