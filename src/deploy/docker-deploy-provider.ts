@@ -111,6 +111,8 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       const r = await dexec([
         "run",
         "-d",
+        "--restart",
+        "unless-stopped",
         "--name",
         name(d),
         "--network",

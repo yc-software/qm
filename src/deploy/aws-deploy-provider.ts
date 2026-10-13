@@ -10,6 +10,7 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
 import { swallow } from "../util/errors.ts";
+import { appGone, listeningOn, supervised, waitAppReady } from "./shared-deploy-provider.ts";
 
 const AGENT_PORT_DEFAULT = 8080;
 const APP_PORT_DEFAULT = 8081;
@@ -31,14 +32,9 @@ const READY_PATH = `${APP_DIR}/.qm-ready`;
 const PID_PATH = "/tmp/qm-app.pid";
 const LOG_PATH = "/tmp/qm-app.log";
 const APP_READY_WINDOW_SEC = 60;
-const APP_READY_EXEC_TIMEOUT_SEC = 90;
 const APP_PORT_RELEASE_TICKS = 40;
 const APP_START_EXEC_TIMEOUT_SEC = 60;
 const EXIT_APP_PORT_HELD = 97;
-const EXIT_APP_EXITED = 98;
-
-const LISTENING_ON_APP_PORT = (port: number): string =>
-  `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; [ "$?" != "7" ]; }`;
 
 const LIVE_REPLICATOR_PIDS = `ls_pids() { for p in /proc/[0-9]*; do c=$(tr '\\0' ' ' < "$p/cmdline" 2>/dev/null); case "\${c%% *}" in litestream|*/litestream) case "$c" in *${LITESTREAM_CONFIG}*) echo "\${p#/proc/}";; esac;; esac; done; }`;
 const ENDPOINT_PORT = 443;
@@ -435,7 +431,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       .join("; ");
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
     const script = [
-      LISTENING_ON_APP_PORT(appPort),
+      listeningOn(appPort),
       `old=$(cat ${shq(PID_PATH)} 2>/dev/null || true)`,
       `if [ -n "$old" ]; then kill -TERM "-$old" 2>/dev/null || true; sleep 0.5; kill -KILL "-$old" 2>/dev/null || true; fi`,
       `rm -f ${shq(PID_PATH)}`,
@@ -446,7 +442,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       `export PORT=${appPort}`,
       ...(s3 ? [`export DATA_DIR=${shq(DATA_DIR)}`] : []),
       ...(envExports ? [envExports] : []),
-      `setsid sh -c ${shq(inner)} > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`,
+      `setsid sh -c ${shq(supervised(inner, appPort))} > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`,
     ].join("; ");
     const r = await execRaw(id, endpoint, script, APP_START_EXEC_TIMEOUT_SEC);
     if (r.code === EXIT_APP_PORT_HELD) {
@@ -455,27 +451,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       );
     }
     if (r.code !== 0) throw new Error(`aws deploy app start failed: ${r.stderr.slice(0, 300)}`);
-    await waitAppReady(id, endpoint);
-  }
-
-  async function waitAppReady(id: string, endpoint: string): Promise<void> {
-    const probe =
-      `pid=$(cat ${shq(PID_PATH)} 2>/dev/null || true); died=0; ` +
-      `end=$(( $(date +%s) + ${APP_READY_WINDOW_SEC} )); ` +
-      `while [ "$(date +%s)" -lt "$end" ]; do ` +
-      `curl -s --max-time 2 -o /dev/null http://127.0.0.1:${appPort}/ && exit 0; ` +
-      `kill -0 -"$pid" 2>/dev/null || died=1; ` +
-      `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; exit 1`;
-    const r = await execRaw(id, endpoint, probe, APP_READY_EXEC_TIMEOUT_SEC);
-    if (r.code === 0) return;
-    const log = await execRaw(id, endpoint, `tail -c 2000 ${shq(LOG_PATH)} 2>/dev/null || true`, 30)
-      .then((out) => `${out.stdout}${out.stderr}`.trim())
-      .catch(() => "");
-    const why =
-      r.code === EXIT_APP_EXITED
-        ? `the version's entrypoint exited without binding port ${appPort}`
-        : `app never listened on port ${appPort} within ${APP_READY_WINDOW_SEC}s`;
-    throw new Error(why + (log ? `; last output from the entrypoint:\n${log}` : "; the entrypoint produced no output"));
+    await waitAppReady((script, timeoutSec) => execRaw(id, endpoint, script, timeoutSec), {
+      appPort,
+      windowSec: APP_READY_WINDOW_SEC,
+      pidPath: PID_PATH,
+      logPath: LOG_PATH,
+    });
   }
 
   async function materialize(
@@ -564,6 +545,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       )
         return null;
       await ensureRunning(stored.microvmId, stored.endpoint);
+      const exec = (script: string, timeoutSec: number) =>
+        execRaw(stored.microvmId, stored.endpoint, script, timeoutSec);
+      if (await appGone(exec, { appPort, pidPath: PID_PATH })) return null;
     } catch (e) {
       if (!(e instanceof AwsApiError && (e.status >= 500 || e.status === 429))) throw e;
     }

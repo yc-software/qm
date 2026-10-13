@@ -237,6 +237,34 @@ test("resolveEndpoint reports the live body and forgets a dead one", async () =>
   assert.equal(await store.get("dep-5"), null);
 });
 
+test("an app that crashes after publishing is restarted in place, and keeps resolving while it comes back", async () => {
+  const d = deployment("dep-5d", "crashy");
+  const crashy = SERVER.replace(
+    "if (q.url === '/data')",
+    "if (q.url === '/crash') process.exit(1); if (q.url === '/data')",
+  );
+  const v = version({ "server.js": crashy }, "node server.js");
+  const applied = await provider.apply(d, v);
+  await fetch(`http://127.0.0.1:${appPort}/crash`).catch(() => {});
+  assert.deepEqual(await provider.resolveEndpoint!({ ...d, endpoint: applied }, v), applied);
+  let body = "";
+  for (const end = Date.now() + 10_000; !body && Date.now() < end; await new Promise((r) => setTimeout(r, 200)))
+    body = await fetchText("/").catch(() => "");
+  assert.match(body, /^hello from/);
+  assert.match((await provider.logs!(d, { tailLines: 50 })) ?? "", /entrypoint exited with status 1/);
+});
+
+test("resolveEndpoint returns null when the app and its supervisor are both gone, so the service re-applies", async () => {
+  const d = deployment("dep-5e", "gone");
+  const v = version({ "server.js": SERVER }, "node server.js");
+  const applied = await provider.apply(d, v);
+  const { sandboxId } = (await store.get("dep-5e"))!;
+  await fake.client.sandboxes.raw.exec(sandboxId, { command: ["sh", "-c", 'kill -KILL -"$(cat /tmp/qm-app.pid)"'] });
+  for (const end = Date.now() + 5_000; Date.now() < end; await new Promise((r) => setTimeout(r, 100)))
+    if (!(await fetchText("/").catch(() => ""))) break;
+  assert.equal(await provider.resolveEndpoint!({ ...d, endpoint: applied }, v), null);
+});
+
 test("resolveEndpoint caches the live answer instead of asking Porter on every request", async () => {
   make({ resolveCacheMs: 60_000 });
   const d = deployment("dep-5b", "cached");

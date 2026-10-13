@@ -1,8 +1,14 @@
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
+import { swallow } from "../util/errors.ts";
 
 const EXIT_APP_EXITED = 98;
+const EXIT_APP_GONE = 99;
 const READY_EXEC_GRACE_SEC = 30;
+const APP_PROBE_TIMEOUT_SEC = 15;
+const EXITED_MARK = "qm: entrypoint exited";
+
+type Exec = (script: string, timeoutSec: number) => Promise<Pick<ExecResult, "stdout" | "stderr" | "code">>;
 
 export interface AppReadyOptions {
   appPort: number;
@@ -11,16 +17,39 @@ export interface AppReadyOptions {
   logPath: string;
 }
 
-export async function waitAppReady(
-  exec: (script: string, timeoutSec: number) => Promise<ExecResult>,
-  opts: AppReadyOptions,
-): Promise<void> {
+export const listeningOn = (port: number): string =>
+  `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; [ "$?" != "7" ]; }`;
+
+/** Runs `inner` forever, restarting it with backoff whenever it exits; killing the process group stops it. */
+export function supervised(inner: string, appPort: number): string {
+  return [
+    listeningOn(appPort),
+    "n=1",
+    `while :; do s=$(date +%s); sh -c ${shq(inner)}; echo "${EXITED_MARK} with status $?, restarting"`,
+    "while listening; do sleep 5; done",
+    `[ $(( $(date +%s) - s )) -lt 60 ] || n=1; sleep "$n"; [ "$n" -ge 30 ] || n=$((n * 2)); done`,
+  ].join("; ");
+}
+
+/** True only when nothing answers on the app port and no supervisor (or pre-supervisor app process) is alive to bring it back. */
+export async function appGone(exec: Exec, opts: { appPort: number; pidPath: string }): Promise<boolean> {
+  const probe =
+    `${listeningOn(opts.appPort)}; listening && exit 0; pid=$(cat ${shq(opts.pidPath)} 2>/dev/null || true); ` +
+    `[ -n "$pid" ] && { kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && exit 0; exit ${EXIT_APP_GONE}`;
+  const r = await exec(probe, APP_PROBE_TIMEOUT_SEC).catch((e) => {
+    swallow("deploy: app liveness probe", e);
+    return null;
+  });
+  return r?.code === EXIT_APP_GONE;
+}
+
+export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<void> {
   const probe =
     `pid=$(cat ${shq(opts.pidPath)} 2>/dev/null || true); died=0; ` +
     `end=$(( $(date +%s) + ${opts.windowSec} )); ` +
     `while [ "$(date +%s)" -lt "$end" ]; do ` +
     `curl -s --max-time 2 -o /dev/null http://127.0.0.1:${opts.appPort}/ && exit 0; ` +
-    `kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null || died=1; ` +
+    `{ kill -0 -"$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; } && ! grep -qF ${shq(EXITED_MARK)} ${shq(opts.logPath)} 2>/dev/null || died=1; ` +
     `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; exit 1`;
   const r = await exec(probe, opts.windowSec + READY_EXEC_GRACE_SEC);
   if (r.code === 0) return;

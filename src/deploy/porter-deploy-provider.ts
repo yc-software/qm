@@ -3,7 +3,7 @@ import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
-import { waitAppReady } from "./shared-deploy-provider.ts";
+import { appGone, supervised, waitAppReady } from "./shared-deploy-provider.ts";
 import { normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import {
@@ -147,7 +147,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
 
   async function startApp(sandboxId: string, version: DeploymentVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
-    const launch = `sh -c ${shq(inner)} < /dev/null > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`;
+    const launch = `sh -c ${shq(supervised(inner, appPort))} < /dev/null > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`;
     const script = [
       `mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}`,
       `export HOME=${shq(HOME_DIR)} PORT=${appPort} DATA_DIR=${shq(DATA_DIR)}`,
@@ -251,6 +251,8 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         resolveCache.delete(d.id);
         return null;
       }
+      const exec = (script: string, timeoutSec: number) => execRaw(stored.sandboxId, script, timeoutSec);
+      if (await appGone(exec, { appPort, pidPath: PID_PATH })) return null;
       const endpoint = endpointOf(stored);
       if (resolveCacheMs > 0) resolveCache.set(d.id, endpoint);
       return endpoint;
