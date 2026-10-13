@@ -5,10 +5,12 @@ import type { SessionTool, SessionTopbarOpts } from "../src/session-scope.ts";
 
 const requests: string[] = [];
 let respond: (path: string) => unknown = () => ({});
-const { vite, close } = await browserEnv("http://localhost/", async (input) => {
-  const path = String(input);
-  requests.push(path);
-  return Response.json(respond(path));
+const { vite, close } = await browserEnv({
+  fetch: async (input) => {
+    const path = String(input);
+    requests.push(path);
+    return Response.json(respond(path));
+  },
 });
 after(close);
 const { render } = await vite.ssrLoadModule("lit");

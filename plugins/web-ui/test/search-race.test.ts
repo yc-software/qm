@@ -22,24 +22,26 @@ const runtimeConfig = {
   effective: { harnessId: "pi", modelId: "m" },
   upgradeAvailable: false,
 };
-const env = await browserEnv("http://localhost/", (input, init) => {
-  const path = String(input);
-  const chats = path.startsWith("/api/search?");
-  if (chats || path.startsWith("/api/resources/search?"))
-    return new Promise<Response>((resolve, reject) =>
-      (chats ? requests : resourceRequests).push({
-        signal: init!.signal!,
-        resolve: (body) => resolve(Response.json(body)),
-        reject,
-      }),
-    );
-  const id = path.match(/^\/api\/sessions\/([^/?]+)\?/)?.[1];
-  if (id) opened.push(id);
-  if (path.startsWith("/api/runtime-config")) return Promise.resolve(Response.json(runtimeConfig));
-  if (path.endsWith("/approvals")) return Promise.resolve(Response.json({ approvals: [] }));
-  if (path === "/api/sessions") return Promise.resolve(Response.json({ sessions }));
-  if (id) return Promise.resolve(Response.json({ session: sessions.find((s) => s.id === id), entries: [] }));
-  return Promise.resolve(Response.json({}));
+const env = await browserEnv({
+  fetch: (input, init) => {
+    const path = String(input);
+    const chats = path.startsWith("/api/search?");
+    if (chats || path.startsWith("/api/resources/search?"))
+      return new Promise<Response>((resolve, reject) =>
+        (chats ? requests : resourceRequests).push({
+          signal: init!.signal!,
+          resolve: (body) => resolve(Response.json(body)),
+          reject,
+        }),
+      );
+    const id = path.match(/^\/api\/sessions\/([^/?]+)\?/)?.[1];
+    if (id) opened.push(id);
+    if (path.startsWith("/api/runtime-config")) return Promise.resolve(Response.json(runtimeConfig));
+    if (path.endsWith("/approvals")) return Promise.resolve(Response.json({ approvals: [] }));
+    if (path === "/api/sessions") return Promise.resolve(Response.json({ sessions }));
+    if (id) return Promise.resolve(Response.json({ session: sessions.find((s) => s.id === id), entries: [] }));
+    return Promise.resolve(Response.json({}));
+  },
 });
 const realLocation = env.dom.window.location;
 Object.defineProperty(globalThis, "location", {

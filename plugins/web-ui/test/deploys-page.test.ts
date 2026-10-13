@@ -4,10 +4,13 @@ import { browserEnv } from "./browser-env.ts";
 import type { DeploymentView } from "../src/deploy-view.ts";
 
 let requests: Array<{ path: string; resolve: (body: unknown) => void }> = [];
-const { vite, close } = await browserEnv("http://localhost/apps", (input) => {
-  const path = String(input);
-  if (path === "/api/contexts") return Promise.resolve(Response.json({ contexts: [] }));
-  return new Promise<Response>((resolve) => requests.push({ path, resolve: (body) => resolve(Response.json(body)) }));
+const { vite, close } = await browserEnv({
+  dom: { url: "http://localhost/apps" },
+  fetch: (input) => {
+    const path = String(input);
+    if (path === "/api/contexts") return Promise.resolve(Response.json({ contexts: [] }));
+    return new Promise<Response>((resolve) => requests.push({ path, resolve: (body) => resolve(Response.json(body)) }));
+  },
 });
 after(close);
 

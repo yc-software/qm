@@ -1,5 +1,5 @@
-import { JSDOM } from "jsdom";
-import { createServer, type ViteDevServer } from "vite";
+import { JSDOM, type ConstructorOptions } from "jsdom";
+import { createServer, type PluginOption, type ViteDevServer } from "vite";
 
 export interface BrowserEnv {
   dom: JSDOM;
@@ -8,12 +8,17 @@ export interface BrowserEnv {
 }
 
 export async function browserEnv(
-  url: string,
-  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  options: {
+    dom?: ConstructorOptions;
+    html?: string;
+    fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    plugins?: PluginOption[];
+  } = {},
 ): Promise<BrowserEnv> {
-  const dom = new JSDOM('<!doctype html><body><div id="app"></div><main></main></body>', {
-    url,
+  const dom = new JSDOM(options.html ?? '<!doctype html><div id="app"></div><main id="main"></main>', {
+    url: "http://localhost/",
     pretendToBeVisual: true,
+    ...options.dom,
   });
   Object.defineProperty(dom.window, "matchMedia", {
     value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
@@ -36,6 +41,7 @@ export async function browserEnv(
     Element: dom.window.Element,
     Node: dom.window.Node,
     Event: dom.window.Event,
+    CustomEvent: dom.window.CustomEvent,
     InputEvent: dom.window.InputEvent,
     KeyboardEvent: dom.window.KeyboardEvent,
     MouseEvent: dom.window.MouseEvent,
@@ -48,7 +54,7 @@ export async function browserEnv(
       disconnect() {}
     },
     EventSource: undefined,
-    fetch,
+    fetch: options.fetch ?? globalThis.fetch,
     setTimeout: ((...args: Parameters<typeof setTimeout>) => track(realSetTimeout(...args))) as typeof setTimeout,
     setInterval: ((...args: Parameters<typeof setInterval>) => track(realSetInterval(...args))) as typeof setInterval,
     requestAnimationFrame: (callback: FrameRequestCallback) =>
@@ -60,18 +66,34 @@ export async function browserEnv(
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const restore = () => {
+    for (const id of timers) clearTimeout(id);
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+    dom.window.close();
+  };
+  let vite: ViteDevServer;
+  try {
+    vite = await createServer({
+      server: { middlewareMode: true, hmr: false, ws: false },
+      appType: "custom",
+      plugins: options.plugins,
+    });
+  } catch (error) {
+    restore();
+    throw error;
+  }
   return {
     dom,
     vite,
     close: async () => {
-      await vite.close();
-      for (const id of timers) clearTimeout(id);
-      for (const [key, descriptor] of descriptors) {
-        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-        else delete (globalThis as Record<string, unknown>)[key];
+      try {
+        await vite.close();
+      } finally {
+        restore();
       }
-      dom.window.close();
     },
   };
 }

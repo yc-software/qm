@@ -11,21 +11,23 @@ const session = (id: string, extra: Partial<Session> = {}): Session => ({
   ...extra,
 });
 let known: Session[] = [];
-const env = await browserEnv("http://localhost/", async (input) => {
-  const path = String(input);
-  if (path.startsWith("/api/runtime-config"))
-    return Response.json({
-      scopeId: "personal:tester",
-      approvedHarnesses: [],
-      modelsByHarness: {},
-      modelCatalog: {},
-      effective: { harnessId: "pi", modelId: "m" },
-    });
-  if (path.endsWith("/approvals")) return Response.json({ approvals: [] });
-  if (path === "/api/sessions") return Response.json({ sessions: known });
-  const id = path.match(/^\/api\/sessions\/([^/?]+)/)?.[1];
-  if (id) return Response.json({ session: known.find((s) => s.id === id), entries: [] });
-  return Response.json({ contexts: [], items: [], crons: [] });
+const env = await browserEnv({
+  fetch: async (input) => {
+    const path = String(input);
+    if (path.startsWith("/api/runtime-config"))
+      return Response.json({
+        scopeId: "personal:tester",
+        approvedHarnesses: [],
+        modelsByHarness: {},
+        modelCatalog: {},
+        effective: { harnessId: "pi", modelId: "m" },
+      });
+    if (path.endsWith("/approvals")) return Response.json({ approvals: [] });
+    if (path === "/api/sessions") return Response.json({ sessions: known });
+    const id = path.match(/^\/api\/sessions\/([^/?]+)/)?.[1];
+    if (id) return Response.json({ session: known.find((s) => s.id === id), entries: [] });
+    return Response.json({ contexts: [], items: [], crons: [] });
+  },
 });
 after(env.close);
 
