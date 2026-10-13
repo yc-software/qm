@@ -73,12 +73,6 @@ export function fireNeedsAttention(summary: FireSummary): boolean {
   );
 }
 
-/**
- * Review headroom for a single fire. `maxOpenOutputs` used to be read once, at fire start; with items
- * running beside each other that let one fire sail straight past the cap. Now every item in flight
- * holds a slot while it runs and settles it for the outputs it actually left waiting for a person,
- * so the cap holds continuously instead of only at the starting line.
- */
 class ReviewBudget {
   private inFlight = 0;
   private readonly cap: number | undefined;
@@ -146,8 +140,6 @@ export async function runLoopFire(
     loop.caps?.maxItemsPerFire,
   );
   const batch = loop.throttle ? queued.slice(0, Math.max(1, Math.floor(queued.length / 2))) : queued;
-  // A shared cursor rather than `for…of`: a worker that stops early must not close the iterator out
-  // from under the workers still pulling from it.
   const remaining = batch.values();
   let capped = false;
   let drained = false;
@@ -274,8 +266,6 @@ export async function runLoopFire(
             summary.ready.push(item.id);
           }
         } catch (error) {
-          // whatever was promoted and not auto-shipped is still sitting in the review queue; everything
-          // else is about to be superseded, so it costs the loop no review headroom
           openedOutputs = autoShippedCount > 0 ? Math.max(0, promoted.length - autoShippedCount) : 0;
           const reason = error instanceof Error ? error.message : String(error);
           summary.failures.push(`${item.sourceKey}: ${reason}`);
@@ -303,7 +293,6 @@ export async function runLoopFire(
   );
   // the fire throws only once every worker has settled, so no work is still running when the caller sees it fail
   for (const worker of workers) if (worker.status === "rejected") throw worker.reason;
-  // read the headroom after everything has settled, so the reason names what is really waiting
   if (capped && !drained) summary.throttled ??= budget.reason();
 
   await stores.loops.recordFireOutcome(loop.id, summary.failures.length > 0);
