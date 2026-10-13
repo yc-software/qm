@@ -10,7 +10,7 @@ import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
 
-export type ThemeChoice = "light" | "dark" | "system" | "custom";
+type ThemeChoice = "light" | "dark" | "system" | "custom";
 
 const THEME_KEY = "theme";
 const CUSTOM_THEME_KEY = "theme:custom";
@@ -28,7 +28,7 @@ const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode 
 let settingsHost: HTMLElement | null = null;
 let themeImportError: string | null = null;
 
-export function storedTheme(): ThemeChoice {
+function storedTheme(): ThemeChoice {
   try {
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "light" || stored === "dark") return stored;
@@ -39,7 +39,7 @@ export function storedTheme(): ThemeChoice {
   return "system";
 }
 
-export function storedCustomTheme(): Palette | null {
+function storedCustomTheme(): Palette | null {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY) ?? "null");
     return isPalette(parsed) ? parsed : null;
@@ -95,7 +95,7 @@ export function applyTheme(): void {
   publishTheme();
 }
 
-export function setTheme(choice: ThemeChoice): void {
+function setTheme(choice: ThemeChoice): void {
   themeImportError = null;
   try {
     if (choice === "system") localStorage.removeItem(THEME_KEY);
@@ -107,12 +107,12 @@ export function setTheme(choice: ThemeChoice): void {
   drawSettings();
 }
 
-export function installCustomTheme(palette: Palette): void {
+function installCustomTheme(palette: Palette): void {
   storeCustomTheme(palette);
   setTheme("custom");
 }
 
-export function removeCustomTheme(): void {
+function removeCustomTheme(): void {
   const wasActive = storedTheme() === "custom";
   storeCustomTheme(null);
   setTheme(wasActive ? "system" : storedTheme());

@@ -1915,21 +1915,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
-    path: "/api/sessions/:id/adopt",
-    handle: async (c) => {
-      const p = await readJson<{ parentSessionId?: unknown }>(c.req, c.res);
-      if (!p) return;
-      if (typeof p.parentSessionId !== "string") return json(c.res, 400, { error: "bad_request" });
-      return relayCore(
-        c.res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/adopt`,
-        JSON.stringify({ principalId: c.user, parentSessionId: p.parentSessionId }),
-      );
-    },
-  },
-  {
-    method: "POST",
     path: "/api/sessions/:id/detach",
     handle: async (c) => {
       const { res, user } = c;

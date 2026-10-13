@@ -395,7 +395,6 @@ export interface App {
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
   detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
-  adoptSession(sessionId: string, parentSessionId: string, principalId: string): Promise<{ adopted: true } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
   forkSession(

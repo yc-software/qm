@@ -3,12 +3,7 @@ import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
-import {
-  sessionTreeRoot,
-  sessionTreeRunCount,
-  SUBAGENT_TREE_RUN_CAP,
-  workingSessionThreadRefs,
-} from "../sessions/session-syscalls.ts";
+import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import { isSessionStatus } from "../sessions/session-status.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -94,7 +89,6 @@ export function createSessionMethods(
   | "authorizesCapabilityScope"
   | "updateSession"
   | "detachSession"
-  | "adoptSession"
   | "regenerateTitle"
   | "spawnSession"
   | "discardSession"
@@ -875,42 +869,6 @@ export function createSessionMethods(
             deps.advisoryLock!.withLock("session-run-admission", detach),
           )
         : detach();
-    },
-
-    async adoptSession(sessionId, parentSessionId, principalId) {
-      const adopt = async () => {
-        const child = await sessionForViewer(sessionId, principalId);
-        const parent = await sessionForViewer(parentSessionId, principalId);
-        if (!child?.spawnMeta || !parent || child.scopeId !== parent.scopeId || child.id === parent.id) return null;
-        if (parent.threadRef.startsWith("swarm:")) return null;
-        if (!(await principalCanWriteScope(principalId, child.scopeId))) return null;
-        const seen = new Set([child.id]);
-        let ancestor = parent;
-        while (true) {
-          if (seen.has(ancestor.id)) return null;
-          seen.add(ancestor.id);
-          if (!ancestor.parentSessionId) break;
-          const next = await deps.sessions.get(ancestor.parentSessionId);
-          if (!next) return null;
-          ancestor = next;
-        }
-        const root = await sessionTreeRoot(deps.sessions, parent);
-        const childRoot = await sessionTreeRoot(deps.sessions, child);
-        if (
-          root.id !== childRoot.id &&
-          (await sessionTreeRunCount(deps.sessions, deps.runs, root)) +
-            (await sessionTreeRunCount(deps.sessions, deps.runs, child)) >
-            SUBAGENT_TREE_RUN_CAP
-        )
-          return null;
-        await deps.sessions.setParentSession(child.id, parent.id);
-        return { adopted: true as const };
-      };
-      return deps.advisoryLock
-        ? deps.advisoryLock.withLock("session-tree-admission", () =>
-            deps.advisoryLock!.withLock("session-run-admission", adopt),
-          )
-        : adopt();
     },
 
     async regenerateTitle(sessionId, principalId) {

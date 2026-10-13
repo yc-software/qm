@@ -87,14 +87,6 @@ async function detachSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
-async function adoptSession(ctx: ApiCtx): Promise<void> {
-  const { principalId, parentSessionId } = ctx.body as { principalId?: unknown; parentSessionId?: unknown };
-  if (typeof principalId !== "string" || typeof parentSessionId !== "string" || !principalId || !parentSessionId)
-    return sendJson(ctx.res, 400, { error: "bad_request" });
-  const out = await ctx.app.adoptSession(ctx.params.id!, parentSessionId, principalId);
-  return sendJson(ctx.res, out ? 200 : 404, out ?? { error: "not_found" });
-}
-
 async function forkSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -1334,7 +1326,6 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },
   { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
   { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
-  { method: "POST", path: "/v1/sessions/:id/adopt", auth: "source", handle: adoptSession },
   { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
   { method: "GET", path: "/v1/sessions/:id/approvals", auth: "source", handle: listSessionApprovals },
   { method: "GET", path: "/v1/sessions/:id/background", auth: "source", handle: getSessionBackground },
