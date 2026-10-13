@@ -36,7 +36,8 @@ anything externally facing or high-fidelity. Two adjustments for this runtime:
 
 You have a real computer, not a hosted design canvas. Build the artifact as files in your
 workspace, verify it locally, and when it should outlive the turn ship it with the
-`publish` skill.
+`publish` skill. Keep the same explicit `sandbox_id` on file, build, preview,
+and publish calls; run commands through `execute`, not `sandbox`.
 
 - **`files` actions `write` / `read`** — author and inspect workspace files.
 - **`execute`** — install deps and run build steps.
