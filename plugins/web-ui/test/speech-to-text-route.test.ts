@@ -29,7 +29,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
-process.env.WEB_UI_VOICE_ENABLED = "1";
 process.env.WEB_UI_VOICE_USERS = "alice";
 process.env.OPENAI_API_KEY = "voice-test-key";
 const { handler } = await import("../server/index.ts");
@@ -133,4 +132,22 @@ test("disconnecting a dictation request cancels its provider request", async (t)
   await started.promise;
   controller.abort();
   await Promise.all([rejected, cancelled.promise]);
+});
+
+test("chunked recordings cannot exceed the audio limit", async () => {
+  const chunk = new Uint8Array(1024 * 1024);
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent++ > 10) controller.close();
+      else controller.enqueue(chunk);
+    },
+  });
+  const response = await fetch(`${base}/api/dictation`, {
+    method: "POST",
+    headers,
+    body,
+    duplex: "half",
+  } as RequestInit);
+  assert.equal(response.status, 413);
 });

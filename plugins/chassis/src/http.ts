@@ -63,7 +63,7 @@ export function json(res: ServerResponse, status: number, body: unknown): void {
   sendBuffered(res, status, { "content-type": "application/json" }, JSON.stringify(body));
 }
 
-export async function readBody(req: IncomingMessage, maxBytes = Infinity): Promise<string> {
+export async function readBodyBytes(req: IncomingMessage, maxBytes = Infinity): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
@@ -71,7 +71,27 @@ export async function readBody(req: IncomingMessage, maxBytes = Infinity): Promi
     if (size > maxBytes) throw new PayloadTooLargeError();
     chunks.push(c as Buffer);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+export async function readBody(req: IncomingMessage, maxBytes = Infinity): Promise<string> {
+  return (await readBodyBytes(req, maxBytes)).toString("utf8");
+}
+
+export function sameOriginRequest(req: IncomingMessage, expectedOrigin: string): boolean {
+  const origin = req.headers.origin;
+  const originMatches =
+    typeof origin === "string" &&
+    (() => {
+      try {
+        return new URL(origin).origin === expectedOrigin;
+      } catch {
+        return false;
+      }
+    })();
+  const site = req.headers["sec-fetch-site"];
+  if (typeof site !== "string") return originMatches;
+  return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
 }
 
 export function cookie(req: IncomingMessage, name: string): string | null {

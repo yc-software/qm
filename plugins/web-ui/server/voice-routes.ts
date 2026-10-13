@@ -1,15 +1,24 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { json, readBody as readBodyCapped, PayloadTooLargeError } from "../../chassis/src/http.ts";
+import { json, readBodyBytes, PayloadTooLargeError } from "../../chassis/src/http.ts";
 import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import {
-  dictationEnabled,
+  createLiveVoice,
   dictationFormats,
+  LIVE_MODEL,
   MAX_DICTATION_BYTES,
-  readDictation,
-  speechToTextProvider,
-} from "./speech-to-text.ts";
-import { createLiveVoice, voiceEnabled, voiceOriginAllowed } from "./live-voice.ts";
+  openaiKey,
+  transcribe,
+  voiceEnabled,
+  voiceRequestAllowed,
+  VoiceProviderError,
+} from "./voice.ts";
+
+const BODY_READ_TIMEOUT_MS = 30_000;
+
+function reportVoiceError(error: unknown, code: string): void {
+  reportBackendError(error, code, error instanceof VoiceProviderError ? error.detail : undefined);
+}
 
 export async function handleVoiceRoute(
   req: IncomingMessage,
@@ -19,108 +28,91 @@ export async function handleVoiceRoute(
   config: { core: string; secret: string | undefined; org: string; publicUrl: string },
 ): Promise<void> {
   const { user } = identity;
-  const method = req.method;
-  const { core: CORE, secret: CORE_SIGNING_SECRET, org: ORG, publicUrl: PUBLIC_URL } = config;
-  if (path === "/api/dictation" && method === "GET") {
-    res.setHeader("cache-control", "no-store");
-    const enabled = dictationEnabled(user) && !identity.impersonator;
-    return json(res, 200, { enabled, provider: enabled ? speechToTextProvider()!.name : null });
-  }
-  if (path === "/api/dictation" && method === "POST") {
-    res.setHeader("cache-control", "no-store");
-    if (!dictationEnabled(user) || identity.impersonator)
-      return json(res, 404, { error: "dictation_disabled", message: "Dictation is not enabled for this account." });
-    if (!voiceOriginAllowed(req.headers.origin, PUBLIC_URL, identity.portalVerified))
-      return json(res, 403, { error: "unexpected_origin" });
-    const mimeType = req.headers["content-type"]?.split(";")[0]?.trim() ?? "";
+  const enabled = voiceEnabled(user) && !identity.impersonator;
+  res.setHeader("cache-control", "no-store");
+  if (req.method === "GET" && path === "/api/dictation")
+    return json(res, 200, { enabled, provider: enabled ? "OpenAI" : null });
+  if (req.method === "GET" && path === "/api/voice") return json(res, 200, { enabled, model: LIVE_MODEL });
+  if (req.method !== "POST" || path === "/api/voice") return json(res, 405, { error: "method_not_allowed" });
+
+  const dictation = path === "/api/dictation";
+  if (!enabled)
+    return dictation
+      ? json(res, 404, { error: "dictation_disabled", message: "Dictation is not enabled for this account." })
+      : json(res, 404, { error: "voice_disabled" });
+  if (!voiceRequestAllowed(req, config.publicUrl, identity.portalVerified))
+    return json(res, 403, { error: "unexpected_origin" });
+  const mimeType = req.headers["content-type"]?.split(";")[0]?.trim() ?? "";
+  let sdp = "";
+  if (dictation) {
     if (!Object.hasOwn(dictationFormats, mimeType)) return json(res, 415, { error: "unsupported_audio" });
     if (Number(req.headers["content-length"]) > MAX_DICTATION_BYTES)
       return json(res, 413, { error: "audio_too_large" });
-    const controller = new AbortController();
-    const disconnect = () => {
-      if (!res.writableEnded) controller.abort();
+  } else {
+    let offer: { sdp?: unknown } | null;
+    try {
+      offer = JSON.parse((await readBodyBytes(req, 65_536)).toString("utf8")) as { sdp?: unknown } | null;
+    } catch (error) {
+      if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "offer_too_large" });
+      return json(res, 400, { error: "invalid_offer" });
+    }
+    if (typeof offer?.sdp !== "string" || !offer.sdp.startsWith("v=0") || offer.sdp.length > 60_000)
+      return json(res, 400, { error: "invalid_offer" });
+    sdp = offer.sdp;
+  }
+
+  const controller = new AbortController();
+  const disconnect = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  res.once("close", disconnect);
+  try {
+    let allowed: boolean;
+    try {
+      allowed = await withinRateLimit(coreClaimStore(config.core, config.secret, dictation ? "dictation" : "voice"), {
+        secret: config.secret!,
+        kind: dictation ? "dictation" : "voice-session",
+        value: `${config.org}:${user}`,
+        limit: dictation ? 60 : 6,
+        windowS: 3600,
+        nowMs: Date.now(),
+      });
+    } catch (error) {
+      reportVoiceError(error, "voice_rate_limit_store");
+      return json(res, 503, { error: "rate_limit_unavailable", message: "Voice is temporarily unavailable." });
+    }
+    if (!allowed)
+      return dictation
+        ? json(res, 429, { error: "dictation_rate_limit", message: "Dictation limit reached. Try again next hour." })
+        : json(res, 429, { error: "voice_rate_limit", message: "Voice session limit reached. Try again next hour." });
+
+    const caller = {
+      user,
+      org: config.org,
+      apiKey: openaiKey()!,
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(dictation ? 60_000 : 25_000)]),
     };
-    res.once("close", disconnect);
+    if (!dictation) return json(res, 201, await createLiveVoice(sdp, caller));
+    const readTimer = setTimeout(() => req.destroy(), BODY_READ_TIMEOUT_MS);
+    let audio: Buffer;
     try {
-      const allowed = await withinRateLimit(coreClaimStore(CORE, CORE_SIGNING_SECRET, "dictation"), {
-        secret: CORE_SIGNING_SECRET!,
-        kind: "dictation",
-        value: `${ORG}:${user}`,
-        limit: 60,
-        windowS: 3600,
-        nowMs: Date.now(),
-      });
-      if (!allowed)
-        return json(res, 429, {
-          error: "dictation_rate_limit",
-          message: "Dictation limit reached. Try again next hour.",
-        });
-      const audio = await readDictation(req);
-      if (!audio.byteLength) return json(res, 400, { error: "empty_audio" });
-      const text = await speechToTextProvider()!.transcribe({
-        audio,
-        mimeType,
-        user,
-        org: ORG,
-        signal: controller.signal,
-      });
-      return json(res, 200, { text });
-    } catch (error) {
-      reportBackendError(error);
-      if (controller.signal.aborted) return;
-      if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "audio_too_large" });
-      return json(res, 503, {
-        error: "dictation_unavailable",
-        message: "Could not transcribe the recording. Please try again.",
-      });
+      audio = await readBodyBytes(req, MAX_DICTATION_BYTES);
     } finally {
-      res.off("close", disconnect);
+      clearTimeout(readTimer);
     }
+    if (!audio.byteLength) return json(res, 400, { error: "empty_audio" });
+    return json(res, 200, { text: await transcribe(audio, mimeType, caller) });
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "audio_too_large" });
+    reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider");
+    return dictation
+      ? json(res, 503, {
+          error: "dictation_unavailable",
+          message: "Could not transcribe the recording. Please try again.",
+        })
+      : json(res, 503, { error: "voice_unavailable", message: "Voice could not connect. Please try again." });
+  } finally {
+    res.off("close", disconnect);
   }
-  if (path === "/api/voice" && method === "GET") {
-    res.setHeader("cache-control", "no-store");
-    return json(res, 200, {
-      enabled: voiceEnabled(user) && !identity.impersonator,
-      model: "gpt-live-1",
-    });
-  }
-  if (path === "/api/voice/sessions" && method === "POST") {
-    res.setHeader("cache-control", "no-store");
-    if (!voiceEnabled(user) || identity.impersonator) return json(res, 404, { error: "voice_disabled" });
-    if (!voiceOriginAllowed(req.headers.origin, PUBLIC_URL, identity.portalVerified))
-      return json(res, 403, { error: "unexpected_origin" });
-    const raw = await readBodyCapped(req, 65_536);
-    let body: { sdp?: unknown } | null;
-    try {
-      body = JSON.parse(raw) as { sdp?: unknown } | null;
-    } catch {
-      return json(res, 400, { error: "invalid_offer" });
-    }
-    if (typeof body?.sdp !== "string" || !body.sdp.startsWith("v=0") || body.sdp.length > 60_000)
-      return json(res, 400, { error: "invalid_offer" });
-    try {
-      const allowed = await withinRateLimit(coreClaimStore(CORE, CORE_SIGNING_SECRET, "voice"), {
-        secret: CORE_SIGNING_SECRET!,
-        kind: "voice-session",
-        value: `${ORG}:${user}`,
-        limit: 6,
-        windowS: 3600,
-        nowMs: Date.now(),
-      });
-      if (!allowed)
-        return json(res, 429, {
-          error: "voice_rate_limit",
-          message: "Voice session limit reached. Try again next hour.",
-        });
-      const session = await createLiveVoice(body.sdp, user, ORG, process.env.OPENAI_API_KEY!);
-      return json(res, 201, session);
-    } catch (error) {
-      reportBackendError(error);
-      return json(res, 503, {
-        error: "voice_unavailable",
-        message: "Voice could not connect. Check the deployment's OpenAI access and try again.",
-      });
-    }
-  }
-  return json(res, 405, { error: "method_not_allowed" });
 }

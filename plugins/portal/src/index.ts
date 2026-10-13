@@ -67,6 +67,7 @@ import {
   serveFavicon,
   readBody,
   PayloadTooLargeError,
+  sameOriginRequest,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -361,22 +362,6 @@ function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_
     },
     html,
   );
-}
-
-function sameOriginRequest(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  const originMatches =
-    typeof origin === "string" &&
-    (() => {
-      try {
-        return new URL(origin).origin === ORIGIN;
-      } catch {
-        return false;
-      }
-    })();
-  const site = req.headers["sec-fetch-site"];
-  if (typeof site !== "string") return originMatches;
-  return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
 }
 
 function wantsHtml(req: IncomingMessage): boolean {
@@ -1060,7 +1045,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
   if (pathname === "/auth/logout" && method === "POST") {
-    if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+    if (!sameOriginRequest(req, ORIGIN)) return json(res, 403, { error: "forbidden" });
     if (AUTH_BROKER_UPSTREAM && url.searchParams.get("everywhere") === "1") {
       const session = currentSession(req);
       if (!session || session.anon) return json(res, 401, { error: "sign in" });
@@ -1107,7 +1092,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   if (brokerPath) {
-    if (method !== "GET" && !sameOriginRequest(req))
+    if (method !== "GET" && !sameOriginRequest(req, ORIGIN))
       return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     return proxyToUpstream(
       req,
@@ -1135,7 +1120,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (pathname === "/auth/impersonate" && method === "POST") {
     if (!session) return json(res, 401, { error: "sign in" });
-    if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+    if (!sameOriginRequest(req, ORIGIN))
+      return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
@@ -1169,7 +1155,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   if (pathname === "/auth/impersonate/stop" && method === "POST") {
-    if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+    if (!sameOriginRequest(req, ORIGIN))
+      return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
     setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
     if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
@@ -1251,7 +1238,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         error: "sign in",
         message: "your session expired, re-open the link, sign in, and paste again",
       });
-    if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+    if (!sameOriginRequest(req, ORIGIN))
+      return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     if (session.anon)
       return json(res, 403, { error: "forbidden", message: "secret drops are disabled for playground sessions" });
     return handleSecretDrop(req, res, {
@@ -1319,7 +1307,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  if (method !== "GET" && method !== "HEAD" && !crossOrigin && !sameOriginRequest(req)) {
+  if (method !== "GET" && method !== "HEAD" && !crossOrigin && !sameOriginRequest(req, ORIGIN)) {
     return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
   }
 
@@ -1399,7 +1387,10 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
   }
   if (url.pathname.endsWith("/redeem")) {
     if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
-    if ((req.headers.origin !== undefined || req.headers["sec-fetch-site"] !== undefined) && !sameOriginRequest(req))
+    if (
+      (req.headers.origin !== undefined || req.headers["sec-fetch-site"] !== undefined) &&
+      !sameOriginRequest(req, ORIGIN)
+    )
       return json(res, 403, { error: "forbidden" });
     let body: URLSearchParams;
     try {
@@ -1443,7 +1434,7 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
   const state = url.searchParams.get("state") ?? "";
   if (!desktopChallenge(challenge) || !desktopChallenge(state))
     return json(res, 400, { error: "invalid_desktop_request" });
-  if (req.method === "POST" && !sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+  if (req.method === "POST" && !sameOriginRequest(req, ORIGIN)) return json(res, 403, { error: "forbidden" });
   const session = renewSessionCookie(req, res) ?? currentSession(req);
   if (!session || session.anon) {
     res.writeHead(303, {
@@ -1502,7 +1493,7 @@ async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<v
       `${PAGE_CSP}; script-src '${INVITE_LOGIN_SCRIPT_HASH}'`,
     );
   if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
-  if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+  if (!sameOriginRequest(req, ORIGIN)) return json(res, 403, { error: "forbidden" });
   let token: string;
   try {
     token = new URLSearchParams(await readBody(req, 8192)).get("token") ?? "";
@@ -1560,7 +1551,7 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
     );
   }
   if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
-  if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+  if (!sameOriginRequest(req, ORIGIN)) return json(res, 403, { error: "forbidden" });
   let token: string;
   try {
     token = new URLSearchParams(await readBody(req, 8192)).get("token") ?? "";
