@@ -26,7 +26,7 @@ export function supervised(inner: string, appPort: number, pidPath: string): str
     listeningOn(appPort),
     `rm -f ${exitedPath(pidPath)}`,
     "n=1",
-    `while :; do s=$(date +%s); sh -c ${shq(inner)}; rc=$?; echo "$rc" > ${exitedPath(pidPath)}`,
+    `while :; do s=$(date +%s); sh -c ${shq(inner)}; rc=$?; echo "$rc" >> ${exitedPath(pidPath)}`,
     'echo "qm: entrypoint exited with status $rc, restarting"',
     "while listening; do sleep 5; done",
     `[ $(( $(date +%s) - s )) -lt 60 ] || n=1; sleep "$n"; [ "$n" -ge 30 ] || n=$((n * 2)); done`,
