@@ -122,14 +122,29 @@ function remove(kind: "Provider" | "Rule", id: string) {
   const key = kind === "Provider" ? "providers" : "rules";
   void send({ [`remove${kind}`]: id }, () => (state.data[key] = state.data[key].filter((x: any) => x.id !== id)));
 }
-const field = (label: string, value: string, set: (v: string) => void, hint = "", locked = false) =>
+const field = (
+  label: string,
+  value: string,
+  set: (v: string) => void,
+  hint = "",
+  locked = false,
+  suggestions: readonly string[] = [],
+) =>
   html`<label
     >${label}<input
+      list=${suggestions.length ? `decision-${label.replace(/\s/g, "-")}` : ""}
       ?disabled=${locked}
       .value=${value}
       placeholder=${hint}
       @input=${(e: Event) => set((e.target as HTMLInputElement).value)}
-  /></label>`;
+    />${
+      suggestions.length
+        ? html`<datalist id=${`decision-${label.replace(/\s/g, "-")}`}>
+            ${[...new Set(suggestions)].map((v) => html`<option value=${v}></option>`)}
+          </datalist>`
+        : ""
+    }</label
+  >`;
 const select = (label: string, value: string, values: readonly string[], set: (v: string) => void) =>
   html`<label
     >${label}<select @change=${(e: Event) => (set((e.target as HTMLSelectElement).value), redraw())}>
@@ -189,7 +204,10 @@ function ruleEditor() {
       state.data.providers.map((p: any) => p.id),
       set("provider"),
     )}
-    ${field("Decision model", d.model, set("model"), "model served by the provider")}
+    ${field("Decision model", d.model, set("model"), "model served by the provider", false, [
+      ...state.data.rules.filter((r: any) => r.model.provider === d.provider).map((r: any) => r.model.model),
+      ...(state.data.providers.find((p: any) => p.id === d.provider)?.baseUrl ? [] : state.data.gatewayModels || []),
+    ])}
     ${select("Mode", d.mode, state.data.modes, set("mode"))}
     ${select("On error", d.onError, ["", ...d.options.map((o: any) => o.key)], set("onError"))}
     ${d.options.map((o: any, i: number) => optionFields(d, o, i))}
@@ -226,7 +244,7 @@ function template() {
                 ${field("Provider id", p.id, (v) => (p.id = v), "", p.editing)}
                 ${select("Protocol", p.protocol, data.protocols, (v) => (p.protocol = v))}
                 ${field("Base URL", p.baseUrl, (v) => (p.baseUrl = v), "blank uses the model gateway")}
-                ${field("Credential", p.credential, (v) => (p.credential = v), "org service credential")}
+                ${field("Credential", p.credential, (v) => (p.credential = v), "org service credential", false, data.credentials || [])}
                 <button ?disabled=${state.saving || !p.id} @click=${saveProvider}>Save provider</button>
                 ${p.editing ? html`<button @click=${() => ((state.provider = { ...NEW_PROVIDER }), redraw())}>Cancel</button>` : ""}
                 <span class="status">${state.providerStatus ? state.message : ""}</span>

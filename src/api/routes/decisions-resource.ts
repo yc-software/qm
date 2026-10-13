@@ -1,4 +1,5 @@
 import { decisionCatalog, parseDecisionProvider, parseDecisionRule } from "../../decisions/decisions.ts";
+import { GATEWAY_MODEL_PREFIX, gatewayModelCatalog } from "../../model/gateway-models.ts";
 import { selectableBaseModels } from "../../model/pi-models.ts";
 import { parseScopeId } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -12,10 +13,12 @@ export const decisionsResource: AdminResource = {
   label:
     "Decision providers and rules. Send { provider }, { removeProvider: id }, { rule } or { removeRule: id }. A provider names a wire protocol (chat-completions, decisions or systemone); leave baseUrl unset to use the model gateway, or set baseUrl plus an org service credential. A rule asks a classifier a question at a hook and applies the chosen option's action. Rule mode is off, observe or enforce. Agents can save off or observe rules; only an admin enforces a rule or changes an enforced rule or its provider.",
   readKey: "decisions",
-  get: async (deps) =>
+  get: async (deps, scope) =>
     deps.decisions && {
       ...decisionCatalog(),
       models: selectableBaseModels().map((m) => m.id),
+      gatewayModels: gatewayModelCatalog().map((m) => m.id.slice(GATEWAY_MODEL_PREFIX.length)),
+      credentials: ((await deps.serviceCreds?.listServiceCredentials(scope)) ?? []).map((c) => c.slug),
       providers: await deps.decisions.providers(),
       rules: await deps.decisions.rules(),
     },
