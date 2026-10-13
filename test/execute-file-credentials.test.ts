@@ -40,7 +40,7 @@ async function fixture(t: TestContext) {
     origin: "agent-session:original",
     accountLabel: "original owner",
   });
-  const handle: SandboxHandle = { id: "default", rootDir: root, homeDir: root };
+  const handle: SandboxHandle = { id: "default", rootDir: root, homeDir: root, resourceId: "sandbox-1" };
   const commands: Array<{ handle: SandboxHandle; command: string }> = [];
   const sandbox = {
     async run(h: SandboxHandle, command: string) {
@@ -321,6 +321,7 @@ function background(
       registry,
       scopeId: scope,
       pollMs: 10,
+      provisionSandbox: async () => f.handle,
       onExit: (h, processId) => finish(h, processId),
     });
   const ctx = (b = broker()) => f.context({ sandbox, backgroundBroker: b });
