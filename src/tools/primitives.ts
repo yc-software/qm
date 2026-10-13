@@ -13,6 +13,7 @@ import { withAbort, withTimeout } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
+import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
 import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { join } from "node:path";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
@@ -60,7 +61,6 @@ import { errMessage, withCleanup } from "../util/errors.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
-import { factLine } from "../memory/facts.ts";
 import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
@@ -235,8 +235,8 @@ export interface ToolContext extends SurfaceToolDeps {
   publish(input: PublishInput): Promise<PublishResult>;
   setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
-  memorySearch(q: string, limit?: number): Promise<string[] | null>;
-  memoryRead(): Promise<string | null>;
+  memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null>;
+  memoryRead(scope?: ScopeId): Promise<string | null>;
   memoryAdd(facts: string[]): Promise<number | null>;
   memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
   memoryDelete(ids: string[]): Promise<true | null>;
@@ -1128,28 +1128,23 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
-    async memorySearch(q: string, limit?: number): Promise<string[] | null> {
-      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit));
-      const read = deps.memoryAccess?.read ?? [];
-      if (!memory || read.length === 0) return null;
+    async memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null> {
+      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit, scope));
+      if (!memory) return null;
       return timed("recall", () =>
-        Promise.all(
-          read.map(async (scope) =>
-            (await memory!.query(scope, q, limit, { actorId: deps.createdBy })).map((fact) =>
-              read.length > 1 ? `[${scope}] ${fact}` : fact,
-            ),
-          ),
-        ).then((rows) => rows.flat().slice(0, limit ?? 20)),
+        searchNotebooks(memory!, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy),
       );
     },
 
-    async memoryRead(): Promise<string | null> {
-      const write = deps.memoryAccess?.write;
-      if (!memory || !write) return null;
-      return timed("recall", async () => {
-        const facts = await memory!.facts?.(write);
-        return facts ? facts.map(factLine).join("\n") : memory!.read(write);
+    async memoryRead(scope?: ScopeId): Promise<string | null> {
+      const target = scope ?? deps.memoryAccess?.write ?? deps.memoryScopeId;
+      if (!memory || !target || !canReadNotebook(deps.memoryAccess ?? { read: [] }, target)) return null;
+      const body = await timed("recall", async () => {
+        if (deps.context && deps.memoryAccess?.read.includes(target)) return deps.context.readMemory(target);
+        return readNotebook(memory!, target);
       });
+      if (body === null) return null;
+      return scope !== undefined ? `### ${target}\n${body}` : body;
     },
 
     async memoryAdd(facts: string[]): Promise<number | null> {

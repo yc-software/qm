@@ -51,24 +51,22 @@ export function createRoutedMemoryService(opts: {
     },
     async recall(scopeId, context) {
       const routes = routesFor(scopeId).filter((route) => route.recall !== false);
-      const recalled = await Promise.all(
+      const batches = await Promise.all(
         routes.map(async (route) => {
           try {
-            return { route, body: (await providerFor(route).recall(scopeId, context)).trim() };
+            return { route, rows: await providerFor(route).recall(scopeId, context) };
           } catch (error) {
             if (!route.failOpen) throw error;
             opts.onError?.(error, route.provider, "recall");
-            return { route, body: "" };
+            return { route, rows: [] };
           }
         }),
       );
-      const present = recalled.filter(({ body }) => body);
-      if (present.length === 0) return "";
-      if (present.length === 1) {
-        const { route, body } = present[0]!;
-        return route.label ? `### ${route.label}\n${body}` : body;
-      }
-      return present.map(({ route, body }) => `### ${route.label ?? route.provider}\n${body}`).join("\n\n");
+      const present = batches.filter(({ rows }) => rows.length);
+      return present.flatMap(({ route, rows }) => {
+        const label = route.label ?? (present.length > 1 ? route.provider : undefined);
+        return rows.map((row) => (label && row.id === undefined ? { ...row, text: `### ${label}\n${row.text}` } : row));
+      });
     },
 
     async capture(scopeId, facts, at, author, context) {

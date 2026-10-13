@@ -441,7 +441,7 @@ test("sharing e2e: local notebooks retain late facts while unclassified carried 
   await b.memory.capture("channel:C1", ["ROOM_FACT_END"], Date.now(), "U1");
   const p = await b.turn("!sysprompt", true);
   assert.doesNotMatch(p, /PERSONAL_FACT_119/);
-  assert.match(p, /### channel:C1[\s\S]*ROOM_FACT_END/);
+  assert.match(p, /### #engineering[\s\S]*ROOM_FACT_END/);
   assert.match(await b.turn("!sysprompt"), /PERSONAL_FACT_119/);
   assert.doesNotMatch(await b.turn("!memorysearch PERSONAL_FACT_119", true), /PERSONAL_FACT_119/);
 });

@@ -71,6 +71,7 @@ export interface PersistedScopedFlag {
 }
 export interface PersistedBaseModel {
   scopeId: ScopeId;
+  embeddingModelId?: string;
   modelId?: string;
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
@@ -261,6 +262,8 @@ export interface ScopedConfigStore {
   setBrowseMaxSteps(id: ScopeId, steps: number | null): void;
   getBrowseModel(id: ScopeId): string | null;
   setBrowseModel(id: ScopeId, modelId: string | null): void;
+  getEmbeddingModelDurable(): Promise<string | null>;
+  setEmbeddingModel(modelId: string | null): Promise<void>;
   getAutoFlaggerConfig(): AutoFlaggerConfig | null;
   setAutoFlaggerConfig(config: AutoFlaggerConfig | null): void;
   getTurnWallClockSecDurable(id: ScopeId): Promise<number | null>;
@@ -402,6 +405,7 @@ export function createMemoryConfigStore(
   const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null) =>
     id === org
       ? {
+          ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
           ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
           ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
           ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
@@ -1105,6 +1109,18 @@ export function createMemoryConfigStore(
         browseModels.set(id, modelId);
         persist(`browseModel:${id}`, "browse model", () => browseModelStore.put(id, { scopeId: id, modelId }));
       }
+    },
+    getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
+    setEmbeddingModel: async (modelId) => {
+      await writeQueue(`model:${org}`, async () => {
+        const saved = await updateBaseModelRow(org, (current) => {
+          const row: PersistedBaseModel = { ...current, scopeId: org };
+          if (modelId) row.embeddingModelId = modelId;
+          else delete row.embeddingModelId;
+          return row;
+        });
+        cacheBaseModel(org, saved);
+      });
     },
     getAutoFlaggerConfig: () => autoFlaggerConfig,
     setAutoFlaggerConfig(config) {

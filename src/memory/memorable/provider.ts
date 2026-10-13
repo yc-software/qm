@@ -58,9 +58,9 @@ export function createMemorableMemoryProvider(deps: MemorableProviderDeps): Memo
   return {
     async recall(scopeId: ScopeId, context) {
       const task = context?.query?.trim();
-      if (!task) return "";
+      if (!task) return [];
       const block = await inject(deps.argv, scopeId, task, spawnOpts, deps.injectTimeoutMs);
-      return block ?? "";
+      return block ? [{ text: block, score: 0.2 }] : [];
     },
 
     async capture(scopeId: ScopeId, _facts, _at, _author, context) {
