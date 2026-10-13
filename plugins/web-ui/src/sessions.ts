@@ -123,7 +123,6 @@ type SessionPatch = {
   color?: string | null;
   unread?: boolean;
 };
-/** A conversation the person marked unread while it was open stays unread until they open another one. */
 let keptUnreadId: string | null = null;
 const sessionPatchTails = new Map<string, Promise<void>>();
 const sessionPatchVersions = new Map<string, number>();
@@ -1558,7 +1557,6 @@ function unreadDot(s: CoreSession): TemplateResult | typeof nothing {
   return showsUnread(s) ? html`<span class="unread-dot" role="img" aria-label="Unread"></span>` : nothing;
 }
 
-/** Whatever is on screen has been read: clear unread for open conversations as replies land. */
 function markOpenSessionsRead(): void {
   const open = new Set(openConversationIds());
   for (const s of sessionsState.list) {

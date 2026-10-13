@@ -102,7 +102,6 @@ export interface Session {
   archived?: boolean;
   pinned?: boolean;
   color?: string;
-  /** An agent reply arrived after this participant last read the conversation (or they marked it unread). */
   unread?: boolean;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;

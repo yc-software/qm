@@ -45,6 +45,7 @@ import {
   userMessagePreview,
   tapeTranscriptEntryRecord,
   transcriptEntryFromTape,
+  isWebThread,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
@@ -112,7 +113,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     const visible = view ? all.some((e) => entryWithinTenure(e, view)) : false;
     const replies = all.filter((e) => e.type === "assistant" || e.type === "delivery");
     const lastReply = replies.length ? Math.max(...replies.map((e) => e.createdAt)) : null;
-    const unread = lastReply !== null && lastReply > (view?.readAt ?? 0) && s.threadRef.startsWith("web:");
+    const unread = lastReply !== null && lastReply > (view?.readAt ?? 0) && isWebThread(s.threadRef);
     return {
       ...s,
       ...(view?.title != null ? { title: view.title } : {}),

@@ -53,6 +53,7 @@ import {
   threadRefCronIdExpr,
   userMessagePreview,
   tapeTranscriptEntryRecord,
+  isWebThread,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
@@ -100,11 +101,7 @@ function rowToParticipantSession(r: Record<string, unknown>): Session {
   if (r.p_archived) s.archived = true;
   if (r.p_pinned) s.pinned = true;
   if (r.p_color != null) s.color = r.p_color as string;
-  if (
-    r.agent_last_reply != null &&
-    Number(r.agent_last_reply) > Number(r.p_read_at ?? 0) &&
-    s.threadRef.startsWith("web:")
-  )
+  if (r.agent_last_reply != null && Number(r.agent_last_reply) > Number(r.p_read_at ?? 0) && isWebThread(s.threadRef))
     s.unread = true;
   if (r.user_last_activity != null) s.lastActivityAt = Number(r.user_last_activity);
   if (r.has_entries != null) s.hasEntries = Boolean(r.has_entries);

@@ -100,6 +100,7 @@ test("surface session route marks a conversation unread and read", async () => {
     const id = await newSession(srv.base, "web:U1:unread");
     const unread = await patch(srv.base, id, { principalId: "U1", unread: true });
     assert.equal(unread.status, 200);
+    assert.equal(unread.session?.unread, true);
     const read = await patch(srv.base, id, { principalId: "U1", unread: false });
     assert.equal(read.status, 200);
     assert.equal(read.session?.unread ?? false, false);

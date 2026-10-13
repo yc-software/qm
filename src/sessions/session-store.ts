@@ -150,6 +150,8 @@ export interface SessionPin extends NewSessionPin {
 
 type TapeKind = "message" | "context_event" | "annotation";
 
+export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
+
 export const TAPE_RENDER_VERSION = 1;
 
 export interface TapeCheckpointEntry {
