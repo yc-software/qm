@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { json, readBodyBytes, PayloadTooLargeError } from "../../chassis/src/http.ts";
 import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { errMessage } from "../../chassis/src/errors.ts";
 import {
   createLiveVoice,
   dictationFormats,
@@ -17,7 +18,9 @@ import {
 const BODY_READ_TIMEOUT_MS = 30_000;
 
 function reportVoiceError(error: unknown, code: string): void {
-  reportBackendError(error, code, error instanceof VoiceProviderError ? error.detail : undefined);
+  const detail = error instanceof VoiceProviderError ? error.detail : undefined;
+  console.error(`[voice] ${code}: ${errMessage(error)}`, detail ? JSON.stringify(detail) : "");
+  reportBackendError(error, code, detail);
 }
 
 export async function handleVoiceRoute(
@@ -46,8 +49,6 @@ export async function handleVoiceRoute(
   let sdp = "";
   if (dictation) {
     if (!Object.hasOwn(dictationFormats, mimeType)) return json(res, 415, { error: "unsupported_audio" });
-    if (Number(req.headers["content-length"]) > MAX_DICTATION_BYTES)
-      return json(res, 413, { error: "audio_too_large" });
   } else {
     let offer: { sdp?: unknown } | null;
     try {
@@ -78,7 +79,8 @@ export async function handleVoiceRoute(
         nowMs: Date.now(),
       });
     } catch (error) {
-      reportVoiceError(error, "voice_rate_limit_store");
+      reportVoiceError(error, dictation ? "dictation_rate_limit_store" : "voice_rate_limit_store");
+      res.setHeader("retry-after", "30");
       return json(res, 503, { error: "rate_limit_unavailable", message: "Voice is temporarily unavailable." });
     }
     if (!allowed)
@@ -97,15 +99,18 @@ export async function handleVoiceRoute(
     let audio: Buffer;
     try {
       audio = await readBodyBytes(req, MAX_DICTATION_BYTES);
+    } catch (error) {
+      if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "audio_too_large" });
+      if (!controller.signal.aborted) reportVoiceError(error, "dictation_upload");
+      return controller.signal.aborted ? undefined : json(res, 400, { error: "upload_failed" });
     } finally {
       clearTimeout(readTimer);
     }
     if (!audio.byteLength) return json(res, 400, { error: "empty_audio" });
     return json(res, 200, { text: await transcribe(audio, mimeType, caller) });
   } catch (error) {
-    if (controller.signal.aborted) return;
-    if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "audio_too_large" });
     reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider");
+    if (controller.signal.aborted) return;
     return dictation
       ? json(res, 503, {
           error: "dictation_unavailable",

@@ -16,8 +16,8 @@ export const dictationFormats: Record<string, string> = {
 
 export class VoiceProviderError extends Error {
   readonly detail: Record<string, unknown>;
-  constructor(message: string, detail: Record<string, unknown>) {
-    super(message);
+  constructor(message: string, detail: Record<string, unknown>, cause?: unknown) {
+    super(message, { cause });
     this.name = "VoiceProviderError";
     this.detail = detail;
   }
@@ -49,32 +49,53 @@ interface Caller {
   org: string;
   apiKey: string;
   signal: AbortSignal;
-  request?: typeof fetch;
 }
 
 async function openai(path: string, body: FormData | string, headers: Record<string, string>, caller: Caller) {
-  const response = await (caller.request ?? fetch)(`https://api.openai.com/v1/${path}`, {
-    method: "POST",
-    redirect: "error",
-    signal: caller.signal,
-    headers: {
-      ...headers,
-      authorization: `Bearer ${caller.apiKey}`,
-      "OpenAI-Safety-Identifier": createHash("sha256")
-        .update(JSON.stringify([caller.org, caller.user]))
-        .digest("hex"),
-    },
-    body,
-  });
-  if (!response.ok) {
-    throw new VoiceProviderError(`OpenAI ${path} returned HTTP ${response.status}`, {
-      status: response.status,
-      requestId: response.headers.get("x-request-id"),
-      retryAfter: response.headers.get("retry-after"),
-      body: (await response.text().catch(() => "")).slice(0, 2000),
+  let response: Response;
+  try {
+    response = await fetch(`https://api.openai.com/v1/${path}`, {
+      method: "POST",
+      redirect: "error",
+      signal: caller.signal,
+      headers: {
+        ...headers,
+        authorization: `Bearer ${caller.apiKey}`,
+        "OpenAI-Safety-Identifier": createHash("sha256")
+          .update(JSON.stringify([caller.org, caller.user]))
+          .digest("hex"),
+      },
+      body,
     });
+  } catch (error) {
+    throw new VoiceProviderError(`OpenAI ${path} request failed`, { path }, error);
   }
-  return (await response.json()) as Record<string, unknown> | null;
+  const detail = {
+    path,
+    status: response.status,
+    requestId: response.headers.get("x-request-id"),
+    retryAfter: response.headers.get("retry-after"),
+  };
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    throw new VoiceProviderError(`OpenAI ${path} response could not be read`, detail, error);
+  }
+  if (!response.ok)
+    throw new VoiceProviderError(`OpenAI ${path} returned HTTP ${response.status}`, {
+      ...detail,
+      body: text.slice(0, 2000),
+    });
+  try {
+    return JSON.parse(text) as Record<string, unknown> | null;
+  } catch (error) {
+    throw new VoiceProviderError(
+      `OpenAI ${path} returned invalid JSON`,
+      { ...detail, body: text.slice(0, 200) },
+      error,
+    );
+  }
 }
 
 export async function transcribe(audio: Uint8Array, mimeType: string, caller: Caller): Promise<string> {
