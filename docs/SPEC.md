@@ -182,9 +182,9 @@ Description and examples pending human input.
 
 ### Prod-like QA (1 example)
 
-QA every change in a prod-like setting on the real system it touches before merge. Mocks and unit tests don't count; a missing credential is a blocker to solve or report, not a reason to merge.
+QA every behavior change in a prod-like setting on the real system it touches before merge. Mocks and unit tests don't count; a missing credential is a blocker to solve or report, not a reason to merge.
 
-- **Shipped changes for a provider without testing on that provider** (2026-10-13): [qm#2226](https://github.com/yc-software/qm/pull/2226) changed how the Fly deploy provider starts and supervises apps, and merged with only mocked unit tests for Fly. The agent had no working Fly token and shipped anyway.
+- **Shipped changes for a provider without testing on that provider** (2026-10-12): [qm#2226](https://github.com/yc-software/qm/pull/2226) changed how the Fly deploy provider starts and supervises apps, and merged with only mocked unit tests for Fly. The agent had no working Fly token and shipped anyway.
 
 ### Performance (3 examples)
 
