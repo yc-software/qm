@@ -100,7 +100,6 @@ export function effortLevelsForHarness(
     if (value === "adaptive" || value === "default") return false;
     if (harnessId === "pi") return true;
     if (harnessId === "claude") return value !== "ultracode";
-    if (harnessId === "codex") return value !== "max" && value !== "ultracode";
     return false;
   });
   return [EFFORT_LEVELS.find(({ value }) => value === "auto")!, ...levels];

@@ -113,7 +113,7 @@ for (const explicit of [
 ]) {
   test(`child followups preserve only explicit runtime choices: ${JSON.stringify(explicit)}`, async () => {
     const runtimeKeys = ["model", "harness", "thinkingLevel", "fastMode"] as const;
-    let defaults = { model: "old-default", harness: "codex", thinkingLevel: "low", fastMode: true };
+    let defaults = { model: "old-default", harness: "pi", thinkingLevel: "low", fastMode: true };
     const preparedInputs: OrchestratorInput[] = [];
     const r = await rig({
       prepareRequest: async (request) => {
@@ -1447,7 +1447,7 @@ for (const addressed of [true, false]) {
       gatewayContext: { location: "original DM", details: { channel: "D1" }, instructions: "Reply in Slack" },
       timezone: "America/Los_Angeles",
       model: "test-model",
-      harness: "codex",
+      harness: "pi",
       thinkingLevel: "high",
       fastMode: false,
       skipMemory: true,

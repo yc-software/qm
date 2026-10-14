@@ -4,14 +4,14 @@ import { dirname, join } from "node:path";
 import { liveEnvPath } from "./pool.ts";
 import { bestEffort, readEnvFile, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
-import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/harness/codex-auth-file.ts";
+import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/model/chatgpt-auth-file.ts";
 
 export interface AssembledEnv {
   env: Record<string, string>;
   anthropicKeySource: string;
   openaiKeySource: string;
   codexAuthSource: string;
-  harness: "pi" | "mock" | "opencode" | "codex" | "claude";
+  harness: "pi" | "mock" | "claude";
   liveEnvFile: string;
   warnings: string[];
 }
@@ -129,33 +129,29 @@ export async function assembleEnv(opts: {
 
   if (!env.CODEX_AUTH_FILE && wtEnv.CODEX_AUTH_FILE) env.CODEX_AUTH_FILE = wtEnv.CODEX_AUTH_FILE;
   let codexAuthSource = "";
-  const codexAuthCandidate = codexAuthFileForEnv({ ...env, ...opts.callerEnv }, true);
+  const codexAuthCandidate = codexAuthFileForEnv({ ...env, ...opts.callerEnv });
   const codexOAuthConfigured = Boolean(codexAuthCandidate && readCodexOAuthAuthFile(codexAuthCandidate));
   if (codexOAuthConfigured && codexAuthCandidate) {
     env.CODEX_AUTH_FILE = codexAuthCandidate;
     codexAuthSource = codexAuthCandidate;
   }
 
-  let harness: "pi" | "mock" | "opencode" | "codex" | "claude";
-  if (opts.callerEnv.HARNESS === "codex" || opts.callerEnv.HARNESS === "claude") {
-    harness = opts.callerEnv.HARNESS;
+  let harness: "pi" | "mock" | "claude";
+  if (opts.callerEnv.HARNESS === "claude") {
+    harness = "claude";
     env.HARNESS = harness;
-    if (harness === "codex" && !env.OPENAI_API_KEY && !codexOAuthConfigured) {
-      throw new Error(
-        "HARNESS=codex needs OPENAI_API_KEY or a readable ChatGPT OAuth auth.json via CODEX_AUTH_FILE (or ~/.codex/auth.json)",
-      );
-    }
-  } else if (env.ANTHROPIC_API_KEY) {
-    harness = opts.callerEnv.HARNESS === "opencode" ? "opencode" : "pi";
+  } else if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
+    harness = "pi";
     env.HARNESS = harness;
-    if (harness === "pi" && !env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
+    if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
+    if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
   } else if (opts.allowMock) {
     harness = "mock";
     env.HARNESS = "mock";
     warnings.push("mock turns explicitly allowed by DEV_INSTANCE_ALLOW_MOCK=1 -- no anthropic key found");
   } else {
     throw new Error(
-      `ANTHROPIC_API_KEY is required: dev instances exercise real LLM calls by default. Export a key, add one to ${liveEnvFile}, or set DEV_INSTANCE_ALLOW_MOCK=1 for a deliberate mock-only wiring check.`,
+      `ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login (CODEX_AUTH_FILE) is required: dev instances exercise real LLM calls by default. Export a key, add one to ${liveEnvFile}, or set DEV_INSTANCE_ALLOW_MOCK=1 for a deliberate mock-only wiring check.`,
     );
   }
 

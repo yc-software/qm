@@ -7,6 +7,7 @@ import type { ScopeId } from "../types.ts";
 import { orgScope } from "../config.ts";
 import {
   defaultModelForHarness,
+  harnessIdOrPi,
   isHarnessId,
   modelProviderAvailabilityFor,
   modelSupportedByHarness,
@@ -39,7 +40,7 @@ export type RuntimeDeps = Partial<
 > & { baseModelDefault?: string };
 
 export function runtimeFallback(ctx: { deps: RuntimeDeps }): { harnessId: HarnessId; modelId: string } {
-  const harnessId = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
+  const harnessId = harnessIdOrPi(ctx.deps.harnessId);
   const gatewayIds = gatewayModelCatalog(true).map((model) => model.id);
   const providers =
     gatewayIds.length && ctx.deps.providerKeys
@@ -57,15 +58,10 @@ export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: S
     account === "anthropic" ? null : store.get(actorId, "openai"),
   ]);
   const snapshot = await runtimeConfigBody(ctx, scope, async (choice) => {
-    const route = resolveIndividualAuthRouting(anthropic, openai, choice.modelId, choice.harnessId);
+    const route = resolveIndividualAuthRouting(anthropic, openai, choice.modelId);
     return route?.harness === choice.harnessId && route.model === choice.modelId ? null : "account_runtime_unavailable";
   });
-  const route = resolveIndividualAuthRouting(
-    anthropic,
-    openai,
-    snapshot.effective.modelId,
-    snapshot.effective.harnessId,
-  );
+  const route = resolveIndividualAuthRouting(anthropic, openai, snapshot.effective.modelId);
   if (!route?.model || !snapshot.modelsByHarness[route.harness]?.includes(route.model)) return snapshot;
   const { unavailableReason: _, ...available } = snapshot;
   return {

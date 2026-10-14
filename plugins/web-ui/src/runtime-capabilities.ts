@@ -19,15 +19,15 @@ export function effortLabel(level: EffortLevel): string {
 }
 
 export function harnessSupportsEffort(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "codex" || harnessId === "claude";
+  return harnessId === "pi" || harnessId === "claude";
 }
 
 export function harnessSupportsFastMode(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex" || harnessId === "opencode";
+  return harnessId === "pi" || harnessId === "claude";
 }
 
 export function harnessSupportsSteer(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex" || harnessId === "opencode";
+  return harnessId === "pi" || harnessId === "claude";
 }
 
 export function defaultEffortForModel(model: Model<Api> | undefined): EffortLevel {

@@ -1,97 +1,91 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { createCodexDeviceLogin } from "../src/model/codex-device-login.ts";
 
-function idToken(accountId: string): string {
+function accessToken(accountId: string): string {
   const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
   return `${seg({ alg: "RS256", typ: "JWT" })}.${seg({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } })}.sig`;
 }
 
-/** Fake `codex app-server` that serves the device-login RPCs and writes auth.json on approval. */
-function loginBinary(dir: string, opts: { succeed: boolean; delayMs?: number; failBeforePrompt?: boolean }): string {
-  const path = join(dir, `codex-login-${opts.succeed ? "ok" : "fail"}`);
-  writeFileSync(
-    path,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const readline = require("node:readline");
-const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const msg = JSON.parse(line);
-  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
-  if (msg.method === "initialized") return;
-  if (msg.method === "account/login/start") {
-    if (${JSON.stringify(opts.failBeforePrompt ?? false)}) {
-      send({ method: "account/login/completed", params: { loginId: "login-1", success: false, error: "denied before prompt" } });
-      return setTimeout(() => send({ id: msg.id, result: { type: "chatgptDeviceCode", loginId: "login-1", verificationUrl: "https://auth.openai.com/codex/device", userCode: "ABCD-1234" } }), 50);
-    }
-    send({ id: msg.id, result: { type: "chatgptDeviceCode", loginId: "login-1", verificationUrl: "https://auth.openai.com/codex/device", userCode: "ABCD-1234" } });
-    return setTimeout(() => {
-      if (${JSON.stringify(opts.succeed)}) {
-        fs.writeFileSync(path.join(process.env.CODEX_HOME, "auth.json"), JSON.stringify({
-          auth_mode: "chatgpt",
-          tokens: { access_token: "acc-1", refresh_token: "ref-1", id_token: ${JSON.stringify(idToken("acct_9"))}, account_id: "acct_9" },
-        }));
-        send({ method: "account/login/completed", params: { loginId: "login-1", success: true, error: null } });
-      } else {
-        send({ method: "account/login/completed", params: { loginId: "login-1", success: false, error: "denied by user" } });
-      }
-    }, ${opts.delayMs ?? 30});
-  }
-});
-`,
-  );
-  chmodSync(path, 0o755);
-  return path;
+interface FakeAuthServer {
+  approve(): void;
+  deny(): void;
+  calls: Array<{ url: string; body: string }>;
 }
 
-test("device login: start returns the prompt, poll is pending then yields tokens without exposing internals", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-device-login-test-"));
-  const login = createCodexDeviceLogin({ binaryPath: loginBinary(dir, { succeed: true, delayMs: 120 }) });
-  t.after(async () => {
-    await login.close();
-    rmSync(dir, { recursive: true, force: true });
+function fakeAuthServer(t: TestContext, opts: { userCodeStatus?: number } = {}): FakeAuthServer {
+  let decision: "pending" | "approved" | "denied" = "pending";
+  const calls: Array<{ url: string; body: string }> = [];
+  const json = (status: number, value: unknown) =>
+    new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+  t.mock.method(globalThis, "fetch", async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, body: String(init?.body ?? "") });
+    if (url.endsWith("/api/accounts/deviceauth/usercode")) {
+      if (opts.userCodeStatus) return json(opts.userCodeStatus, { error: "unavailable" });
+      return json(200, { device_auth_id: "device-1", user_code: "ABCD-1234", interval: "1" });
+    }
+    if (url.endsWith("/api/accounts/deviceauth/token")) {
+      if (decision === "approved")
+        return json(200, { authorization_code: "code-1", code_challenge: "c", code_verifier: "verifier-1" });
+      if (decision === "denied") return json(400, { error: { code: "access_denied", message: "denied by user" } });
+      return json(403, { error: { code: "deviceauth_authorization_pending" } });
+    }
+    if (url.endsWith("/oauth/token"))
+      return json(200, { access_token: accessToken("acct_9"), refresh_token: "ref-1", expires_in: 3600 });
+    return json(404, {});
   });
+  return {
+    approve: () => (decision = "approved"),
+    deny: () => (decision = "denied"),
+    calls,
+  };
+}
+
+async function settle(poll: () => Promise<unknown>): Promise<unknown> {
+  for (let i = 0; i < 60; i += 1) {
+    const result = await poll().catch((error: unknown) => error);
+    if (result !== "pending") return result;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("login never settled");
+}
+
+test("device login: start returns the prompt, poll is pending then yields subscription tokens", async (t) => {
+  const server = fakeAuthServer(t);
+  const login = createCodexDeviceLogin();
+  t.after(() => login.close());
   const prompt = await login.start();
   assert.equal(prompt.userCode, "ABCD-1234");
   assert.equal(prompt.verificationUrl, "https://auth.openai.com/codex/device");
+  assert.equal(prompt.intervalMs, 1000);
   assert.equal(await login.poll(prompt.deviceAuthId), "pending");
-  await new Promise((r) => setTimeout(r, 200));
-  const tokens = await login.poll(prompt.deviceAuthId);
-  assert.notEqual(tokens, "pending");
-  if (tokens === "pending") return;
-  assert.equal(tokens.accessToken, "acc-1");
-  assert.equal(tokens.refreshToken, "ref-1");
-  assert.equal(tokens.accountId, "acct_9");
-  // The login is one-shot: after harvest it is gone.
+  server.approve();
+  const tokens = await settle(() => login.poll(prompt.deviceAuthId));
+  assert.ok(tokens && typeof tokens === "object" && "accessToken" in tokens);
+  assert.equal(tokens.accessToken, accessToken("acct_9"));
+  assert.equal((tokens as { refreshToken?: string }).refreshToken, "ref-1");
+  assert.equal((tokens as { accountId?: string }).accountId, "acct_9");
+  const exchange = server.calls.find((call) => call.url.endsWith("/oauth/token"));
+  assert.match(exchange?.body ?? "", /code_verifier=verifier-1/);
+  assert.match(exchange?.body ?? "", /deviceauth%2Fcallback/);
   await assert.rejects(() => login.poll(prompt.deviceAuthId), /expired or unknown/);
 });
 
 test("device login: a denied login surfaces the provider error and cleans up", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-device-login-test-"));
-  const login = createCodexDeviceLogin({ binaryPath: loginBinary(dir, { succeed: false, delayMs: 20 }) });
-  t.after(async () => {
-    await login.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
+  const server = fakeAuthServer(t);
+  const login = createCodexDeviceLogin();
+  t.after(() => login.close());
   const prompt = await login.start();
-  await new Promise((r) => setTimeout(r, 120));
-  await assert.rejects(() => login.poll(prompt.deviceAuthId), /denied by user/);
+  server.deny();
+  const error = await settle(() => login.poll(prompt.deviceAuthId));
+  assert.match(String(error), /denied by user/);
   await assert.rejects(() => login.poll(prompt.deviceAuthId), /expired or unknown/);
 });
 
-test("device login contains provider failure before the start response", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-device-login-test-"));
-  const login = createCodexDeviceLogin({ binaryPath: loginBinary(dir, { succeed: false, failBeforePrompt: true }) });
-  t.after(async () => {
-    await login.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const prompt = await login.start();
-  await assert.rejects(() => login.poll(prompt.deviceAuthId), /denied before prompt/);
+test("device login: a provider failure before the prompt rejects start", async (t) => {
+  fakeAuthServer(t, { userCodeStatus: 500 });
+  const login = createCodexDeviceLogin();
+  t.after(() => login.close());
+  await assert.rejects(() => login.start(), /device code request failed with status 500/);
 });

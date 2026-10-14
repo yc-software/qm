@@ -20,6 +20,6 @@ export async function resolveBrowserModel(input: {
     account === "openai" ? null : input.credentials?.get(input.actorId, "anthropic"),
     account === "anthropic" ? null : input.credentials?.get(input.actorId, "openai"),
   ]);
-  const routing = resolveIndividualAuthRouting(anthropic ?? null, openai ?? null, requested, "pi");
+  const routing = resolveIndividualAuthRouting(anthropic ?? null, openai ?? null, requested);
   return { account, model: routing?.model, routing };
 }

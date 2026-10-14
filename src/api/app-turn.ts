@@ -18,6 +18,7 @@ import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-st
 import { samePerson } from "../directory/person.ts";
 import {
   defaultModelForHarness,
+  harnessIdOrPi,
   isHarnessId,
   modelProviderAvailabilityFor,
   modelServiceable,
@@ -252,7 +253,7 @@ export function createTurnMethods(
         }
         const org = scopeId("org", orgIdOf());
         const targetScope = conversationScope(req.conversation, actor.id);
-        const fallbackHarness = isHarnessId(deps.harnessId) ? deps.harnessId : "pi";
+        const fallbackHarness = harnessIdOrPi(deps.harnessId);
         const runtimeFallback = deps.runtimeFallback ?? {
           harnessId: fallbackHarness,
           modelId: defaultModelForHarness(fallbackHarness),

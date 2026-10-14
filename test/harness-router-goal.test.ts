@@ -51,9 +51,9 @@ function stubTurn(emitted: SessionEntry[], extra: Partial<HarnessTurnInput> = {}
 }
 
 function router(harness: Harness): Harness {
-  return createHarnessRouter(new Map([["codex", harness]]), createMockHarness(), async () => ({
-    harnessId: "codex",
-    modelId: "gpt-5.6-codex",
+  return createHarnessRouter(new Map([["claude", harness]]), createMockHarness(), async () => ({
+    harnessId: "claude",
+    modelId: "claude-opus-5-5",
   }));
 }
 
@@ -173,7 +173,7 @@ test("rounds without progress never waive the goal; only a user stop ends it", a
   assert.equal(latestGoalRecord(emitted)?.status, "paused");
 });
 
-for (const harnessId of ["codex", "claude", "opencode"] as const) {
+for (const harnessId of ["claude"] as const) {
   test(`${harnessId} preserves an active goal on infrastructure cancellation and resumes after reload`, async () => {
     const emitted: SessionEntry[] = [];
     const cancel = new AbortController();
@@ -201,7 +201,7 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
   });
 }
 
-for (const harnessId of ["codex", "claude", "opencode"] as const) {
+for (const harnessId of ["claude"] as const) {
   test(`${harnessId} persists user Stop when shutdown races with the real run signal`, async () => {
     const signals = createMemoryRunSignalStore();
     const cancel = new AbortController();

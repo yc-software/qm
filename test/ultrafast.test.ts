@@ -15,7 +15,7 @@ test("Ultrafast is an explicit API-only Pi choice with its own full pricing card
   assert.equal(model.api, "openai-responses");
   assert.equal(wantsFastMode(true, id), false);
   assert.equal(modelSupportedByHarness(id, "pi"), true);
-  for (const harness of ["codex", "claude", "opencode"]) assert.equal(modelSupportedByHarness(id, harness), false);
+  assert.equal(modelSupportedByHarness(id, "claude"), false);
   assert.equal(resolveModel(`codex/${id}`), undefined);
   for (const tokens of [
     { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000 },
@@ -32,10 +32,10 @@ test("Ultrafast is an explicit API-only Pi choice with its own full pricing card
     assert.ok(Math.abs(ultrafast.costUsd - standard.costUsd * 6) < 1e-9);
   }
   const oauth = { kind: "oauth", oauth: { accessToken: "test" } } as never;
-  for (const harness of ["pi", "codex"]) assert.equal(resolveIndividualAuthRouting(null, oauth, id, harness), null);
+  assert.equal(resolveIndividualAuthRouting(null, oauth, id), null);
   const apiKey = { kind: "apikey", apiKey: "test" } as never;
-  assert.equal(resolveIndividualAuthRouting(null, apiKey, id, "pi")?.model, id);
-  assert.equal(resolveIndividualAuthRouting(apiKey, null, id, "pi"), null);
+  assert.equal(resolveIndividualAuthRouting(null, apiKey, id)?.model, id);
+  assert.equal(resolveIndividualAuthRouting(apiKey, null, id), null);
 });
 
 for (const gateway of [false, true]) {
