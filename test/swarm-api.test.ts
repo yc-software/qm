@@ -256,3 +256,61 @@ test("HTTP retry after a lost initial response exposes only a complete pool and 
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+async function seededBoardServer() {
+  const fixture = await swarmFixture();
+  const secret = "source-auth-test-secret".repeat(3);
+  const portalIdentitySecret = "portal-test-secret".repeat(3);
+  const app = {
+    swarms: fixture.service,
+    authorizesCapabilityScope: async () => true,
+    getSessionForViewer: async (id: string, actorId: string) => {
+      const session = await fixture.sessions.getForParticipant(id, actorId);
+      return session ? { session, entries: [] } : null;
+    },
+  } as unknown as App;
+  const server = createServer(app, {
+    signingSecret: secret,
+    capabilitySecret: "capability-test-secret".repeat(3),
+    portalIdentitySecret,
+    requireSignedPortalIdentity: true,
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await fixture.service.spawn(fixture.caller, { requestId: "pool", text: "Work" });
+  await fixture.service.sweep();
+  await fixture.service.send(fixture.caller, { requestId: "later", audience: "all", text: "the later finding" });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const path = `/v1/sessions/${fixture.root.id}/swarm`;
+  const portal = await mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, portalIdentitySecret);
+  const read = async (query: string) => {
+    const full = `${path}${query}`;
+    const response = await fetch(`${base}${full}`, {
+      headers: signedRequestHeaders(secret, "GET", full, undefined, { "x-portal-identity": portal }),
+    });
+    const body = (await response.json()) as { messages?: { text: string }[] };
+    return { status: response.status, texts: body.messages?.map((message) => message.text) };
+  };
+  const close = () =>
+    new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  return { read, close };
+}
+
+test("the board read answers an agent token only, so the person watching the swarm reads nothing", async () => {
+  const { read, close } = await seededBoardServer();
+  try {
+    const all = await read("?read=1&after=0");
+    assert.equal(all.status, 200);
+    assert.deepEqual(all.texts, ["Work", "the later finding"]);
+  } finally {
+    await close();
+  }
+});
+
+test("the board read ignores the cursor, so the panel re-reads the whole board on every poll", async () => {
+  const { read, close } = await seededBoardServer();
+  try {
+    assert.deepEqual((await read("?read=1&after=1")).texts, ["the later finding"]);
+  } finally {
+    await close();
+  }
+});

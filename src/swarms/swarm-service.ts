@@ -69,6 +69,7 @@ export interface SwarmService {
     peers: SwarmMember[];
     board?: Swarm["board"];
     backend: Swarm["backend"];
+    model?: Swarm["template"]["model"];
     settings: SwarmSettings;
     expiresAt: number;
   }>;
@@ -580,6 +581,7 @@ export function createSwarmService(deps: {
         peers: swarm.members.map(view),
         ...(swarm.board ? { board: swarm.board } : {}),
         backend: swarm.backend,
+        ...(swarm.template.model ? { model: swarm.template.model } : {}),
         settings: swarm.settings,
         expiresAt: swarm.expiresAt,
       };
@@ -735,6 +737,7 @@ export function createSwarmService(deps: {
           actorId: auth.actorId,
           text: input.text,
           audience,
+          ...(input.audience === "all" ? { broadcast: true as const } : {}),
           ...(input.replyTo ? { replyTo: input.replyTo } : {}),
           createdAt: Date.now(),
           notifications: Object.fromEntries(recipients.map((peer) => [peer, { state: "pending" as const }])),

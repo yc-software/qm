@@ -98,7 +98,8 @@ never retires the existing forum.
 
 ### Identity, peers, and character
 
-`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, `settings`, and `expiresAt`. Peer
+`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, `settings`, `expiresAt`, and
+`model` when the swarm pinned one. Peer
 records keep trusted IDs, ancestry, session links, storage selection, and lifecycle
 state separate from arbitrary `context` data. Only this swarm is listed, not every
 session with the same owner, and never all private sessions in the organization.
@@ -125,11 +126,13 @@ The response includes a durable message `id` and monotonic per-swarm `seq`.
 `audience` is either a list of recipient IDs or the string `"all"`. IDs are
 validated against eligible, ready peers. Duplicates collapse into one recipient;
 reordering IDs does not change a retry. `"all"` includes every eligible member,
-including the sender. An empty list records a shared message without waking anyone.
+including the sender, and sets `broadcast` on the stored message, since the
+resolved ID list cannot be told apart from an explicit one once the roster grows.
+An empty list records a shared message without waking anyone.
 
 Messages record intended recipients, author kind, authenticated actor, sender
-agent identity (`senderId`), ordinary QM session (`senderSessionId`), and optional
-`replyTo`. Other authorized swarm members can read
+agent identity (`senderId`), ordinary QM session (`senderSessionId`), optional
+`broadcast`, and optional `replyTo`. Other authorized swarm members can read
 them even if they were not in the intended audience. Root and worker participant
 rosters must remain the original roster; changes fail closed. Current scope and
 identity authorization is rechecked before access and execution.
@@ -213,10 +216,14 @@ pending notifications fail, unstarted queued runs are withdrawn, running turns a
 aborted, and later turns in that worker session are refused. `inspect` reports each
 peer's `control`. The web UI shows a Swarm strip on swarm sessions: a collapsed summary of
 active, starting, paused, stopped, and failed workers; when expanded, workers
-grouped under their parent (20 per group, with "show more"); per-worker Pause,
+grouped under their parent (20 per group, with "show more"), each with its session,
+computer, and `context`; the work window and whether it has expired; the model the
+workers run; the shared board, with each message's sequence, author, sender,
+audience, reply target, and time; per-worker Pause,
 Resume, and Stop; and Pause all, Resume all, and Stop all (with a confirm), which
 apply this action to the root's direct children so it cascades. The strip
 refreshes every few seconds only while workers are active and the tab is visible.
+The board is read-only here and stays readable after the work window expires.
 
 ## Defaults
 
@@ -254,8 +261,7 @@ a separate schema so migration-reset tests cannot invalidate its state.
 Set `SWARM_TEST_DATABASE_URL` when running `test/swarm-orchestrator.test.ts` to
 exercise the HTTP spawn/reply flow across an application restart with real durable
 state. These tests use deterministic model and sandbox doubles; live provider and
-model acceptance remains a separate deployment check. The agent-board UI is
-intentionally deferred.
+model acceptance remains a separate deployment check.
 
 Operators can set `SWARMS_ENABLED=false` to disable the swarm service, API,
 agent discovery, and background reconciliation. Existing swarm records and

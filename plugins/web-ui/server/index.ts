@@ -1951,7 +1951,20 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
     path: "/api/sessions/:id/swarm",
-    handle: async (c) => relayCore(c.res, "GET", `/v1/sessions/${encodeURIComponent(c.params.id!)}/swarm`),
+    handle: async (c) => {
+      const qs = new URLSearchParams();
+      if (c.url.searchParams.get("read") === "1") {
+        qs.set("read", "1");
+        const after = c.url.searchParams.get("after");
+        if (after) qs.set("after", after);
+      }
+      const query = String(qs);
+      return relayCore(
+        c.res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/swarm${query ? `?${query}` : ""}`,
+      );
+    },
   },
   {
     method: "POST",

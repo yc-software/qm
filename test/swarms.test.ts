@@ -834,6 +834,63 @@ test("human messages preserve human actor attribution while notifications remain
   assert.equal(message.senderId, root.id);
 });
 
+test("the swarm view omits the model the workers run", async () => {
+  const { service, caller } = await swarmFixture({ runtime: { model: "pinned-worker-model" } });
+  await service.spawn(caller, { requestId: "one", text: "Work" });
+  assert.equal((await service.inspect(caller)).model, "pinned-worker-model");
+});
+
+test("the board stops answering the person reviewing it once the work window shuts", async () => {
+  const { service, caller, root, store } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work" });
+  await service.sweep();
+  await service.send(caller, { requestId: "finding", audience: "all", text: "what the workers found" });
+  await store.update(root.id, (swarm) => {
+    swarm.expiresAt = Date.now() - 1;
+  });
+  await service.sweep();
+  const reviewer: SwarmCaller = {
+    kind: "human",
+    actorId: caller.kind === "agent" ? caller.claims.actorId : "",
+    sessionId: root.id,
+  };
+  assert.deepEqual(
+    (await service.read(reviewer, {})).map((message) => message.text),
+    ["Work", "what the workers found"],
+  );
+});
+
+test("the worker tree disappears from the review once the work window shuts", async () => {
+  const { service, caller, root, store } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work" });
+  await service.sweep();
+  await store.update(root.id, (swarm) => {
+    swarm.expiresAt = Date.now() - 1;
+  });
+  await service.sweep();
+  const reviewer: SwarmCaller = {
+    kind: "human",
+    actorId: caller.kind === "agent" ? caller.claims.actorId : "",
+    sessionId: root.id,
+  };
+  assert.equal((await service.inspect(reviewer)).peers.length, 2);
+});
+
+test("a broadcast is stored as a plain id list, so it cannot be told from an explicit address", async () => {
+  const { service, caller, root } = await swarmFixture();
+  const [worker] = await service.spawn(caller, { requestId: "one", text: "Work" });
+  await service.sweep();
+  const everyone = await service.send(caller, { requestId: "everyone", audience: "all", text: "Work" });
+  const named = await service.send(caller, {
+    requestId: "named",
+    audience: [root.id, worker!.id],
+    text: "Work",
+  });
+  assert.deepEqual(everyone.audience, named.audience);
+  assert.equal(everyone.broadcast, true);
+  assert.equal("broadcast" in named, false);
+});
+
 test("expired swarms retain readable history but cannot reserve or wake more work", async () => {
   const { service, caller, root, store, runs } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });

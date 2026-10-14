@@ -42,6 +42,7 @@ export interface SwarmMessage {
   actorId: string;
   text: string;
   audience: string[];
+  broadcast?: true;
   replyTo?: string;
   createdAt: number;
   notifications: Record<string, { state: "pending" | "queued" | "failed"; runId?: string }>;

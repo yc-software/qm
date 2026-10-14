@@ -72,3 +72,44 @@ test("the web proxy exposes only swarm controls, not spawn or send", async () =>
   }
   assert.equal(calls.slice(before).filter((call) => call.url.includes("/swarm")).length, 0);
 });
+
+const relayedQuery = (url: string) => {
+  const parsed = new URL(url, "http://core.invalid");
+  const params = parsed.searchParams;
+  return {
+    path: parsed.pathname,
+    read: params.get("read"),
+    after: params.get("after"),
+  };
+};
+
+test("a board read loses read=1 and its after cursor on the way to core", async () => {
+  const before = calls.length;
+  assert.equal((await fetch(`${base}/api/sessions/root-1/swarm?read=1&after=7&waitMs=5000`, { headers })).status, 200);
+  assert.equal((await fetch(`${base}/api/sessions/root-1/swarm?read=1`, { headers })).status, 200);
+  assert.deepEqual(
+    calls.slice(before).map((call) => relayedQuery(call.url)),
+    [
+      { path: "/v1/sessions/root-1/swarm", read: "1", after: "7" },
+      { path: "/v1/sessions/root-1/swarm", read: "1", after: null },
+    ],
+  );
+});
+
+test("the relay hands waitMs to core, so every open panel parks a core connection", async () => {
+  const before = calls.length;
+  assert.equal((await fetch(`${base}/api/sessions/root-1/swarm?read=1&waitMs=30000`, { headers })).status, 200);
+  assert.deepEqual(
+    calls.slice(before).map((call) => new URL(call.url, "http://core").searchParams.get("waitMs")),
+    [null],
+  );
+});
+
+test("a tree read forwards a stray after cursor and stops being a tree read", async () => {
+  const before = calls.length;
+  assert.equal((await fetch(`${base}/api/sessions/root-1/swarm?after=7&waitMs=5000`, { headers })).status, 200);
+  assert.deepEqual(
+    calls.slice(before).map((call) => relayedQuery(call.url)),
+    [{ path: "/v1/sessions/root-1/swarm", read: null, after: null }],
+  );
+});
