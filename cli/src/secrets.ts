@@ -1,5 +1,11 @@
 import { serviceHost, type DeclaredServiceName } from "./services.ts";
-import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
+import {
+  effectiveModelProvider,
+  MODEL_PROVIDER_KEYS,
+  MODEL_PROVIDERS,
+  type ModelProvider,
+  type QmConfig,
+} from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue } from "./util.ts";
 
@@ -43,35 +49,24 @@ export const MINT_JWK =
   "node -e \"const {generateKeyPairSync}=require('node:crypto');process.stdout.write(JSON.stringify(generateKeyPairSync('ec',{namedCurve:'P-256'}).privateKey.export({format:'jwk'})))\"";
 
 export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
-  {
-    name: "ANTHROPIC_API_KEY",
-    service: "core",
-    required: { when: { kind: "model-provider", provider: "anthropic" }, optionalOtherwise: true },
-    description:
-      'Anthropic API key: bills the base model when modelProvider is "anthropic", an optional deployment fallback otherwise.',
-  },
-  {
-    name: "OPENROUTER_API_KEY",
-    service: "core",
-    required: { when: { kind: "model-provider", provider: "openrouter" }, optionalOtherwise: true },
-    description:
-      'OpenRouter API key: bills the base model when modelProvider is "openrouter", an optional deployment fallback otherwise.',
-  },
-  {
-    name: "OPENAI_API_KEY",
-    service: "core",
-    required: {
-      when: {
-        kind: "any",
-        conditions: [
-          { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
-          { kind: "model-provider", provider: "openai" },
-        ],
+  ...MODEL_PROVIDERS.map((provider): SecretSpec => {
+    const selected: SecretCondition = { kind: "model-provider", provider };
+    const codex = provider === "openai";
+    return {
+      name: MODEL_PROVIDER_KEYS[provider],
+      service: "core",
+      required: {
+        when: codex
+          ? {
+              kind: "any",
+              conditions: [{ kind: "env-equals", service: "core", name: "HARNESS", value: "codex" }, selected],
+            }
+          : selected,
+        optionalOtherwise: true,
       },
-    },
-    description:
-      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
-  },
+      description: `Bills the base model when modelProvider is "${provider}", an optional deployment fallback otherwise${codex ? '; required when env.core.HARNESS is "codex" (its CLI cannot do browser OAuth in a container)' : ""}.`,
+    };
+  }),
   {
     name: "PUBLIC_API_URL",
     service: "core",
