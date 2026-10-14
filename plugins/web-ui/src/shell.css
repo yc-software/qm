@@ -1768,6 +1768,9 @@ a.chat-row-open {
 }
 
 .speaker-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   font-weight: 600;
   color: var(--muted-foreground);
@@ -6003,6 +6006,11 @@ a.connector-widget:focus-visible {
   color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 650;
+}
+.speaker-label > .inbox-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
 }
 .project-member-row > .inbox-avatar,
 .project-member-result > .inbox-avatar,

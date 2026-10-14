@@ -149,6 +149,7 @@ import {
 } from "./model-options";
 import {
   attachmentGallery,
+  avatarTpl,
   browserRenderableImage,
   chipBadge,
   copyText,
@@ -354,6 +355,19 @@ export function createChatSurface(
     if (!chatState.labelSpeakers) return undefined;
     const speaker = (message as { speaker?: string }).speaker;
     return typeof speaker === "string" && speaker.trim() ? speaker.trim() : undefined;
+  }
+
+  function speakerMember(speaker: string): { principalId: string; avatarUrl?: string } | undefined {
+    const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
+    return project?.members.find((m) => m.displayName === speaker);
+  }
+
+  function speakerLabelTpl(speaker: string | undefined): TemplateResult | typeof nothing {
+    if (!speaker) return nothing;
+    const member = speakerMember(speaker);
+    return html`<div class="speaker-label">
+      ${avatarTpl({ key: member?.principalId ?? speaker, name: speaker, avatarUrl: member?.avatarUrl })}${speaker}
+    </div>`;
   }
   let transcriptRefreshGeneration = 0;
   const forkOriginController = createForkOriginController({
@@ -1706,7 +1720,8 @@ export function createChatSurface(
     if (!cacheable) return chatMessage(message, index, isStreaming);
     const forkable = Boolean(chatState.threadRef && chatState.sessionId && chatState.agent);
     const forking = pendingFork !== null;
-    const speakerLabel = speakerLabelFor(message);
+    const speaker = speakerLabelFor(message);
+    const speakerLabel = speaker && `${speaker}\n${speakerMember(speaker)?.avatarUrl ?? ""}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
     const day = new Date().toDateString();
@@ -1790,7 +1805,7 @@ export function createChatSurface(
           text: `${messageText(message)}${edited || deleted ? ` (${deleted ? "deleted" : "edited"})` : ""}`,
           index,
           entrySeqs: messageEntrySeqs(message).join(" "),
-          before: html`${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}`,
+          before: html`${speakerLabelTpl(speaker)}${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}`,
           after: sendFailure
             ? html`<div class="send-failure">
                 <span>${sendFailure}</span
@@ -1807,7 +1822,7 @@ export function createChatSurface(
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
-          ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
+          ${speakerLabelTpl(speaker)}
           ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
           <div
             class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
