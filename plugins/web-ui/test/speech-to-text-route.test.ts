@@ -1,14 +1,17 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, stat, utimes, writeFile } from "node:fs/promises";
+import fs from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { Writable } from "node:stream";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
-process.env.TMPDIR = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
+const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
+process.env.TMPDIR = testTmp;
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
 process.env.WEB_UI_VOICE_USERS = "alice";
@@ -24,7 +27,11 @@ const identity = (user = "alice") => ({
 const headers = { ...identity(), "content-type": "audio/mp4", origin: "https://qm.example.test" };
 
 let openai: (req: IncomingMessage, res: ServerResponse) => void = (_req, res) => res.end("{}");
-const openaiStub = createServer((req, res) => openai(req, res));
+const stubPaths: string[] = [];
+const openaiStub = createServer((req, res) => {
+  stubPaths.push(req.url ?? "");
+  openai(req, res);
+});
 await new Promise<void>((resolve) => openaiStub.listen(0, resolve));
 const spoolDir = join(tmpdir(), "qm-dictation");
 const spooled = async () => new Set(await readdir(spoolDir).catch(() => []));
@@ -49,6 +56,7 @@ function reply(status: number, body: unknown, headers: Record<string, string> = 
 test.after(() => {
   surface.close();
   openaiStub.close();
+  void rm(testTmp, { recursive: true, force: true });
 });
 
 test("dictation checks identity, origin, allowlist and format before provider access", async () => {
@@ -86,12 +94,10 @@ test("dictation uploads the whole recording to OpenAI and removes its spool file
   let received = "";
   openai = (req, res) => {
     const hash = createHash("sha256");
-    let raw = Buffer.alloc(0);
-    req.on("data", (chunk: Buffer) => {
-      raw = Buffer.concat([raw, chunk]);
-    });
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
-      void new Response(raw, { headers: { "content-type": req.headers["content-type"]! } })
+      void new Response(Buffer.concat(chunks), { headers: { "content-type": req.headers["content-type"]! } })
         .formData()
         .then(async (form) => {
           const file = form.get("file") as File;
@@ -146,7 +152,7 @@ test("dictation maps OpenAI errors by code", async (t) => {
     [400, "invalid_parameter", {}, { status: 502, error: "dictation_rejected" }],
     [401, "invalid_api_key", {}, { status: 502, error: "dictation_rejected" }],
     [409, "conflict", {}, { status: 503, error: "dictation_unavailable" }],
-    [302, "redirect", { location: "https://elsewhere.test/" }, { status: 503, error: "dictation_unavailable" }],
+    [302, "redirect", { location: "/followed" }, { status: 503, error: "dictation_unavailable" }],
     [500, "server_error", {}, { status: 503, error: "dictation_unavailable" }],
   ];
   for (const [status, code, providerHeaders, expected] of cases) {
@@ -155,6 +161,28 @@ test("dictation maps OpenAI errors by code", async (t) => {
     for (const [key, value] of Object.entries(expected))
       assert.equal(result[key], value, `${status} ${code} ${JSON.stringify(providerHeaders)}: ${key}`);
   }
+  assert.equal(stubPaths.includes("/followed"), false);
+});
+
+test("dictation reports storage failures as unavailable instead of hanging", async (t) => {
+  routeOpenAIToStub(t);
+  const actual = fs.createWriteStream;
+  t.mock.method(fs, "createWriteStream", (path: string, options: object) => {
+    actual(path, options).destroy();
+    return new Writable({
+      write(_chunk, _encoding, done) {
+        done(Object.assign(new Error("no space left on device"), { code: "ENOSPC", syscall: "write" }));
+      },
+    });
+  });
+  const response = await fetch(`${base}/api/dictation`, {
+    method: "POST",
+    headers,
+    body: new Uint8Array(256 * 1024),
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, "dictation_unavailable");
 });
 
 test("startup sweep removes only stale spool files", async () => {

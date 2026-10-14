@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import fs from "node:fs";
+import { chmod, mkdir, readdir, rm, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,8 +38,9 @@ export async function sweepDictationSpool(nowMs = Date.now()): Promise<void> {
 
 async function spool(req: IncomingMessage, signal: AbortSignal): Promise<{ file: string; size: number }> {
   await mkdir(SPOOL_DIR, { recursive: true, mode: 0o700 });
+  await chmod(SPOOL_DIR, 0o700);
   const file = join(SPOOL_DIR, randomUUID());
-  const out = createWriteStream(file, { mode: 0o600 });
+  const out = fs.createWriteStream(file, { mode: 0o600 });
   try {
     await pipeline(req, out, { signal });
   } catch (error) {
@@ -115,7 +116,7 @@ export async function handleVoiceRoute(
     try {
       audio = await spool(req, controller.signal);
     } catch (error) {
-      const clientGone = controller.signal.aborted || req.aborted;
+      const clientGone = controller.signal.aborted;
       reportVoiceError(error, "dictation_upload", clientGone);
       if (clientGone) return;
       return typeof (error as NodeJS.ErrnoException).syscall === "string"

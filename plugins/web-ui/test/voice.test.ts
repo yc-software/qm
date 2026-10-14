@@ -1,5 +1,5 @@
 import { test, type TestContext } from "node:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -14,8 +14,12 @@ const caller = {
 };
 const stubFetch = (t: TestContext, impl: (url: string, init?: RequestInit) => Promise<Response>) =>
   t.mock.method(globalThis, "fetch", (url: Parameters<typeof fetch>[0], init?: RequestInit) => impl(String(url), init));
+const audioDirs: string[] = [];
+test.after(() => Promise.all(audioDirs.map((dir) => rm(dir, { recursive: true, force: true }))));
 const audioFile = async (bytes: number[]) => {
-  const file = join(await mkdtemp(join(tmpdir(), "voice-test-")), "audio");
+  const dir = await mkdtemp(join(tmpdir(), "voice-test-"));
+  audioDirs.push(dir);
+  const file = join(dir, "audio");
   await writeFile(file, new Uint8Array(bytes));
   return file;
 };
