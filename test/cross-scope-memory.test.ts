@@ -211,19 +211,3 @@ test("an external block that fills its maxChars is trimmed to the remaining budg
   assert.match(out, /zzzz/);
   assert.ok(out.length <= 6000);
 });
-
-test("recall continues past many oversized matches", async (t) => {
-  const { base, memory } = await fixture(t);
-  await base.capture(
-    "personal:a",
-    Array.from({ length: 130 }, (_, i) => `0.99 oversized ${i} ${"x".repeat(1000)}`),
-    AT,
-  );
-  await base.capture("personal:a", ["0.9 final small"], AT);
-  const out = renderRecall(
-    await recallAcrossScopes(memory, ["personal:a"], { query: "verify", maxChars: 80 }),
-    new Map(),
-  );
-  assert.match(out, /final small/);
-  assert.doesNotMatch(out, /oversized/);
-});

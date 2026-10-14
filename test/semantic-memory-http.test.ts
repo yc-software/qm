@@ -110,8 +110,8 @@ pgTest("HTTP turn injects semantic matches; grep remains independent and authori
   );
   databaseFixture.stop = () => built.runtime.stop();
   await migrateRegisteredPgSchemas(databaseUrl);
-  await built.memory.facts!("personal:U1");
-  await built.memory.recall("personal:U1", { query: "no model configured" });
+  await built.memory.capture("personal:unconfigured", ["a fact before model configuration"], Date.now());
+  await built.memory.recall("personal:unconfigured", { query: "no model configured" });
   const inspector = new pg.Client({ connectionString: databaseUrl });
   await inspector.connect();
   try {

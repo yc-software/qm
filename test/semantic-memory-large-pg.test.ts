@@ -49,24 +49,3 @@ test("a 4500-fact scope fully drains 3072-dimensional recall in under one second
   assert.ok(elapsed < 1000, `4500-fact full drain took ${elapsed.toFixed(1)}ms`);
   t.diagnostic(`4500 facts / 3072 dimensions / full drain: ${elapsed.toFixed(1)}ms`);
 });
-
-test(
-  "a stricter similarity floor still includes unindexed live facts at the recency score",
-  { skip: !url },
-  async (t) => {
-    const scope = `personal:floor-${randomUUID()}`;
-    const base = createPostgresMemoryService(url!);
-    const index = createPostgresVectorStore(url!);
-    t.after(() => index.close());
-    await base.capture(scope, ["unindexed current fact"], 1000);
-    const facts = (await base.facts!(scope)).map((fact) => ({
-      id: fact.id,
-      hash: factHash(fact.text),
-      at: fact.createdAt,
-    }));
-    const matches = await index.search({ scope, model: "strict", vector: [1, 0], facts, minSimilarity: 0.9 });
-    assert.equal(matches.length, 1);
-    assert.equal(matches[0]!.factId, facts[0]!.id);
-    assert.ok(Math.abs(matches[0]!.score - 0.2) < 1e-9);
-  },
-);

@@ -20,13 +20,11 @@ export interface MemoryVectorSearch {
   vector: number[];
   facts: readonly { id: string; hash: string; at: number }[];
   minSimilarity?: number;
-  signal?: AbortSignal;
 }
 
 export interface MemoryVectorStore {
   search(input: MemoryVectorSearch): Promise<MemoryVectorMatch[]>;
   put(rows: readonly MemoryVector[], signal?: AbortSignal): Promise<void>;
-  remove(scope: string, factIds: readonly string[], signal?: AbortSignal): Promise<void>;
   missing(
     model: string,
     limit: number,
@@ -96,7 +94,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           1 - minSimilarity,
           1 - Math.min(0.2, minSimilarity),
         ],
-        { signal: input.signal, timeoutMs: 5000 },
+        { timeoutMs: 5000 },
       );
       return rows.map((row) => ({
         factId: String(row.id),
@@ -126,14 +124,6 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         ON CONFLICT (scope_id, model, fact_id) DO UPDATE
         SET fact_hash = EXCLUDED.fact_hash, dimensions = EXCLUDED.dimensions, embedding = EXCLUDED.embedding`,
         [JSON.stringify([...latest.values()])],
-        { signal, timeoutMs: 5000 },
-      );
-    },
-    async remove(scope, factIds, signal) {
-      if (!factIds.length) return;
-      await db.q(
-        "DELETE FROM memory_fact_vectors WHERE scope_id = $1 AND fact_id = ANY($2::bigint[])",
-        [scope, factIds],
         { signal, timeoutMs: 5000 },
       );
     },

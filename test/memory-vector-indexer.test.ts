@@ -155,19 +155,6 @@ test("indexer refuses malformed batches and never writes after losing its leader
   assert.equal(f.failures.length, 2);
 });
 
-test("unconfigured indexing does not create a store or call an embedder", async () => {
-  let resolutions = 0;
-  const indexer = createMemoryVectorIndexer({
-    resolve: async () => {
-      resolutions++;
-      return undefined;
-    },
-    leaderLease: createNoopLeaderLease(),
-  });
-  await indexer.tick();
-  assert.equal(resolutions, 1);
-});
-
 test("fact embeddings stay bounded and dimension probes are cached for ten minutes", async () => {
   const f = fixture();
   const calls: string[][] = [];

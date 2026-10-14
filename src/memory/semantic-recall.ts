@@ -30,8 +30,7 @@ export function createSemanticMemoryService(
     let pending = queries.get(context);
     if (!pending) {
       pending = (async () => {
-        const timeout = AbortSignal.timeout(8000);
-        const signal = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+        const signal = AbortSignal.timeout(8000);
         const embedder = await resolveEmbedder();
         if (!embedder) return undefined;
         const vectors = await embedder.embed([context.query!.trim().slice(0, 4000)], signal);
@@ -58,7 +57,6 @@ export function createSemanticMemoryService(
               ...query,
               facts: facts.map((fact) => ({ id: fact.id, hash: factHash(fact.text), at: fact.createdAt })),
               minSimilarity: opts.minSimilarity,
-              signal: context.signal,
             });
             return matches.flatMap((match) => {
               const fact = byId.get(match.factId);

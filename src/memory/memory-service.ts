@@ -21,7 +21,6 @@ const MEMORY_FACTS_FILE = "memory/facts.json";
 
 export interface MemoryRecallContext {
   query?: string;
-  signal?: AbortSignal;
   actorId?: string;
   sessionId?: string;
   maxChars?: number;

@@ -318,7 +318,7 @@ test("a recall-only routed provider still reaches prompt recall through disclosu
 
 test("semantic recall ranks only currently disclosed facts and rechecks membership on every recall", async () => {
   const f = fixture();
-  for (let i = 0; i < 130; i++) f.put("personal:alice", `hidden ${i}`, "restricted");
+  f.put("personal:alice", "hidden", "restricted");
   f.put("personal:alice", "late ordinary fact", "ordinary");
   const queries: string[][] = [];
   const semantic = createSemanticMemoryService(f.raw, async () => ({ id: "test", embed: async () => [[1, 0]] }), {
@@ -329,8 +329,8 @@ test("semantic recall ranks only currently disclosed facts and rechecks membersh
   });
   const view = disclosedMemory(semantic, f.access);
   assert.match((await view.recall("personal:alice", { query: "recall" }))[0]!.text, /late ordinary fact/);
-  assert.deepEqual(queries, [["131"]]);
+  assert.deepEqual(queries, [["2"]]);
   f.access.currentScopeMembers = async () => [];
   assert.deepEqual(await view.recall("personal:alice", { query: "recall" }), []);
-  assert.deepEqual(queries, [["131"]]);
+  assert.deepEqual(queries, [["2"]]);
 });

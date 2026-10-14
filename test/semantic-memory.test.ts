@@ -185,16 +185,12 @@ test("query failures fall back without rebuilding facts in recall", async (t) =>
     {
       async search(input) {
         assert.deepEqual(input.vector, [1, 0]);
-        assert.ok(input.signal);
         throw new Error("Database query unavailable");
       },
     },
     { onError: () => errors++ },
   );
-  assert.equal(
-    await recall(memory, "personal:a", { query: "verify", signal: AbortSignal.timeout(1000) }),
-    "- (2026-10-01) A fact",
-  );
+  assert.equal(await recall(memory, "personal:a", { query: "verify" }), "- (2026-10-01) A fact");
   assert.equal(errors, 1);
   assert.deepEqual(calls, [["verify"]]);
 });
@@ -239,29 +235,4 @@ test("fallback reloads current disclosed facts after an edit races the index que
   const result = await memory.recall("personal:a", { query: "verify" });
   assert.match(result[0]!.text, /current fact/);
   assert.doesNotMatch(result[0]!.text, /old private/);
-});
-
-test("search cancellation uses the caller signal, not the elapsed query embedding deadline", async (t) => {
-  const { base } = await fixture(t);
-  await base.capture("personal:a", ["A fact"], AT);
-  const controller = new AbortController();
-  let embeddingSignal: AbortSignal | undefined;
-  const memory = createSemanticMemoryService(
-    base,
-    async () => ({
-      id: "test",
-      async embed(_texts, signal) {
-        embeddingSignal = signal;
-        return [[1, 0]];
-      },
-    }),
-    {
-      async search(input) {
-        assert.equal(input.signal, controller.signal);
-        assert.notEqual(input.signal, embeddingSignal);
-        return input.facts.map((fact) => ({ factId: fact.id, hash: fact.hash, score: 1 }));
-      },
-    },
-  );
-  assert.equal((await memory.recall("personal:a", { query: "verify", signal: controller.signal })).length, 1);
 });
