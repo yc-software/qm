@@ -1513,7 +1513,31 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     ctx.chat.resumeIfIdle();
   }
 
+  let pendingSubmissions = 0;
+  let disposed = false;
+  const preventUnsafeUpdate = (event: Event): void => {
+    if (
+      pendingSubmissions ||
+      composerState.attachments.length ||
+      composerState.processingFiles ||
+      composerState.pasteView
+    ) {
+      event.preventDefault();
+    }
+  };
+  window.addEventListener("qm:prepare-update", preventUnsafeUpdate);
+
   async function sendPrompt(agent: Agent): Promise<void> {
+    pendingSubmissions++;
+    try {
+      await sendPromptNow(agent);
+    } finally {
+      pendingSubmissions--;
+      if (disposed && !pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
+    }
+  }
+
+  async function sendPromptNow(agent: Agent): Promise<void> {
     if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
     if (agent.state.isStreaming) return queueDraft(agent);
@@ -1971,6 +1995,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function dispose(): void {
+    disposed = true;
+    if (!pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     window.removeEventListener("model-account-changed", refreshAccount);
     document.removeEventListener("visibilitychange", revalidateRuntime);
     modelPicker.dispose();

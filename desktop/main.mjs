@@ -261,6 +261,14 @@ async function start() {
   const checkForUpdates = startUpdates(async () => {
     for (const page of workspaceWindows) {
       if (page.isDestroyed()) continue;
+      const ready = await page.webContents.executeJavaScript(`(() => {
+        const event = new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } });
+        return window.dispatchEvent(event) && event.detail.ready;
+      })()`);
+      if (!ready) return false;
+    }
+    for (const page of workspaceWindows) {
+      if (page.isDestroyed()) continue;
       await page.webContents.executeJavaScript('window.dispatchEvent(new Event("pagehide"))');
       page.webContents.session.flushStorageData();
       await page.webContents.session.cookies.flushStore();
@@ -269,6 +277,7 @@ async function start() {
       const current = mainWindow?.webContents.getURL();
       await saveInstance(loginDestination(target, target, current));
     }
+    return true;
   });
   const assertSetup = (event) => {
     if (event.sender !== setupWindow?.webContents || event.senderFrame?.url !== setupUrl) {

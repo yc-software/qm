@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const release = process.argv.includes("--release");
 const identity = process.env.QM_MAC_SIGN_IDENTITY;
-if (release && (process.platform !== "darwin" || !identity)) {
-  throw new Error("Mac releases require macOS, QM_MAC_SIGN_IDENTITY and a signed-in Xcode account.");
+if (release && (process.platform !== "darwin" || process.arch !== "arm64" || !identity)) {
+  throw new Error("Mac releases require Apple Silicon macOS, QM_MAC_SIGN_IDENTITY and a signed-in Xcode account.");
 }
 const apps = await packager({
   dir: directory,

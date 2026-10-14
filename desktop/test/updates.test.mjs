@@ -4,14 +4,22 @@ import { mock, test } from "node:test";
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 test("updates restart only after preparation succeeds, without prompting", async () => {
-  const app = { isPackaged: false };
+  const app = { isPackaged: false, on() {} };
   let options;
   let checks = 0;
   let restarts = 0;
   const errors = [];
+  let onError;
   mock.method(console, "error", (...args) => errors.push(args));
   mock.module("electron", {
-    namedExports: { app, autoUpdater: { checkForUpdates: () => checks++, quitAndInstall: () => restarts++ } },
+    namedExports: {
+      app,
+      autoUpdater: {
+        on: (_event, callback) => (onError = callback),
+        checkForUpdates: () => checks++,
+        quitAndInstall: () => restarts++,
+      },
+    },
   });
   mock.module("update-electron-app", {
     namedExports: { UpdateSourceType: { StaticStorage: 1 }, updateElectronApp: (value) => (options = value) },
@@ -35,13 +43,17 @@ test("updates restart only after preparation succeeds, without prompting", async
     options.onNotifyUser();
     await tick();
     assert.equal(restarts, 0);
-    prepared.resolve();
+    prepared.resolve(true);
     await tick();
     assert.equal(restarts, 1);
+    onError();
+    options.onNotifyUser();
+    await tick();
+    assert.equal(restarts, 2);
     startUpdates(() => Promise.reject(new Error("disk full")));
     options.onNotifyUser();
     await tick();
-    assert.equal(restarts, 1);
+    assert.equal(restarts, 2);
     assert.match(errors.find((args) => args[1] instanceof Error)[1].message, /disk full/);
   } finally {
     mock.restoreAll();
