@@ -725,7 +725,6 @@ export function createTurnMethods(
       const replying = deps.turnStream?.replying(runId) ?? false;
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
-      const tasks = await deps.tasks?.list({ originRunId: runId });
       const stale =
         run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
@@ -765,7 +764,6 @@ export function createTurnMethods(
         ...(stale ? { stale: true } : {}),
         ...(replying ? { replying: true } : {}),
         ...(replyComplete ? { replyComplete: true } : {}),
-        ...(tasks?.length ? { tasks: tasks.map(({ id, title, status }) => ({ id, title, status })) } : {}),
         ...(activity && activity.length ? { activity } : {}),
       };
     },

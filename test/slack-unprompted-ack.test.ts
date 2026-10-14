@@ -85,20 +85,6 @@ function harness(run: (hooks: any) => Promise<unknown>) {
   return { handler, client, followup, reactions, posts, postArgs, turns };
 }
 
-test("the task-list placeholder is posted with its run's status key so a recovered reply can find it", async () => {
-  const h = harness(async (hooks) => {
-    await hooks.onQueued?.("r1");
-    await hooks.onTasks?.([{ id: "t1", title: "Check staging", status: "in_progress" }]);
-    return { status: "ok", reply: "Staging is green." };
-  });
-  await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT> check staging" }, h.client);
-  const placeholder = h.postArgs.find((args) => String(args.text).includes("Check staging"));
-  assert.deepEqual(placeholder?.metadata, {
-    event_type: "qm_delivery",
-    event_payload: { idempotency_key: "status:run:r1" },
-  });
-});
-
 test("an unmentioned thread followup QM answers gets the ack reaction added then cleared", async () => {
   const h = harness(async (hooks) => {
     hooks.onReplying?.();
@@ -178,7 +164,6 @@ test("waitRun signals replying only once the run has passed detection and begun 
         return { id: "r1", status: polls >= 4 ? "done" : "running", attempts: 1 };
       },
     },
-    tasks: { list: async () => [] },
     app: { getRun: async () => ({ result: { status: "ok", reply: "done" } }) },
   } as any);
   await client.waitRun("r1", {

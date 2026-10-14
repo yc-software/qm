@@ -29,6 +29,11 @@ export function personIds(id: string): string[] {
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
 }
 
+export function rosterIds(id: string): string[] {
+  const ids = [id.trim(), ...personIds(id)].filter(Boolean);
+  return [...new Set(ids.flatMap((x) => [x, foldPrincipalId(x)]))];
+}
+
 export function personKey(id: string | null | undefined): string {
   const key = foldPrincipalId(id);
   if (!key) return "";

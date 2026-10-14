@@ -172,27 +172,12 @@ test("runResultDelivery carries the surface's edit checkpoint into the destinati
   assert.equal(d?.destination.editRef, "171.002");
 });
 
-test("runResultDelivery carries a durable terminal task projection", () => {
-  const d = runResultDelivery(run({ deliveryState: { editRef: "171.002" } }), [
-    {
-      id: "task-1",
-      sessionId: "s1",
-      originRunId: "r-1",
-      title: "research",
-      status: "failed",
-      createdAt: 1,
-      updatedAt: 2,
-    },
-  ]);
-  assert.deepEqual(d?.destination.taskList, [{ id: "task-1", title: "research", status: "failed" }]);
-});
-
 test("runResultDelivery links the admin error page when a resolver is wired", () => {
   const failed = run({
     status: "failed",
     result: { status: "failed", sessionId: "b6f3f9e2-0000-4000-8000-000000000001", reason: "boom" },
   });
-  const d = runResultDelivery(failed, [], (sessionId) => `https://portal.example.com/admin/?session=${sessionId}`);
+  const d = runResultDelivery(failed, (sessionId) => `https://portal.example.com/admin/?session=${sessionId}`);
   assert.equal(
     d?.text,
     "⚠️ I couldn't finish that turn: something went wrong on my end — full error: https://portal.example.com/admin/?session=b6f3f9e2-0000-4000-8000-000000000001",
@@ -433,7 +418,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const { sessions, session } = await failureSessions();
   const { runs } = createMemoryRunStore();
   const deliveries = createDeliveryStore();
-  wireRunResultDeliveries(runs, deliveries, undefined, undefined, sessions);
+  wireRunResultDeliveries(runs, deliveries, undefined, sessions);
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);
