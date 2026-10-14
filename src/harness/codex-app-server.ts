@@ -97,6 +97,7 @@ export class CodexAppServer {
       if (pendingOutput) receiveLine(pendingOutput);
       pendingOutput = "";
     });
+    this.process.stdin?.on("error", (error) => this.failTransport(error));
     this.process.stderr?.on("data", (chunk: Buffer) => {
       this.stderr = `${this.stderr}${chunk.toString()}`.slice(-16_384);
     });
