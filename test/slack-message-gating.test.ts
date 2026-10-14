@@ -206,7 +206,7 @@ test("isBareStop accepts case-insensitive stop with optional trailing . or !", (
   for (const t of ["stop", "Stop", "STOP", " stop ", "stop.", "stop!"]) assert.equal(isBareStop(t), true, t);
   for (const t of ["please stop the job", "stop it", "stop?", "stopping", ""]) assert.equal(isBareStop(t), false, t);
   for (const t of ["@qm stop", "@qm Stop!"]) assert.equal(isBareStop(t, "qm"), true, t);
-  for (const t of ["@qm stop it", "@alice stop", "@here stop"]) assert.equal(isBareStop(t, "qm"), false, t);
+  for (const t of ["@qm stop it", "@qmstop", "@alice stop", "@here stop"]) assert.equal(isBareStop(t, "qm"), false, t);
 });
 
 test("maybeInterceptStop: bare stop with in-flight run signals abort and suppresses the turn", async () => {

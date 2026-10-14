@@ -202,7 +202,8 @@ export async function dedupedRun(
 export function isBareStop(text: string, botHandle = ""): boolean {
   const trimmed = text.trim();
   const tag = botHandle ? `@${botHandle}` : "";
-  const rest = tag && trimmed.startsWith(tag) ? trimmed.slice(tag.length) : trimmed;
+  const afterTag = tag && trimmed.startsWith(tag) ? trimmed.slice(tag.length) : undefined;
+  const rest = afterTag !== undefined && /^\s/.test(afterTag) ? afterTag : trimmed;
   return /^stop[.!]?$/i.test(rest.trim());
 }
 
