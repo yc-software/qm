@@ -52,6 +52,7 @@ export const SESSION = {
   threadRef: "web:tester:deep",
   scopeId: "personal:tester",
   title: "Deep linked chat",
+  canContinue: true,
 };
 
 export async function harness(opts: HarnessOptions): Promise<Harness> {

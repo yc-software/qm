@@ -128,6 +128,10 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
     asUser("bob", { method: "POST", body: JSON.stringify({ text: "sneak", threadRef: "web:alice:s1" }) }),
   );
   assert.equal(personalClaim.status, 403);
+  assert.equal(
+    ((await personalClaim.json()) as { reason: string }).reason,
+    "that conversation lives in a different context",
+  );
 
   const outsider = await fetch(
     `${webBase}/api/turn`,
@@ -140,7 +144,6 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
 });
 
 test("a person's own chats stay writable whichever login started them; Slack threads and other people stay out", async () => {
-  // Account linking leaves old chats in the person's scope with the thread id of the login that started them.
   const old = await built.sessions.getOrCreateByThread("web:oidc:test:42:p1", "dm", "personal:carol@example.com");
   await built.sessions.addParticipant(old.id, "carol@example.com", "Started on my other login");
   const slack = await built.sessions.getOrCreateByThread("dm:D9", "dm", "personal:carol@example.com");
@@ -171,4 +174,29 @@ test("a person's own chats stay writable whichever login started them; Slack thr
     }),
   );
   assert.equal(other.status, 403);
+});
+
+test("someone who can start a chat in a public channel can keep going in it", async () => {
+  await built.app.upsertChannels(
+    [{ channelId: "C4", name: "town-square", isPrivate: false }],
+    [{ channelId: "C4", principalId: "alice" }],
+  );
+  const first = await fetch(
+    `${webBase}/api/turn`,
+    asUser("erin", {
+      method: "POST",
+      body: JSON.stringify({ text: "hi", threadRef: "web:erin:t1", scopeId: "channel:C4", channelName: "town-square" }),
+    }),
+  );
+  assert.ok(first.status < 300, `erin's first turn should be accepted (got ${first.status})`);
+  const session = await waitForSession("erin", "web:erin:t1");
+  assert.equal(session.canContinue, true);
+  const second = await fetch(
+    `${webBase}/api/turn`,
+    asUser("erin", {
+      method: "POST",
+      body: JSON.stringify({ text: "more", threadRef: session.threadRef, scopeId: session.scopeId }),
+    }),
+  );
+  assert.ok(second.status < 300, `erin's second turn should be accepted (got ${second.status})`);
 });

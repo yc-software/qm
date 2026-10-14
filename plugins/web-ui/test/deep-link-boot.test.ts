@@ -77,7 +77,13 @@ test("a share link whose transcript fetch flakes still opens from the session li
 
 test("a session list that wins the race keeps its own decorated rows", async () => {
   const listed = { ...SESSION, working: true };
-  const other = { id: "sess-other", threadRef: "web:tester:other", scopeId: "personal:tester", title: "Other" };
+  const other = {
+    id: "sess-other",
+    threadRef: "web:tester:other",
+    scopeId: "personal:tester",
+    title: "Other",
+    canContinue: true,
+  };
   const h = await harness({ path: "/s/sess-deep", holdTranscript: true, listSessions: [other, listed] });
   try {
     const booted = h.boot();
@@ -102,7 +108,13 @@ test("a session list that wins the race keeps its own decorated rows", async () 
 });
 
 test("a list that omits the open conversation does not drop its row", async () => {
-  const other = { id: "sess-other", threadRef: "web:tester:other", scopeId: "personal:tester", title: "Other" };
+  const other = {
+    id: "sess-other",
+    threadRef: "web:tester:other",
+    scopeId: "personal:tester",
+    title: "Other",
+    canContinue: true,
+  };
   const h = await harness({ path: "/s/sess-deep", listSessions: [other] });
   try {
     await h.boot();
@@ -119,7 +131,13 @@ test("a list that omits the open conversation does not drop its row", async () =
 });
 
 test("a list landing mid-open still keeps the row of the conversation being opened", async () => {
-  const other = { id: "sess-other", threadRef: "web:tester:other", scopeId: "personal:tester", title: "Other" };
+  const other = {
+    id: "sess-other",
+    threadRef: "web:tester:other",
+    scopeId: "personal:tester",
+    title: "Other",
+    canContinue: true,
+  };
   const h = await harness({ path: "/s/sess-deep", holdApprovals: true, listSessions: [other] });
   try {
     const booted = h.boot();

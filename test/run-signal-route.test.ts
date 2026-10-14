@@ -470,7 +470,8 @@ test("web proxy: a steer claiming another user's thread is refused", async () =>
       body: JSON.stringify({ kind: "steer", text: "louder", threadRef: "web:bob:stolen" }),
     }),
   );
-  assert.equal(steer.status, 403);
+  assert.equal(steer.status, 400);
+  assert.equal(((await steer.json()) as { reason?: string }).reason, "conversation_mismatch");
   assert.deepEqual(await built.signals.takePending(submit.runId!), []);
 });
 

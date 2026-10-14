@@ -241,7 +241,7 @@ export function createTurnMethods(
         const existing = await deps.sessions.getByThread(threadRef);
         if (existing) {
           const claimed = conversationScope(req.conversation, actor.id);
-          if (existing.scopeId !== claimed || !(await h.canContinueOnWeb(actor.id, existing))) {
+          if (existing.scopeId !== claimed) {
             return { status: "refused", reason: "that conversation lives in a different context" };
           }
         } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {

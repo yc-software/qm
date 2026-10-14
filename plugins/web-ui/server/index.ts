@@ -345,7 +345,6 @@ async function resolveWebConversation(
   scope: string | undefined,
   channelName: string | undefined,
 ): Promise<{ conversation: WebConversation } | { error: string; message: string }> {
-  // Who may continue which session is core's decision (canContinueOnWeb); only the inbox thread is special here.
   if (/^web:.+:inbox$/.test(threadRef) && threadRef !== `web:${user}:inbox`) {
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   }

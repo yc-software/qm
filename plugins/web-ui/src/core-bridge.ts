@@ -141,7 +141,6 @@ export interface CoreSession {
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
-  /** Core decides whether this viewer may add a turn; the UI only renders it. */
   canContinue?: boolean;
   backgroundJobs?: number;
   watches?: number;

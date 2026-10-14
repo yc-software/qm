@@ -26,7 +26,7 @@ import {
   createManagesArtifactHome,
   createMembershipControlsScope,
 } from "../resolution/scope-membership.ts";
-import { canonicalPerson, samePerson } from "../directory/person.ts";
+import { samePerson } from "../directory/person.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 import { swallow } from "../util/errors.ts";
@@ -422,18 +422,18 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   const principalCanWriteScope = createCanWriteScope(scopeMembershipDeps);
 
-  /** The one rule for whether a viewer may add a web turn to an existing session; the turn path and session views both use it. */
   async function canContinueOnWeb(
     principalId: string,
     session: Pick<Session, "threadRef" | "scopeId">,
-    writableScopes = new Map<ScopeId, Promise<boolean>>(),
+    sharedAccess = new Map<ScopeId, Promise<boolean>>(),
   ): Promise<boolean> {
     if (!session.threadRef.startsWith("web:") && !isSubagentThreadRef(session.threadRef)) return false;
-    if (parseScopeId(session.scopeId).kind === "personal")
-      return session.scopeId === scopeId("personal", canonicalPerson(principalId));
-    if (!writableScopes.has(session.scopeId))
-      writableScopes.set(session.scopeId, principalCanWriteScope(principalId, session.scopeId));
-    return writableScopes.get(session.scopeId)!;
+    const actor = deps.identity.classify(principalId);
+    const { kind, ref } = parseScopeId(session.scopeId);
+    if (kind === "personal") return session.scopeId === scopeId("personal", actor.id);
+    if (kind !== "channel" && kind !== "group") return false;
+    if (!sharedAccess.has(session.scopeId)) sharedAccess.set(session.scopeId, mayUseSharedScope(kind, ref, actor));
+    return sharedAccess.get(session.scopeId)!;
   }
 
   async function principalCanAccessCurrentScope(principalId: string, targetScope: ScopeId): Promise<boolean> {

@@ -413,7 +413,11 @@ export function createSessionMethods(
       }
       const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
       const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
-      const writableScopes = new Map<ScopeId, Promise<boolean>>();
+      const sharedAccess = new Map<ScopeId, Promise<boolean>>(
+        all
+          .filter((s) => parseScopeId(s.scopeId).kind === "group" && projectIdFromGroupRef(parseScopeId(s.scopeId).ref))
+          .map((s) => [s.scopeId, Promise.resolve(true)]),
+      );
       const sessions = await Promise.all(
         all
           .filter(
@@ -423,7 +427,7 @@ export function createSessionMethods(
               workingThreadRefs.has(s.threadRef) ||
               waiting.has(s.id),
           )
-          .map(async (s) => ({ ...s, canContinue: await canContinueOnWeb(principalId, s, writableScopes) })),
+          .map(async (s) => ({ ...s, canContinue: await canContinueOnWeb(principalId, s, sharedAccess) })),
       );
       const now = Date.now();
       const jobCounts = new Map<string, number>();
@@ -937,7 +941,8 @@ export function createSessionMethods(
           resource: sessionId,
           scopeLabel: source.scopeId,
         });
-        const session = (await deps.sessions.get(forked.id)) ?? forked;
+        const stored = (await deps.sessions.get(forked.id)) ?? forked;
+        const session = { ...stored, canContinue: await canContinueOnWeb(principalId, stored) };
         return { session, entries: transcriptEntries((await transcripts.forRender(forked.id)).entries) };
       };
       const projectId = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
