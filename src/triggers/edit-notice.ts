@@ -1,7 +1,7 @@
 import { actsAsScope, type Cron, type CronSchedule, type Destination } from "../types.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { personKeys } from "../directory/person.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 
 export interface CronEditDetail {
@@ -90,8 +90,8 @@ export async function notifyOwnerOfCronEdit(
   if (actsAsScope(cron.owner, cron.ownerScopeId)) return;
   try {
     const [editor, owner] = await Promise.all([
-      sink.directoryMember(args.editorId).catch(() => null),
-      sink.directoryMember(cron.owner).catch(() => null),
+      sink.directoryMember(args.editorId).catch(reportFailureAs("cron edit notice: editor lookup", null)),
+      sink.directoryMember(cron.owner).catch(reportFailureAs("cron edit notice: owner lookup", null)),
     ]);
     const ownerKeys = personKeys(owner, cron.owner);
     if ([...personKeys(editor, args.editorId)].some((k) => ownerKeys.has(k))) return;
@@ -117,6 +117,7 @@ export async function notifyOwnerOfCronEdit(
       idempotencyKey: `cron-edit-notice:${cron.id}:${randomUUID()}`,
     });
   } catch (e) {
-    (onError ?? ((m) => console.warn("[cron-edit-notice]", m)))(errMessage(e));
+    if (onError) onError(errMessage(e));
+    else reportFailure("cron edit notice", e);
   }
 }

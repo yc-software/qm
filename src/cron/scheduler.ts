@@ -1,14 +1,7 @@
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import {
-  parseScopeId,
-  type Cron,
-  type CronFireLogEntry,
-  type CronFireNote,
-  type TurnRequest,
-  type TurnResult,
-} from "../types.ts";
+import { type Cron, type CronFireLogEntry, type CronFireNote, type TurnRequest, type TurnResult } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -16,7 +9,7 @@ import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
-import type { DirectoryMember, DirectoryStore } from "../directory/directory-store.ts";
+import type { DirectoryMember } from "../directory/directory-store.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { recoverNextFireAt } from "./schedule.ts";
@@ -24,7 +17,6 @@ import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
-import { isProjectGroupRef } from "../projects/project-store.ts";
 import { sleep } from "../util/async.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
@@ -85,7 +77,6 @@ export interface SchedulerDeps {
   directory?: VisibilityDirectory & {
     get(principalId: string): Promise<{ displayName: string } | null>;
     list(): Promise<DirectoryMember[]>;
-    conversationMembers?: DirectoryStore["conversationMembers"];
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
@@ -153,25 +144,11 @@ function mentionable(m: DirectoryMember): string {
   return `@${m.displayName}${mentionId ? ` (<@${mentionId}>)` : ""}`;
 }
 
-async function cronMentionRoster(deps: SchedulerDeps, cron: Cron): Promise<string | undefined> {
-  if (!deps.directory) return undefined;
-  const scope = cron.destination?.audienceScopeId;
-  if (!scope) return undefined;
-  const { kind, ref } = parseScopeId(scope);
-  if (kind !== "channel" && kind !== "group") return undefined;
-  const ids =
-    (
-      await deps.directory.conversationMembers?.(kind, ref).catch(reportFailureAs("cron mention roster", undefined))
-    )?.map((m) => m.principalId) ??
-    (kind === "group" && isProjectGroupRef(ref) ? (await deps.currentScopeMembers?.(scope))?.map((m) => m.id) : []) ??
-    [];
-  if (!ids.length || ids.length > CRON_MENTION_ROSTER_MAX) return undefined;
-  const byId = new Map((await deps.directory.list().catch(() => [])).map((m) => [m.principalId, m]));
-  const roster = ids
-    .map((id) => byId.get(id))
-    .filter((m): m is DirectoryMember => !!m && m.type === "internal")
-    .map(mentionable);
-  return roster.length ? roster.join(", ") : undefined;
+function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined): string | undefined {
+  if (cron.destination?.audienceScopeId !== cron.ownerScopeId) return undefined;
+  const internal = homeRoster?.filter((m) => m.type === "internal") ?? [];
+  if (!internal.length || internal.length > CRON_MENTION_ROSTER_MAX) return undefined;
+  return internal.map(mentionable).join(", ");
 }
 
 function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
@@ -285,7 +262,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
       return { authzFailed: false };
     }
-    const mentionRoster = await cronMentionRoster(deps, cron).catch(reportFailureAs("cron mention roster", undefined));
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       outcome = await runTrigger(
@@ -300,7 +276,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
         {
           ...cronTriggerAuthority(cron),
-          input: renderCronFireInput(cron, mentionRoster),
+          input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster)),
           fireKey,
           threadRef,
           surface: "cron",

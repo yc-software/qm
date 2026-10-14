@@ -46,7 +46,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fa
   title?: string;
   owner: string;
   ownerScopeId: ScopeId;
-  input: string;
+  input: string | ((homeRoster: DirectoryMember[] | undefined) => string);
   securityScreenData?: string;
   fireKey: string;
   surface: string;
@@ -324,7 +324,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         surface: spec.surface,
         actor: { externalId: actorId },
         conversation,
-        text: spec.input,
+        text: typeof spec.input === "string" ? spec.input : spec.input(roster),
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
         ...(ownerKind === "personal" && spec.unattendedGrants ? { unattendedGrants: spec.unattendedGrants } : {}),

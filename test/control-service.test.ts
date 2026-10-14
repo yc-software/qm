@@ -527,6 +527,28 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   const fromDm = await control.setCronEnabled(made.cron.id, false, claims("U1"));
   assert.ok(fromDm.ok, "the owner manages it from their DM");
 
+  const conversational = await built.app.createCron({
+    owner: "system:channel:C9",
+    createdBy: "system:channel:C9",
+    ownerScopeId: chanScope,
+    schedule: { everyMs: 60_000 },
+    action: "tidy",
+  });
+  assert.ok((await control.patchCron(conversational.id, { title: "renamed" }, chanClaims("U2"))).ok);
+  await built.app.grant({
+    ownerScopeId: chanScope,
+    ref: `cron:${conversational.id}`,
+    granteeScopeId: scopeId("personal", "U9"),
+    permission: "write",
+    grantedBy: "U2",
+  });
+  const outsiderEdit = await control.patchCron(conversational.id, { title: "mine" }, claims("U9"));
+  assert.equal(
+    outsiderEdit.ok ? "" : outsiderEdit.code,
+    "forbidden",
+    "only current members manage the conversation's cron",
+  );
+
   const personal = await control.createCron(
     { title: "inbox", schedule: { everyMs: 60_000 }, action: "triage" },
     claims("U1"),

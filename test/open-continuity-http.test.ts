@@ -329,7 +329,7 @@ test("HTTP private channel cron runs without its owner's keychain once the conve
   assert.equal(fired.started, true);
   if (fired.started) await fired.settled;
   const { runs } = await b.crons.listFires(cron.id);
-  assert.notEqual(runs.at(-1)?.status, "refused", "the fire still runs");
+  assert.equal(runs.at(-1)?.status, "ok", "the fire still runs");
   assert.ok(!(await b.deliveries.pending("slack")).some((d) => d.text.includes("isolated-credential-present")));
   assert.equal((await b.crons.get(cron.id))?.enabled, true);
 });
