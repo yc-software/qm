@@ -204,31 +204,63 @@ test(
   },
 );
 
-test("pg legacy tape step preparation skips payloads too large to parse and counts them", { skip }, async () => {
+test("pg legacy tape step preparation skips oversized payloads and sessions it cannot parse", { skip }, async () => {
   await withSchema(async (raw) => {
-    const huge = message([{ type: "text", text: "x".repeat(64 * 1024 * 1024) }]);
     await seedSession(
       raw,
       "huge",
-      [huge, message([{ type: "toolCall", id: "call-ok", name: "execute", arguments: {} }])],
-      [
-        ["tool_call", { tool: "execute", callId: "call-ok" }],
-        ["user", { text: "y".repeat(64 * 1024 * 1024) }],
-      ],
+      [message([{ type: "toolCall", id: "call-huge", name: "execute", arguments: {} }])],
+      [["tool_call", { tool: "execute", callId: "call-huge" }]],
+    );
+    await raw.query(
+      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, created_at)
+       VALUES ('huge', 1, 'message', 'pi', '{"role":"assistant","content":[{"type":"text","text":"' || repeat('x', 16 * 1024 * 1024) || '"}]}', $1, 1)`,
+      [scope],
+    );
+    await seedSession(
+      raw,
+      "nested",
+      [message([{ type: "toolCall", id: "call-nested", name: "execute", arguments: {} }])],
+      [["tool_call", { tool: "execute", callId: "call-nested" }]],
+    );
+    await raw.query(
+      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, created_at)
+       VALUES ('nested', 1, 'message', 'pi', '{"role":"assistant","content":' || repeat('[', 200000) || repeat(']', 200000) || '}', $1, 1)`,
+      [scope],
+    );
+    await seedSession(
+      raw,
+      "plain",
+      [message([{ type: "toolCall", id: "call-plain", name: "execute", arguments: {} }])],
+      [["tool_call", { tool: "execute", callId: "call-plain" }]],
     );
 
-    await raw.query("CALL prepare_legacy_tape_steps(1)");
+    await raw.query("CALL prepare_legacy_tape_steps(50)");
 
-    assert.deepEqual((await raw.query("SELECT session_id, seq FROM legacy_tape_steps ORDER BY seq")).rows, [
-      { session_id: "huge", seq: 0 },
-    ]);
-    assert.deepEqual(await progress(raw), {
-      last_session: "huge",
-      done: true,
-      invalid_messages: 1,
-      keyed_blocks: 1,
-      copied_steps: 1,
-      copied_turns: 0,
-    });
+    assert.deepEqual(
+      (await raw.query("SELECT session_id FROM legacy_tape_steps ORDER BY session_id")).rows.map((r) => r.session_id),
+      ["huge", "plain"],
+    );
+    const skipped = (await raw.query("SELECT session_id, error FROM legacy_tape_skipped")).rows;
+    assert.deepEqual(
+      skipped.map((r) => r.session_id),
+      ["nested"],
+    );
+    assert.match(skipped[0].error, /^54001: stack depth limit exceeded/);
+    assert.deepEqual(
+      {
+        ...(await progress(raw)),
+        skipped: (await raw.query("SELECT skipped_sessions::int AS n FROM legacy_tape_steps_progress")).rows[0].n,
+      },
+      {
+        last_session: "plain",
+        done: true,
+        invalid_messages: 1,
+        keyed_blocks: 2,
+        copied_steps: 2,
+        copied_turns: 0,
+        skipped: 1,
+      },
+    );
   });
 });
