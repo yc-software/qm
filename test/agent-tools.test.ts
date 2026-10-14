@@ -1453,7 +1453,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
       emitted.push(e as Emitted);
     },
     scopeLabel: "personal:U1",
-    pollFire: true,
+    allowSilence: true,
   };
   const finish = createAgentTools(ref).find((t) => t.name === "finish_silently");
   const res = (await call(finish, { reason: "nothing new" })) as { terminate?: boolean };
@@ -1471,7 +1471,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
     1,
   );
 
-  ref.pollFire = false;
+  ref.allowSilence = false;
   ref.silentRequested = false;
   const noop = (await call(finish, { reason: "n/a" })) as { terminate?: boolean; content: Array<{ text?: string }> };
   assert.notEqual(noop.terminate, true, "a person is waiting — the tool must not end the turn");

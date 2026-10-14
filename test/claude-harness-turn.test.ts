@@ -675,7 +675,7 @@ for (const surfaceTools of [false, true]) {
       yield resultMessage("Nothing to add");
     };
     const harness = createClaudeHarness();
-    const { turn, entries } = harnessTurn({ pollFire: !surfaceTools, surfaceTools });
+    const { turn, entries } = harnessTurn({ allowSilence: !surfaceTools, surfaceTools });
     const result = await harness.turns.runTurn(turn);
     assert.equal(result.silent, true);
     assert.equal(result.reply, "");

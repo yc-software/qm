@@ -301,8 +301,8 @@ export function createMockHarness(): Harness {
           });
           await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
           usedTool = true;
-          silent = turn.pollFire === true;
-          reply = turn.pollFire ? "" : preamble;
+          silent = turn.allowSilence === true;
+          reply = turn.allowSilence ? "" : preamble;
         } else if (command0.startsWith("!narrate-no-update")) {
           const narration =
             cmd.slice(cmd.indexOf("!narrate-no-update") + "!narrate-no-update".length).trim() || "Nothing new.";
@@ -353,7 +353,7 @@ export function createMockHarness(): Harness {
           reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
         } else if (command0 === "!finish-silent") {
           usedTool = true;
-          silent = turn.pollFire === true || turn.surfaceTools === true;
+          silent = turn.allowSilence === true || turn.surfaceTools === true;
           reply = silent ? "" : "Nothing to report; ending silently.";
           if (silent) {
             await turn.emit({ type: "tool_call", payload: { tool: "finish_silently" }, scopeLabel: turn.scopeLabel });
@@ -365,7 +365,7 @@ export function createMockHarness(): Harness {
           }
         } else if (command0 === "!finish-silent-approval") {
           usedTool = true;
-          silent = turn.pollFire === true || turn.surfaceTools === true;
+          silent = turn.allowSilence === true || turn.surfaceTools === true;
           reply = silent ? "" : "I couldn't finish one check, but nothing to report.";
           collected.push({ command: "gated-check", reason: "requires approval" });
         } else if (command0 === "!cachemiss") {
@@ -493,7 +493,7 @@ export function createMockHarness(): Harness {
           reply = `about to run it`;
         } else if (command0 === "!finish-silent-paused") {
           usedTool = true;
-          silent = turn.pollFire === true || turn.surfaceTools === true;
+          silent = turn.allowSilence === true || turn.surfaceTools === true;
           pausedOnApproval = true;
           collected.push({ command: "gated-check", reason: "requires approval" });
           reply = "";
@@ -655,7 +655,7 @@ export function createMockHarness(): Harness {
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
-          if (tag === "!attachsilent ") silent = turn.pollFire === true;
+          if (tag === "!attachsilent ") silent = turn.allowSilence === true;
           reply = r.ok ? "" : `[not attached] ${r.message}`;
         } else if (command0.startsWith("!reachchan ")) {
           const rest = cmd.slice(cmd.indexOf("!reachchan ") + "!reachchan ".length);

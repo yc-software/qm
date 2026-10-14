@@ -111,7 +111,7 @@ export interface HarnessTurnInput {
   delegateWork?: boolean;
   surfaceName?: string;
   clientTools?: readonly ClientToolDeclaration[];
-  pollFire?: boolean;
+  allowSilence?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
   history: SessionEntry[];

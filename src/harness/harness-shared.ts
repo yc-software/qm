@@ -90,7 +90,7 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     pendingApprovals: [],
     pausedOnApproval: false,
     silentRequested: false,
-    pollFire: Boolean(turn.pollFire),
+    allowSilence: Boolean(turn.allowSilence),
     goal: turn.goal ?? rehydrateOpenGoal(turn.history),
     ...(turn.goal || turn.continueTurn ? { goalRound: 1 } : {}),
     emit: turn.emit,

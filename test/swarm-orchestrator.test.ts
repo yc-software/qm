@@ -6,6 +6,8 @@ import * as mockHarness from "../src/harness/mock-harness.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
+import { createAgentTools } from "../src/harness/agent-tools.ts";
+import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createServer } from "../src/api/server.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
@@ -588,6 +590,75 @@ test("swarms stay off for a person until the swarms flag names their personal sc
     assert.equal(await built.app.swarms.enabledFor("U1"), true);
     assert.equal(await built.app.swarms.enabledFor("U2"), false);
   } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("verified swarm notifications can finish silently without silencing an ordinary root followup", async () => {
+  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  const request: TurnRequest = {
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "silent-notification-root" },
+    origin: { kind: "human" },
+    text: "Initialize",
+  };
+  try {
+    const initial = await built.app.turn(request);
+    const root = (await built.sessions.get(initial.sessionId!))!;
+    const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;
+    const caller = { kind: "human" as const, actorId: "U1", sessionId: root.id, runId: rootRun.id };
+    const service = built.app.swarms!;
+    const forum = await built.sandboxResources.create("U1", root.scopeId, "sprites", "Forum");
+    await service.spawn(caller, { requestId: "quiet-worker", text: "Routine status", forumSandboxId: forum.id });
+    await service.sweep();
+    const notifications = (await built.runs.list()).filter((run) => run.request.swarm);
+    assert.equal(notifications.length, 1);
+    const visited = new Set<string>();
+    const outcomes: boolean[] = [];
+    exerciseTurn = async (turn) => {
+      const ref = harnessToolContext(turn);
+      const tool = createAgentTools(ref).find(({ name }) => name === "finish_silently")!;
+      const result = await (
+        tool.execute as unknown as (id: string, params: unknown) => Promise<{ terminate?: boolean }>
+      )("quiet", { reason: "routine status" });
+      const ordinary = turn.input === "ordinary-followup";
+      if (!ordinary && turn.session.id !== root.id) {
+        await service.send(
+          { kind: "human", actorId: "U1", sessionId: turn.session.id, runId: turn.runId },
+          { requestId: "quiet-root", audience: [root.id], text: "Routine status" },
+        );
+        await service.sweep();
+      }
+      outcomes.push(result.terminate === true && ref.silentRequested === true);
+      visited.add(turn.session.id);
+      turn.input = "!finish-silent";
+    };
+    built.runtime.start();
+    const worker = await built.runs.waitFor(notifications[0]!.id, 15_000);
+    const rootNotification = (await built.runs.list()).find((run) => run.request.swarm?.recipientId === root.id)!;
+    const completed = [worker, await built.runs.waitFor(rootNotification.id, 15_000)];
+    assert.deepEqual(outcomes, [true, true]);
+    for (const run of completed) {
+      assert.equal(run.result?.status, "silent", JSON.stringify(run.result));
+      const entries = (await built.sessions.getEntries(run.result!.sessionId!)).filter(
+        ({ seq }) => seq >= run.turnUserSeq!,
+      );
+      assert.ok(
+        entries.some(({ type, payload }) => type === "tool_result" && (payload as { silent?: boolean }).silent),
+      );
+      assert.equal(
+        entries.some(({ type, payload }) => type === "assistant" && (payload as { text?: string }).text?.trim()),
+        false,
+      );
+    }
+    assert.equal(visited.size, 2);
+    const followup = await built.app.turn({ ...request, text: "ordinary-followup" });
+    assert.equal(followup.status, "ok");
+    assert.match(followup.reply!, /Nothing to report/);
+    assert.deepEqual(outcomes, [true, true, false]);
+  } finally {
+    exerciseTurn = undefined;
     await built.runtime.stop();
   }
 });

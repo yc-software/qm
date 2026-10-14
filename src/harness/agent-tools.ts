@@ -106,7 +106,7 @@ export interface ToolContextRef {
   fast?: boolean;
   abortSignal?: AbortSignal;
   shutdown?: AbortSignal;
-  pollFire?: boolean;
+  allowSilence?: boolean;
   silentRequested?: boolean;
 
   goal?: GoalRecord | null;
@@ -3799,7 +3799,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "finish_silently",
     description:
       "Ends this turn silently. Use on surface turns when choosing not to reply at all, and on " +
-      "scheduled background fires with nothing worth reporting. After posting a reply, just stop; " +
+      "scheduled background fires and swarm notifications with nothing worth reporting. After posting a reply, just stop; " +
       "this is not needed. Keeps the audit log and any messages already posted. " +
       "On a direct human turn without surface tools this does nothing — just answer.",
     parameters: Type.Object({
@@ -3811,14 +3811,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
     }),
     async execute(callId, params) {
-      if (!ref.pollFire && !surfaceTools) {
+      if (!ref.allowSilence && !surfaceTools) {
         await recordCall(callId, { tool: "finish_silently", ...(params.reason ? { reason: params.reason } : {}) });
         return recordResult(
           callId,
-          { tool: "finish_silently", noop: "not_a_poll_fire" },
-          text(
-            "[no-op] finish_silently only applies to surface turns or scheduled background fires; a person is waiting on this turn — just reply.",
-          ),
+          { tool: "finish_silently", noop: "reply_required" },
+          text("[no-op] finish_silently does not apply to direct human turns without surface tools — just reply."),
           true,
         );
       }

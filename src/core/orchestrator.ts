@@ -3055,6 +3055,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
         }
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
+        const allowSilence = isPollFire || Boolean(input.swarm && swarmBinding);
         const sessionUsedTools = visibleHistory.some(
           (e) =>
             e.type === "tool_call" &&
@@ -3484,7 +3485,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             delegateWork,
             ...(input.clientTools?.length ? { clientTools: input.clientTools } : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
-            ...(isPollFire ? { pollFire: true } : {}),
+            ...(allowSilence ? { allowSilence: true } : {}),
             ...(effectiveTurnWallClockMs !== undefined
               ? {
                   turnWallClockMs:
@@ -3959,7 +3960,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sourceAssistantEntrySeq = [...emittedEntries].reverse().find((e) => e.type === "assistant")?.seq;
         if (cancelStopped && !result.pendingApprovals?.length) {
           finalResult = { status: "silent", sessionId: session.id, stopped: true };
-        } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
+        } else if (allowSilence && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
           const approvals: PendingApproval[] = [];

@@ -17,7 +17,7 @@ function base(over: Partial<Opts> = {}): Opts {
     userAborted: false,
     cancelled: false,
     surfaceTools: false,
-    pollFire: false,
+    allowSilence: false,
     ref: { modelCalls: 48 },
     session: session(""),
     turnWallClockMs: 1_800_000,
@@ -26,11 +26,11 @@ function base(over: Partial<Opts> = {}): Opts {
   };
 }
 
-test("a poll fire ending empty is the silence contract — never nudged into narration", () => {
-  assert.equal(emptyEndingNote(base({ pollFire: true })), null);
-  assert.equal(emptyEndingNote(base({ pollFire: true, ref: { modelCalls: 1 } })), null);
-  assert.equal(emptyEndingNote(base({ pollFire: true, ref: {} })), null);
-  assert.equal(emptyEndingNote(base({ pollFire: true, session: session("  \n ") })), null);
+test("a silence-eligible automated turn ending empty is never nudged into narration", () => {
+  assert.equal(emptyEndingNote(base({ allowSilence: true })), null);
+  assert.equal(emptyEndingNote(base({ allowSilence: true, ref: { modelCalls: 1 } })), null);
+  assert.equal(emptyEndingNote(base({ allowSilence: true, ref: {} })), null);
+  assert.equal(emptyEndingNote(base({ allowSilence: true, session: session("  \n ") })), null);
 });
 
 test("a non-poll turn ending empty mid-work gets the plain note", () => {

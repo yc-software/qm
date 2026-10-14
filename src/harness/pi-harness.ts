@@ -992,7 +992,7 @@ export function emptyEndingNote(opts: {
   userAborted: boolean;
   cancelled: boolean;
   surfaceTools: boolean;
-  pollFire: boolean;
+  allowSilence: boolean;
   ref: {
     runtimeHandoff?: unknown;
     silentRequested?: boolean;
@@ -1012,7 +1012,7 @@ export function emptyEndingNote(opts: {
     opts.ref.pendingApprovals?.length
   )
     return null;
-  if (opts.pollFire) return null;
+  if (opts.allowSilence) return null;
   const calls = opts.ref.modelCalls ?? 0;
   if (calls === 0) return null;
   if (piFailedAssistant(opts.session)) return null;
@@ -1759,7 +1759,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           pendingApprovals: [],
           pausedOnApproval: undefined,
           silentRequested: false,
-          pollFire: !!dispatched.pollFire,
+          allowSilence: !!dispatched.allowSilence,
           screenToolResult: dispatched.screenToolResult,
           governGoal: dispatched.governGoal,
           emit: dispatched.emit,
@@ -2215,7 +2215,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               userAborted,
               cancelled: !!turn.cancel?.aborted,
               surfaceTools: !!turn.surfaceTools,
-              pollFire: !!turn.pollFire,
+              allowSilence: !!turn.allowSilence,
               ref: entry.ref,
               session: entry.agentSession,
               turnWallClockMs,
