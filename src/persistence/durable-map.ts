@@ -216,6 +216,7 @@ export function createPostgresMap<T>(
         {
           id: `durable-map/${table}/stats-${field.toLowerCase()}`,
           statements: [
+            `SET LOCAL lock_timeout = '3s'`,
             `CREATE STATISTICS IF NOT EXISTS ${table}_${field.toLowerCase()}_stats ON (json->>'${field}') FROM ${table}`,
             `ANALYZE ${table}`,
           ],
