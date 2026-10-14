@@ -1,3 +1,4 @@
+import { toolCallApprovalKey } from "../core/approval-id.ts";
 import {
   defineHarness,
   type Harness,
@@ -160,15 +161,18 @@ export function createMockHarness(): Harness {
           kind?: "approval";
           matched?: string;
           approvalKey?: string;
+          toolCallKey?: string;
         }> = [];
         let pausedOnApproval = false;
-        const gateTool = (tool: string): boolean => {
-          if (!turn.toolApprovalGate || turn.toolApprovalGate(tool)) return false;
+        const gateTool = (tool: string, params: unknown): boolean => {
+          const toolCallKey = toolCallApprovalKey(tool, params);
+          if (!turn.toolApprovalGate || turn.toolApprovalGate(tool, toolCallKey)) return false;
           collected.push({
             command: tool,
             reason: "strict posture: this tool call requires human approval",
             kind: "approval",
             approvalKey: `tool:${tool}`,
+            toolCallKey,
           });
           pausedOnApproval = true;
           return true;
@@ -407,7 +411,10 @@ export function createMockHarness(): Harness {
           else if (command0.startsWith("!owner ")) tag = "!owner ";
           const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
           const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
-          if (gateTool("execute")) {
+          let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
+          if (tag === "!scratch ") opts = { scratch: true };
+          else if (tag === "!owner ") opts = { ownerAuth: true };
+          if (gateTool("execute", { command, ...opts })) {
             await turn.emit({
               type: "tool_call",
               payload: { tool: "execute", command, blocked: "needs_approval" },
@@ -417,9 +424,6 @@ export function createMockHarness(): Harness {
             reply = "";
           } else {
             await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
-            let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
-            if (tag === "!scratch ") opts = { scratch: true };
-            else if (tag === "!owner ") opts = { ownerAuth: true };
             const result = await turn.tools.execute(command, opts);
             await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
             turn.onProgress?.({ toolCalls: 1 });
@@ -549,7 +553,7 @@ export function createMockHarness(): Harness {
           }
           usedTool = true;
           reply = `ran ${ran}`;
-        } else if (command0.startsWith("!read ") && gateTool("read")) {
+        } else if (command0.startsWith("!read ") && gateTool("read", { path: command0.slice(6).trim() })) {
           usedTool = true;
           reply = "";
         } else if (command0.startsWith("!read ")) {
@@ -619,7 +623,7 @@ export function createMockHarness(): Harness {
           const sp = rest.indexOf(" ");
           const path = sp === -1 ? rest : rest.slice(0, sp);
           const data = sp === -1 ? "" : rest.slice(sp + 1);
-          if (gateTool("write")) {
+          if (gateTool("write", { path, data })) {
             usedTool = true;
             reply = "";
           } else {

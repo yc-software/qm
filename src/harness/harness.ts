@@ -118,7 +118,7 @@ export interface HarnessTurnInput {
   goal?: GoalRecord | null;
   tools: ToolContext;
   commandCredentialHandles?: readonly string[];
-  toolApprovalGate?(tool: string): boolean;
+  toolApprovalGate?(tool: string, callKey: string): boolean;
   emit(entry: NewEntry): Promise<SessionEntry>;
   resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
@@ -150,6 +150,7 @@ export interface HarnessTurnResult {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    toolCallKey?: string;
     grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;

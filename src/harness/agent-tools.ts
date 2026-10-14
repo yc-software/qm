@@ -1,3 +1,4 @@
+import { toolCallApprovalKey } from "../core/approval-id.ts";
 import { adminOperations } from "../tools/admin.ts";
 import { MAX_OUTBOUND_FILES, type OutboundFile } from "../core/attachments.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
@@ -80,6 +81,7 @@ export interface ToolContextRef {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    toolCallKey?: string;
     summary?: string;
     grantModes?: { session: boolean; always: boolean };
   }>;
@@ -119,7 +121,7 @@ export interface ToolContextRef {
   /** The agent's recent work for the governor, newest last. */
   goalRecentWork?: () => string;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
-  toolApprovalGate?: (tool: string) => boolean;
+  toolApprovalGate?: (tool: string, callKey: string) => boolean;
 }
 
 function text(s: string) {
@@ -4495,12 +4497,14 @@ function withToolApprovalGate(
         ? `${tool.name}:${resourceAction ?? "invalid"}`
         : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
-      if (gate && !gate(approvalIdentity)) {
+      const toolCallKey = gate ? toolCallApprovalKey(approvalIdentity, params) : undefined;
+      if (gate && toolCallKey && !gate(approvalIdentity, toolCallKey)) {
         ref.pendingApprovals?.push({
           command: commandLabel,
           reason: STRICT_TOOL_APPROVAL_REASON,
           kind: "approval",
           approvalKey: `tool:${approvalIdentity}`,
+          toolCallKey,
           ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
           ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
         });

@@ -1380,7 +1380,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         commandUses.set(key, uses - 1);
         return true;
       };
-      const authorizeToolCall = (tool: string): boolean => consumeApproval(`tool:${tool}`);
+      const authorizeToolCall = (tool: string, callKey: string): boolean =>
+        consumeApproval(callKey) || (commandUses.get(`tool:${tool}`) === Infinity && consumeApproval(`tool:${tool}`));
       const authorizeCommand = (command: string, approvalKey?: string, exactApprovalKey = false): boolean => {
         let key = approvalKey ?? command;
         if (approvalKey !== undefined && commandUses.has(approvalKey)) key = approvalKey;
@@ -2204,7 +2205,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 .clearSecurityTaint(session.id)
                 .catch(swallowAs("clearSecurityTaint on input approval", false));
             }
-            const useKey = p.approvalKey ?? p.command;
+            const useKey = (scope === "once" ? p.toolCallKey : undefined) ?? p.approvalKey ?? p.command;
             if (p.screenedOutput && quarantineRelease) {
               releasedToolOutput = p.screenedOutput;
               deps.auditLog.record({
@@ -3988,11 +3989,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               : grantModesField;
             const command = pa.command;
+            const identity = pa.toolCallKey ? `${turnKey}:${pa.toolCallKey}` : command;
             const requestId = commandApprovalId(
               session.id,
               pa.screenedOutput
-                ? `${command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
-                : command,
+                ? `${identity}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
+                : identity,
             );
             const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
             prepared.push({
@@ -4011,6 +4013,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
                 ...(pa.screenedOutput ? { screenedOutput: pa.screenedOutput } : {}),
                 ...(pa.approvalKey ? { approvalKey: pa.approvalKey } : {}),
+                ...(pa.toolCallKey ? { toolCallKey: pa.toolCallKey } : {}),
                 ...(pa.kind ? { kind: pa.kind } : {}),
               },
               approval: {
