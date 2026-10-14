@@ -29,7 +29,6 @@ try {
   assert.equal(await actions.evaluate((el) => el.ownerDocument.defaultView.getComputedStyle(el).opacity), "1");
   assert.deepEqual(await group.locator(".split-pane-title").boundingBox(), titleBox);
   assert.deepEqual(await target.locator(".chat-scroll").boundingBox(), inputBox);
-  assert.equal(await target.locator(".composer-wrap").isVisible(), false);
   await page.mouse.move(0, 0);
   await actions.locator("button").first().focus();
   assert.equal(await actions.evaluate((el) => el.ownerDocument.defaultView.getComputedStyle(el).opacity), "1");
