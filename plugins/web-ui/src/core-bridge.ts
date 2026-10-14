@@ -392,6 +392,10 @@ export async function regenerateTitle(id: string): Promise<{ title: string | nul
 export async function detachSession(id: string): Promise<{ detached: true }> {
   return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
 }
+
+export async function cancelSessionGoal(id: string): Promise<{ cancelled: true }> {
+  return api<{ cancelled: true }>(`/api/sessions/${encodeURIComponent(id)}/goal/cancel`, { method: "POST" });
+}
 export interface SessionEntry {
   type:
     | "user"
@@ -1740,7 +1744,7 @@ function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
   return { title: xmlAttrUnescape(m[1]!), sessionId: m[2]!, kind: m[3]! };
 }
 
-export interface HistorySystemNote {
+interface MessageRevisionNote {
   role: "system-note";
   note: "message_revision";
   action: "edited" | "deleted";
@@ -1749,6 +1753,15 @@ export interface HistorySystemNote {
   speaker?: string;
   timestamp?: number;
 }
+
+interface GoalCancelledNote {
+  role: "system-note";
+  note: "goal_cancelled";
+  content: string;
+  timestamp?: number;
+}
+
+export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote;
 
 export interface HistoryApprovalDecision {
   role: "approval-decision";
@@ -1821,7 +1834,13 @@ export function messagesWithStreaming(messages: AgentMessage[], streaming?: Agen
   });
 }
 
-function messageRevisionPayload(payload: unknown): HistorySystemNote | null {
+function goalCancelledPayload(payload: unknown): GoalCancelledNote | null {
+  const p = payload as { kind?: unknown; cancelledBy?: unknown; goal?: { objective?: unknown } | null } | null;
+  if (p?.kind !== "goal" || typeof p.cancelledBy !== "string" || typeof p.goal?.objective !== "string") return null;
+  return { role: "system-note", note: "goal_cancelled", content: p.goal.objective };
+}
+
+function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
   const p = payload as { kind?: unknown; action?: unknown; ts?: unknown; text?: unknown; name?: unknown } | null;
   if (p?.kind !== "message_revision") return null;
   if (p.action !== "edited" && p.action !== "deleted") return null;
@@ -2109,6 +2128,13 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     } else if (e.type === "delivery") {
       appendDeliveryFiles(deliveredFilesFromAttachments(payload?.files));
     } else if (e.type === "system") {
+      const goalNote = goalCancelledPayload(e.payload);
+      if (goalNote) {
+        spillHeldPosts();
+        flushWork("", e.createdAt);
+        out.push({ ...goalNote, timestamp: e.createdAt } as unknown as AgentMessage);
+        continue;
+      }
       const revision = messageRevisionPayload(e.payload);
       if (revision) {
         spillHeldPosts();

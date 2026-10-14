@@ -348,7 +348,7 @@ test("renderGoalNotice: one line per status, floor shown while active", () => {
     "◐ Pursuing goal: get the tests green &lt;fast&gt; · at least 30m",
   );
   assert.equal(renderGoalNotice({ objective: "obj", status: "complete" }), "✓ Goal complete: obj");
-  assert.equal(renderGoalNotice({ objective: "obj", status: "blocked" }), "✕ Goal blocked: obj");
+  assert.equal(renderGoalNotice({ objective: "obj", status: "cancelled" }), "✕ Goal cancelled: obj");
   assert.equal(renderGoalNotice({ objective: "obj", status: "paused" }), "⏸ Goal paused: obj");
 });
 

@@ -1,6 +1,6 @@
 export interface GoalView {
   objective: string;
-  status: "active" | "paused" | "complete" | "blocked";
+  status: "active" | "paused" | "complete" | "cancelled";
 
   floor?: string;
   createdAt: number;
@@ -231,7 +231,7 @@ export function goalViewFromEntry(type: string, payload: unknown): GoalView | nu
   if (!goal || typeof goal !== "object") return null;
   if (typeof goal.objective !== "string" || !goal.objective.trim()) return null;
   const status = goal.status;
-  if (status !== "active" && status !== "paused" && status !== "complete" && status !== "blocked") return null;
+  if (status !== "active" && status !== "paused" && status !== "complete" && status !== "cancelled") return null;
   const floor = formatFloor(goal.floor ?? null);
   return {
     objective: goal.objective,

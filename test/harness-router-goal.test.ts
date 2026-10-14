@@ -4,6 +4,7 @@ import { createGoalRecord, latestGoalRecord, rehydrateOpenGoal } from "../src/ha
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
@@ -231,3 +232,35 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
     assert.equal(rehydrateOpenGoal(emitted)?.status, "paused");
   });
 }
+
+test("a person's cancel during a continuation round ends the loop and persists a cancelled goal", async () => {
+  const emitted: SessionEntry[] = [];
+  const { harness, calls } = fakeAdapter(async (turn, round) => {
+    if (round === 0) {
+      await emitGoalCreate(turn, "old outreach goal");
+      return { reply: "starting" };
+    }
+    if (round > 1) return { reply: "", stopped: true };
+    const ref: ToolContextRef = {
+      current: { humanTurn: true } as ToolContextRef["current"],
+      scopeLabel: scope,
+      emit: async (entry) => turn.emit(entry as Parameters<typeof turn.emit>[0]),
+      goal: turn.goal ?? null,
+    };
+    const goalTool = createAgentTools(ref).find((tool) => tool.name === "goal")!;
+    await (goalTool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("c9", {
+      action: "update",
+      status: "cancel",
+      note: "user (steered): cancel that goal, do not do more of it",
+    });
+    return { reply: "cancelled" };
+  });
+
+  await router(harness).turns.runTurn(stubTurn(emitted, { turnWallClockMs: 600_000 }));
+
+  assert.equal(calls.length, 2, "no keep-going prompt follows the cancellation");
+  const last = emitted.at(-1)!;
+  assert.equal(last.type, "system");
+  assert.equal((last.payload as { goal: { status: string } }).goal.status, "cancelled");
+  assert.equal(rehydrateOpenGoal(emitted), null, "the next turn starts without the cancelled goal");
+});

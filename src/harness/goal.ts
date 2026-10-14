@@ -31,7 +31,7 @@
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
 
-type GoalStatus = "active" | "paused" | "complete";
+type GoalStatus = "active" | "paused" | "complete" | "cancelled";
 
 export interface GoalRecord {
   objective: string;
@@ -48,6 +48,7 @@ export interface GoalRecord {
   /** When the user last resumed the goal; time before it (while paused) never counts. */
   activeSince?: number;
   completionNote?: string;
+  cancelNote?: string;
   /** The governor's last verdict; a pause is only honored right after a step back. */
   governor?: GovernorVerdict;
   /** Why the governor paused the goal: the question waiting on the user. */
@@ -148,7 +149,7 @@ export function goalContinuationPrompt(goal: GoalRecord, meter: GrindMeter): str
     `- Derive the concrete requirements from the objective; verify each against authoritative current state (files, command output, test results), not memory or intent.`,
     `- Do not redefine success around a smaller, easier, or merely test-passing subset. A narrow check never supports a broad claim.`,
     `- Uncertain or indirect evidence means NOT done: gather stronger evidence or keep working.`,
-    `There is no other way out: you cannot pause, block or abandon this goal, and going quiet does not end it — only the user can stop it. If you feel stuck, that is the signal to change approach: re-read the objective, question your assumptions, try a different method or tool, or break the problem down differently. An independent governor reviews your recent work periodically and decides whether a blocker genuinely needs the user. Keep working.`,
+    `There is no other way out: you cannot pause, block or abandon this goal, and going quiet does not end it — only the user can stop or cancel it. If you feel stuck, that is the signal to change approach: re-read the objective, question your assumptions, try a different method or tool, or break the problem down differently. An independent governor reviews your recent work periodically and decides whether a blocker genuinely needs the user. Keep working.`,
     `If the objective is verifiably achieved, request completion with goal action update "complete" and a note carrying the concrete evidence; a fresh verifier decides from that note alone. Otherwise go deeper on the least-examined requirement now.`,
   ]
     .filter(Boolean)
@@ -206,7 +207,8 @@ export function goalPausedNote(goal: GoalRecord): string {
     `[goal] This session has a PAUSED goal (paused when a turn was stopped or by request):\n` +
     `<objective>\n${escapeTags(goal.objective)}\n</objective>\n` +
     `Do not pursue it and do not treat it as enforced. If the user's message explicitly asks to resume it, ` +
-    `call goal action update with status "resume"; never resume it on your own initiative.`
+    `call goal action update with status "resume"; if it explicitly asks to cancel, drop or replace it, call goal action update with status "cancel". ` +
+    `Never do either on your own initiative.`
   );
 }
 
@@ -216,7 +218,7 @@ export function goalSteeringNote(goal: GoalRecord): string {
     `[goal] This session has an active goal registered earlier (status: active` +
     (goal.capTokens ? `, tokens ${goal.tokensUsed}/${goal.capTokens}` : "") +
     `):\n<objective>\n${escapeTags(goal.objective)}\n</objective>\n` +
-    `Unless this message changes or drops the goal, weigh it in everything you do this turn; use goal action get / goal action update to inspect or close it. Only the user stopping it, or goal action update "complete" once it is achieved, ends it.`
+    `Unless this message changes or drops the goal, weigh it in everything you do this turn; use goal action get / goal action update to inspect or close it. Only the user stopping or cancelling it, or goal action update "complete" once it is achieved, ends it.`
   );
 }
 
@@ -356,9 +358,25 @@ export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
  * would re-emit an end-of-turn snapshot — and a fresh "goal complete"
  * notice — on every later turn.
  */
+export function goalIsOpen(goal: GoalRecord | null | undefined): goal is GoalRecord {
+  return goal?.status === "active" || goal?.status === "paused";
+}
+
 export function rehydrateOpenGoal(history: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
   const goal = latestGoalRecord(history);
-  return goal && (goal.status === "active" || goal.status === "paused") ? reviveGoalRecord(goal) : null;
+  return goalIsOpen(goal) ? goal : null;
+}
+
+export function cancelGoal(goal: GoalRecord, note: string, now = Date.now()): void {
+  goal.status = "cancelled";
+  goal.updatedAt = now;
+  goal.cancelNote = note;
+  delete goal.pauseReason;
+  delete goal.governor;
+}
+
+export function goalCancelledNote(goal: GoalRecord): string {
+  return `[goal] The user cancelled this goal; it is no longer enforced and must not be pursued:\n<objective>\n${escapeTags(goal.objective)}\n</objective>`;
 }
 
 export function latestGoalEntry<T extends { type: string; payload?: unknown }>(entries: ReadonlyArray<T>): T | null {

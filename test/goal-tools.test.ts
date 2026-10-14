@@ -284,7 +284,7 @@ test("stop, then a later human turn resumes from the persisted pause and complet
   assert.equal(next.ref.goal?.status, "paused");
   assert.match(
     goalPausedNote(next.ref.goal!),
-    /explicitly asks to resume[\s\S]*never resume it on your own initiative/,
+    /explicitly asks to resume[\s\S]*Never do either on your own initiative/,
   );
   next.ref.current = { humanTurn: true } as never;
   await next.update.execute("u1", { status: "resume", note: "user: resume the goal" });
@@ -347,7 +347,7 @@ test("agent cannot pause a goal or bypass its work floor", async () => {
   assert.deepEqual(ref.goal, before);
 });
 
-test("goal update schema offers only complete and resume", () => {
+test("goal update schema offers only complete, resume and cancel", () => {
   const { tools } = toolbox();
   const goal = tools.find((tool) => tool.name === "goal")!;
   assert.doesNotMatch(JSON.stringify(goal.parameters), /"paused"|"blocked"|"active"/);
@@ -377,4 +377,72 @@ test("update reads named workspace files into the governor's evidence", async ()
   assert.match(seen, /<file path="report.md">\n# Findings\nthree candidates\n<\/file>/);
   assert.match(seen, /<file path="gone.md">\n\[missing: no such file\]/);
   assert.equal(ref.goal?.status, "complete");
+});
+
+for (const start of ["active", "paused"] as const) {
+  test(`cancel of a ${start} goal is refused on turns no person started, and the goal is unchanged`, async () => {
+    const { ref, create, update } = toolbox();
+    await create.execute("c1", { objective: "long haul" });
+    ref.goal!.status = start;
+    const before = structuredClone(ref.goal);
+    for (const current of [null, {}, { humanTurn: false }]) {
+      ref.current = current as never;
+      const result = await update.execute("u1", { status: "cancel", note: "giving up" });
+      assert.match(textOf(result as never), /Only the user can cancel/);
+    }
+    assert.deepEqual(ref.goal, before);
+    assert.match(textOf((await create.execute("c2", { objective: "another" })) as never), /already registered/);
+  });
+
+  test(`a person's request cancels a ${start} goal without completing it, and a replacement can be registered`, async () => {
+    const { ref, create, update } = toolbox();
+    let governorCalls = 0;
+    ref.governGoal = async () => {
+      governorCalls++;
+      return { verdict: "complete", reasons: "proven" };
+    };
+    await create.execute("c1", { objective: "old research", floor: { minTurns: 50 } });
+    ref.goal!.status = start;
+    ref.current = { humanTurn: true } as never;
+    const result = await update.execute("u1", {
+      status: "cancel",
+      note: "user: drop the old goal and start the new one",
+    });
+    assert.match(textOf(result as never), /cancelled at the user's request/);
+    assert.equal(ref.goal?.status, "cancelled");
+    assert.equal(ref.goal?.cancelNote, "user: drop the old goal and start the new one");
+    assert.equal(ref.goal?.completionNote, undefined);
+    assert.equal(governorCalls, 0, "cancelling never asks the governor to call the work complete");
+    const history = [{ type: "system", payload: goalSnapshotPayload(ref.goal!) }];
+    assert.equal(rehydrateOpenGoal(history), null, "a cancelled goal is not revived by a later turn");
+    const replaced = await create.execute("c2", { objective: "broader research and sending" });
+    assert.match(textOf(replaced as never), /registered and now enforced/);
+    assert.equal(ref.goal?.objective, "broader research and sending");
+    assert.equal(ref.goal?.status, "active");
+  });
+}
+
+test("cancel needs an open goal", async () => {
+  const { ref, create, update } = toolbox();
+  ref.current = { humanTurn: true } as never;
+  assert.match(
+    textOf((await update.execute("u0", { status: "cancel", note: "x" })) as never),
+    /No active or paused goal/,
+  );
+  await create.execute("c1", { objective: "ship it" });
+  await update.execute("u1", { status: "complete", note: "done" });
+  assert.equal(ref.goal?.status, "complete");
+  assert.match(
+    textOf((await update.execute("u2", { status: "cancel", note: "x" })) as never),
+    /No active or paused goal/,
+  );
+  assert.equal(ref.goal?.status, "complete");
+});
+
+test("a cancelled goal ends enforcement: no continuation and no floor keep-going", async () => {
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "grind", floor: { minTurns: 100 } });
+  ref.current = { humanTurn: true } as never;
+  await update.execute("u1", { status: "cancel", note: "user: cancel the goal" });
+  assert.equal(goalFloorUnmet(ref.goal!, createGrindMeter()), false);
 });

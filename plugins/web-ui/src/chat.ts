@@ -90,6 +90,7 @@ import {
   forkOriginDetails,
   forkCutSeq,
   forkSession,
+  cancelSessionGoal,
   inheritedRefreshEntries,
   inheritedTranscript,
   loadInheritedTranscript,
@@ -187,7 +188,7 @@ import {
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
-import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, latestGoal } from "./goal-strip";
+import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, latestGoal, type GoalStripState } from "./goal-strip";
 import {
   ackKey,
   peekLines,
@@ -277,6 +278,7 @@ export function createChatSurface(
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
 
+  const goalCancels = new Map<string, { createdAt: number; done: boolean }>();
   const chatState = {
     agent: null as Agent | null,
     host: null as HTMLElement | null,
@@ -1856,22 +1858,23 @@ export function createChatSurface(
     }
     if (role === "system-note") {
       const note = message as unknown as HistorySystemNote;
-      const who = note.speaker ?? "The user";
-      return html`
+      const row = (body: TemplateResult) => html`
         <article
           class="message-row system-note-row"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
-          <div class="system-note">
-            ${
-              note.action === "deleted"
-                ? html`${who} deleted their message`
-                : html`${who} edited their message: <span class="system-note-text">${note.content}</span>`
-            }
-          </div>
+          <div class="system-note">${body}</div>
         </article>
       `;
+      if (note.note === "goal_cancelled")
+        return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
+      const who = note.speaker ?? "The user";
+      return row(
+        note.action === "deleted"
+          ? html`${who} deleted their message`
+          : html`${who} edited their message: <span class="system-note-text">${note.content}</span>`,
+      );
     }
     if (role === "assistant") {
       const msg = message as AssistantMessage;
@@ -2666,10 +2669,29 @@ export function createChatSurface(
     `;
   }
 
+  async function cancelGoal(agent: Agent, goal: GoalStripState): Promise<void> {
+    const sessionId = chatState.sessionId;
+    if (!sessionId || goalCancels.has(sessionId)) return;
+    goalCancels.set(sessionId, { createdAt: goal.createdAt, done: false });
+    drawActiveChat(agent);
+    try {
+      if (agent.state.isStreaming) await stopLiveRun();
+      await cancelSessionGoal(sessionId);
+      goalCancels.set(sessionId, { createdAt: goal.createdAt, done: true });
+    } catch (err) {
+      goalCancels.delete(sessionId);
+      ctx.composer.state.error = errMessage(err, "Could not cancel the goal.");
+    } finally {
+      if (agent === chatState.agent) drawActiveChat(agent);
+    }
+  }
+
   function goalStrip(agent: Agent): TemplateResult | typeof nothing {
     const messages = visibleMessages(agent);
     const goal = latestGoal(messages);
     if (!goal) return nothing;
+    const cancel = chatState.sessionId ? goalCancels.get(chatState.sessionId) : undefined;
+    if (cancel?.done && cancel.createdAt === goal.createdAt) return nothing;
     const { workedMs, paused: stopped } = goalWorked(messages, goal);
     const paused = goal.status === "paused" || (goal.status === "active" && stopped);
     if (goal.status !== "active" && !paused) return nothing;
@@ -2682,6 +2704,16 @@ export function createChatSurface(
         <span class="goal-strip-title">${title}</span>
         <span class="goal-strip-objective" dir="auto">${goalObjectiveLabel(goal.objective)}</span>
         <span class="goal-strip-meta">${goalWorkedLabel(workedMs, goal.floor)}</span>
+        <button
+          type="button"
+          class="chip-x"
+          aria-label="Cancel goal"
+          ${tip("Cancel goal")}
+          ?disabled=${cancel !== undefined && cancel.createdAt === goal.createdAt}
+          @click=${() => void cancelGoal(agent, goal)}
+        >
+          ${icon(X, 13)}
+        </button>
       </section>
     `;
   }

@@ -1927,6 +1927,19 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/sessions/:id/goal/cancel",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/goal/cancel`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "POST",
     path: "/api/sessions/:id/fork",
     handle: async (c) => {
       const { req, res, user } = c;
