@@ -6004,7 +6004,8 @@ a.connector-widget:focus-visible {
   font-size: 10px;
   font-weight: 650;
 }
-.project-member-row > .inbox-avatar {
+.project-member-row > .inbox-avatar,
+.project-member-result > .inbox-avatar {
   width: 28px;
   height: 28px;
   border-radius: 50%;
