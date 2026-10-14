@@ -43,7 +43,7 @@ test("the auth service is a first-class, privately addressed service with its ow
   assert.equal(def.docker.hostPortOffset, undefined, "docker must not publish the broker on a host port");
   const offsets = SERVICE_NAMES.map((name) => serviceDef(name).docker.hostPortOffset);
   assert.equal(new Set(offsets).size, offsets.length, "host port offsets stay unique");
-  const slots = SERVICE_NAMES.map((name) => serviceDef(name).dev.portSlotOffset);
+  const slots = SERVICE_NAMES.map((name) => serviceDef(name).dev?.portSlotOffset);
   assert.equal(new Set(slots).size, slots.length, "dev port slots stay unique");
   assert.ok(def.order < serviceDef("portal").order, "the broker comes up before the portal that publishes it");
   assert.deepEqual(

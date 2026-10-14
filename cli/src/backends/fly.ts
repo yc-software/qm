@@ -669,6 +669,24 @@ function ensureFlycast(app: string): void {
   note(`flycast: allocated private v6 for ${app}`);
 }
 
+function ensurePublicIngress(app: string): void {
+  let ips: Array<{ Type?: string }>;
+  try {
+    ips = JSON.parse(fly(["ips", "list", "-a", app, "--json"]) || "[]");
+  } catch {
+    throw new CliError(`fly ips list returned invalid JSON for ${app}`);
+  }
+  const types = new Set(ips.map((ip) => ip.Type));
+  if (!types.has("v6")) {
+    fly(["ips", "allocate-v6", "-a", app]);
+    note(`public ingress: allocated v6 for ${app}`);
+  }
+  if (!types.has("v4") && !types.has("shared_v4")) {
+    fly(["ips", "allocate-v4", "--shared", "-a", app]);
+    note(`public ingress: allocated shared v4 for ${app}`);
+  }
+}
+
 interface FlyImageDetail {
   digest: string;
   immutableReference: string;
@@ -848,6 +866,7 @@ async function deployService(
   note(`\n=== deploying ${app} ===`);
   if (service === "core") timing.time(service, "Postgres ensure", () => ensurePostgres(ctx));
   if (spec.flycast) timing.time(service, "Flycast ensure", () => ensureFlycast(app));
+  if (spec.publicIngress) timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
   const cfgPath = serviceCfgPath(ctx, service);
   const args = ["deploy", "--yes", "-c", cfgPath, ...spec.deployFlags];
   if (imageSource?.kind === "tagged") {

@@ -763,7 +763,7 @@ test("AWS ECS services wait until target groups are attached to the ALB", () => 
   const service = mainTf.match(/resource "aws_ecs_service" "service" \{([\s\S]*?)\n\}/)?.[1] ?? "";
   assert.match(
     service,
-    /depends_on\s*= \[aws_lb_listener\.public, aws_lb_listener_rule\.production, aws_iam_role_policy_attachment\.ecs_load_balancer\]/,
+    /depends_on\s*= \[aws_lb_listener\.public, aws_lb_listener_rule\.production, aws_lb_listener\.egress_proxy, aws_iam_role_policy_attachment\.ecs_load_balancer\]/,
   );
 });
 
@@ -773,7 +773,7 @@ test("AWS ECS services use native blue-green rollouts with rollback signals and 
   assert.match(versions, /version\s*= ">= 6\.6, < 7\.0"/);
   assert.match(
     service,
-    /deployment_configuration \{[\s\S]*strategy\s*= "BLUE_GREEN"[\s\S]*bake_time_in_minutes = var\.ecs_blue_green_bake_minutes/,
+    /deployment_configuration \{[\s\S]*strategy\s*= .*"BLUE_GREEN"[\s\S]*bake_time_in_minutes = .*var\.ecs_blue_green_bake_minutes/,
   );
   assert.match(
     service,
@@ -790,7 +790,7 @@ test("AWS ECS services use native blue-green rollouts with rollback signals and 
   assert.match(service, /sigint_rollback = true/);
   assert.match(
     mainTf,
-    /portMappings = \[\{ name = each\.key, containerPort = each\.value\.internal_port, appProtocol = "http" \}\]/,
+    /portMappings = \[merge\(\{ name = each\.key, containerPort = each\.value\.internal_port \}, contains\(keys\(local\.egress_proxy\), each\.key\) \? \{\} : \{ appProtocol = "http" \}\)\]/,
   );
 });
 

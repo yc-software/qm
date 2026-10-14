@@ -1,11 +1,10 @@
-app = "qm-egress-proxy-pub"
+app = "qm-egress-proxy"
 primary_region = "sjc"
 
-[build]
-  dockerfile = "../egress-proxy/Dockerfile"
-
 [env]
-  EGRESS_TOKENLESS = "deny"
+  QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
+  CORE_API_URL = "http://qm-core.internal:8080"
+  CORE_ORG_ID = "acme"
 
 [[services]]
   internal_port = 48080
