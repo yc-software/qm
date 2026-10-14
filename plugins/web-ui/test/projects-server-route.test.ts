@@ -101,3 +101,16 @@ test("project routes bind the signed-in principal and relay canonical scope and 
     },
   );
 });
+
+test("deleting a project relays the signed-in principal rather than the one the client claims", async () => {
+  const before = calls.length;
+  await fetch(`${base}/api/projects/p1`, {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({ principalId: "mallory" }),
+  });
+  const relayed = calls
+    .slice(before)
+    .find((call) => call.method === "DELETE" && isNoncedCoreCall(call.url, "/v1/projects/p1"));
+  assert.deepEqual(relayed?.body, { principalId: "alice" });
+});

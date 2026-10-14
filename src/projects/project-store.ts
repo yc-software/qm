@@ -40,6 +40,7 @@ export interface ProjectStore {
   addMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   removeMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   rename(id: string, ownerId: string, name: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
+  remove(id: string, ownerId: string): Promise<ProjectMutation>;
   setSlackChannel(
     id: string,
     actorId: string,
@@ -225,6 +226,15 @@ export function createProjectStore(
         const result = { status: "ok" as const, project: visible(updated), changed };
         await effect?.(result);
         return result;
+      });
+    },
+    async remove(id, ownerId) {
+      return withLock(id, async () => {
+        const project = await backing.get(id);
+        if (!project || project.orgId !== configOrgId()) return { status: "not_found" };
+        if (project.ownerId !== ownerId || !isActiveMember(ownerId)) return { status: "forbidden" };
+        await backing.delete(id);
+        return { status: "ok", project: visible(project), changed: true };
       });
     },
     async setSlackChannel(id, actorId, link, effect) {

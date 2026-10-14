@@ -177,7 +177,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     match: (m, p) =>
       (p === "/v1/projects" && (m === "GET" || m === "POST")) ||
-      (/^\/v1\/projects\/[^/]+$/.test(p) && m === "PATCH") ||
+      (/^\/v1\/projects\/[^/]+$/.test(p) && (m === "PATCH" || m === "DELETE")) ||
       (/^\/v1\/projects\/[^/]+\/members$/.test(p) && m === "POST") ||
       (/^\/v1\/projects\/[^/]+\/members\/[^/]+$/.test(p) && m === "DELETE") ||
       (/^\/v1\/projects\/[^/]+\/slack-channel$/.test(p) && (m === "PUT" || m === "DELETE")),
@@ -194,6 +194,12 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PATCH",
         path: "/v1/projects/:id",
         summary: "rename a project the asking person owns — body {name}",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/projects/:id",
+        summary:
+          "delete a project the asking person owns — irreversible, and everyone in it loses the shared workspace",
       },
       {
         method: "POST",
