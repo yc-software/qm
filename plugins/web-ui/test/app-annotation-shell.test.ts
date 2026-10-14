@@ -166,6 +166,16 @@ test("bundled Devbar mounts original controls without Copy, Export or Agent", as
       disconnect() {}
     },
   });
+  let pendingZeroDelayTimers = 0;
+  const setPageTimeout = w.setTimeout.bind(w);
+  w.setTimeout = ((handler: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    if (delay) return setPageTimeout(handler, delay, ...args);
+    pendingZeroDelayTimers++;
+    return setPageTimeout(() => {
+      pendingZeroDelayTimers--;
+      handler(...args);
+    });
+  }) as typeof w.setTimeout;
   w.eval(appAnnotationAsset("js"));
   const toggle = (on: boolean, chatOpen = false) =>
     w.dispatchEvent(
@@ -252,6 +262,8 @@ test("bundled Devbar mounts original controls without Copy, Export or Agent", as
   toggle(true);
   await tick();
   assert.equal(w.document.querySelector('[aria-label="Select tool"]')?.getAttribute("aria-pressed"), "true");
+  for (let attempt = 0; attempt < 100 && pendingZeroDelayTimers > 0; attempt++) await tick();
+  assert.equal(pendingZeroDelayTimers, 0, "Devbar finished reacting to the toggle");
   w.dispatchEvent(new w.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
   await tick();
   await tick();
