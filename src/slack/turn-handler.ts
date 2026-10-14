@@ -52,10 +52,10 @@ import {
   refusalDelivery,
   refusalNote,
   renderConversationView,
+  resolveMentions,
   resolveReactionTargets,
   shouldSurfaceReaction,
   slackReplyArgs,
-  stripMention,
   threadHasBotStake,
   toSlackMrkdwn,
   uploadAttachments,
@@ -216,7 +216,10 @@ export function createTurnHandler(deps: {
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(actor)) return;
     const timezone = classified.timezone;
-    const text = stripMention(inc.rawText, ids.botUserId);
+    const text = resolveMentions(
+      decodeSlackEntities(inc.rawText).trim(),
+      ids.botUserId && ids.botHandle ? new Map([[ids.botUserId, ids.botHandle]]) : undefined,
+    );
     if (!hasContent(text, inc.files)) return;
 
     let audience: ActorAssertion[] = [actor];
@@ -368,6 +371,7 @@ export function createTurnHandler(deps: {
     if (!inc.unprompted) {
       const intercepted = await maybeInterceptStop({
         text,
+        botHandle: ids.botHandle,
         threadRef,
         getInFlightRun: async (ref) =>
           (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??

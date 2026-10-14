@@ -20,11 +20,6 @@ export function resolveMentions(text: string, nameById: ReadonlyMap<string, stri
   });
 }
 
-export function stripMention(text: string, botUserId: string): string {
-  const withoutMention = botUserId ? text.replace(new RegExp(`<@${botUserId}>`, "g"), "") : text;
-  return decodeSlackEntities(withoutMention).trim();
-}
-
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
 

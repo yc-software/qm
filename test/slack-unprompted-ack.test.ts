@@ -5,7 +5,7 @@ import { createConversationSerializer } from "../src/slack/conversation-view.ts"
 import { createThreadTracker, createDeduper } from "../src/slack/lib.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 
-const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
+const ids = { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm" } as BotIdentity;
 const actor = { externalId: "U1", displayName: "Teammate" };
 const directory = {
   classifyUserCached: async () => ({ actor }),
@@ -173,4 +173,18 @@ test("waitRun signals replying only once the run has passed detection and begun 
     },
   });
   assert.equal(replying, 1);
+});
+
+test("a mention-only thread reply starts a turn with the tag intact", async () => {
+  const h = harness(async () => ({ status: "ok", reply: "On it." }));
+  await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT>" }, h.client);
+  assert.equal(h.turns.length, 1);
+  assert.equal(h.turns[0].text, "@qm");
+  assert.deepEqual(h.posts, ["On it."]);
+});
+
+test("the bot's own mention reaches the agent instead of being stripped", async () => {
+  const h = harness(async () => ({ status: "ok", reply: "Done." }));
+  await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT> check &amp; report" }, h.client);
+  assert.equal(h.turns[0].text, "@qm check & report");
 });
