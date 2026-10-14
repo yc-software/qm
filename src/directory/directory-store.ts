@@ -1,8 +1,8 @@
 import type { PrincipalType } from "../types.ts";
-import { personIds, samePerson } from "./person.ts";
+import { rosterIds, samePerson } from "./person.ts";
 
 function hasPerson(members: ReadonlySet<string> | undefined, principalId: string): boolean {
-  return !!members && personIds(principalId).some((id) => members.has(id));
+  return !!members && rosterIds(principalId).some((id) => members.has(id));
 }
 
 export interface DirectoryMember {
@@ -275,7 +275,7 @@ export function createDirectoryStore(): DirectoryStore {
     async listGroupsFor(principalId) {
       const memberships = groupMembers;
       if (!memberships) return [];
-      return [...memberships].filter(([, members]) => members.has(principalId)).map(([groupId]) => groupId);
+      return [...memberships].filter(([, members]) => hasPerson(members, principalId)).map(([groupId]) => groupId);
     },
     async conversationMembers(kind, id) {
       let ids: string[];
@@ -296,8 +296,7 @@ export function createDirectoryStore(): DirectoryStore {
     async listChannelsFor(principalId) {
       return channels.filter(
         (channel) =>
-          !channel.isPrivate ||
-          (!channel.isExternal && (channelMembers?.get(channel.channelId)?.has(principalId) ?? false)),
+          !channel.isPrivate || (!channel.isExternal && hasPerson(channelMembers?.get(channel.channelId), principalId)),
       );
     },
     async list() {

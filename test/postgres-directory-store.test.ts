@@ -495,13 +495,17 @@ test("pg directory: room membership follows a person's linked identities", { ski
   assert.equal(await store.channelMembership("C-linked", "web-person"), false);
   installPrincipalLinks({
     canonical: (key) => (key === "slack-person@example.com" ? "web-person" : undefined),
-    aliases: (key) => (key === "web-person" ? ["slack-person@example.com"] : []),
+    aliases: (key) => (key === "web-person" ? ["Slack-Person@Example.com"] : []),
   });
   try {
     assert.equal(await store.channelMembership("C-linked", "web-person"), true);
     assert.equal(await store.channelMember("C-linked", "web-person"), true);
     assert.equal(await store.groupMembership("G-linked", "web-person"), true);
     assert.equal(await store.groupMember("G-linked", "web-person"), true);
+    assert.deepEqual(await store.listGroupsFor("web-person"), ["G-linked"]);
+    assert.ok((await store.listChannelsFor("web-person")).some((c) => c.channelId === "C-linked"));
+    assert.ok(!(await store.listChannelsFor("someone-else")).some((c) => c.channelId === "C-linked"));
+    assert.equal(await store.channelMembership("C-linked", "slack-person@example.com"), true);
     assert.equal(await store.channelMembership("C-linked", "someone-else"), false);
   } finally {
     installPrincipalLinks(null);

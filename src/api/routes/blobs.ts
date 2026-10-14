@@ -35,7 +35,7 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
       req.resume();
       sendJson(res, 403, {
         error: "forbidden",
-        message: "the acting user is not a current member of this conversation",
+        message: "the acting user is not currently authorized for this conversation",
       });
       return null;
     }

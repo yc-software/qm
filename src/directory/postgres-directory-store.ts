@@ -3,7 +3,7 @@ import { orgId as configOrgId } from "../config.ts";
 import { createHash } from "node:crypto";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { PrincipalType } from "../types.ts";
-import { foldPrincipalId, personIds } from "./person.ts";
+import { foldPrincipalId, rosterIds } from "./person.ts";
 import {
   MAX_CANDIDATES,
   groupParticipantsKey,
@@ -425,7 +425,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          JOIN directory_channels channel USING (org_id, channel_id)
          WHERE member.org_id = $1 AND member.channel_id = $2 AND member.principal_id = ANY($3::text[])
            AND NOT (channel.is_private AND channel.is_external) LIMIT 1`,
-        [orgId, channelId, personIds(principalId)],
+        [orgId, channelId, rosterIds(principalId)],
       );
       return rows.length > 0;
     },
@@ -451,7 +451,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          ) AS member,
          (SELECT is_private FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS is_private,
          (SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS roster_known`,
-        [orgId, channelId, personIds(principalId)],
+        [orgId, channelId, rosterIds(principalId)],
       );
       const member = rows[0]?.member === true;
       if (rows[0]?.roster_known !== true) return undefined;
@@ -561,7 +561,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async groupMember(groupId, principalId) {
       const rows = await q(
         "SELECT 1 FROM directory_group_members WHERE org_id = $1 AND group_id = $2 AND principal_id = ANY($3::text[]) LIMIT 1",
-        [orgId, groupId, personIds(principalId)],
+        [orgId, groupId, rosterIds(principalId)],
       );
       return rows.length > 0;
     },
@@ -581,7 +581,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          EXISTS (
            SELECT 1 FROM directory_sync WHERE org_id = $1 AND groups_hash IS NOT NULL
          ) AS synced`,
-        [orgId, groupId, personIds(principalId)],
+        [orgId, groupId, rosterIds(principalId)],
       );
       if (rows[0]?.member === true) return true;
       if (rows[0]?.listed !== true) return rows[0]?.synced === true ? false : undefined;
@@ -590,8 +590,8 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
     async listGroupsFor(principalId) {
       const rows = await q(
-        "SELECT group_id FROM directory_group_members WHERE org_id = $1 AND principal_id = $2 ORDER BY group_id",
-        [orgId, principalId],
+        "SELECT DISTINCT group_id FROM directory_group_members WHERE org_id = $1 AND principal_id = ANY($2::text[]) ORDER BY group_id",
+        [orgId, rosterIds(principalId)],
       );
       return rows.map((row) => row.group_id as string);
     },
@@ -633,9 +633,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         `SELECT channel_id, name, is_private, is_external FROM directory_channels c
          WHERE org_id = $1 AND (is_private = FALSE OR (is_external = FALSE AND EXISTS (
            SELECT 1 FROM directory_channel_members m
-           WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = $2)))
+           WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = ANY($2::text[]))))
          ORDER BY name_lc`,
-        [orgId, principalId],
+        [orgId, rosterIds(principalId)],
       );
       return rows.map(channelRow);
     },
