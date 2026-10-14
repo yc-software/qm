@@ -6,7 +6,7 @@ import { deploymentShareScope } from "../deploy/email-access.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../harness/tape-projection.ts";
@@ -413,6 +413,7 @@ export function createSessionMethods(
       }
       const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
       const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
+      const writableScopes = new Map<ScopeId, Promise<boolean>>();
       const sessions = await Promise.all(
         all
           .filter(
@@ -422,7 +423,7 @@ export function createSessionMethods(
               workingThreadRefs.has(s.threadRef) ||
               waiting.has(s.id),
           )
-          .map(async (s) => ({ ...s, canContinue: await canContinueOnWeb(principalId, s) })),
+          .map(async (s) => ({ ...s, canContinue: await canContinueOnWeb(principalId, s, writableScopes) })),
       );
       const now = Date.now();
       const jobCounts = new Map<string, number>();

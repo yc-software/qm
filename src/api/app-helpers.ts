@@ -426,11 +426,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function canContinueOnWeb(
     principalId: string,
     session: Pick<Session, "threadRef" | "scopeId">,
+    writableScopes = new Map<ScopeId, Promise<boolean>>(),
   ): Promise<boolean> {
     if (!session.threadRef.startsWith("web:") && !isSubagentThreadRef(session.threadRef)) return false;
     if (parseScopeId(session.scopeId).kind === "personal")
       return session.scopeId === scopeId("personal", canonicalPerson(principalId));
-    return principalCanWriteScope(principalId, session.scopeId);
+    if (!writableScopes.has(session.scopeId))
+      writableScopes.set(session.scopeId, principalCanWriteScope(principalId, session.scopeId));
+    return writableScopes.get(session.scopeId)!;
   }
 
   async function principalCanAccessCurrentScope(principalId: string, targetScope: ScopeId): Promise<boolean> {
