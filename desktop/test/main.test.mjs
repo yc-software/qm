@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mock, test } from "node:test";
@@ -21,6 +21,16 @@ test(
       getPath: () => directory,
       setAsDefaultProtocolClient() {},
     });
+    let prepareUpdate;
+    let resumeUpdate;
+    mock.module(new URL("../updates.mjs", import.meta.url).href, {
+      namedExports: {
+        startUpdates: (prepare, resume) => {
+          prepareUpdate = prepare;
+          resumeUpdate = resume;
+        },
+      },
+    });
     const handlers = new Map();
     const windows = [];
     const initialLoad = Promise.withResolvers();
@@ -35,6 +45,7 @@ test(
       setPermissionCheckHandler(handler) {
         this.checkPermission = handler;
       },
+      flushStorageData() {},
       cookies: {
         flushStore: async () => {
           flushes++;
@@ -59,6 +70,9 @@ test(
       async loadURL(url) {
         this.url = url;
         initialLoad.resolve();
+      }
+      setEnabled(value) {
+        this.enabled = value;
       }
       show() {
         this.visible = true;
@@ -212,6 +226,20 @@ test(
       assert.equal(opened[1].includes("test-token"), false);
       assert.equal(windows[3].isDestroyed(), true);
       const active = windows.at(-1);
+      const ready = Promise.withResolvers();
+      active.webContents.executeJavaScript = async (source) =>
+        source.includes("qm:prepare-update") ? ready.promise : true;
+      const preparing = prepareUpdate();
+      assert.equal(active.enabled, false, "input is disabled before asking the renderer for readiness");
+      ready.resolve(false);
+      assert.equal(await preparing, false);
+      resumeUpdate();
+      assert.equal(active.enabled, true, "a deferred update restores input");
+      active.webContents.executeJavaScript = async () => true;
+      assert.equal(await prepareUpdate(), true);
+      assert.equal(active.enabled, false, "prepared windows remain quiescent until restart");
+      assert.equal(JSON.parse(await readFile(path.join(directory, "instance.json"), "utf8")).url, active.url);
+      resumeUpdate();
       const child = new BrowserWindow({});
       child.url = "https://new.example/file.pdf";
       active.webContents.emit("did-create-window", child);
