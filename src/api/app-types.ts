@@ -299,6 +299,7 @@ export interface App {
       attachments?: Array<{ name: string; mimetype: string; sizeBytes: number }>;
     };
     partial?: string;
+    partialStartOffset?: number;
     alive?: boolean;
     stale?: boolean;
     replying?: boolean;

@@ -1645,13 +1645,15 @@ export function buildApp(
     : createMemoryEventBus<RunStreamEvent>("run-stream");
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
-    onDelta: (runId, text, offset) => emitRunText(runStreamEvents, runId, text, offset),
+    onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
     onChange: refreshRunStream,
   });
   const stopStreamSync = runStreamEvents.subscribe((event) => {
     if (event.kind !== "sync") return;
     const text = turnStream.snapshot(event.runId);
-    if (text) emitRunText(runStreamEvents, event.runId, text.slice(event.offset), event.offset);
+    const startOffset = turnStream.startOffset(event.runId);
+    const offset = Math.max(event.offset, startOffset);
+    if (text) emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset);
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = config.databaseUrl

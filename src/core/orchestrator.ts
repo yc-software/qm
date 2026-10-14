@@ -3918,14 +3918,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onTextBlockStart: async (phase) => {
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
-              if (phase && !input.surfaceTools) {
+              if (!input.surfaceTools) {
                 const streamOffset =
-                  input.runId && deps.turnStream ? (deps.turnStream.snapshot(input.runId) ?? "").length : undefined;
-                await emit({
+                  input.runId && deps.turnStream
+                    ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
+                    : undefined;
+                const started = emit({
                   type: "text_start",
-                  payload: { phase, ...(streamOffset !== undefined ? { streamOffset } : {}) },
+                  payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
                   scopeLabel: scopeId,
                 });
+                await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
               }
             },
             onGapWork: (cb) => {
