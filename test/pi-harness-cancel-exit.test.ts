@@ -68,10 +68,34 @@ test("a mid-prompt cancel takes the stopped exit and persists the stopped partia
   }
 });
 
-test("a genuine provider error racing a cancel still fails the turn instead of completing it as stopped", async () => {
+test("a cancel that lands before the model request starts still stops the turn", { timeout: 10_000 }, async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
   controller.abort();
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        reject(abortShapedError());
+        return;
+      }
+      signal?.addEventListener("abort", () => reject(abortShapedError()), { once: true });
+    })) as typeof globalThis.fetch;
+  try {
+    const result = await harness.turns.runTurn(cancelTurn("cancel-before-request", controller.signal, sink));
+
+    assert.equal(result.stopped, true);
+    assert.equal(result.reply, "(stopped)");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a genuine provider error racing a cancel still fails the turn instead of completing it as stopped", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const controller = new AbortController();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () =>
@@ -81,10 +105,15 @@ test("a genuine provider error racing a cancel still fails the turn instead of c
     })) as typeof globalThis.fetch;
   try {
     await assert.rejects(
-      harness.turns.runTurn(cancelTurn("cancel-exit-error", controller.signal, sink)),
+      harness.turns.runTurn(
+        cancelTurn("cancel-exit-error", controller.signal, sink, {
+          recordLlmRequest: async () => controller.abort(),
+        }),
+      ),
       /boom|400|invalid_request_error/,
       "the unrelated failure surfaces as a turn error, not a stopped completion",
     );
+    assert.equal(controller.signal.aborted, true, "the cancel landed before the turn chose its exit");
     assert.equal(
       sink.entries.some(
         (entry) => entry.type === "assistant" && (entry.payload as { text?: unknown }).text === "(stopped)",

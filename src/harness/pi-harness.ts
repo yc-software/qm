@@ -1283,11 +1283,15 @@ export async function oneShot(
       void session.abort().catch(() => undefined);
     };
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
+    const unsubscribe = session.agent.subscribe((event) => {
+      if (event.type === "agent_start" && opts?.signal?.aborted) session.agent.abort();
+    });
     try {
       await session.prompt(prompt);
     } catch (err) {
       throw piTurnError(session, err, messagesBefore);
     } finally {
+      unsubscribe();
       opts?.signal?.removeEventListener("abort", onAbort);
     }
     return piLastAssistantTextOrThrow(session);
@@ -1895,6 +1899,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             entry.agentSession as unknown as { agent?: PiAgentWithPayloadHook }
           ).agent?.subscribe?.((event) => {
             const e = event as { type?: string; message?: unknown };
+            if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
             return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
           });
           const unsubscribe = entry.agentSession.subscribe((event) => {

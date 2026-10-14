@@ -982,3 +982,42 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
 });
+
+test("oneShot stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {
+  let requests = 0;
+  const server = createServer((request) => {
+    requests += 1;
+    request.resume();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
+  assert(baseModel);
+  const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const subscribe = signal.addEventListener.bind(signal);
+  signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+    subscribe(...args);
+    controller.abort();
+  }) as AbortSignal["addEventListener"];
+
+  const outcome = await oneShot("pi-abort-test", model, "test-key", "system", "hello", { signal }).then(
+    (text) => ({ text }),
+    (error: unknown) => ({ error }),
+  );
+
+  assert.deepEqual(outcome, { text: undefined });
+  assert.equal(requests, 0);
+});
