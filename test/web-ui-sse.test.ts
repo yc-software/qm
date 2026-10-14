@@ -262,7 +262,8 @@ test("a completed long stream replays its bounded tail with absolute offsets and
     partialStartOffset: number;
     result: { reply: string };
   };
-  assert.equal(done.partial.length, 200_000);
+  assert.ok(done.partial.length <= 200_000);
+  assert.ok(done.partial.length >= 100_000);
   assert.ok(done.partialStartOffset > 0);
   assert.equal(done.result.reply.slice(done.partialStartOffset), done.partial);
   assert.ok(done.partial.includes("last sentence"));

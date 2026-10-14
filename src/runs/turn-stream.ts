@@ -90,7 +90,8 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   const append = (runId: string, entry: Entry, delta: string): void => {
     const offset = entry.totalChars;
     entry.totalChars += delta.length;
-    entry.text = (entry.text + delta).slice(-maxChars);
+    entry.text += delta;
+    if (entry.text.length > maxChars) entry.text = entry.text.slice(-Math.max(BLOCK_JOIN.length, Math.floor(maxChars / 2)));
     opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
   };
 

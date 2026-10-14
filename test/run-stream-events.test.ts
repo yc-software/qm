@@ -39,7 +39,7 @@ test("cross-process text frames stay under Postgres' payload limit and preserve 
     if (event.kind === "delta") parts.push(event);
   });
   const text = '\u0000"\\🌍'.repeat(3_000);
-  emitRunText(bus, "r".repeat(36), text, 37);
+  emitRunText(bus, "r".repeat(36), text, 37, 0);
   let offset = 37;
   for (const part of parts) {
     assert.equal(part.offset, offset);
@@ -61,9 +61,9 @@ test("a boundary near the cap remains complete and later deltas keep absolute of
   stream.publish("r", "next");
   assert.deepEqual(frames, [
     ["abcd", 0, 0],
-    ["\n\n", 4, 1],
-    ["next", 6, 5],
+    ["\n\n", 4, 4],
+    ["next", 6, 8],
   ]);
-  assert.equal(stream.snapshot("r"), "\nnext");
-  assert.equal(stream.startOffset("r"), 5);
+  assert.equal(stream.snapshot("r"), "xt");
+  assert.equal(stream.startOffset("r"), 8);
 });

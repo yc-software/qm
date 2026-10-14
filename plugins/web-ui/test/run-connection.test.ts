@@ -325,3 +325,19 @@ test("trimmed snapshots and live deltas use absolute offsets without freezing or
   assert.deepEqual((await stream.result()).content, [{ type: "text", text: "word more!" }]);
   assert.equal(state.polls, 0);
 });
+
+test("a resume snapshot replaces whitespace-normalized transcript seeds", async () => {
+  const fn = makeRunResumeStreamFn(
+    "r",
+    {
+      status: "done",
+      result: { status: "ok" },
+      partial: "\nChecking.\n\nNext part",
+    },
+    undefined,
+    undefined,
+    "Checking.",
+  );
+  const stream = await fn(model, {} as Context, {});
+  assert.deepEqual((await stream.result()).content, [{ type: "text", text: "\nChecking.\n\nNext part" }]);
+});

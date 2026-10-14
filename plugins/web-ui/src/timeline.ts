@@ -293,7 +293,7 @@ export function sessionToolView(
 }
 
 export function currentTextPhase(work: WorkBlock): {
-  phase: "commentary" | "final_answer";
+  phase: "commentary" | "final_answer" | undefined;
   streamOffset: number;
   startedAt: number;
 } | null {
@@ -301,8 +301,8 @@ export function currentTextPhase(work: WorkBlock): {
   if (!entry) return null;
   const payload = entry.payload as { phase?: unknown; streamOffset?: unknown } | null;
   if (
-    (payload?.phase !== "commentary" && payload?.phase !== "final_answer") ||
-    typeof payload.streamOffset !== "number" ||
+    (payload?.phase !== undefined && payload.phase !== "commentary" && payload.phase !== "final_answer") ||
+    typeof payload?.streamOffset !== "number" ||
     !Number.isSafeInteger(payload.streamOffset) ||
     payload.streamOffset < 0
   )
@@ -314,7 +314,7 @@ export function streamedAnswer(text: string, work: WorkBlock): string {
   const phase = currentTextPhase(work);
   if (phase) {
     const lastText = work.activity.findLast((entry) => entry.type === "text_start" || entry.type === "text");
-    if (phase.phase === "commentary" && lastText?.type === "text") return "";
+    if (phase.phase !== "final_answer" && lastText?.type === "text") return "";
     return streamTextFrom(text, phase.streamOffset, work.streamStartOffset ?? 0);
   }
   return work.streamStartOffset

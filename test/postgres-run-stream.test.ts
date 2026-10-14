@@ -14,7 +14,7 @@ test(
     const channel = `stream_${randomUUID().replaceAll("-", "")}`;
     const worker = createPostgresNotifyBus<RunStreamEvent>(database!, channel, "test-worker");
     const api = createPostgresNotifyBus<RunStreamEvent>(database!, channel, "test-api");
-    const stream = createTurnStream({ onDelta: (runId, text, offset) => emitRunText(worker, runId, text, offset) });
+    const stream = createTurnStream({ onDelta: (runId, text, offset, startOffset) => emitRunText(worker, runId, text, offset, startOffset) });
     const runId = randomUUID();
     stream.begin(runId);
     stream.publish(runId, "preexisting 🌍 ");
@@ -27,8 +27,11 @@ test(
     const offWorker = await new Promise<() => void>((resolve) => {
       const off = worker.subscribe(
         (event) => {
-          if (event.kind === "sync")
-            emitRunText(worker, runId, (stream.snapshot(runId) ?? "").slice(event.offset), event.offset);
+          if (event.kind === "sync") {
+            const startOffset = stream.startOffset(runId);
+            const offset = Math.max(startOffset, event.offset);
+            emitRunText(worker, runId, (stream.snapshot(runId) ?? "").slice(offset - startOffset), offset, startOffset);
+          }
         },
         { onResync: () => resolve(off) },
       );

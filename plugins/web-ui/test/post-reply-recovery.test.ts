@@ -501,6 +501,20 @@ test("post replies remain visible in new and continuing conversations", async (t
           host.querySelector<HTMLElement & { content: string }>(".work-said qm-markdown")?.content,
           "Progress 2",
         );
+        const priorActivity = work.activity;
+        work.streamStartOffset = 200_001;
+        work.activity = [
+          ...priorActivity,
+          { seq: 3, parentSeq: null, type: "text_start", createdAt: Date.now(), payload: { streamOffset: 200_003 } },
+        ];
+        streaming.content = [{ type: "text", text: " \nCommentary marker" }];
+        conv!.drawActiveChat(agent);
+        assert.equal(
+          host.querySelector<HTMLElement & { content: string }>(".work-said qm-markdown")?.content,
+          "Commentary marker",
+        );
+        delete work.streamStartOffset;
+        work.activity = priorActivity;
         work.activity = [
           ...work.activity,
           {

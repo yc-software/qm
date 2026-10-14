@@ -1079,7 +1079,7 @@ async function driveApproval(
     work.status = "complete";
     work.finishedAt = Date.now();
     notify();
-    finish(stream, partial, { acc: "", lastProgressAt: now() }, submit.reply ?? "");
+    finish(stream, partial, { acc: "", startOffset: 0, lastProgressAt: now() }, submit.reply ?? "");
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -1248,7 +1248,7 @@ async function drive(
     work.status = "complete";
     work.finishedAt = Date.now();
     notify();
-    finish(stream, partial, { acc: "", lastProgressAt: now() }, submit.reply ?? "");
+    finish(stream, partial, { acc: "", startOffset: 0, lastProgressAt: now() }, submit.reply ?? "");
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -1288,7 +1288,7 @@ async function resumeDrive(
     notify();
     stream.push({ type: "start", partial });
     stream.push({ type: "text_start", contentIndex: 0, partial });
-    const st: Acc = { acc: "", lastProgressAt: now() };
+    const st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() };
     // Keep any assistant text the transcript already showed for this in-flight
     // run visible: seed the accumulator with it so attaching the live stream
     // never blanks text the person has already read. The server's own partial
@@ -1312,7 +1312,7 @@ async function followRun(
   runId: string,
   signal?: AbortSignal,
   notify?: () => void,
-  st: Acc = { acc: "", lastProgressAt: now() },
+  st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() },
   slot?: RunSlot,
   gen = 0,
 ): Promise<void> {
@@ -1342,7 +1342,7 @@ function runPath(runId: string, suffix: string): string {
 }
 
 export interface Acc {
-  startOffset?: number;
+  startOffset: number;
   acc: string;
   lastProgressAt: number;
   staleSince?: number;
@@ -1413,7 +1413,14 @@ function applyRun(
   }
   setWorkStale(work, run.stale === true, notify);
   const p = typeof run.partial === "string" ? run.partial : "";
-  if (p) applyStreamText(stream, partial, st, p, run.partialStartOffset ?? 0, run.partialStartOffset ?? 0);
+  const startOffset = run.partialStartOffset ?? 0;
+  if (p && startOffset + p.length >= st.startOffset + st.acc.length) {
+    if (startOffset + p.length > st.startOffset + st.acc.length) st.lastProgressAt = now();
+    if (startOffset !== st.startOffset) (partial as AssistantWork).streamingBaseline = "";
+    st.startOffset = startOffset;
+    if (work) work.streamStartOffset = startOffset;
+    pushDelta(stream, partial, st, p);
+  }
   if (!runIsTerminal(run)) return "open";
   const res = run.result;
   const delivered = deliveredFilesFromAttachments(res?.attachments);
@@ -1588,7 +1595,7 @@ async function streamRunViaSse(
           typeof value.delta !== "string"
         )
           return "fallback";
-        if (value.offset > Math.max((st.startOffset ?? 0) + st.acc.length, value.startOffset ?? 0)) return "fallback";
+        if (value.offset > Math.max(st.startOffset + st.acc.length, value.startOffset ?? 0)) return "fallback";
         applyStreamText(stream, partial, st, value.delta, value.offset, value.startOffset ?? 0);
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
@@ -1655,15 +1662,15 @@ function applyStreamText(
   offset: number,
   startOffset: number,
 ): void {
-  const end = (st.startOffset ?? 0) + st.acc.length;
-  if (offset + text.length < end || (offset + text.length === end && startOffset <= (st.startOffset ?? 0))) return;
+  const end = st.startOffset + st.acc.length;
+  if (offset + text.length < end || (offset + text.length === end && startOffset <= st.startOffset)) return;
   const start = Math.max(st.startOffset ?? 0, startOffset);
   const next = offset > end ? text : st.acc + text.slice(Math.max(0, end - offset));
-  const nextStart = offset > end ? offset : (st.startOffset ?? 0);
+  const nextStart = offset > end ? offset : st.startOffset;
   const work = (partial as AssistantWork).work;
   if (work) work.streamStartOffset = start;
-  if (start !== (st.startOffset ?? 0)) (partial as AssistantWork).streamingBaseline = "";
-  st.acc = offset > end ? "" : st.acc.slice(start - (st.startOffset ?? 0));
+  if (start !== st.startOffset) (partial as AssistantWork).streamingBaseline = "";
+  st.acc = offset > end ? "" : st.acc.slice(start - st.startOffset);
   st.lastProgressAt = now();
   pushDelta(stream, partial, st, next.slice(start - nextStart));
   st.startOffset = start;

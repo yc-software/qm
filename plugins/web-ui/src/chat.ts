@@ -1890,7 +1890,7 @@ export function createChatSurface(
         workView = workBlock(
           work,
           isStreaming,
-          msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : text,
+          msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : isStreaming ? messageText(msg) : text,
           (msg as AssistantWork).streamingBaseline ?? "",
         );
       }

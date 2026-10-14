@@ -74,8 +74,8 @@ test("caps a run's buffer at maxChars", () => {
   const s = createTurnStream({ maxChars: 5 });
   s.publish("r1", "abc");
   s.publish("r1", "defghij");
-  assert.equal(s.snapshot("r1"), "fghij", "buffer retains the newest text past the cap");
-  assert.equal(s.startOffset("r1"), 5);
+  assert.equal(s.snapshot("r1"), "ij", "buffer retains the newest text past the cap");
+  assert.equal(s.startOffset("r1"), 8);
 });
 
 test("end() evicts a finished run's buffer after the grace period", async () => {

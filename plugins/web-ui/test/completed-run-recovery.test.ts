@@ -32,7 +32,7 @@ test("a poll timeout retains the exact run identity needed to recover its saved 
   const partial = entriesToMessages([answer])[0] as AssistantWork;
   partial.content = [{ type: "text", text: "" }];
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, partial, "run-current", { acc: "", lastProgressAt: 0 });
+  await pollRun(stream, partial, "run-current", { acc: "", startOffset: 0, lastProgressAt: 0 });
   const error = (await stream.result()) as AssistantWork;
   assert.equal(error.stopReason, "error");
   assert.equal(error.interruptedRunId, "run-current");
@@ -43,7 +43,7 @@ test("an idle running snapshot timeout also retains the run identity", async () 
   setClock(() => RUN_IDLE_MS + 1);
   globalThis.fetch = async () => new Response(JSON.stringify({ status: "running", result: null }));
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, entriesToMessages([answer])[0] as AssistantWork, "run-idle", { acc: "", lastProgressAt: 0 });
+  await pollRun(stream, entriesToMessages([answer])[0] as AssistantWork, "run-idle", { acc: "", startOffset: 0, lastProgressAt: 0 });
   assert.equal(((await stream.result()) as AssistantWork).interruptedRunId, "run-idle");
 });
 
@@ -51,7 +51,7 @@ test("definitive backend failures are not marked as interrupted polling", async 
   globalThis.fetch = async () =>
     new Response(JSON.stringify({ status: "failed", result: { status: "failed", reason: "backend error" } }));
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, entriesToMessages([answer])[0] as AssistantWork, "run-failed", { acc: "", lastProgressAt: 0 });
+  await pollRun(stream, entriesToMessages([answer])[0] as AssistantWork, "run-failed", { acc: "", startOffset: 0, lastProgressAt: 0 });
   const error = (await stream.result()) as AssistantWork;
   assert.equal(error.stopReason, "error");
   assert.equal(error.interruptedRunId, undefined);
