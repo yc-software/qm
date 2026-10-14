@@ -8215,10 +8215,6 @@ h3.ambient-field-label {
   font-family: var(--app-font);
 }
 
-.dockview-theme-qm .dv-groupview.dv-active-group .dv-tabs-and-actions-container {
-  --split-strip-line: color-mix(in srgb, var(--brand-accent) 20%, var(--border));
-}
-
 /* Empty auxiliary action containers must not occupy a flex-gap slot. */
 .dockview-theme-qm .dv-pre-actions-container:empty,
 .dockview-theme-qm .dv-left-actions-container:empty {
@@ -13326,21 +13322,13 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   min-width: 80px;
 }
 
-.split-dock[data-chrome] [data-chrome-active="false"] .composer-wrap {
+.split-canvas:not(.single-pane) .dv-groupview:not(.dv-active-group) .composer-wrap {
   display: none;
 }
 
-.split-dock[data-chrome] .dv-groupview.dv-active-group .dv-tabs-and-actions-container {
-  --split-strip-line: var(--border);
-}
-
-.split-dock[data-chrome="quiet"] .dv-groupview:not(.dv-active-group) .dv-right-actions-container,
-.split-dock[data-chrome="quiet"] .dv-groupview:not(.dv-active-group) .split-tab-actions,
-.split-dock[data-chrome="quiet"] .dv-groupview:not(.dv-active-group) .split-pane-crumb,
-.split-dock[data-chrome="quiet"] .dv-groupview:not(.dv-active-group) .split-pane-crumb-sep {
-  display: none;
-}
-
-.split-dock[data-chrome="focus"] .dv-groupview:not(.dv-active-group) > .dv-tabs-and-actions-container {
-  display: none;
+.split-canvas:not(.single-pane)
+  .dv-groupview:not(.dv-active-group):not(:hover):not(:focus-within)
+  :is(.dv-right-actions-container, .split-tab-actions) {
+  opacity: 0;
+  pointer-events: none;
 }

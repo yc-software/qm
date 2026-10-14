@@ -13,7 +13,8 @@
     "serve": "node --env-file-if-exists=.env server/index.ts",
     "start": "npm run build && npm run serve",
     "test": "NODE_ENV=test ALLOW_UNSIGNED_TEST_IDENTITY=1 node --test \"test/**/*.test.ts\"",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test:browser": "node test/browser/multiview-chrome.mjs"
   },
   "dependencies": {
     "@codemirror/language": "6.12.4",
@@ -49,6 +50,7 @@
     "@types/papaparse": "5.5.2",
     "jsdom": "^29.1.1",
     "katex": "^0.16.47",
+    "playwright": "^1.64.0",
     "typescript": "^5.8.2",
     "vite": "^7.1.6"
   },

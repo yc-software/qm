@@ -189,8 +189,6 @@ function buildDock(): DockviewApi {
   const host = canvasHost!;
   const dockEl = document.createElement("div");
   dockEl.className = "split-dock";
-  const chrome = new URLSearchParams(location.search).get("chrome");
-  if (chrome === "focus" || chrome === "quiet") dockEl.dataset.chrome = chrome;
   host.appendChild(dockEl);
   toastEl = document.createElement("div");
   toastEl.className = "split-toast-layer";
@@ -204,14 +202,6 @@ function buildDock(): DockviewApi {
     singleTabMode: "fullwidth",
     disableFloatingGroups: true,
   });
-  const syncChrome = (): void => {
-    if (!dockEl.dataset.chrome) return;
-    const restore = preserveTranscriptScroll(host);
-    for (const [id, content] of paneContents) {
-      content.element.dataset.chromeActive = String(id === api.activePanel?.id);
-    }
-    restore();
-  };
   const inner = dockEl.querySelector(":scope > .dv-dockview") as HTMLElement | null;
   let restoreScroll = () => {};
   api.onWillMutateLayout(() => {
@@ -244,7 +234,6 @@ function buildDock(): DockviewApi {
   });
   const guarded = new WeakSet<IDockviewGroupPanel>();
   api.onDidLayoutChange(() => {
-    syncChrome();
     const wasSingle = host.classList.contains("single-pane");
     host.classList.toggle("single-pane", api.panels.length === 1);
     if (wasSingle !== host.classList.contains("single-pane")) {
@@ -260,7 +249,6 @@ function buildDock(): DockviewApi {
     persistSoon();
   });
   api.onDidActivePanelChange((e) => {
-    syncChrome();
     splitState.focusedId = e.panel?.id ?? null;
     syncDocumentTitle();
     if (e.panel) focusPaneComposer(paneContents.get(e.panel.id)?.element);
