@@ -3128,6 +3128,7 @@ export function serverDeps(
             items: built.loops.items,
             errors: built.errors,
             tokens: built.keychain,
+            directory: built.directory,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
           }),
         }

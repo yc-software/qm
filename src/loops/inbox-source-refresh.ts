@@ -8,10 +8,12 @@ import type { LoopItemLedger } from "./item-ledger.ts";
 import { isResolved } from "./ledger-view.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
+import type { DirectoryStore } from "../directory/directory-store.ts";
 
 interface RefreshDeps {
   items: LoopItemLedger;
   tokens: ConnectorTokenSource;
+  directory?: Pick<DirectoryStore, "resolve">;
   featureFlags: Pick<FeatureFlagStore, "enabled">;
   errors?: ErrorLog;
   fetchImpl?: typeof fetch;
@@ -82,18 +84,13 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     return body;
   }
 
-  async function slackInfo(
-    owner: string,
-    path: string,
-    token: string,
-    deadline?: number,
-  ): Promise<Record<string, unknown>> {
+  async function slackInfo(owner: string, path: string, token: string): Promise<Record<string, unknown>> {
     const key = `${owner}:${path}`;
     const cached = info.get(key);
     if (cached) return cached;
     const pending = infoRunning.get(key);
     if (pending) return pending;
-    const task = get(owner, "slack", path, token, deadline)
+    const task = get(owner, "slack", path, token)
       .then((value) => {
         info.set(key, value);
         return value;
@@ -131,12 +128,11 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     };
   }
 
+  // Profiles come from the org's bot-synced Slack directory, not the owner's own Slack login.
   async function participants(
     owner: string,
     ids: string[],
-    token: string,
     previous: SlackParticipant[],
-    deadline?: number,
   ): Promise<{ people: SlackParticipant[]; refreshAt: number }> {
     let complete = true;
     const people = await Promise.all(
@@ -144,16 +140,11 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         const saved = previous.find((person) => person.id === id) ?? { id, name: id };
         if (id.startsWith("bot:")) return saved;
         try {
-          const result = await slackInfo(owner, `users.info?user=${encodeURIComponent(id)}`, token, deadline);
-          if (!isObj(result.user)) throw new Error("Slack profile is unavailable.");
-          const user = result.user;
-          const profile = isObj(user.profile) ? user.profile : {};
-          const avatarUrl = imageUrl(profile) ?? saved.avatarUrl;
-          return {
-            id,
-            name: String(profile.display_name || profile.real_name || user.real_name || user.name || saved.name),
-            ...(avatarUrl ? { avatarUrl } : {}),
-          };
+          const found = await deps.directory?.resolve(id);
+          const member = found?.kind === "one" ? found.member : undefined;
+          if (!member || (member.slackId ?? member.principalId) !== id) return saved;
+          const avatarUrl = member.avatarUrl?.startsWith("https://") ? member.avatarUrl : saved.avatarUrl;
+          return { id, name: member.displayName || saved.name, ...(avatarUrl ? { avatarUrl } : {}) };
         } catch (error) {
           recordFailure(owner, `Slack profile ${id}`, error);
           complete = false;
@@ -170,13 +161,12 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     if (typeof payload.slackAvatarsRefreshAt === "number" && now() < payload.slackAvatarsRefreshAt) return;
     const meta = isObj(payload.slack) ? payload.slack : {};
     if (typeof meta.channelId !== "string" || typeof meta.ts !== "string") return;
-    const token = await tokenFor(deps.tokens, "slack.com", owner);
-    if (!token) return;
-    const deadline = now() + 3000;
     const previous = savedParticipants(payload);
     let senderId = typeof meta.userId === "string" ? meta.userId : previous[0]?.id;
     if (senderId?.startsWith("bot:")) senderId = undefined;
     if (!senderId) {
+      const token = await tokenFor(deps.tokens, "slack.com", owner);
+      if (!token) return;
       const params = new URLSearchParams({
         channel: meta.channelId,
         oldest: meta.ts,
@@ -186,7 +176,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
       });
       const method = typeof meta.threadTs === "string" ? "conversations.replies" : "conversations.history";
       if (typeof meta.threadTs === "string") params.set("ts", meta.threadTs);
-      const body = await get(owner, "slack", `${method}?${params}`, token, deadline);
+      const body = await get(owner, "slack", `${method}?${params}`, token);
       const message = Array.isArray(body.messages)
         ? body.messages.filter(isObj).find((m) => m.ts === meta.ts)
         : undefined;
@@ -200,13 +190,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     }
     if (!previous.some((person) => person.id === senderId))
       previous.unshift({ id: senderId, name: typeof payload.from === "string" ? payload.from : senderId });
-    const profiles = await participants(
-      owner,
-      [senderId, ...previous.map((person) => person.id)],
-      token,
-      previous,
-      deadline,
-    );
+    const profiles = await participants(owner, [senderId, ...previous.map((person) => person.id)], previous);
     await deps.items.annotate(
       item.id,
       {
@@ -289,7 +273,6 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
           return person ? [person.id] : [];
         }),
       ],
-      token,
       [...previous.values()],
     );
     const people = new Map([...previous.values(), ...profiles.people].map((person) => [person.id, person]));
