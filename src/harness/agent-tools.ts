@@ -27,8 +27,10 @@ import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import {
   applyGovernorVerdict,
+  cancelGoal,
   createGoalRecord,
   goalFloorMeter,
+  goalIsOpen,
   goalReport,
   GOAL_STEP_BACK_PROMPT,
   type GoalGovernor,
@@ -85,7 +87,6 @@ export interface ToolContextRef {
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
-  tapeResultScopes?: Map<string, ScopeId>;
   llmCapture?: Array<{
     envelope: unknown;
     truncated: boolean;
@@ -109,6 +110,7 @@ export interface ToolContextRef {
   silentRequested?: boolean;
 
   goal?: GoalRecord | null;
+  goalOpenedThisTurn?: boolean;
 
   goalRound?: number;
 
@@ -384,10 +386,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       orgScopeId: ref.orgScopeId ?? ref.scopeLabel,
       sourceScopeId,
     });
-    if (type === "tool_result" && scopeLabel !== ref.scopeLabel) {
-      const callId = (payload as { callId?: unknown } | null)?.callId;
-      if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
-    }
     if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload)) payload = { ...payload, interrupted: true };
     await ref.emit({ type, payload, scopeLabel });
   };
@@ -2323,16 +2321,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       '— it runs at their own personal scope and DMs them, even from a channel. Don\'t bury "send this to Slack" inside `task`; a cron with no destination ' +
       "runs but has nowhere external to post. Use action=retarget to move an existing cron's delivery to a " +
       "different destinationKey. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
-      "MODE (runAs) — who can edit it and whose access it runs with. A cron always runs with the combined " +
-      "keychain of its owner and its scope:\n" +
-      "  • a cron in your DM is just you — your access, only you can edit it.\n" +
-      '  • a cron in a channel/group defaults to "scopeShared": it runs with YOUR keychain plus what the ' +
-      "scope shares, any member can edit it, and you're notified of every edit you didn't make. This is the " +
-      "default for a shared scope and is usually what you want.\n" +
-      '  • pass runAs="owner" to keep a channel cron editable only by you (still your access).\n' +
-      '  • pass runAs="scopeFloor" to run with ONLY what the whole scope shares, excluding your personal ' +
-      "keychain — for team crons that shouldn't touch your private access.\n" +
-      "The mode is editable later via action=patch (runAs=...), but only by the cron's owner.\n" +
+      "ACCESS — a cron belongs to whoever creates it and runs as them, with what its conversation has been granted " +
+      "plus, where they share Open with it, their own keychain. Everyone in the conversation " +
+      "can see it; only its owner can change it unless they share write access (action=share, permission=write). " +
+      "If the owner leaves the conversation, the cron is deleted.\n" +
       "action=list pages through your crons (and ones visible through shared scopes), 25 per page — enabled first, " +
       "newest first, long task text trimmed; when there's more, a footer line names the offset for the next page. " +
       "action=get inspects one in full; " +
@@ -2420,7 +2412,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       scope: Type.Optional(
         Type.Literal("personal", {
           description:
-            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey or runAs=scopeFloor.",
+            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey.",
         }),
       ),
       participants: Type.Optional(
@@ -2444,12 +2436,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
         }),
       ),
-      runAs: Type.Optional(
-        Type.Union([Type.Literal("owner"), Type.Literal("scopeFloor"), Type.Literal("scopeShared")], {
-          description:
-            'create or patch: the cron\'s mode. "scopeShared" (default in a channel/group) = your keychain + the scope\'s, any member edits, you\'re notified of others\' edits; "owner" = your access, only you edit (the default in a DM); "scopeFloor" = only what the whole scope shares, any member edits. On patch, only the owner may change the mode.',
-        }),
-      ),
       note: Type.Optional(
         Type.String({
           maxLength: CRON_FIRE_NOTE_MAX_CHARS,
@@ -2463,12 +2449,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           [
             Type.Null(),
             Type.Object({
-              harnessId: Type.Union([
-                Type.Literal("pi"),
-                Type.Literal("opencode"),
-                Type.Literal("codex"),
-                Type.Literal("claude"),
-              ]),
+              harnessId: Type.Union([Type.Literal("pi"), Type.Literal("claude")]),
               modelId: Type.String(),
               effortLevel: Type.Optional(
                 Type.Union([
@@ -2538,7 +2519,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.scope !== undefined ? { scope: params.scope } : {}),
             ...(Array.isArray(params.participants) ? { participants: params.participants } : {}),
             ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
-            ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
           });
@@ -2670,7 +2650,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-            ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
@@ -3921,11 +3900,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const p = params as { objective: string; floor?: Record<string, number>; token_cap?: number };
       await recordCall(callId, { tool: "goal", action: "create", objective: p.objective });
-      if (ref.goal && (ref.goal.status === "active" || ref.goal.status === "paused")) {
+      if (goalIsOpen(ref.goal)) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "create", error: "goal_exists" },
-          text("A goal is already registered (active or paused) — goal action get shows it."),
+          text(
+            'A goal is already registered (active or paused) — goal action get shows it. If the user asked to replace it, cancel it first (goal action update "cancel").',
+          ),
           true,
         );
       }
@@ -3945,6 +3926,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       ref.goal = record;
+      ref.goalOpenedThisTurn = true;
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "create", goal: record },
@@ -3982,12 +3964,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
       "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
       'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
-      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap.",
+      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap. " +
+      'Cancel (status "cancel") ends an active or paused goal without completing it, only when the person in this turn ' +
+      "explicitly asks to cancel, drop or replace it; never to escape unfinished work.",
     parameters: Type.Object({
-      status: Type.Union([Type.Literal("complete"), Type.Literal("resume")]),
+      status: Type.Union([Type.Literal("complete"), Type.Literal("resume"), Type.Literal("cancel")]),
       note: Type.String({
         description:
-          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume: quote the user's request to resume.",
+          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume or cancel: quote the user's request.",
       }),
       files: Type.Optional(
         Type.Array(Type.String(), {
@@ -3998,8 +3982,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       sandbox_id: sandboxSelector("Sandbox holding `files`; omit for the default."),
     }),
     async execute(callId, params) {
-      const p = params as { status?: "complete" | "resume"; note: string; files?: string[]; sandbox_id?: string };
-      const status = p.status === "resume" ? "resume" : "complete";
+      const p = params as {
+        status?: "complete" | "resume" | "cancel";
+        note: string;
+        files?: string[];
+        sandbox_id?: string;
+      };
+      const status = p.status === "resume" || p.status === "cancel" ? p.status : "complete";
       await recordCall(callId, {
         tool: "goal",
         action: "update",
@@ -4007,6 +3996,34 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(p.note ? { note: p.note } : {}),
       });
       const goal = ref.goal;
+      if (status === "cancel") {
+        if (!goalIsOpen(goal)) {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "no_open_goal" },
+            text("No active or paused goal to cancel."),
+            true,
+          );
+        }
+        if (ref.current?.humanTurn !== true || (ref.goalRound ?? 0) > 0 || ref.goalOpenedThisTurn) {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "human_required" },
+            text(
+              "Only the user's own message can cancel a goal, and the message you are answering is not one that came after this goal started (it is a keep-going prompt, an automated run, or the goal was started or resumed this turn). The goal is unchanged. If the user asked to cancel, tell them to use the cancel button on the goal bar, or to stop this reply and ask again.",
+            ),
+            true,
+          );
+        }
+        cancelGoal(goal, p.note);
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "update", goal },
+          text(
+            "The goal is cancelled at the user's request: it is no longer enforced and was not completed. A new goal can be registered now if the user asked for one.",
+          ),
+        );
+      }
       if (status === "resume") {
         if (goal?.status !== "paused") {
           return recordCoreAuthoredResult(
@@ -4030,6 +4047,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         goal.status = "active";
         goal.updatedAt = goal.activeSince = Date.now();
+        ref.goalOpenedThisTurn = true;
         delete goal.pauseReason;
         delete goal.governor;
         return recordCoreAuthoredResult(
@@ -4236,7 +4254,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const request = params as RuntimeRequest;
       await recordCall(callId, { tool: "runtime", ...request });
-      if (request.action !== "get" && ref.goal && (ref.goal.status === "active" || ref.goal.status === "paused")) {
+      if (request.action !== "get" && goalIsOpen(ref.goal)) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "runtime", error: "goal_in_progress" },

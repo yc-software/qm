@@ -69,7 +69,6 @@ test("loadConfig parses provider base URLs and feeds the child harness envs", ()
     openai: "https://o.example.com/v1",
   });
   assert.equal(config.claudeProcessEnv.ANTHROPIC_BASE_URL, "https://a.example.com");
-  assert.equal(config.codexProcessEnv.OPENAI_BASE_URL, "https://o.example.com/v1");
 });
 
 test("loadConfig rejects an invalid provider base URL", () => {
@@ -80,7 +79,6 @@ test("loadConfig leaves child envs untouched when no override is set", () => {
   const config = loadConfig(BASE_ENV);
   assert.deepEqual(config.providerBaseUrls, {});
   assert.equal(config.claudeProcessEnv.ANTHROPIC_BASE_URL, undefined);
-  assert.equal(config.codexProcessEnv.OPENAI_BASE_URL, undefined);
 });
 
 test("loadConfig accepts a complete model gateway and rejects partial or malformed routing", () => {

@@ -140,7 +140,7 @@ export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<v
     `while [ "$(date +%s)" -lt "$end" ]; do pid=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true); ` +
     `code=; listening && { code=$(status); case "$code" in ""|[1-4]??) exit 0 ;; esac; }; ` +
     `[ -z "$pid" ] || alive "$pid" && [ ! -f ${EXITED} ] || died=1; ` +
-    `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; ` +
+    `sleep 0.1; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; ` +
     `[ "$code" -ge 500 ] 2>/dev/null && { echo "$code"; exit ${EXIT_APP_SERVER_ERROR}; }; exit 1`;
   let left = opts.windowSec;
   let r: Awaited<ReturnType<Exec>>;

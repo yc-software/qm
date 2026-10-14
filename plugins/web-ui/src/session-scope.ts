@@ -1,7 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ArrowUpLeft, Box, Brain, Clock3, Ellipsis, Files, GitFork, KeyRound, Rocket } from "lucide";
 import { api } from "./core-bridge";
-import { closeFormMenus, icon, toggleFormMenu } from "./ui";
+import { closeFormMenus, toggleFormMenu } from "./ui";
+import { icon } from "./icons";
 import { tip } from "./tooltip";
 
 /** A session's context carried into the crons/files/memory views so the whole

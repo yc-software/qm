@@ -104,7 +104,7 @@ test("discovers unknown tool models through the company key without leaking tran
   assert.match(validateWebTurnModelOptions({ model: id }, [], availability) ?? "", /not enabled/);
 
   assert.equal(modelSupportedByHarness(id, "pi"), true);
-  for (const harness of ["opencode", "claude", "codex"]) assert.equal(modelSupportedByHarness(id, harness), false);
+  assert.equal(modelSupportedByHarness(id, "claude"), false);
   assert.equal(modelServiceable(id, { anthropic: true, openai: true, openrouter: true }), false);
   assert.equal(
     modelServiceable(id, { anthropic: false, openai: false, openrouter: false, modelIds: new Set([id]) }),

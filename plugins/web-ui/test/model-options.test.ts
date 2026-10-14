@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   defaultModelValue,
   getModelOptions,
-  getHarnessOptions,
+  harnessOptions,
   runtimeModelOptions,
   transcriptModel,
   harnessSupportsEffort,
@@ -46,7 +46,7 @@ test("empty, unknown, missing-metadata and unapproved lists stay empty", async (
   assert.deepEqual(getModelOptions("scope:empty"), []);
   assert.equal(defaultModelValue("scope:empty"), "pi:future");
   assert.equal(transcriptModel("scope:empty"), undefined);
-  assert.deepEqual(getHarnessOptions("scope:empty"), []);
+  assert.deepEqual(harnessOptions(getModelOptions("scope:empty")), []);
 });
 
 test("scopes retain independent choices and an unloaded scope does not borrow another policy", async () => {
@@ -74,10 +74,9 @@ test("OpenRouter and custom provider metadata retains provider grouping", async 
 
 test("harness controls retain their supported surfaces", async () => {
   assert.equal(harnessSupportsEffort("pi"), true);
-  assert.equal(harnessSupportsEffort("opencode"), false);
+  assert.equal(harnessSupportsEffort("mock"), false);
   assert.equal(harnessSupportsFastMode("claude"), true);
-  assert.equal(harnessSupportsFastMode("codex"), true);
-  assert.equal(harnessSupportsFastMode("opencode"), true);
+  assert.equal(harnessSupportsFastMode("mock"), false);
 });
 
 test("deleted selection retains identity and transcript rendering does not borrow a replacement", async () => {

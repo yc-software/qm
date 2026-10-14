@@ -1581,24 +1581,6 @@ const callWith = (tool: ReturnType<typeof createAgentTools>[number] | undefined,
   return (tool.execute as unknown as (i: string, p: unknown) => Promise<unknown>)(id, params);
 };
 
-test("a cross-scope result's classified label is recorded by callId for the tape writer", async () => {
-  const ref: ToolContextRef = {
-    current: fakeToolContext(),
-    emit: () => {},
-    scopeLabel: "channel:C1",
-    orgScopeId: "org:acme",
-  };
-  const [execute, , read] = createAgentTools(ref);
-
-  await callWith(read, "call-private", { action: "read", path: "a.txt" });
-  await callWith(read, "call-missing", { action: "read", path: "missing.txt" });
-  await callWith(execute, "call-exec", { command: "echo hi", purpose: "Run test command" });
-
-  assert.equal(ref.tapeResultScopes?.get("call-private"), "personal:U1", "the tape row gets the source scope");
-  assert.equal(ref.tapeResultScopes?.has("call-missing"), false, "session-scoped results are not recorded");
-  assert.equal(ref.tapeResultScopes?.has("call-exec"), false);
-});
-
 test("tool entries carry the call id + faithful model-facing result (WAL replay record)", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {
@@ -4353,7 +4335,7 @@ test("native skills discovery exposes list and search with validated pagination"
   }
 });
 
-test("skill discovery records the page's source scope for history and tape filtering", async () => {
+test("skill discovery records the page's source scope for history filtering", async () => {
   const emitted: Emitted[] = [];
   const ctx = fakeToolContext();
   ctx.listSkills = async () => ({
@@ -4371,7 +4353,7 @@ test("skill discovery records the page's source scope for history and tape filte
   };
   const tool = createAgentTools(ref).find((t) => t.name === "skills")!;
   await callWith(tool, "discovery", { action: "list" });
-  assert.equal(ref.tapeResultScopes?.get("discovery"), "personal:U1");
+  assert.equal(emitted.find((e) => e.type === "tool_result")?.scopeLabel, "personal:U1");
   const history = emitted.map((e, seq) => ({ ...e, seq, createdAt: seq, sessionId: "s" })) as SessionEntry[];
   const visible = filterHistoryForAudience(history, [{ id: "U2", type: "internal" }], "channel:C1", "org:default-org");
   assert.doesNotMatch(JSON.stringify(visible), /Private description|private-helper/);

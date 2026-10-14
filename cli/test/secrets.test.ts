@@ -213,15 +213,7 @@ test("naming a base model provider makes that provider's key a required deployme
 test("the providers a deployment did not select stay optional", () => {
   const anthropic = makeConfig({ modelProvider: "anthropic" });
   assert.equal(secretByName(anthropic, "OPENROUTER_API_KEY").required, false);
-  // OPENAI_API_KEY keeps its own Codex rule, so it is absent rather than optional here.
-  assert.ok(!computedSecrets(anthropic).some((secret) => secret.name === "OPENAI_API_KEY"));
-});
-
-test("an OpenAI base model and the Codex harness agree on one required key", () => {
-  const both = makeConfig({ modelProvider: "openai", env: { core: { HARNESS: "codex" } } });
-  const matches = computedSecrets(both).filter((secret) => secret.name === "OPENAI_API_KEY");
-  assert.equal(matches.length, 1, "overlapping rules collapse to a single secret");
-  assert.equal(matches[0]!.required, true);
+  assert.equal(secretByName(anthropic, "OPENAI_API_KEY").required, false);
 });
 
 test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavior", () => {
@@ -251,13 +243,11 @@ test("AWS public app domains require and route their gate secret to core", () =>
 });
 
 test("real harnesses require and route the sandbox-reachable PUBLIC_API_URL to core", () => {
-  for (const harness of ["pi", "opencode"]) {
-    const real = makeConfig({ env: { core: { HARNESS: harness } } });
-    const publicApi = secretByName(real, "PUBLIC_API_URL");
-    assert.equal(publicApi.required, true);
-    assert.deepEqual(runtimeSecretNames("core", publicApi), ["PUBLIC_API_URL"]);
-    assert.ok(renderEnvExample(real).includes("PUBLIC_API_URL="));
-  }
+  const real = makeConfig({ env: { core: { HARNESS: "pi" } } });
+  const publicApi = secretByName(real, "PUBLIC_API_URL");
+  assert.equal(publicApi.required, true);
+  assert.deepEqual(runtimeSecretNames("core", publicApi), ["PUBLIC_API_URL"]);
+  assert.ok(renderEnvExample(real).includes("PUBLIC_API_URL="));
   assert.ok(
     !computedSecrets(makeConfig({ env: { core: { HARNESS: "mock" } } })).some((s) => s.name === "PUBLIC_API_URL"),
   );

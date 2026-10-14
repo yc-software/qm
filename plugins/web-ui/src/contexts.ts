@@ -18,7 +18,6 @@ import {
 } from "lucide";
 import {
   api,
-  isContinuable,
   sharedContextLabel,
   type CoreContext,
   type CoreProject,
@@ -27,7 +26,8 @@ import {
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
-import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
+import { actionSnippet, fieldSelect, formatBytes, initials, menuSelect, relTime } from "./ui";
+import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
@@ -1381,7 +1381,7 @@ async function loadScopeResources(scopeId: string): Promise<void> {
 
 function contextSessionRow(s: CoreSession): TemplateResult {
   const surface = surfaceOf(s);
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   return html`
     <button class="context-session-row" type="button" @click=${() => void openFromContext(s)}>
       <span class="context-session-title" dir="auto">${groupDmTitle(s)}</span>

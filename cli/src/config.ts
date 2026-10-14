@@ -126,8 +126,8 @@ export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
 };
 
 export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly string[]>> = {
-  anthropic: ["pi", "opencode", "claude", "mock"],
-  openai: ["pi", "opencode", "codex", "mock"],
+  anthropic: ["pi", "claude", "mock"],
+  openai: ["pi", "mock"],
   openrouter: ["pi", "mock"],
 };
 
@@ -830,7 +830,15 @@ export function effectiveModelProvider(config: QmConfig): ModelProvider | undefi
   return isModelProvider(override) ? override : config.modelProvider;
 }
 
+const HARNESSES = ["mock", "pi", "claude"];
+
 function validateModelProvider(config: QmConfig, path: string): void {
+  const harness = configuredHarness(config);
+  if (!HARNESSES.includes(harness)) {
+    throw new CliError(
+      `${path}: env.core.HARNESS "${harness}" is not recognized — use ${HARNESSES.join(", ")}, or unset it.`,
+    );
+  }
   const override = config.env.core?.MODEL_PROVIDER?.trim();
   if (override === "") delete config.env.core!.MODEL_PROVIDER;
   if (override !== undefined && override !== "" && !isModelProvider(override)) {
@@ -840,7 +848,6 @@ function validateModelProvider(config: QmConfig, path: string): void {
   }
   const provider = effectiveModelProvider(config);
   if (!provider) return;
-  const harness = configuredHarness(config);
   if (!MODEL_PROVIDER_HARNESSES[provider].includes(harness)) {
     throw new CliError(
       `${path}: model provider "${provider}" cannot serve a base model on env.core.HARNESS "${harness}" — that harness runs no ${provider} model, so every agent turn would be refused. Use ${MODEL_PROVIDER_HARNESSES[provider].join(", ")}, or pick a provider that harness can bill.`,

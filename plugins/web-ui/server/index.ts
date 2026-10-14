@@ -1,4 +1,5 @@
 import "./instrument.ts";
+import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { appEditSlug } from "../src/app-edit.ts";
@@ -326,12 +327,11 @@ type WebConversation = {
 };
 
 function conversationForScope(
-  user: string,
   threadRef: string,
   scope: string | undefined,
   channelName: string | undefined,
 ): WebConversation | null {
-  if (!scope || scope === `personal:${user}`) return { kind: "dm", threadRef };
+  if (!scope || scope.startsWith("personal:")) return { kind: "dm", threadRef };
   const sep = scope.indexOf(":");
   const kind = scope.slice(0, sep);
   const ref = scope.slice(sep + 1);
@@ -345,17 +345,12 @@ async function resolveWebConversation(
   scope: string | undefined,
   channelName: string | undefined,
 ): Promise<{ conversation: WebConversation } | { error: string; message: string }> {
-  if (
-    (/^web:.+:inbox$/.test(threadRef) && threadRef !== `web:${user}:inbox`) ||
-    (!threadRef.startsWith(`web:${user}:`) &&
-      !threadRef.startsWith(SUBAGENT_THREAD_PREFIX) &&
-      !(scope?.startsWith("channel:") || scope?.startsWith("group:")))
-  ) {
+  if (/^web:.+:inbox$/.test(threadRef) && threadRef !== `web:${user}:inbox`) {
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   }
   if (threadRef === `web:${user}:inbox` && !isInboxUser(user))
     return { error: "forbidden", message: "inbox access is not enabled for this user" };
-  const conversation = conversationForScope(user, threadRef, scope, channelName);
+  const conversation = conversationForScope(threadRef, scope, channelName);
   if (!conversation || (threadRef === `web:${user}:inbox` && conversation.kind !== "dm")) {
     return {
       error: "forbidden_scope",
@@ -446,6 +441,7 @@ interface Identity {
   user: string;
   name: string | null;
   impersonator: string | null;
+  portalVerified: boolean;
 }
 type Denial = "unauthenticated" | "not_allowed";
 
@@ -469,7 +465,9 @@ function authenticate(req: IncomingMessage): { identity: Identity } | { denied: 
   }
   if (!user) return { denied: "unauthenticated" };
   if (ALLOW.length > 0 && !ALLOW.includes(user)) return { denied: "not_allowed" };
-  return { identity: { user, name: name?.trim() || null, impersonator: impersonator ?? null } };
+  return {
+    identity: { user, name: name?.trim() || null, impersonator: impersonator ?? null, portalVerified: Boolean(claims) },
+  };
 }
 
 function resolveIdentity(req: IncomingMessage): Identity | null {
@@ -1632,11 +1630,11 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/suggested-activities",
     handle: async (c) => {
-      const input = JSON.parse((await readBody(c.req)) || "{}") as { timezone?: unknown };
+      const input = JSON.parse((await readBody(c.req)) || "{}") as { timezone?: unknown; poll?: unknown };
       const response = await coreFetch(
         "POST",
         "/v1/suggested-activities",
-        JSON.stringify({ principalId: c.user, seeds: suggestedActivities, timezone: input.timezone }),
+        JSON.stringify({ principalId: c.user, seeds: suggestedActivities, timezone: input.timezone, poll: input.poll }),
         60_000,
       );
       return json(c.res, response.status, JSON.parse(response.text));
@@ -1915,21 +1913,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
-    path: "/api/sessions/:id/adopt",
-    handle: async (c) => {
-      const p = await readJson<{ parentSessionId?: unknown }>(c.req, c.res);
-      if (!p) return;
-      if (typeof p.parentSessionId !== "string") return json(c.res, 400, { error: "bad_request" });
-      return relayCore(
-        c.res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/adopt`,
-        JSON.stringify({ principalId: c.user, parentSessionId: p.parentSessionId }),
-      );
-    },
-  },
-  {
-    method: "POST",
     path: "/api/sessions/:id/detach",
     handle: async (c) => {
       const { res, user } = c;
@@ -1938,6 +1921,19 @@ const apiRoutes: readonly WebRoute[] = [
         res,
         "POST",
         `/v1/sessions/${encodeURIComponent(id)}/detach`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/goal/cancel",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/goal/cancel`,
         JSON.stringify({ principalId: user }),
       );
     },
@@ -3319,6 +3315,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
+    if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
+      return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
+        org: ORG,
+        publicUrl: PUBLIC_URL,
+      });
+    }
+
     const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
     if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
@@ -3432,6 +3435,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         t.unref?.();
         void runStateFeed();
         void runInboxFeed();
+        void sweepDictationSpool();
       });
     })
     .catch(async (err: unknown) => {

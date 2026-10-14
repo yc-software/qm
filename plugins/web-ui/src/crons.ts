@@ -2,7 +2,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2 } from "lucide";
 import { api, userSendMessage } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";

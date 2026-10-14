@@ -67,6 +67,7 @@ import {
   serveFavicon,
   readBody,
   PayloadTooLargeError,
+  sameOriginRequest as sameOriginFor,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -363,21 +364,7 @@ function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_
   );
 }
 
-function sameOriginRequest(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  const originMatches =
-    typeof origin === "string" &&
-    (() => {
-      try {
-        return new URL(origin).origin === ORIGIN;
-      } catch {
-        return false;
-      }
-    })();
-  const site = req.headers["sec-fetch-site"];
-  if (typeof site !== "string") return originMatches;
-  return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
-}
+const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, ORIGIN);
 
 function wantsHtml(req: IncomingMessage): boolean {
   const accept = req.headers.accept;

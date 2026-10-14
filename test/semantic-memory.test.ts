@@ -190,3 +190,75 @@ test("a provider vector-width change falls back to recency and rebuilds the inde
     [3],
   );
 });
+
+test("moving the embedding gateway to another URL keeps the vector index", async (t) => {
+  const { base, index } = await fixture(t);
+  await base.capture("personal:a", ["browser preference", "release note"], AT);
+  const model = {
+    kind: "embedding" as const,
+    baseUrl: "https://gateway.invalid",
+    id: "gateway/embed",
+    name: "embed",
+    provider: "qm:gateway",
+  };
+  const embedded: string[] = [];
+  const through = (url: string) => {
+    const transport = { url, apiKey: "k", apiKeyHeader: "x-k", models: { "gateway/embed": "embed" } };
+    const embedder = createMemoryEmbedder(model, null, transport, async (_url, init) => {
+      const input = JSON.parse(String(init?.body)).input as string[];
+      embedded.push(...input);
+      return Response.json({
+        data: input.map((text, i) => ({ index: i, embedding: /browser|verify/i.test(text) ? [1, 0] : [0, 1] })),
+      });
+    });
+    return createSemanticMemoryService(base, async () => embedder, index);
+  };
+  assert.equal(
+    await recall(through("http://signer.one:8080/v1"), "personal:a", { query: "verify" }),
+    "- (2026-10-01) browser preference",
+  );
+  const rows = await index.all();
+  embedded.length = 0;
+  assert.equal(
+    await recall(through("http://signer.two:8080/v1"), "personal:a", { query: "verify" }),
+    "- (2026-10-01) browser preference",
+  );
+  assert.deepEqual(embedded, ["verify"]);
+  assert.deepEqual(await index.all(), rows);
+});
+
+test("re-indexing a large notebook for a new model keeps index writes bounded", async (t) => {
+  const { base, index } = await fixture(t);
+  await base.capture(
+    "personal:a",
+    Array.from({ length: 40 }, (_, i) => `fact ${i}`),
+    AT,
+  );
+  let inFlight = 0;
+  let peak = 0;
+  const track = async (write: () => Promise<void>) => {
+    peak = Math.max(peak, ++inFlight);
+    await new Promise((resolve) => setImmediate(resolve));
+    try {
+      await write();
+    } finally {
+      inFlight--;
+    }
+  };
+  const tracked = {
+    ...index,
+    put: (id: string, value: MemoryVector) => track(() => index.put(id, value)),
+    delete: (id: string) => track(() => index.delete(id)),
+  };
+  const model = (id: string): MemoryEmbedder => ({ id, embed: async (texts) => texts.map(() => [1, 0]) });
+  for (const id of ["old-model", "new-model"])
+    await recall(
+      createSemanticMemoryService(base, async () => model(id), tracked),
+      "personal:a",
+      { query: "fact" },
+    );
+  assert.ok(peak <= 4, `peak concurrent index writes ${peak}`);
+  const rows = await index.all();
+  assert.equal(rows.length, 40);
+  assert.ok(rows.every((row) => row.model === "new-model"));
+});

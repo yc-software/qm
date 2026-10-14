@@ -1,6 +1,7 @@
 import { html, type TemplateResult } from "lit";
 import { Plus } from "lucide";
-import { icon, initials } from "./ui";
+import { initials } from "./ui";
+import { icon } from "./icons";
 
 export interface DirectoryMatch {
   principalId: string;

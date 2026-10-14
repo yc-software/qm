@@ -109,7 +109,7 @@ export interface CustomRuntimeModel {
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
-export function customProviderApi(protocol: CustomProviderProtocol): CustomRuntimeModel["api"] {
+function customProviderApi(protocol: CustomProviderProtocol): CustomRuntimeModel["api"] {
   if (protocol === "anthropic") return "anthropic-messages";
   if (protocol === "openai-responses") return "openai-responses";
   return "openai-completions";

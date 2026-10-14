@@ -10,7 +10,6 @@ import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
-import { asObject } from "./harness/codex-auth-file.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -35,6 +34,7 @@ import { createLoopIngress, type LoopIngressService, type LoopIngress, type Ingr
 import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
+import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import {
   createSessionSyscalls,
@@ -155,7 +155,8 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { createBudgetTracker, estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, type CronStore } from "./cron/cron-store.ts";
+import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { LEGACY_HARNESS_MIGRATION } from "./model/legacy-harness-migration.ts";
 import { createMemoryCronFireStore, createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
@@ -183,7 +184,6 @@ import {
   type EnvironmentStore,
 } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
-import { isOpenScopeMember } from "./resolution/sharing-access.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
@@ -204,6 +204,7 @@ import {
   createCurrentScopeMembers,
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
+  rosterAdmits,
   type CanReadScope,
   type CanManageScope,
   type ManagesArtifactHome,
@@ -317,9 +318,11 @@ import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import type { SessionStore } from "./sessions/session-store.ts";
 import { createMockHarness } from "./harness/mock-harness.ts";
-import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/opencode-harness.ts";
-import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
-import { keychainCodexAuthStore, fileCodexAuthStore, type CodexAuthStore } from "./harness/codex-auth-store.ts";
+import {
+  fileCompanyChatGPTAuth,
+  keychainCompanyChatGPTAuth,
+  type CompanyChatGPTAuth,
+} from "./model/company-chatgpt-auth.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
@@ -327,9 +330,6 @@ import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harn
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
-import { createMemoryTaskStore } from "./tasks/memory-task-store.ts";
-import { createPostgresTaskStore } from "./tasks/postgres-task-store.ts";
-import type { TaskStore } from "./tasks/task-store.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
 import {
@@ -400,6 +400,10 @@ import {
 } from "./surface-cache/ack-emoji-pick-store.ts";
 import {
   auxiliaryModelFor,
+  CODEX_SUBSCRIPTION_PROVIDER,
+  codexSubscriptionModelId,
+  isOverlayModel,
+  modelRequestOverrides,
   auxiliaryModelForProvider,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
@@ -479,7 +483,6 @@ export function stopWithBackstop(
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
-  suggestedActivityMaintenance: Sweeper;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   screenSecurity?: SecurityScreenProbe;
@@ -491,7 +494,6 @@ export interface BuiltApp {
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
-  tasks: TaskStore;
   sessionStateBus: SessionStateBus;
   ledgerEventBus: LedgerEventBus;
   surfaceCache: SurfaceCache;
@@ -656,6 +658,7 @@ export function buildApp(
       const direct = await directModelCredentials.availability();
       return {
         ...direct,
+        ...(directProviderAvailability.codexOAuth ? { codexOAuth: true } : {}),
         modelIds: new Set(Object.keys(gatewayTransport?.models ?? {})),
       };
     },
@@ -855,14 +858,17 @@ export function buildApp(
   );
   // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
-  const baseMemory: MemoryService = createConfiguredMemoryService({
-    defaultMemory,
-    config: config.memoryProviderConfig,
-    sessionEntries: (sessionId) => {
-      if (!memorySessions.store) throw new Error("session store is not ready");
-      return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
-    },
-  });
+  const baseMemory: MemoryService = withMemoryTidy(
+    createConfiguredMemoryService({
+      defaultMemory,
+      config: config.memoryProviderConfig,
+      sessionEntries: (sessionId) => {
+        if (!memorySessions.store) throw new Error("session store is not ready");
+        return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
+      },
+    }),
+    (scope) => memoryTidy.ensure(scope),
+  );
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog());
   const sandboxOnError = (
@@ -1333,7 +1339,6 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
       : createMemoryRunSignalStore();
-  const tasks = config.databaseUrl ? createPostgresTaskStore(config.databaseUrl) : createMemoryTaskStore();
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
       await refreshModels();
@@ -1397,20 +1402,30 @@ export function buildApp(
       ...customKeys,
     };
   };
-  let companyCodexAuthStore: CodexAuthStore | undefined;
+  let companyChatGPTAuth: CompanyChatGPTAuth | undefined;
   if (config.codexAuthCredential && keychain)
-    companyCodexAuthStore = keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential });
-  else if (config.codexAuthFile) companyCodexAuthStore = fileCodexAuthStore(config.codexAuthFile);
-  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> => {
-    const keys: ProviderKeys = await resolveModelProviderKeys();
-    if (includeSubscription && harnessCarriedModelAuth(config) === "openai") {
-      const auth = await companyCodexAuthStore?.load();
-      const token = companyCodexAuthStore
-        ? asObject(auth?.tokens)?.access_token
-        : config.codexProcessEnv.CODEX_ACCESS_TOKEN;
-      if (typeof token === "string" && token) keys["openai-codex"] = token;
+    companyChatGPTAuth = keychainCompanyChatGPTAuth({ keychain, credentialId: config.codexAuthCredential });
+  else if (config.codexAuthFile) companyChatGPTAuth = fileCompanyChatGPTAuth(config.codexAuthFile);
+  const resolveCompanySubscriptionKeys = async (): Promise<ProviderKeys> => {
+    if (!companyChatGPTAuth) return {};
+    try {
+      const token = await companyChatGPTAuth.accessToken();
+      return token ? { [CODEX_SUBSCRIPTION_PROVIDER]: token } : {};
+    } catch (e) {
+      console.error(`[model] company ChatGPT auth (${companyChatGPTAuth.description}) unreadable: ${errMessage(e)}`);
+      return {};
     }
-    return keys;
+  };
+  const resolvePiProviderKeys = async (): Promise<ProviderKeys> => ({
+    ...(await resolveModelProviderKeys()),
+    ...(await resolveCompanySubscriptionKeys()),
+  });
+  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
+    includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();
+  const companyModelId = (id: string): string => {
+    if (resolveModel(id)?.provider !== "openai" || isOverlayModel(id) || modelRequestOverrides(id)) return id;
+    const subscription = codexSubscriptionModelId(id);
+    return resolveModel(subscription) ? subscription : id;
   };
   const runtimeOrgScope = scopeId("org", config.orgId);
   const orgBaseModelId = (): string | undefined =>
@@ -1432,48 +1447,9 @@ export function buildApp(
         modelGateway: gatewayTransport,
         resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
         resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-        resolveProviderKeys: resolveModelProviderKeys,
+        resolveProviderKeys: resolvePiProviderKeys,
+        ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
         signals: runSignals,
-        mcpTools,
-      }),
-    ],
-    [
-      "opencode",
-      createOpenCodeHarness({
-        ...openCodeHarnessConfigOptions(config),
-        signals: runSignals,
-        tasks,
-        mcpTools,
-        resolveCustomProviders: async () => {
-          const enabled = await customProviders.enabled();
-          return Promise.all(
-            enabled.map(async (spec) => {
-              try {
-                const apiKey = await customProviders.resolveKey(spec.id);
-                return { spec, ...(apiKey ? { apiKey } : {}) };
-              } catch (e) {
-                // An unreadable key must not prevent the opencode server from
-                // starting; the provider is configured keyless and its models
-                // fail individually instead.
-                console.error(`[model] custom provider ${spec.id}: key unreadable: ${errMessage(e)}`);
-                return { spec };
-              }
-            }),
-          );
-        },
-      }),
-    ],
-    [
-      "codex",
-      createCodexHarness({
-        ...codexHarnessConfigOptions(config),
-        // Keychain custody: the subscription login lives encrypted in its
-        // owner's keychain; core refreshes it centrally and hands the harness
-        // ephemeral derived material. The credential can be (re)registered at
-        // runtime — resolution happens on every load.
-        ...(companyCodexAuthStore ? { authStore: companyCodexAuthStore } : {}),
-        signals: runSignals,
-        tasks,
         mcpTools,
       }),
     ],
@@ -1490,7 +1466,6 @@ export function buildApp(
             }
           : {}),
         signals: runSignals,
-        tasks,
         mcpTools,
       }),
     ],
@@ -1686,13 +1661,15 @@ export function buildApp(
     : createMemoryEventBus<RunStreamEvent>("run-stream");
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
-    onDelta: (runId, text, offset) => emitRunText(runStreamEvents, runId, text, offset),
+    onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
     onChange: refreshRunStream,
   });
   const stopStreamSync = runStreamEvents.subscribe((event) => {
     if (event.kind !== "sync") return;
     const text = turnStream.snapshot(event.runId);
-    if (text) emitRunText(runStreamEvents, event.runId, text.slice(event.offset), event.offset);
+    const startOffset = turnStream.startOffset(event.runId);
+    const offset = Math.max(event.offset, startOffset);
+    if (text) emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset);
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = config.databaseUrl
@@ -1808,8 +1785,6 @@ export function buildApp(
   const managesArtifactHome = createManagesArtifactHome({ managedGroups: projects, directory }, canManageScope);
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
   const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
-  const openScopeMember = (actorId: string, scope: ScopeId) =>
-    isOpenScopeMember({ actorId, scope, config: configStore, isCurrentSharedScopeMember });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
@@ -1931,6 +1906,17 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
+  pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS suggested_activity_profiles (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      `UPDATE crons c SET json = jsonb_set(c.json, '{schedule,cron}', to_jsonb(get_byte(sha256(convert_to(p.id, 'UTF8')), 0) % 60 || ' 2 * * *')) FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND c.json -> 'schedule' = p.json -> 'managedSchedule'`,
+      `UPDATE crons c SET json = jsonb_set(c.json, '{enabled}', 'true') FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND (p.json ->> 'autoPaused')::boolean`,
+    ],
+  });
   const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
@@ -1971,8 +1957,16 @@ export function buildApp(
     const ref = request.conversation.channelRef;
     if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
     const version = await projects.version(ref);
-    const audience = await currentScopeMembers(resolution.scopeFor(request.conversation, request.actor));
-    if (!version || !audience?.some((p) => p.id === request.actor.id))
+    const audience = await currentScopeMembers(scope);
+    if (
+      !version ||
+      !audience ||
+      !rosterAdmits(
+        audience.map((p) => p.id),
+        request.actor.id,
+        scope,
+      )
+    )
       throw new Error("session owner is no longer a member of this project");
     return {
       ...request,
@@ -2028,7 +2022,6 @@ export function buildApp(
     defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    sessionTapeMode: config.sessionTapeMode,
     sessions,
     workspace,
     files,
@@ -2079,7 +2072,6 @@ export function buildApp(
     turnStream,
     runActivity,
     runs,
-    tasks,
     blobTransfer,
     featureFlags,
     teams,
@@ -2118,7 +2110,7 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, tasks, recoveryAdminUrlFor, sessions);
+  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -2232,7 +2224,6 @@ export function buildApp(
     runStreamEvents,
     runActivity,
     signals: runSignals,
-    tasks,
     modelGateway,
     modelCredentials,
     userModelCredentials,
@@ -2333,7 +2324,6 @@ export function buildApp(
     metrics,
     runs,
     turnStream,
-    tasks,
     ackPicks: ackEmojiPicks,
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
@@ -2496,7 +2486,6 @@ export function buildApp(
             run: (req) => app.turn(req),
             directory,
             currentScopeMembers,
-            isOpenScopeMember: openScopeMember,
             sessions,
             getCron: (id) => crons.get(id),
             getAsk: (id) => keychain.getAsk(id),
@@ -2527,7 +2516,6 @@ export function buildApp(
       run: (req) => app.turn(req),
       directory,
       currentScopeMembers,
-      isOpenScopeMember: openScopeMember,
       sessions,
     },
   });
@@ -2557,8 +2545,18 @@ export function buildApp(
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   let ingressMaintenance: Promise<void> | undefined;
+  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
+  const memoryTidy = createMemoryTidyService({
+    store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
+    memory: baseMemory,
+    timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
+    crons,
+    scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
+  });
   const scheduler = createScheduler({
     admittedWork,
+    skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
+    deleteCron: (id) => app.deleteCron(id),
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     lock: advisoryLock,
     crons,
@@ -2569,7 +2567,6 @@ export function buildApp(
     leaderLease,
     directory,
     currentScopeMembers,
-    isOpenScopeMember: openScopeMember,
     sessions,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     ...(config.databaseUrl
@@ -2587,18 +2584,13 @@ export function buildApp(
     },
   });
   const suggestedActivities = createSuggestedActivityService({
-    store: artifactMap<SuggestedActivityProfile>("suggested_activity_profiles"),
+    store: suggestedActivityProfiles,
     sessions,
     crons,
     scheduler,
     enabled: config.suggestedActivitiesEnabled === true,
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
-  const suggestedActivityMaintenance = createSweeper(
-    () => leaderLease.hold("suggested-activities:maintenance", () => suggestedActivities.maintain()),
-    60 * 60_000,
-    { label: "suggested-activities", immediate: true },
-  );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
@@ -2740,8 +2732,8 @@ export function buildApp(
     deployIdleTtlMs && deployIdleTtlMs > 0
       ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
       : null;
-  const KEEP_WARM_INTERVAL_MS = 5 * 60_000;
-  const keepWarmSweeper = createSweeper(() => app.keepAlwaysOnWarm(), KEEP_WARM_INTERVAL_MS);
+  const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
+  const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
@@ -2793,7 +2785,7 @@ export function buildApp(
       composioReturnSweeper.start();
       fileUploads?.start();
       idleSweeper?.start();
-      keepWarmSweeper.start();
+      deployMaintenanceSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
       swarms?.start();
@@ -2820,7 +2812,7 @@ export function buildApp(
       spendSweeper?.stop(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
-      keepWarmSweeper.stop(),
+      deployMaintenanceSweeper.stop(),
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
       composioReturnSweeper.stop(),
@@ -2895,7 +2887,6 @@ export function buildApp(
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
       await harness.turns.close?.();
-      await tasks.close?.();
       await flyTunnel?.stop();
     },
   };
@@ -2914,7 +2905,6 @@ export function buildApp(
     sessions,
     runs,
     signals: runSignals,
-    tasks,
     sessionStateBus,
     ledgerEventBus,
     surfaceCache,
@@ -2992,7 +2982,6 @@ export function buildApp(
       ? { suggestedActivities }
       : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
-    suggestedActivityMaintenance,
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
     sessionShares: artifactMap<SessionShare>("session_shares"),
     sessionShareBytes:

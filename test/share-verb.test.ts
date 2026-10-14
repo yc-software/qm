@@ -64,6 +64,15 @@ function fakeApp(state: FakeState): App {
     canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string) {
       return fakeManages(state)(homeScopeId, createdBy, principalId);
     },
+    async getCron(id: string) {
+      const home = state.artifacts[`cron:${id}`];
+      return home ? { id, owner: home.createdBy, createdBy: home.createdBy, ownerScopeId: home.ownerScopeId } : null;
+    },
+    samePerson: async (a: string, b: string) => a === b,
+    isCurrentSharedScopeMember: async () => false,
+    artifactGrantPermission: async () => null,
+    membershipControlsScope: async () => false,
+    managesScope: async () => false,
     async grant(g: Grant) {
       await state.acl.grant(g, authorOfGrant(state, g.ownerScopeId, g.ref));
     },

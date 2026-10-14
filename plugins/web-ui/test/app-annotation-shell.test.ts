@@ -250,7 +250,6 @@ test("bundled Devbar mounts original controls without Copy, Export or Agent", as
   toggle(false);
   await tick();
   toggle(true);
-  await tick();
   assert.equal(w.document.querySelector('[aria-label="Select tool"]')?.getAttribute("aria-pressed"), "true");
   w.dispatchEvent(new w.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
   await tick();

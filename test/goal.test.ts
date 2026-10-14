@@ -95,7 +95,6 @@ test("prompts carry the objective as escaped user data plus audit language", () 
   assert.match(cont, /finish &lt;thing&gt; &amp; verify/);
   assert.match(cont, /treat completion as unproven/);
   assert.match(cont, /NOT met/);
-  assert.match(cont, /only the user can stop it/);
   assert.match(cont, /change approach/);
   assert.doesNotMatch(cont, /"blocked"/);
   goal.capTokens = 1000;

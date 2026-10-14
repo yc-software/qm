@@ -9,13 +9,12 @@ import {
 } from "../../../types.ts";
 import {
   sessionCategory,
-  transcriptEntries,
   type LlmRequestRecord,
   type SessionCategory,
   type SessionStore,
   type SessionSummary,
 } from "../../../sessions/session-store.ts";
-import { createTranscriptSource } from "../../../harness/tape-projection.ts";
+import { createTranscriptSource } from "../../../sessions/transcript-source.ts";
 import { swallowAs } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
@@ -363,12 +362,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
     ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).entries
     : [];
   const hasMore = !all && raw.length > limit;
-  const entries = await labelTranscriptEntries(
-    app,
-    deps,
-    session,
-    transcriptEntries(hasMore ? raw.slice(raw.length - limit) : raw),
-  );
+  const entries = await labelTranscriptEntries(app, deps, session, hasMore ? raw.slice(raw.length - limit) : raw);
   const recipientDeliveries = deps.deliveries
     ? await deps.deliveries.listByRecipientThread(session.threadRef, { limit: 100 })
     : [];

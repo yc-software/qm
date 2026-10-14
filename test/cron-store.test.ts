@@ -241,29 +241,6 @@ test("recordFire appends compact durable fire log entries and replaces duplicate
   assert.equal((await store.get(cron.id))?.fireLog, undefined, "the legacy json fireLog is never written");
 });
 
-test("create stores runAs + member snapshot for a scopeFloor cron", async () => {
-  const store = createCronStore();
-  const members = [
-    { id: "U1", type: "internal" as const },
-    { id: "U2", type: "internal" as const },
-  ];
-  const cron = await store.create({
-    ...base,
-    ownerScopeId: scopeId("channel", "C"),
-    schedule: { everyMs: 1000 },
-    runAs: "scopeFloor",
-    members,
-  });
-  assert.equal(cron.runAs, "scopeFloor");
-  assert.deepEqual(
-    cron.members?.map((m) => m.id),
-    ["U1", "U2"],
-  );
-  const owned = await store.create({ ...base, schedule: { everyMs: 1000 } });
-  assert.equal(owned.runAs, undefined);
-  assert.equal(owned.members, undefined);
-});
-
 test("markFired does not clobber a concurrent setEnabled(false) (field-level update)", async () => {
   const backing = createMemoryMap<Cron>();
   const slowReads: DurableMap<Cron> = {
@@ -325,8 +302,7 @@ test("create dedups across schedule-field ordering (semantically identical reque
 
 test("create does NOT dedup when any keyed field differs (distinct requests stay distinct)", async () => {
   const store = createCronStore();
-  const members = [{ id: "U1", type: "internal" as const }];
-  const chan = { ...base, ownerScopeId: scopeId("channel", "C"), runAs: "scopeFloor" as const };
+  const chan = { ...base, ownerScopeId: scopeId("channel", "C") };
   const a = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 }, action: "x" });
   const diffAction = await store.create({
     ...base,
@@ -350,15 +326,10 @@ test("create does NOT dedup when any keyed field differs (distinct requests stay
     action: "x",
     destination: { type: "slack", target: "C1" },
   });
-  const m1 = await store.create({ ...chan, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 }, members });
-  const m2 = await store.create({
-    ...chan,
-    schedule: { everyMs: 60_000, firstFireAt: 1_000_000 },
-    members: [...members, { id: "U2", type: "internal" as const }],
-  });
-  const ids = new Set([a.id, diffAction.id, diffSchedule.id, diffMessage.id, diffDest.id, m1.id, m2.id]);
-  assert.equal(ids.size, 7, "each distinct request — including a different member set — is its own record");
-  assert.equal((await store.list()).length, 7);
+  const diffScope = await store.create({ ...chan, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 }, action: "x" });
+  const ids = new Set([a.id, diffAction.id, diffSchedule.id, diffMessage.id, diffDest.id, diffScope.id]);
+  assert.equal(ids.size, 6, "each distinct request is its own record");
+  assert.equal((await store.list()).length, 6);
 });
 
 test("a duplicate create returns the existing record WITHOUT clobbering its live fire state", async () => {
@@ -893,26 +864,6 @@ test("backfillFires survives a cron deleted mid-loop: entries still reach the ta
   assert.equal((await store.listFires("gone")).total, 1, "the deleted cron's history still reaches the table");
   assert.equal((await store.listFires("stays")).total, 1);
   assert.equal((await backing.get("stays"))!.fireLog, undefined, "the surviving cron is still stripped");
-});
-
-test("Open owner authorization is durable, distinct from legacy mode, and cannot be cleared by a patch", async () => {
-  const backing = createMemoryMap<Cron>();
-  const store = createCronStore(backing);
-  const input = {
-    ...base,
-    ownerScopeId: scopeId("group", "g1"),
-    runAs: "scopeShared" as const,
-    schedule: { everyMs: 60_000 },
-  };
-  const legacy = await store.create(input);
-  const open = await store.create({ ...input, ownerResourcesRequireOpen: true });
-  assert.notEqual(open.id, legacy.id);
-  const restored = createCronStore(backing);
-  assert.equal((await restored.get(open.id))?.ownerResourcesRequireOpen, true);
-  await restored.update(open.id, { title: "edited", runAs: "owner", ownerResourcesRequireOpen: false });
-  await restored.update(open.id, { runAs: "scopeShared" });
-  assert.equal((await restored.get(open.id))?.ownerResourcesRequireOpen, true);
-  assert.equal((await restored.get(legacy.id))?.ownerResourcesRequireOpen, undefined);
 });
 
 test("cron runtime overrides survive store reload, distinguish creation, and clear without changing the task", async () => {

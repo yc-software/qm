@@ -41,7 +41,6 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
-  isContinuable,
   entriesToMessages,
   regenerateTitle,
   sharedContextLabel,
@@ -72,7 +71,8 @@ import {
 } from "./session-list";
 import { tip } from "./tooltip";
 import { errMessage } from "../../chassis/src/errors";
-import { copyText, icon, menuSelect, relTime, workingWave } from "./ui";
+import { copyText, menuSelect, relTime, workingWave } from "./ui";
+import { icon } from "./icons";
 import { listPageTpl } from "./list-page";
 import {
   contextsState,
@@ -111,7 +111,7 @@ export const sessionsState = {
   openMenuId: null as string | null,
   renamingId: null as string | null,
   openingKey: null as string | null,
-  webOnly: true,
+  webOnly: false,
   collapsedProjectScopes: new Set<string>(),
 };
 
@@ -160,9 +160,9 @@ function visibleRowOrder(): string[] {
 const WEB_ONLY_KEY = "web-ui:web-only";
 sessionsState.webOnly = ((): boolean => {
   try {
-    return localStorage.getItem(WEB_ONLY_KEY) !== "0";
+    return localStorage.getItem(WEB_ONLY_KEY) === "1";
   } catch {
-    return true;
+    return false;
   }
 })();
 
@@ -804,7 +804,7 @@ function isActiveRow(s: CoreSession): boolean {
 }
 
 function chatPageRow(s: CoreSession): TemplateResult {
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
     <div class="list-row chat-row ${color ? "colored" : ""}" style=${color ? `--session-color:${color}` : nothing}>
@@ -890,6 +890,7 @@ export function addPendingSession(
     title: pendingFork ? "Forking…" : null,
     channelName,
     archived: false,
+    canContinue: true,
   };
   if (pendingFork) pendingForkThreads.add(threadRef);
   sessionsState.list = withPendingSession(sessionsState.list, pending);
@@ -980,7 +981,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const untitledProjectChild = projectChild && !s.title?.trim();
   let title = sessionTitle(s);
   if (untitledProjectChild) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
   const working = sessionWorking(s);
@@ -1065,10 +1066,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(s)}${surfaceGlyph(s)}${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}<span
-            class="tl"
-            dir="auto"
-            >${titleContent}</span
+          ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
           >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
       </a>
@@ -1828,7 +1826,7 @@ export async function openSessionInto(
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
-  const continuable = isContinuable(s, appState.me?.user ?? "");
+  const continuable = s.canContinue === true;
   const [entriesRes, approvalsRes] = await Promise.all([
     entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
     continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),

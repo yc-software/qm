@@ -49,7 +49,7 @@ export const THINKING_LEVELS = [
   "max",
   "ultracode",
 ] as const;
-export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
+export const HARNESS_IDS = ["pi", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
 export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
@@ -77,13 +77,12 @@ export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string)
       return harnessId === "pi" && (!modelId || (!!model && modelSupportsProviderDefault(model)));
     if (harnessId === "pi") return true;
     if (harnessId === "claude") return level !== "ultracode";
-    if (harnessId === "codex") return level !== "max" && level !== "ultracode";
     return level === "auto";
   });
 }
 
 export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
-  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex" || harnessId === "opencode";
+  return harnessId === "pi" || harnessId === "claude";
 }
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
@@ -94,6 +93,10 @@ export function isModelProvider(value: unknown): value is ModelProvider {
 
 export function isHarnessId(value: unknown): value is HarnessId {
   return typeof value === "string" && (HARNESS_IDS as readonly string[]).includes(value);
+}
+
+export function harnessIdOrPi(value: unknown): HarnessId {
+  return isHarnessId(value) ? value : "pi";
 }
 
 type PiModel = Model<Api>;
@@ -666,12 +669,10 @@ export function modelSupportedByHarness(id: string | undefined, harness: string)
   if (id && isGatewayModelId(id)) return (harness === "pi" || harness === "mock") && Boolean(resolveGatewayModel(id));
   if (!id || unavailableOverlays.has(id)) return false;
   if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!) && (harness === "pi" || harness === "mock");
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id))
-    return harness === "pi" || harness === "opencode" || harness === "mock";
-  if (harness === "pi" || harness === "opencode" || harness === "mock") return Boolean(resolveModel(id));
+  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi" || harness === "mock";
+  if (harness === "pi" || harness === "mock") return Boolean(resolveModel(id));
   const provider = resolveModel(id)?.provider;
   if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
-  if (harness === "codex") return provider === "openai" || /^(?:gpt-|o\d|codex|openai\/)/i.test(id);
   return false;
 }
 
@@ -682,7 +683,7 @@ export function defaultModelForHarness(
 ): string {
   if (configured && (modelUnavailableReason(configured) || modelSupportedByHarness(configured, harness)))
     return configured;
-  const preferred = harness === "codex" ? DEFAULT_CODEX_MODEL_ID : DEFAULT_AGENT_MODEL_ID;
+  const preferred = DEFAULT_AGENT_MODEL_ID;
   if (!providers || modelServiceable(preferred, providers)) return preferred;
   const servable = selectableBaseModels(true).find(
     (model) => modelSupportedByHarness(model.id, harness) && modelServiceable(model.id, providers),
@@ -698,17 +699,19 @@ export interface ModelProviderAvailability {
   codexOAuth?: boolean;
 }
 
-function providerFlags(value: ModelProviderAvailability): ModelProviderAvailability {
-  return { anthropic: value.anthropic, openai: value.openai, openrouter: value.openrouter };
-}
-
 export function modelServiceable(id: string, providers: ModelProviderAvailability): boolean {
   if (isGatewayModelId(id)) return Boolean(resolveGatewayModel(id) && providers.modelIds?.has(id));
   const provider = resolveModel(id)?.provider;
   if (!provider) return false;
   if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return true;
   if (providers.modelIds?.has(id)) return true;
-  if (provider === "openai") return providers.openai;
+  if (provider === "openai")
+    return (
+      providers.openai ||
+      (providers.codexOAuth === true &&
+        resolveModel(codexSubscriptionModelId(id))?.provider === CODEX_SUBSCRIPTION_PROVIDER)
+    );
+  if (provider === CODEX_SUBSCRIPTION_PROVIDER) return providers.codexOAuth === true;
   if (provider === "anthropic") return providers.anthropic;
   if (provider === "openrouter") return providers.openrouter;
   return true;
@@ -718,7 +721,12 @@ export function serviceableModelIds(ids: readonly string[], providers: ModelProv
   return ids.filter((id) => modelServiceable(id, providers));
 }
 
-export const ALL_PROVIDERS_AVAILABLE: ModelProviderAvailability = { anthropic: true, openai: true, openrouter: true };
+export const ALL_PROVIDERS_AVAILABLE: ModelProviderAvailability = {
+  anthropic: true,
+  openai: true,
+  openrouter: true,
+  codexOAuth: true,
+};
 
 export function modelProviderAvailabilityFor(
   harness: string,
@@ -726,9 +734,6 @@ export function modelProviderAvailabilityFor(
   managedKeys: ModelProviderAvailability = configKeys,
 ): ModelProviderAvailability {
   if (harness === "pi") return managedKeys;
-  if (harness === "opencode") return { ...providerFlags(configKeys), openrouter: false };
-  if (harness === "codex")
-    return { ...providerFlags(configKeys), openai: configKeys.openai || Boolean(configKeys.codexOAuth) };
   return ALL_PROVIDERS_AVAILABLE;
 }
 
@@ -793,6 +798,15 @@ export function safeModelMetadata(id: string) {
       HARNESS_IDS.map((harness) => [harness, thinkingLevelsForHarness(harness, id)]),
     ),
   };
+}
+
+export function modelCatalogFor(ids: Iterable<string>) {
+  return Object.fromEntries(
+    [...new Set(ids)].flatMap((id) => {
+      const metadata = safeModelMetadata(id);
+      return metadata ? [[id, metadata]] : [];
+    }),
+  );
 }
 
 export function embeddingModelFromDefinition(model: EmbeddingModelDefinition): EmbeddingModel {

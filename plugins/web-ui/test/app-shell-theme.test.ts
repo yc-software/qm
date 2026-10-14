@@ -1,13 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
-import { runInNewContext } from "node:vm";
-import { isPalette, themeCss, themeTokens } from "../src/theme-import.ts";
 import { JSDOM, type DOMWindow } from "jsdom";
+import { createServer } from "vite";
 import { appShellHtml } from "../../../src/deploy/app-shell.ts";
+import { harness } from "./deep-link-boot-fixture.ts";
 
-const settings = readFileSync(new URL("../src/settings.ts", import.meta.url), "utf8");
 const keys = ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"];
 
 test("the app bar accepts the chat palette only from its portal iframe, even while closed", () => {
@@ -50,27 +47,45 @@ test("the app bar accepts the chat palette only from its portal iframe, even whi
   dom.window.close();
 });
 
-test("embedded chat publishes active colors and tracks theme changes from other tabs", () => {
+test("embedded chat publishes active colors and tracks theme changes from other tabs", async (t) => {
   const dom = new JSDOM("<iframe></iframe>", { url: "https://portal.example.com", runScripts: "outside-only" });
   const frame = dom.window.document.querySelector("iframe")!.contentWindow as unknown as DOMWindow;
   const messages: Array<{ data: { dark: boolean; colors: Record<string, string> }; origin: string }> = [];
   dom.window.postMessage = (data, origin) => messages.push({ data, origin: origin as string });
-  Object.assign(frame, { isPalette, themeCss, themeTokens });
-  frame.eval("window.matchMedia = () => ({ matches: false, addEventListener() {} });");
-  const source =
-    settings.slice(settings.indexOf("export function storedTheme"), settings.indexOf("let themeParentOrigin")) +
-    settings.slice(settings.indexOf("let themeParentOrigin"), settings.indexOf("export function setTheme")) +
-    settings.slice(settings.indexOf("export function watchSystemTheme"), settings.indexOf("function themeSwatches"));
-  frame.eval(
-    stripTypeScriptTypes(
-      'const THEME_KEY = "theme", CUSTOM_THEME_KEY = "theme:custom", CUSTOM_THEME_STYLE_ID = "custom-theme";\n' +
-        source.replaceAll("export function", "function"),
-    ),
-  );
+  frame.document.body.innerHTML = '<div id="app"></div>';
+  frame.matchMedia = () =>
+    ({ matches: false, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList;
+  const descriptors = new Map<string, PropertyDescriptor | undefined>();
+  for (const [key, value] of Object.entries({
+    window: frame,
+    document: frame.document,
+    location: frame.location,
+    history: frame.history,
+    localStorage: frame.localStorage,
+    sessionStorage: frame.sessionStorage,
+    navigator: frame.navigator,
+    HTMLElement: frame.HTMLElement,
+    Element: frame.Element,
+    Node: frame.Node,
+    customElements: frame.customElements,
+    getComputedStyle: frame.getComputedStyle.bind(frame),
+  })) {
+    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  }
+  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  t.after(async () => {
+    await vite.close();
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+    dom.window.close();
+  });
+  await vite.ssrLoadModule("/src/shell.ts");
   const style = frame.document.createElement("style");
   style.textContent = `:root { ${keys.map((key) => `${key}: #abcdef;`).join(" ")} }`;
   frame.document.head.appendChild(style);
-  frame.eval("applyTheme(); watchSystemTheme();");
   frame.dispatchEvent(
     new frame.MessageEvent("message", {
       source: dom.window as unknown as Window,
@@ -100,25 +115,22 @@ test("embedded chat publishes active colors and tracks theme changes from other 
   frame.localStorage.clear();
   frame.dispatchEvent(new frame.StorageEvent("storage", { key: null }));
   assert.equal(messages.at(-1)!.data.dark, false);
-  dom.window.close();
 });
 
 test("theme-only startup stops before authenticated chat boot", async () => {
-  const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
-  const boot = stripTypeScriptTypes(shell.slice(shell.indexOf("export async function boot():")).replace("export ", ""));
-  const location = { search: "?slug=demo&embed=1&themeOnly=1" };
-  let started = false;
-  const run = runInNewContext(boot + "; boot", {
-    location,
-    URLSearchParams,
-    captureConnectionReturn: () => {
-      started = true;
-      throw new Error("chat boot");
-    },
-  }) as () => Promise<void>;
-  await run();
-  assert.equal(started, false);
-  location.search = "?slug=demo&embed=1";
-  await assert.rejects(run(), /chat boot/);
-  assert.equal(started, true);
+  const themeOnly = await harness({ path: "/?slug=demo&embed=1&themeOnly=1" });
+  try {
+    await themeOnly.boot();
+    assert.deepEqual(themeOnly.requests, []);
+  } finally {
+    await themeOnly.close();
+  }
+  const chat = await harness({ path: "/?slug=demo&embed=1" });
+  try {
+    chat.releaseSessions();
+    await chat.boot();
+    assert.ok(chat.requests.includes("/me"));
+  } finally {
+    await chat.close();
+  }
 });

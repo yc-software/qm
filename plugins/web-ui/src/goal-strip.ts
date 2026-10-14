@@ -1,6 +1,6 @@
 export interface GoalStripState {
   objective: string;
-  status: "active" | "paused" | "complete";
+  status: "active" | "paused" | "complete" | "cancelled";
   floor?: string;
   createdAt: number;
 }
@@ -11,6 +11,8 @@ interface ActivityLike {
 }
 
 interface MessageLike {
+  role?: string;
+  note?: string;
   work?: { activity?: ActivityLike[] };
 }
 
@@ -27,7 +29,7 @@ function snapshotFrom(payload: unknown): GoalStripState | null | undefined {
   };
   if (typeof goal !== "object" || typeof goal.objective !== "string" || !goal.objective.trim()) return undefined;
   const status = goal.status;
-  if (status !== "active" && status !== "paused" && status !== "complete") return undefined;
+  if (status !== "active" && status !== "paused" && status !== "complete" && status !== "cancelled") return undefined;
   const floor = goalFloorLabel(goal.floor ?? null);
   const createdAt = typeof goal.createdAt === "number" ? goal.createdAt : Date.now();
   return {
@@ -41,6 +43,10 @@ function snapshotFrom(payload: unknown): GoalStripState | null | undefined {
 export function latestGoal(messages: readonly unknown[]): GoalStripState | null {
   let latest: GoalStripState | null = null;
   for (const message of messages) {
+    if ((message as MessageLike).role === "system-note" && (message as MessageLike).note === "goal_cancelled") {
+      latest = null;
+      continue;
+    }
     const activity = (message as MessageLike).work?.activity;
     if (!activity) continue;
     for (const item of activity) {

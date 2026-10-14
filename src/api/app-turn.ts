@@ -6,6 +6,7 @@ import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscal
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
+import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
@@ -17,6 +18,7 @@ import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-st
 import { samePerson } from "../directory/person.ts";
 import {
   defaultModelForHarness,
+  harnessIdOrPi,
   isHarnessId,
   modelProviderAvailabilityFor,
   modelServiceable,
@@ -134,7 +136,7 @@ export function createTurnMethods(
         }
         const roster = (await deps.projects?.members(conversationRef)) ?? [];
         const activeMemberIds = roster.filter((memberId) => deps.identity.isInternal(deps.identity.classify(memberId)));
-        if (!activeMemberIds.includes(actor.id))
+        if (!rosterAdmits(activeMemberIds, actor.id, scopeId("group", conversationRef)))
           return { status: "refused", reason: "you're not a member of that context" };
         projectAudience = await Promise.all(
           activeMemberIds.map(async (memberId) => {
@@ -244,12 +246,14 @@ export function createTurnMethods(
           if (existing.scopeId !== claimed) {
             return { status: "refused", reason: "that conversation lives in a different context" };
           }
+          if (!(await h.mayWriteSession(actor.id, existing)))
+            return { status: "refused", reason: "you can't continue that conversation from the web" };
         } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
           return { status: "refused", reason: "you can only start a new conversation on your own thread" };
         }
         const org = scopeId("org", orgIdOf());
         const targetScope = conversationScope(req.conversation, actor.id);
-        const fallbackHarness = isHarnessId(deps.harnessId) ? deps.harnessId : "pi";
+        const fallbackHarness = harnessIdOrPi(deps.harnessId);
         const runtimeFallback = deps.runtimeFallback ?? {
           harnessId: fallbackHarness,
           modelId: defaultModelForHarness(fallbackHarness),
@@ -722,7 +726,6 @@ export function createTurnMethods(
       const replying = deps.turnStream?.replying(runId) ?? false;
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
-      const tasks = await deps.tasks?.list({ originRunId: runId });
       const stale =
         run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
@@ -753,7 +756,7 @@ export function createTurnMethods(
           : {}),
         startedAt: run.startedAt,
         finishedAt: run.finishedAt,
-        ...(partial ? { partial } : {}),
+        ...(partial ? { partial, partialStartOffset: deps.turnStream!.startOffset(runId) } : {}),
         ...(firstBlock
           ? { firstBlock: firstBlock.text, ...(firstBlock.closed ? { firstBlockClosed: true } : {}) }
           : {}),
@@ -762,7 +765,6 @@ export function createTurnMethods(
         ...(stale ? { stale: true } : {}),
         ...(replying ? { replying: true } : {}),
         ...(replyComplete ? { replyComplete: true } : {}),
-        ...(tasks?.length ? { tasks: tasks.map(({ id, title, status }) => ({ id, title, status })) } : {}),
         ...(activity && activity.length ? { activity } : {}),
       };
     },

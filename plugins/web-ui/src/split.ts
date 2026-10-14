@@ -55,7 +55,8 @@ import {
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { attachTooltip, tip } from "./tooltip";
-import { icon, workingWave } from "./ui";
+import { workingWave } from "./ui";
+import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
@@ -162,6 +163,11 @@ function pushRemoteSoon(payload: { updatedAt: number }): void {
 }
 
 function flushRemoteNow(): void {
+  if (persistTimer !== null) {
+    window.clearTimeout(persistTimer);
+    persistTimer = null;
+    persist();
+  }
   if (remoteTimer !== null) {
     window.clearTimeout(remoteTimer);
     remoteTimer = null;

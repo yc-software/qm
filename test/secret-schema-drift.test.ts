@@ -87,11 +87,15 @@ test("a declared base model provider is enforced at boot, not just at deploy tim
   assert.deepEqual(validateCoreSecretEnv({} as NodeJS.ProcessEnv), [], "no provider declared, nothing required");
 });
 
-test("an OpenAI base model on the Codex harness reports its one missing key once", () => {
+test("an OpenAI base model needs an API key unless a company ChatGPT login serves it", () => {
+  assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: "openai" } as NodeJS.ProcessEnv), ["OPENAI_API_KEY"]);
   assert.deepEqual(
-    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", HARNESS: "codex" } as NodeJS.ProcessEnv),
-    ["OPENAI_API_KEY"],
-    "two rules wanting the same key must not name it twice",
+    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" } as NodeJS.ProcessEnv),
+    [],
+  );
+  assert.deepEqual(
+    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_FILE: "/tmp/auth.json" } as NodeJS.ProcessEnv),
+    [],
   );
 });
 

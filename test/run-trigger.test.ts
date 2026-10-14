@@ -204,7 +204,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
-  it("threads grants for owner mode but omits them for scopeFloor and scopeShared", async () => {
+  it("threads grants only for personal crons", async () => {
     const requests: TurnRequest[] = [];
     const d = deps(async (request) => {
       requests.push(request);
@@ -218,17 +218,12 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
       unattendedGrants: ["admin.sessions.read"],
     };
     await runTrigger(d, { ...base, fireKey: "cron:owner" });
+    await runTrigger(d, { ...base, ownerScopeId: scopeId("channel", "C1"), fireKey: "cron:channel" });
     await runTrigger(d, {
       ...base,
-      fireKey: "cron:floor",
-      runAs: "scopeFloor",
-      members: [{ id: "U1", type: "internal" }],
-    });
-    await runTrigger(d, {
-      ...base,
-      fireKey: "cron:shared",
-      runAs: "scopeShared",
-      members: [{ id: "U1", type: "internal" }],
+      owner: "system:channel:C1",
+      ownerScopeId: scopeId("channel", "C1"),
+      fireKey: "cron:conversation",
     });
     assert.deepEqual(requests[0]?.unattendedGrants, ["admin.sessions.read"]);
     assert.equal(requests[1]?.unattendedGrants, undefined);

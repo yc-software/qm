@@ -1,6 +1,6 @@
 import { html, type TemplateResult } from "lit";
 import { Plug } from "lucide";
-import { icon } from "./ui";
+import { icon } from "./icons";
 
 const CONNECTOR_LOGOS: Record<string, string> = {
   googlesheets:

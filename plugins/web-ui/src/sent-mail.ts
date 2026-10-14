@@ -3,7 +3,8 @@ import { ArrowUpRight, ChevronRight, Mail } from "lucide";
 import type { LedgerItem } from "./inbox";
 import { api } from "./core-bridge";
 import { listBackLink } from "./list-page";
-import { icon, initials, relTime } from "./ui";
+import { initials, relTime } from "./ui";
+import { icon } from "./icons";
 
 interface SentThreadMessage {
   from: string;

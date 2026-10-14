@@ -145,7 +145,6 @@ export function createMockHarness(): Harness {
             ...(turn.documents?.length
               ? { documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })) }
               : {}),
-            ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
           },
           truncated: false,
           usage: callUsage(0),
@@ -913,7 +912,6 @@ export function createMockHarness(): Harness {
                     documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })),
                   }
                 : {}),
-              ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
             },
             truncated: false,
             usage: callUsage(1),

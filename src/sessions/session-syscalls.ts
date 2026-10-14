@@ -175,7 +175,7 @@ type SessionListResult = { ok: true; sessions: SessionSummary[] } | { ok: false;
 
 type SessionReadResult =
   | { ok: true; mode: "children"; children: SessionChildSummary[] }
-  | { ok: true; mode: "tape"; sessionId: string; title: string; status: string; rendered: string }
+  | { ok: true; mode: "transcript"; sessionId: string; title: string; status: string; rendered: string }
   | { ok: false; message: string };
 
 interface SessionSyscallBinding {
@@ -347,9 +347,6 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
         ? { destination: meta.origin.destination }
         : {}),
       ...(meta.origin?.kind === "automation" && meta.origin.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
-      ...(meta.origin?.kind === "automation" && meta.origin.ownerResourcesRequireOpen
-        ? { ownerResourcesRequireOpen: true }
-        : {}),
       screenData: text,
     },
     ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
@@ -689,7 +686,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                       origin: {
                         kind: "automation" as const,
                         ...(caller.origin.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
-                        ...(caller.origin.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
                         ...(caller.origin.destination ? { destination: caller.origin.destination } : {}),
                       },
                     }
@@ -938,7 +934,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
           return {
             ok: true,
-            mode: "tape",
+            mode: "transcript",
             sessionId: target.id,
             title: visibleTitle(target),
             status: await statusOf(target),

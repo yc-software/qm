@@ -33,6 +33,14 @@ export function personalScope(principalId: string): ScopeId {
   return scopeId("personal", principalId);
 }
 
+export function scopeActor(scope: ScopeId): string {
+  return `system:${scope}`;
+}
+
+export function actsAsScope(principalId: string, scope: ScopeId): boolean {
+  return principalId === scopeActor(scope);
+}
+
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };
@@ -112,6 +120,7 @@ export interface Session {
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
+  canContinue?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
@@ -214,11 +223,6 @@ export interface Destination {
   relaySender?: string;
   threadTs?: string;
   editRef?: string;
-  taskList?: Array<{
-    id: string;
-    title: string;
-    status: "pending" | "in_progress" | "completed" | "skipped" | "failed";
-  }>;
   unfurlLinks?: boolean;
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
@@ -284,9 +288,6 @@ export interface Cron extends TriggerBase {
   message?: string;
   loopId?: string;
   createdAt: number;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
-  ownerResourcesRequireOpen?: boolean;
-  members?: Principal[];
   unattendedGrants?: string[];
   sessionRef?: string;
 
@@ -390,7 +391,6 @@ export interface Loop extends TriggerBase {
   healthReason?: string;
   throttle?: boolean;
   cronId?: string;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
   consecutiveFailedFires?: number;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
@@ -637,7 +637,6 @@ export type TurnOrigin =
       screenData?: string;
       destination?: Destination;
       useOwnerKeychain?: boolean;
-      ownerResourcesRequireOpen?: boolean;
     }
   | { kind: "direct" };
 
@@ -692,7 +691,6 @@ export interface TurnRequest {
   securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;
-  ownerResourcesRequireOpen?: boolean;
   unprompted?: boolean;
   liveActor?: boolean;
   botActor?: boolean;

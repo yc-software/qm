@@ -46,6 +46,7 @@ const EXIT_APP_PORT_HELD = 97;
 const LIVE_REPLICATOR_PIDS = `ls_pids() { for p in /proc/[0-9]*; do c=$(tr '\\0' ' ' < "$p/cmdline" 2>/dev/null); case "\${c%% *}" in litestream|*/litestream) case "$c" in *${LITESTREAM_CONFIG}*) echo "\${p#/proc/}";; esac;; esac; done; }`;
 const ENDPOINT_PORT = 443;
 const RESOLVE_CACHE_MS = 15_000;
+const ROTATE_AHEAD_MS = 30 * 60_000;
 
 const DEFAULT_INGRESS = (region: string): string =>
   `arn:aws:lambda:${region}:aws:network-connector:aws-network-connector:ALL_INGRESS`;
@@ -60,6 +61,7 @@ export interface StoredDeployBody {
   lastSnapshotMs?: number;
   dataCredsAtMs?: number;
   rotateNotBeforeMs?: number;
+  replacementMicrovmId?: string;
   orgId?: string;
 }
 
@@ -104,7 +106,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const store = opts.store ?? createMemoryMap<StoredDeployBody>();
   const launchQueue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
-  const resolveCache = new Map<string, { endpoint: DeployEndpoint; untilMs: number }>();
+  const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
   const inflightResolves = new Map<string, Promise<DeployEndpoint | null>>();
   const resolveGens = new Map<string, number>();
   const bumpResolveGen = (id: string): void => {
@@ -127,8 +129,13 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const appPort = opts.appPort ?? APP_PORT_DEFAULT;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
   const rotateAfterMs = (opts.rotateAfterSeconds ?? 27_000) * 1000;
+  const rotateDueMs = Math.max(0, rotateAfterMs - ROTATE_AHEAD_MS);
+  const rotationDue = (stored: StoredDeployBody): boolean =>
+    Date.now() - stored.createdAtMs > rotateDueMs &&
+    !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs);
   const maxIdleDurationSeconds = opts.maxIdleDurationSeconds ?? 900;
-  const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? 3600;
+  const awakeForMs = Math.max(0, maxIdleDurationSeconds * 1000 - 60_000);
+  const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
   const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
   const dataBucket = opts.dataBucket;
@@ -349,23 +356,35 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
   async function ensureBody(d: Deployment): Promise<{ id: string; endpoint: string; fresh: boolean }> {
     return launchQueue(d.id, async () => {
-      const stored = await store.get(d.id);
+      let stored = await store.get(d.id);
+      if (stored?.replacementMicrovmId) {
+        await api
+          .terminate(stored.replacementMicrovmId)
+          .catch((e) => swallow("aws-deploy: terminate orphaned replacement", e));
+        const { replacementMicrovmId: _, ...rest } = stored;
+        stored = rest;
+        await store.put(d.id, stored);
+      }
+      let next: { id: string; endpoint: string } | undefined;
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
         const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-        const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
-        if (alive && !stale) {
-          await ensureRunning(stored.microvmId, stored.endpoint);
+        if (alive && !rotationDue(stored)) {
+          await ensureRunning(stored.microvmId, stored.endpoint, desc);
           return { id: stored.microvmId, endpoint: stored.endpoint, fresh: false };
         }
-        if (alive && stale) {
-          await ensureRunning(stored.microvmId, stored.endpoint).catch(() => {});
+        if (alive) {
+          next = await launchBody(d.id, d.alwaysOn);
+          const replacement = next;
+          await store.put(d.id, { ...stored, replacementMicrovmId: replacement.id });
+          await ensureRunning(stored.microvmId, stored.endpoint, desc).catch(() => {});
           const defer = async (
             label: string,
             e: unknown,
             extra: Partial<StoredDeployBody> = {},
           ): Promise<{ id: string; endpoint: string; fresh: boolean }> => {
             swallow(label, e);
+            await api.terminate(replacement.id).catch((e2) => swallow("aws-deploy: abandon replacement", e2));
             await store.put(d.id, { ...stored, rotateNotBeforeMs: Date.now() + 5 * 60_000, ...extra });
             return { id: stored.microvmId, endpoint: stored.endpoint, fresh: false };
           };
@@ -386,7 +405,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           }
         }
       }
-      const body = await launchBody(d.id, d.alwaysOn);
+      const body = next ?? (await launchBody(d.id, d.alwaysOn));
       try {
         await hydrateData(d.id, body.id, body.endpoint);
       } catch (e) {
@@ -555,7 +574,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs)
       )
         return null;
-      await ensureRunning(stored.microvmId, stored.endpoint);
+      await ensureRunning(stored.microvmId, stored.endpoint, desc);
       const exec = (script: string, timeoutSec: number) =>
         execRaw(stored.microvmId, stored.endpoint, script, timeoutSec);
       const report = appReporter(opts.onError, d, version.env);
@@ -625,30 +644,55 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
     apply: (d, version) => place(d, version),
 
+    async rotationDue(d): Promise<boolean> {
+      const stored = await store.get(d.id);
+      return !!stored && rotationDue(stored);
+    },
+
     reconcile: (d, version, input) => place(d, version, input),
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
-      const cached = resolveCache.get(d.id);
-      if (cached && Date.now() < cached.untilMs) return cached.endpoint;
-      const inflight = inflightResolves.get(d.id);
-      if (inflight) return inflight;
       const gen = resolveGens.get(d.id) ?? 0;
       const genCurrent = (): boolean => (resolveGens.get(d.id) ?? 0) === gen;
-      const resolve = resolveLive(d, version, genCurrent)
-        .then((endpoint) => {
-          if (endpoint && genCurrent()) {
-            if (resolveCache.size > 500) {
-              for (const [k, v] of resolveCache) if (Date.now() >= v.untilMs) resolveCache.delete(k);
+      const revalidate = (): Promise<DeployEndpoint | null> => {
+        const inflight = inflightResolves.get(d.id);
+        if (inflight) return inflight;
+        const resolve = resolveLive(d, version, genCurrent)
+          .then((endpoint) => {
+            if (!genCurrent()) return endpoint;
+            if (!endpoint) {
+              resolveCache.delete(d.id);
+              return endpoint;
             }
-            resolveCache.set(d.id, { endpoint, untilMs: Date.now() + RESOLVE_CACHE_MS });
-          }
-          return endpoint;
-        })
-        .finally(() => {
-          if (inflightResolves.get(d.id) === resolve) inflightResolves.delete(d.id);
-        });
-      inflightResolves.set(d.id, resolve);
-      return resolve;
+            if (resolveCache.size > 500) {
+              for (const [k, v] of resolveCache) if (Date.now() - v.usedMs >= awakeForMs) resolveCache.delete(k);
+            }
+            resolveCache.set(d.id, { endpoint, checkedMs: Date.now(), usedMs: Date.now() });
+            return endpoint;
+          })
+          .finally(() => {
+            if (inflightResolves.get(d.id) === resolve) inflightResolves.delete(d.id);
+          });
+        inflightResolves.set(d.id, resolve);
+        return resolve;
+      };
+      const cached = resolveCache.get(d.id);
+      const samePlacement = !d.endpoint || d.endpoint.host === cached?.endpoint.host;
+      if (cached && samePlacement && Date.now() - cached.usedMs < awakeForMs) {
+        cached.usedMs = Date.now();
+        if (Date.now() - cached.checkedMs >= RESOLVE_CACHE_MS)
+          void revalidate().catch((e) => swallow("aws-deploy: background revalidate", e));
+        return cached.endpoint;
+      }
+      return revalidate();
+    },
+
+    async park(d): Promise<void> {
+      if (d.alwaysOn) return;
+      const stored = await store.get(d.id);
+      if (!stored) return;
+      resolveCache.delete(d.id);
+      await api.suspend(stored.microvmId);
     },
 
     async logs(d, opts): Promise<string | null> {

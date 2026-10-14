@@ -70,11 +70,6 @@ test("Project trigger access follows current membership while Slack-group owner 
     createdBy: "member",
     action: "project secret",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: [
-      { id: "owner", type: "internal" },
-      { id: "member", type: "internal" },
-    ],
   });
   const slackScope = "group:G-slack" as const;
   const slackCron = await built.app.createCron({
@@ -107,7 +102,8 @@ test("Project trigger access follows current membership while Slack-group owner 
   });
 
   const control = createControlService(built.app, built.scheduler);
-  assert.ok((await control.listCrons(claims("owner"))).crons.some((cron) => cron.id === projectCron.id));
+  assert.ok((await control.listCrons(claims("member"))).crons.some((cron) => cron.id === projectCron.id));
+  assert.ok((await control.listCrons(claims("owner"))).visible.some((cron) => cron.id === projectCron.id));
   assert.ok((await control.listWebhooks(claims("owner"))).some((webhook) => webhook.id === projectWebhook.id));
 
   const server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
@@ -133,11 +129,7 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
 
   await runNowSettled(built.scheduler, projectCron.id);
-  assert.equal(
-    (await built.crons.get(projectCron.id))?.enabled,
-    false,
-    "a scopeShared Project cron disables when its owner leaves",
-  );
+  assert.equal(await built.crons.get(projectCron.id), null, "a Project cron is deleted once its owner leaves");
 
   assert.equal((await fetch(`${base}/v1/soul`, { headers: { "x-agent-capability": projectToken } })).status, 403);
   assert.equal(

@@ -266,15 +266,15 @@ test("branding governance validates, round-trips through surface-config, clears,
 });
 
 test("surface-config filters persisted model choices to the active native harness", async () => {
-  const srv = start("codex");
+  const srv = start("claude");
   try {
     srv.built.config.setBaseModel("org:default-org", "claude-opus-4-8");
     srv.built.config.setWebuiModels("org:default-org", ["claude-opus-4-8", "gpt-5.6-sol"]);
     const response = await fetch(`${srv.base}/v1/surface-config`);
     const config = (await response.json()) as { harnessId: string; baseModel: string; webuiModels: string[] };
-    assert.equal(config.harnessId, "codex");
-    assert.equal(config.baseModel, "gpt-5.6-sol");
-    assert.deepEqual(config.webuiModels, ["gpt-5.6-sol"]);
+    assert.equal(config.harnessId, "claude");
+    assert.equal(config.baseModel, "claude-opus-4-8");
+    assert.deepEqual(config.webuiModels, ["claude-opus-4-8"]);
   } finally {
     await srv.close();
   }
@@ -283,7 +283,7 @@ test("surface-config filters persisted model choices to the active native harnes
 test("runtime-config lets a person set, keep, and inherit an approved personal runtime", async () => {
   const srv = start("pi");
   try {
-    srv.built.config.setApprovedHarnesses(["pi", "codex", "claude"]);
+    srv.built.config.setApprovedHarnesses(["pi", "claude"]);
     srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
     srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
     await srv.built.config.flushScope("org:default-org");
@@ -297,7 +297,9 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     assert.equal(initial.effective.harnessId, "pi");
     assert.equal(initial.scopeOverride, null);
     assert.deepEqual(initial.modelsByHarness.claude, ["claude-sonnet-4-6", "claude-opus-4-8"]);
-    assert.deepEqual(initial.modelsByHarness.codex, ["gpt-5.5"]);
+    assert.deepEqual(initial.modelsByHarness.pi, ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
+    assert.equal(initial.modelsByHarness.codex, undefined);
+    assert.equal(initial.modelsByHarness.opencode, undefined);
 
     const set = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
@@ -305,7 +307,7 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
       body: JSON.stringify({
         principalId: "alice",
         scopeId: "personal:alice",
-        harnessId: "codex",
+        harnessId: "pi",
         modelId: "gpt-5.5",
         effortLevel: "low",
         fastMode: true,
@@ -316,7 +318,7 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
       effective: { harnessId: string; effortLevel: string; fastMode: boolean };
     };
     assert.deepEqual(selected.effective, {
-      harnessId: "codex",
+      harnessId: "pi",
       modelId: "gpt-5.5",
       effortLevel: "low",
       fastMode: false,
@@ -582,7 +584,7 @@ test("admin runtime saves reasoning level and fast mode with the default model",
   const srv = start();
   const url = `${srv.base}/v1/admin/scopes/org:default-org/runtime`;
   try {
-    srv.built.config.setApprovedHarnesses(["pi", "opencode", "codex"]);
+    srv.built.config.setApprovedHarnesses(["pi", "claude"]);
     await srv.built.config.flushScope("org:default-org");
     const saved = await fetch(url, {
       method: "PUT",
@@ -622,17 +624,18 @@ test("admin runtime saves reasoning level and fast mode with the default model",
     assert.equal(unsupported.status, 200);
     assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
 
-    const openCode = await fetch(url, {
+    const claude = await fetch(url, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ harnessId: "opencode", modelId: "claude-opus-5", effortLevel: "auto", fastMode: true }),
+      body: JSON.stringify({ harnessId: "claude", modelId: "claude-opus-5", effortLevel: "auto", fastMode: true }),
     });
-    assert.equal(openCode.status, 200);
+    assert.equal(claude.status, 200);
     assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, true);
 
     for (const body of [
       { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "extreme", fastMode: true },
-      { harnessId: "codex", modelId: "gpt-5.5", effortLevel: "max", fastMode: false },
+      { harnessId: "codex", modelId: "gpt-5.5", effortLevel: "high", fastMode: false },
+      { harnessId: "opencode", modelId: "gpt-5.5", effortLevel: "high", fastMode: false },
       { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: "yes" },
     ]) {
       assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify(body) })).status, 400);

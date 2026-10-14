@@ -80,7 +80,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
                 .value=${s.value("auto-flagger-harness")}
                 @change=${(event: Event) => changeField(s, "auto-flagger-harness", event)}
               >
-                ${harnessOptions(s).map((id) => html`<option value=${id} ?selected=${id === s.draft.harnessId}>${({ pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" } as Record<string, string>)[id] || id}</option>`)}
+                ${harnessOptions(s).map((id) => html`<option value=${id} ?selected=${id === s.draft.harnessId}>${({ pi: "Pi", claude: "Claude Code" } as Record<string, string>)[id] || id}</option>`)}
               </select>
             </div>
             <div>

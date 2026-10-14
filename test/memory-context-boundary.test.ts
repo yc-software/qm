@@ -136,10 +136,10 @@ for (const change of ["source", "audience"] as const)
         text: "PRIVATE_SENTINEL summarized",
       },
     });
-    await sessions.appendTape(lease, {
-      kind: "message",
+    await sessions.append(lease, {
+      type: "assistant",
       scopeLabel: session.scopeId,
-      payload: { role: "assistant", content: [{ type: "text", text: "PRIVATE_SENTINEL" }] },
+      payload: { text: "PRIVATE_SENTINEL" },
     });
     await sessions.releaseLease(lease);
     content = "";
@@ -153,7 +153,6 @@ for (const change of ["source", "audience"] as const)
     assert.doesNotMatch(seen[1]!.environment ?? "", /PRIVATE_SENTINEL/);
     const retained = JSON.stringify({
       history: seen[1]!.history,
-      tape: seen[1]!.tape,
       priorTurns: seen[1]!.priorTurns,
     });
     if (change === "source") {

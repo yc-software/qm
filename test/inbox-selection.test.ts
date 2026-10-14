@@ -284,9 +284,8 @@ for (const completed of [false, true]) {
           ownerScopeId: "personal:alice",
           schedule: { everyMs: 120000 + index * 60000 },
           enabled: index === 0,
-          runAs: "owner",
         });
-        await w.deps.store.update(loop.id, { cronId: sourceCron.id, runAs: "owner" });
+        await w.deps.store.update(loop.id, { cronId: sourceCron.id });
         if (index === 1) await w.deps.store.setState(loop.id, "paused");
       }
     }

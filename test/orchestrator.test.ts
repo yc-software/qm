@@ -1662,10 +1662,10 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
       assert.equal(
         claims!.members,
         undefined,
-        "withheld publishMembers must not mint a scopeFloor cron member snapshot",
+        "withheld publishMembers must not mint a scope-run cron member snapshot",
       );
     } else {
-      assert.deepEqual(claims!.members, [], "empty publishMembers stays an empty scopeFloor snapshot");
+      assert.deepEqual(claims!.members, [], "empty publishMembers stays an empty scope-run snapshot");
     }
     assert.deepEqual(
       claims!.keychainMembers?.map((p) => p.id),
@@ -1706,7 +1706,7 @@ test("attaching a path that is not there is an in-turn error, not a silent non-d
   assert.match(res.reply ?? "", /not attached.*nope\.txt \(not found\)/);
 });
 
-test("an attached file is recorded in the tool result, not as a delivery entry", async () => {
+test("an attached file is recorded in the attach tool result", async () => {
   const { app } = freshApp();
   const t1 = await app.turn(dm("!writeattach flag.png FLAG"));
   assert.deepEqual(
@@ -1715,11 +1715,6 @@ test("an attached file is recorded in the tool result, not as a delivery entry",
   );
 
   const s1 = await app.getSession(t1.sessionId!);
-  assert.equal(
-    s1!.entries.find((e) => e.type === "delivery"),
-    undefined,
-    "the attach tool result is the record — no separate delivery entry is written",
-  );
   const result = s1!.entries.findLast(
     (e) => e.type === "tool_result" && (e.payload as { tool?: string } | null)?.tool === "attach",
   );
@@ -2206,17 +2201,11 @@ test("priorTurns are routed to the harness as structured roled turns (PR3)", asy
 test("overheard messages are imported ONCE into the durable log, author-labeled, and handed to the harness", async () => {
   const { app, sessions } = freshApp();
   const entryBatches: number[] = [];
-  const tapeBatches: number[] = [];
   const appendMany = sessions.appendMany.bind(sessions);
-  const appendTapeMany = sessions.appendTapeMany.bind(sessions);
   sessions.appendMany = async (lease, entries) => {
     if (entries.some((entry) => (entry.payload as { overheard?: boolean })?.overheard))
       entryBatches.push(entries.length);
     return appendMany(lease, entries);
-  };
-  sessions.appendTapeMany = async (lease, records) => {
-    if (records.some((record) => record.meta?.overheard)) tapeBatches.push(records.length);
-    return appendTapeMany(lease, records);
   };
   const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
     entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
@@ -2267,7 +2256,6 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
     "append-only: each message recorded exactly once",
   );
   assert.deepEqual(entryBatches, [3, 1]);
-  assert.deepEqual(tapeBatches, [3, 1]);
 });
 
 test("a message answered on one turn is not re-imported as overheard on the next (full-stack dedupe)", async () => {
@@ -4365,33 +4353,10 @@ test("narration reaches the live activity feed before its tool call", async () =
   const view = await app.getRun(run.id);
   assert.deepEqual(
     view?.activity?.map((entry) => entry.type),
-    ["text", "tool_call", "tool_result"],
+    ["text", "tool_call", "tool_result", "text_start"],
   );
   assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item." });
-});
-
-test("public text phases persist with exact stream offsets in session history and run activity", async () => {
-  const { app, runs } = freshApp();
-  const result = await app.turn(dm("!phased-reply"));
-  assert.equal(result.status, "ok");
-  assert.equal(result.reply, "All clear.");
-  const run = (await runs.list()).find((entry) => entry.request.text === "!phased-reply");
-  assert.ok(run);
-  const view = await app.getRun(run.id);
-  const history = await app.getSession(result.sessionId!);
-  const expected = [
-    { phase: "commentary", streamOffset: 0 },
-    { phase: "final_answer", streamOffset: "Checking.\n\n".length },
-  ];
-  assert.deepEqual(
-    view?.activity?.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
-    expected,
-  );
-  assert.deepEqual(
-    history?.entries.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
-    expected,
-  );
-  assert.equal(view?.partial, "Checking.\n\nAll clear.");
+  assert.deepEqual(view?.activity?.at(-1)?.payload, { streamOffset: "I'll check the first item.\n\n".length });
 });
 
 function fixtureScreen(): SecurityScreener {

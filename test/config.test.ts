@@ -1,13 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   harnessCarriedModelAuth,
   baseModelProviders,
   boolEnv,
   enabledSandboxBackends,
   loadConfig,
+  configuredModelForHarness,
   numEnv,
+  providerKeysPresent,
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
 
@@ -384,19 +388,10 @@ test("HARNESS=pi can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
 });
 
-test("HARNESS=codex requires OPENAI_API_KEY: its CLI cannot do browser OAuth in a container", () => {
-  assert.throws(() => loadConfig({ HARNESS: "codex" }), /missing or insecure required core secrets: OPENAI_API_KEY/);
-  assert.throws(() => loadConfig({ HARNESS: " codex " }), /missing or insecure required core secrets: OPENAI_API_KEY/);
-  assert.doesNotThrow(() => loadConfig({ HARNESS: "codex", OPENAI_API_KEY: "sk-openai" }));
-  assert.throws(
-    () => loadConfig({ ...productionEnv, HARNESS: "codex" }),
-    /missing or insecure required core secrets: OPENAI_API_KEY/,
-  );
-  assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "codex", OPENAI_API_KEY: "sk-openai" }));
-  assert.equal(
-    loadConfig({ HARNESS: "codex", OPENAI_API_KEY: "sk-openai", CODEX_MODEL: "gpt-5.4" }).codexModel,
-    "gpt-5.4",
-  );
+test("HARNESS accepts only the remaining harnesses", () => {
+  for (const harness of ["codex", " opencode "])
+    assert.throws(() => loadConfig({ HARNESS: harness }), /is not recognized — use mock, pi, or claude/);
+  assert.equal(loadConfig({ HARNESS: "pi" }).harness, "pi");
 });
 
 test("HARNESS=claude uses native Claude authentication and does not require an Anthropic key", () => {
@@ -568,23 +563,14 @@ test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
 
 test("MODEL_PROVIDER is refused when the harness can never run that vendor's models", () => {
   assert.throws(
-    () => loadConfig({ MODEL_PROVIDER: "openrouter", HARNESS: "codex", OPENROUTER_API_KEY: "k", OPENAI_API_KEY: "k" }),
-    /cannot serve a base model on HARNESS=codex/,
+    () => loadConfig({ MODEL_PROVIDER: "openrouter", HARNESS: "claude", OPENROUTER_API_KEY: "k" }),
+    /cannot serve a base model on HARNESS=claude/,
   );
   assert.throws(
-    () => loadConfig({ MODEL_PROVIDER: "anthropic", HARNESS: "codex", ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k" }),
-    /cannot serve a base model on HARNESS=codex/,
+    () => loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "claude", OPENAI_API_KEY: "k" }),
+    /cannot serve a base model on HARNESS=claude/,
   );
-  assert.throws(
-    () => loadConfig({ MODEL_PROVIDER: "openrouter", HARNESS: "opencode", OPENROUTER_API_KEY: "k" }),
-    /cannot serve a base model on HARNESS=opencode/,
-    "opencode has no OpenRouter route",
-  );
-  assert.equal(
-    loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "codex", OPENAI_API_KEY: "k" }).modelProvider,
-    "openai",
-    "the one combination Codex can bill is accepted",
-  );
+  assert.equal(loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "pi", OPENAI_API_KEY: "k" }).modelProvider, "openai");
 });
 
 test("baseModelProviders constrains the base model only when a provider is declared", () => {
@@ -814,10 +800,42 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
 });
 
-test("Codex file OAuth satisfies model onboarding without an API key", () => {
-  const config = { ...loadConfig({}), harness: "codex" as const, codexAuthFile: "/local/auth.json" };
-  assert.equal(harnessCarriedModelAuth(config), "openai");
-  assert.equal(harnessCarriedModelAuth({ ...config, codexAuthFile: undefined }), undefined);
+test("company ChatGPT auth satisfies model onboarding on any harness without an API key", () => {
+  const config = { ...loadConfig({}), harness: "pi" as const };
+  assert.equal(harnessCarriedModelAuth({ ...config, codexAuthCredential: "cred-1" }), "openai");
+  assert.equal(harnessCarriedModelAuth({ ...config, codexAuthFile: "/local/auth.json" }), "openai");
+  assert.equal(harnessCarriedModelAuth({ ...config, harness: "claude", codexAuthCredential: "cred-1" }), "openai");
+  assert.equal(harnessCarriedModelAuth(config), undefined);
+  assert.equal(providerKeysPresent({ ...config, codexAuthCredential: "cred-1" }).codexOAuth, true);
+  assert.equal(
+    loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "pi", CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthCredential,
+    "cred-1",
+  );
+});
+
+test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-config-chatgpt-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "auth.json");
+  const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
+  const token = `e30.${claims.toString("base64url")}.sig`;
+  writeFileSync(path, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: token, refresh_token: "r" } }));
+  chmodSync(path, 0o600);
+  assert.equal(loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }).codexAuthFile, path);
+  assert.throws(
+    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(dir, "missing.json") }),
+    /CODEX_AUTH_FILE is unusable: .*ENOENT/,
+  );
+  assert.equal(
+    loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path, CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthFile,
+    undefined,
+  );
+  assert.throws(
+    () => loadConfig({ ...productionEnv, CODEX_AUTH_FILE: path }),
+    /CODEX_AUTH_FILE is supported for local development only/,
+  );
+  chmodSync(path, 0o644);
+  assert.throws(() => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }), /must not be readable by group or others/);
 });
 
 test("retired brain environment does not configure a runtime integration and warns once", () => {
@@ -981,4 +999,18 @@ test("sandbox capability TTL is deployment-configurable with a 48-hour default",
   assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "168" }).sandboxCapabilityTtlMs, 168 * 3_600_000);
   assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "none" }).sandboxCapabilityTtlMs, 0);
   assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
+});
+
+test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
+  const base = { ...loadConfig({}), harness: "pi" as const };
+  assert.equal(configuredModelForHarness({ ...base, codexAuthCredential: "cred-1" }, "pi"), "gpt-5.6-sol");
+  assert.equal(
+    configuredModelForHarness({ ...base, codexAuthCredential: "cred-1", anthropicApiKey: "k" }, "pi"),
+    undefined,
+  );
+  assert.equal(
+    configuredModelForHarness({ ...base, codexAuthCredential: "cred-1", modelId: "claude-opus-5" }, "pi"),
+    "claude-opus-5",
+  );
+  assert.equal(configuredModelForHarness(base, "pi"), undefined);
 });

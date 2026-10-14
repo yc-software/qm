@@ -36,7 +36,7 @@ export function createMemoryEmbedder(
   const target = routed?.target ?? model.id;
   return {
     id: createHash("sha256")
-      .update(JSON.stringify([url, target]))
+      .update(JSON.stringify(routed ? [model.provider, target] : [url, target]))
       .digest("hex"),
     async embed(texts, signal) {
       const response = await fetchImpl(url, {
