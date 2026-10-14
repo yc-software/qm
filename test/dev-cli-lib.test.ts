@@ -424,6 +424,7 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
     probeLoginShell: async () => "",
   });
   assert.equal(openaiOnly.harness, "pi");
+  assert.equal(openaiOnly.env.MODEL_PROVIDER, "openai");
   const mock = await assembleEnv({ worktree, callerEnv: {}, allowMock: true, log, probeLoginShell: async () => "" });
   assert.equal(mock.harness, "mock");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
@@ -469,7 +470,10 @@ test("harness config is strict and a ChatGPT auth file feeds the company subscri
   assert.equal(oauthConfig.codexAuthFile, authFile);
   assert.equal(providerKeysPresent(oauthConfig).openai, false);
   assert.equal(providerKeysPresent(oauthConfig).codexOAuth, true);
-  assert.equal(loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(source, "missing.json") }).codexAuthFile, undefined);
+  assert.throws(
+    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(source, "missing.json") }),
+    /CODEX_AUTH_FILE is unusable/,
+  );
   rmSync(source, { recursive: true, force: true });
   assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, or claude/);
   assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, or claude/);

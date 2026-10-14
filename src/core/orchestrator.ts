@@ -3163,7 +3163,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           return { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken };
         };
-        // A ChatGPT subscription serves an OpenAI model under its `codex/` id; compare in that form.
         const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
           (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
         if (input.harness && !isHarnessId(input.harness))

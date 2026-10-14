@@ -180,5 +180,8 @@ test("file auth serves the local login as-is and never refreshes or rewrites it"
   assert.equal(fetches.mock.callCount(), 0);
   assert.equal(readFileSync(path, "utf8"), stored);
   chmodSync(path, 0o644);
-  assert.equal(await auth.accessToken(), undefined, "a group- or world-readable login file is refused");
+  await assert.rejects(auth.accessToken(), /must not be readable by group or others/);
+  writeFileSync(path, JSON.stringify(authJson("acct", 1_000_000_000)));
+  chmodSync(path, 0o600);
+  await assert.rejects(auth.accessToken(), /has expired; run the Codex CLI to refresh it/);
 });

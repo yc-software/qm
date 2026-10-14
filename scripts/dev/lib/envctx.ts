@@ -143,6 +143,7 @@ export async function assembleEnv(opts: {
   } else if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
     harness = "pi";
     env.HARNESS = harness;
+    if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
     if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
   } else if (opts.allowMock) {
     harness = "mock";

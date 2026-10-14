@@ -822,7 +822,10 @@ test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
   writeFileSync(path, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: token, refresh_token: "r" } }));
   chmodSync(path, 0o600);
   assert.equal(loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }).codexAuthFile, path);
-  assert.equal(loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(dir, "missing.json") }).codexAuthFile, undefined);
+  assert.throws(
+    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(dir, "missing.json") }),
+    /CODEX_AUTH_FILE is unusable: .*ENOENT/,
+  );
   assert.equal(
     loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path, CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthFile,
     undefined,
@@ -832,7 +835,7 @@ test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
     /CODEX_AUTH_FILE is supported for local development only/,
   );
   chmodSync(path, 0o644);
-  assert.equal(loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }).codexAuthFile, undefined);
+  assert.throws(() => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }), /must not be readable by group or others/);
 });
 
 test("retired brain environment does not configure a runtime integration and warns once", () => {

@@ -130,10 +130,16 @@ export function codexAuthFileForEnv(env: NodeJS.ProcessEnv): string | undefined 
   return explicit ? expandPath(explicit) : undefined;
 }
 
+export function loadCodexAuthFile(path: string): JsonObject {
+  if (statSync(path).mode & 0o077) throw new Error(`${path} must not be readable by group or others (chmod 600 it)`);
+  const auth = chatgptAuthFromValue(JSON.parse(readFileSync(path, "utf8")));
+  if (!auth) throw new Error(`${path} is not a ChatGPT login auth.json`);
+  return auth;
+}
+
 export function readCodexOAuthAuthFile(path: string): JsonObject | null {
   try {
-    if (statSync(path).mode & 0o077) return null;
-    return chatgptAuthFromValue(JSON.parse(readFileSync(path, "utf8")));
+    return loadCodexAuthFile(path);
   } catch {
     return null;
   }
@@ -143,8 +149,11 @@ export function fileCompanyChatGPTAuth(path: string): CompanyChatGPTAuth {
   return {
     description: `auth file ${path}`,
     async accessToken() {
-      const auth = readCodexOAuthAuthFile(path);
-      return auth ? authTokens(auth)?.access : undefined;
+      const auth = loadCodexAuthFile(path);
+      const expiresAt = accessExpiresAt(auth);
+      if (expiresAt !== undefined && expiresAt <= Date.now())
+        throw new Error(`the ChatGPT login in ${path} has expired; run the Codex CLI to refresh it`);
+      return authTokens(auth)?.access;
     },
   };
 }

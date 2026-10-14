@@ -1,4 +1,5 @@
-import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "./model/company-chatgpt-auth.ts";
+import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/company-chatgpt-auth.ts";
+import { errMessage } from "./util/errors.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
@@ -1200,13 +1201,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const harness = harnessEnvStrict(env.HARNESS);
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
-  const codexAuthCandidate = codexAuthCredential ? undefined : codexAuthFileForEnv(env);
-  const codexAuthFile =
-    codexAuthCandidate && readCodexOAuthAuthFile(codexAuthCandidate) ? codexAuthCandidate : undefined;
+  const codexAuthFile = codexAuthCredential ? undefined : codexAuthFileForEnv(env);
   if (env.NODE_ENV === "production" && codexAuthFile) {
     throw new Error(
       "CODEX_AUTH_FILE is supported for local development only; production must use CODEX_AUTH_CREDENTIAL (keychain custody)",
     );
+  }
+  if (codexAuthFile) {
+    try {
+      loadCodexAuthFile(codexAuthFile);
+    } catch (error) {
+      throw new Error(`CODEX_AUTH_FILE is unusable: ${errMessage(error)}`, { cause: error });
+    }
   }
   const deployAppsDomain = deployAppsDomainEnv(env, env.DEPLOY_PROVIDER ?? "docker");
   const missingSecrets = validateCoreSecretEnv(env);
