@@ -285,7 +285,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
       return { authzFailed: false };
     }
-    const mentionRoster = await cronMentionRoster(deps, cron).catch(() => undefined);
+    const mentionRoster = await cronMentionRoster(deps, cron).catch(reportFailureAs("cron mention roster", undefined));
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       outcome = await runTrigger(

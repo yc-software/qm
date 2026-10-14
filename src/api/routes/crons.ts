@@ -395,6 +395,8 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   if (!cron) return;
   if (method === "DELETE") {
     await app.deleteCron(id);
+    const editor = url.searchParams.get("principalId");
+    if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
     return sendJson(res, 200, { ok: true });
   }
   if ((cron.unattendedGrants?.length ?? 0) > 0) {

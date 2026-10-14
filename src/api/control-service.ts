@@ -203,6 +203,7 @@ export async function canAdministerCron(
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   if (await ownsCron(app, cron, actorId, isActor)) return true;
+  if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actorId)) === "write";
 }
 

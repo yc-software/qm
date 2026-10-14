@@ -16,7 +16,7 @@ import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { principalDestination, reachEnqueue } from "../reach/reach.ts";
 import { consentRequiredRecipient, recipientConsentSatisfied } from "./trigger-store.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
-import type { DirectoryStore } from "../directory/directory-store.ts";
+import type { DirectoryMember, DirectoryStore } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
@@ -179,21 +179,18 @@ export async function destinationVisible(
 
 const SCHEDULED_SURFACES = new Set(["cron", "loop", "keychain-ask"]);
 
-async function ownerLeftHome(
-  deps: TriggerDeps,
-  owner: string,
-  scope: ScopeId,
+function homeRoster(
+  kind: string | null,
+  ref: string,
+  isPrivate: boolean | undefined,
+  roster: DirectoryMember[] | undefined,
   currentMembers: Principal[] | undefined,
-): Promise<boolean> {
-  const { kind, ref } = parseScopeId(scope);
-  if (kind === "channel" && (await deps.directory?.channelPrivacy?.(ref)) !== true) return false;
-  if (kind !== "channel" && kind !== "group") return false;
-  const roster =
-    (
-      await deps.directory?.conversationMembers?.(kind, ref).catch(reportFailureAs("cron owner roster", undefined))
-    )?.map((m) => [m.principalId, m.slackId]) ??
+): string[][] | undefined {
+  if (kind === "channel" && isPrivate !== true) return undefined;
+  const ids =
+    roster?.map((m) => [m.principalId, ...(m.slackId ? [m.slackId] : [])]) ??
     (kind === "group" && isProjectGroupRef(ref) ? currentMembers?.map((m) => [m.id]) : undefined);
-  return !!roster?.length && !roster.some((ids) => ids.some((id) => samePerson(id, owner)));
+  return ids?.length ? ids : undefined;
 }
 
 export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
@@ -205,9 +202,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   if (!runsAsScope && deps.identity.classify(spec.owner).type !== "internal") {
     return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
   }
-  if (scheduled && !runsAsScope && (await ownerLeftHome(deps, spec.owner, spec.ownerScopeId, currentMembers))) {
-    return { authzFailed: true, ownerLeft: true, ran: false, note: "the owner left this conversation" };
-  }
   const audience =
     runsAsScope && currentMembers?.length
       ? currentMembers.map((m) => ({ externalId: m.id, ...(m.teamIds ? { teamIds: m.teamIds } : {}) }))
@@ -215,9 +209,16 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
   const threadRef = spec.threadRef ?? spec.fireKey;
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
+  let roster: DirectoryMember[] | undefined;
+  let isPrivate: boolean | undefined;
   if (ownerKind === "channel" || ownerKind === "group") {
-    const roster = await deps.directory?.conversationMembers?.(ownerKind, ownerRef).catch(() => undefined);
-    const isPrivate = ownerKind === "channel" ? await deps.directory?.channelPrivacy?.(ownerRef) : undefined;
+    roster = await deps.directory
+      ?.conversationMembers?.(ownerKind, ownerRef)
+      .catch(reportFailureAs("trigger home roster", undefined));
+    isPrivate =
+      ownerKind === "channel"
+        ? await deps.directory?.channelPrivacy?.(ownerRef).catch(reportFailureAs("trigger home privacy", undefined))
+        : undefined;
     conversation = {
       kind: ownerKind,
       channelRef: ownerRef,
@@ -228,9 +229,15 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     };
   }
 
+  const members = runsAsScope ? undefined : homeRoster(ownerKind, ownerRef, isPrivate, roster, currentMembers);
+  const ownerIsMember = members?.some((ids) => ids.some((id) => samePerson(id, actorId)));
+  if (scheduled && ownerIsMember === false)
+    return { authzFailed: true, ownerLeft: true, ran: false, note: "the owner left this conversation" };
   let homeAccess: { ok: boolean; note?: string };
-  if (runsAsScope) {
+  if (runsAsScope || ownerIsMember) {
     homeAccess = { ok: true };
+  } else if (ownerIsMember === false) {
+    homeAccess = { ok: false, note: MEMBERSHIP_SKIP_NOTE };
   } else if (currentMembers !== undefined) {
     homeAccess = currentMembers.some((member) => samePerson(member.id, actorId))
       ? { ok: true }

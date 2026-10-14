@@ -541,6 +541,15 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
     "bad_request",
     "a personal cron runs with the whole keychain",
   );
+  await built.app.grant({
+    ownerScopeId: personal.cron.ownerScopeId,
+    ref: `cron:${personal.cron.id}`,
+    granteeScopeId: scopeId("personal", "U2"),
+    permission: "write",
+    grantedBy: "U1",
+  });
+  const viaOldGrant = await control.patchCron(personal.cron.id, { action: "exfiltrate" }, claims("U2"));
+  assert.equal(viaOldGrant.ok ? "" : viaOldGrant.code, "forbidden", "an older write grant can't steer a personal cron");
 });
 
 test("app.turn forwards ownerKeychainUnion onto the persisted run request (else scheduled fires lose the union)", async () => {
