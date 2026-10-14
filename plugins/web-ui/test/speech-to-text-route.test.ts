@@ -1,18 +1,20 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, stat, utimes, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
+process.env.TMPDIR = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
 process.env.WEB_UI_VOICE_USERS = "alice";
 process.env.OPENAI_API_KEY = "voice-test-key";
 const { handler } = await import("../server/index.ts");
+const { sweepDictationSpool } = await import("../server/voice-routes.ts");
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, resolve));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
@@ -143,6 +145,8 @@ test("dictation maps OpenAI errors by code", async (t) => {
     [400, "unsupported_format", {}, { status: 400, error: "invalid_audio" }],
     [400, "invalid_parameter", {}, { status: 502, error: "dictation_rejected" }],
     [401, "invalid_api_key", {}, { status: 502, error: "dictation_rejected" }],
+    [409, "conflict", {}, { status: 503, error: "dictation_unavailable" }],
+    [302, "redirect", { location: "https://elsewhere.test/" }, { status: 503, error: "dictation_unavailable" }],
     [500, "server_error", {}, { status: 503, error: "dictation_unavailable" }],
   ];
   for (const [status, code, providerHeaders, expected] of cases) {
@@ -151,6 +155,21 @@ test("dictation maps OpenAI errors by code", async (t) => {
     for (const [key, value] of Object.entries(expected))
       assert.equal(result[key], value, `${status} ${code} ${JSON.stringify(providerHeaders)}: ${key}`);
   }
+});
+
+test("startup sweep removes only stale spool files", async () => {
+  await mkdir(spoolDir, { recursive: true });
+  const stale = join(spoolDir, "stale-test");
+  const fresh = join(spoolDir, "fresh-test");
+  await writeFile(stale, "old");
+  await writeFile(fresh, "new");
+  const old = new Date(Date.now() - 2 * 3_600_000);
+  await utimes(stale, old, old);
+  await sweepDictationSpool();
+  await assert.rejects(stat(stale));
+  assert.ok(await stat(fresh));
+  await sweepDictationSpool(Date.now() + 2 * 3_600_000);
+  assert.deepEqual(await spooled(), new Set());
 });
 
 test("empty and interrupted uploads never reach OpenAI or leave spool files", async (t) => {
