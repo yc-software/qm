@@ -394,6 +394,24 @@ test("rotation: the replacement body is launched before the old one is terminate
   assert.equal(await p.rotationDue!(d), false);
 });
 
+test("rotation: a replacement left behind by a crash mid-rotation is terminated on the next attempt", async () => {
+  const { api, vms } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const first = (await store.get(ID))!;
+  vms.set("mvm-orphan", { state: "RUNNING", endpoint: "mvm-orphan.lambda-microvm.us-west-2.on.aws" });
+  await store.put(ID, { ...first, replacementMicrovmId: "mvm-orphan" });
+
+  await p.apply(d, version(localSnapshot("a", "1")));
+  assert.equal(vms.get("mvm-orphan")!.state, "TERMINATED");
+  const after = (await store.get(ID))!;
+  assert.equal(after.microvmId, first.microvmId);
+  assert.equal(after.replacementMicrovmId, undefined);
+});
+
 test("resolveEndpoint: reaches within the cache window skip the control plane", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();

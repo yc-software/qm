@@ -61,6 +61,7 @@ export interface StoredDeployBody {
   lastSnapshotMs?: number;
   dataCredsAtMs?: number;
   rotateNotBeforeMs?: number;
+  replacementMicrovmId?: string;
   orgId?: string;
 }
 
@@ -355,7 +356,15 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
   async function ensureBody(d: Deployment): Promise<{ id: string; endpoint: string; fresh: boolean }> {
     return launchQueue(d.id, async () => {
-      const stored = await store.get(d.id);
+      let stored = await store.get(d.id);
+      if (stored?.replacementMicrovmId) {
+        await api
+          .terminate(stored.replacementMicrovmId)
+          .catch((e) => swallow("aws-deploy: terminate orphaned replacement", e));
+        const { replacementMicrovmId: _, ...rest } = stored;
+        stored = rest;
+        await store.put(d.id, stored);
+      }
       let next: { id: string; endpoint: string } | undefined;
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
@@ -367,6 +376,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         if (alive) {
           next = await launchBody(d.id, d.alwaysOn);
           const replacement = next;
+          await store.put(d.id, { ...stored, replacementMicrovmId: replacement.id });
           await ensureRunning(stored.microvmId, stored.endpoint, desc).catch(() => {});
           const defer = async (
             label: string,
