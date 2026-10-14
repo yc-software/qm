@@ -272,3 +272,49 @@ ${batchSql(true)}  DROP TABLE pg_temp.legacy_batch_blocks;
 END $batch$`,
   skippingProcedure(),
 ];
+
+export const DROP_SESSION_TAPE_SQL = [
+  `SET LOCAL lock_timeout = '5s'`,
+  `DO $tape_drop_gate$
+DECLARE
+  started BIGINT;
+  finished BOOLEAN;
+  writes BIGINT;
+  first_write BIGINT;
+  reset TEXT := 'reset with DROP TRIGGER legacy_tape_frozen ON session_tape; TRUNCATE legacy_tape_steps, legacy_turn_runs, legacy_tape_writes, legacy_tape_skipped; '
+    || 'UPDATE legacy_tape_steps_progress SET started_at = NULL, last_session = NULL, done = false, invalid_messages = 0, '
+    || 'keyed_blocks = 0, copied_steps = 0, copied_turns = 0, skipped_sessions = 0; then CALL prepare_legacy_tape_steps() again';
+BEGIN
+  IF to_regclass('session_tape') IS NULL THEN
+    RETURN;
+  END IF;
+  LOCK TABLE session_tape IN ACCESS EXCLUSIVE MODE;
+  IF to_regclass('legacy_tape_steps_progress') IS NOT NULL THEN
+    SELECT started_at, done INTO started, finished FROM legacy_tape_steps_progress;
+  END IF;
+  IF started IS NULL OR NOT COALESCE(finished, false) THEN
+    IF NOT EXISTS (SELECT 1 FROM session_tape WHERE kind = 'message') THEN
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'session_tape still holds model messages: run CALL prepare_legacy_tape_steps() to completion before this migration, or if legacy_tape_frozen already exists, %',
+      reset;
+  END IF;
+  SELECT count(*), min(at) INTO writes, first_write FROM legacy_tape_writes;
+  IF writes > 0 THEN
+    RAISE EXCEPTION 'session_tape was written % times after prepare_legacy_tape_steps() started, first at % (ms since epoch): stop every writer, %',
+      writes, first_write, reset;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgname = 'legacy_tape_frozen' AND tgrelid = 'session_tape'::regclass AND tgenabled = 'A'
+  ) THEN
+    RAISE EXCEPTION 'legacy_tape_frozen is missing or not always enabled, so tape writes since the preparation are unproven: %', reset;
+  END IF;
+END $tape_drop_gate$`,
+  `DROP VIEW IF EXISTS session_transcript_entries`,
+  `DROP TABLE IF EXISTS session_tape`,
+  `DROP PROCEDURE IF EXISTS prepare_legacy_tape_steps(INT)`,
+  `DROP FUNCTION IF EXISTS legacy_tape_written()`,
+  `DROP FUNCTION IF EXISTS legacy_tape_steps_batch(TEXT[], BIGINT)`,
+  `DROP TABLE IF EXISTS legacy_prep_runs, legacy_tape_writes`,
+];

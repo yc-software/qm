@@ -8,7 +8,7 @@ import { scopeId } from "../src/types.ts";
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tapeless store test";
 
-test("the session store keeps working once session_tape and its view are dropped", { skip }, async () => {
+test("migrations drop an empty session_tape and the store keeps working without it", { skip }, async () => {
   const pg = (await import("pg")).default;
   const admin = new pg.Pool({ connectionString: URL });
   const schema = `tapeless_${randomUUID().replaceAll("-", "")}`;
@@ -29,8 +29,7 @@ test("the session store keeps working once session_tape and its view are dropped
       scopeLabel: scope,
     });
 
-    await raw.query("DROP VIEW session_transcript_entries");
-    await raw.query("DROP TABLE session_tape");
+    assert.equal((await raw.query("SELECT to_regclass('session_tape') AS t")).rows[0].t, null);
     await applyPgMigrations(raw, registeredPgMigrations(url.toString()));
     assert.equal((await raw.query("SELECT to_regclass('session_tape') AS t")).rows[0].t, null);
 

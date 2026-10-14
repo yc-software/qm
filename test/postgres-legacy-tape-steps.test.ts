@@ -9,7 +9,9 @@ import { scopeId } from "../src/types.ts";
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the legacy tape steps test";
 
-async function withSchema(fn: (raw: import("pg").Pool) => Promise<void>): Promise<void> {
+const beforeTapeDrop = (id: string) => !id.startsWith("sessions/store/") || id < "sessions/store/0031";
+
+async function withSchema(fn: (raw: import("pg").Pool, url: string) => Promise<void>): Promise<void> {
   const pg = (await import("pg")).default;
   const admin = new pg.Pool({ connectionString: URL });
   const schema = `tape_steps_${randomUUID().replaceAll("-", "")}`;
@@ -20,8 +22,11 @@ async function withSchema(fn: (raw: import("pg").Pool) => Promise<void>): Promis
   try {
     createPostgresSessionStore(url.toString());
     createPostgresRunStore(url.toString());
-    await applyPgMigrations(raw, registeredPgMigrations(url.toString()));
-    await fn(raw);
+    await applyPgMigrations(
+      raw,
+      registeredPgMigrations(url.toString()).filter((migration) => beforeTapeDrop(migration.id)),
+    );
+    await fn(raw, url.toString());
   } finally {
     await raw.end();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
@@ -200,6 +205,52 @@ test(
 
       await raw.query("DROP TRIGGER legacy_tape_frozen ON session_tape");
       await assert.rejects(raw.query("CALL prepare_legacy_tape_steps(1)"), /a preparation already started/);
+    });
+  },
+);
+
+test(
+  "pg migrations drop the tape only after a completed preparation that saw no later tape write",
+  { skip },
+  async () => {
+    await withSchema(async (raw, url) => {
+      await seedSession(
+        raw,
+        "legacy",
+        [message([{ type: "toolCall", id: "c1", name: "execute", arguments: { b: 1, a: 2 } }])],
+        [["tool_call", { tool: "execute", callId: "c1", a: 2, b: 1 }]],
+      );
+      const migrations = registeredPgMigrations(url);
+      await assert.rejects(applyPgMigrations(raw, migrations), /run CALL prepare_legacy_tape_steps\(\) to completion/);
+
+      await raw.query("CALL prepare_legacy_tape_steps()");
+      await raw.query("UPDATE session_tape SET harness = 'pi'");
+      await assert.rejects(
+        applyPgMigrations(raw, migrations),
+        /written 1 times after prepare_legacy_tape_steps\(\) started, first at \d+/,
+      );
+
+      await raw.query("DELETE FROM legacy_tape_writes");
+      await raw.query("ALTER TABLE session_tape ENABLE TRIGGER legacy_tape_frozen");
+      await assert.rejects(applyPgMigrations(raw, migrations), /missing or not always enabled/);
+
+      await raw.query("ALTER TABLE session_tape ENABLE ALWAYS TRIGGER legacy_tape_frozen");
+      await applyPgMigrations(raw, migrations);
+      assert.deepEqual(
+        (
+          await raw.query(
+            `SELECT to_regclass('session_tape') AS tape, to_regclass('session_transcript_entries') AS view,
+                  to_regclass('legacy_tape_writes') AS writes,
+                  to_regprocedure('prepare_legacy_tape_steps(int)') AS prepare, to_regprocedure('legacy_tape_written()') AS written,
+                  to_regprocedure('legacy_tape_steps_batch(text[], bigint)') AS batch, to_regclass('legacy_tape_skipped') IS NOT NULL AS skipped`,
+          )
+        ).rows[0],
+        { tape: null, view: null, writes: null, prepare: null, written: null, batch: null, skipped: true },
+      );
+      assert.deepEqual((await raw.query("SELECT seq, wire FROM legacy_tape_steps")).rows, [
+        { seq: 0, wire: { argumentsJson: '{"b":1,"a":2}' } },
+      ]);
+      assert.equal((await raw.query("SELECT copied_steps::int AS n FROM legacy_tape_steps_progress")).rows[0].n, 1);
     });
   },
 );
