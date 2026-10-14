@@ -1887,10 +1887,11 @@ export function createChatSurface(
       let workView: TemplateResult | typeof nothing =
         work && steeringOnly.length ? html`${steeringOnly.map((item) => renderTimelineItem(item, work))}` : nothing;
       if (showWork) {
+        const workText = isStreaming ? messageText(msg) : text;
         workView = workBlock(
           work,
           isStreaming,
-          msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : isStreaming ? messageText(msg) : text,
+          msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : workText,
           (msg as AssistantWork).streamingBaseline ?? "",
         );
       }
