@@ -54,8 +54,8 @@ function fixture() {
     writes,
     failures,
     prunes,
-    advance: () => {
-      now += 600001;
+    advance: (ms = 600001) => {
+      now += ms;
     },
   };
 }
@@ -197,3 +197,38 @@ for (const operation of ["embed", "put"] as const) {
     assert.ok(f.failures.includes(cleanup));
   });
 }
+
+test("indexer drains full batches within twenty seconds and prunes once per tick", async () => {
+  const f = fixture();
+  const missing = f.store.missing;
+  const put = f.store.put;
+  const sizes = [64, 64, 3];
+  f.store.missing = async (...args) => {
+    const [fact] = await missing(...args);
+    return Array.from({ length: sizes.shift() ?? 0 }, (_, i) => ({
+      ...fact!,
+      factId: String(Number(args[4] ?? 0) + i + 1),
+    }));
+  };
+  f.store.put = async (...args) => {
+    await put(...args);
+    f.advance(10_000);
+  };
+  await f.indexer.tick();
+  assert.deepEqual(
+    f.writes.map((rows) => rows.length),
+    [64, 64],
+  );
+  assert.equal(f.prunes.length, 1);
+  await f.indexer.tick();
+  assert.deepEqual(
+    f.writes.map((rows) => rows.length),
+    [64, 64, 3],
+  );
+  assert.deepEqual(
+    f.requests.map((request) => request.afterId),
+    [undefined, "64", "128"],
+  );
+  assert.equal(f.prunes.length, 2);
+  assert.deepEqual(f.failures, []);
+});

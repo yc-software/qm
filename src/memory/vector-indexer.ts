@@ -36,11 +36,12 @@ export function createMemoryVectorIndexer(opts: {
         dimensions = width;
         nextProbeAt = now + 10 * 60_000;
       }
-      signal.throwIfAborted();
-      const facts = await store.missing(embedder.id, 64, dimensions, signal, afterId);
-      afterId = facts.at(-1)?.factId;
       try {
-        if (facts.length) {
+        do {
+          signal.throwIfAborted();
+          const facts = await store.missing(embedder.id, 64, dimensions, signal, afterId);
+          afterId = facts.at(-1)?.factId;
+          if (!facts.length) break;
           const vectors = await embedder.embed(
             facts.map((fact) => fact.text.slice(0, 8000)),
             signal,
@@ -61,7 +62,8 @@ export function createMemoryVectorIndexer(opts: {
           }
           signal.throwIfAborted();
           await store.put(rows, signal);
-        }
+          if (facts.length < 64) break;
+        } while ((opts.now ?? Date.now)() - now < 20_000);
       } finally {
         if (!signal.aborted) await store.prune(embedder.id, 200, dimensions, signal).catch(onError);
       }
