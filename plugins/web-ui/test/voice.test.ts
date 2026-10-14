@@ -13,8 +13,8 @@ const stubFetch = (t: TestContext, impl: (url: string, init?: RequestInit) => Pr
   t.mock.method(globalThis, "fetch", (url: Parameters<typeof fetch>[0], init?: RequestInit) => impl(String(url), init));
 const req = (headers: Record<string, string>) => ({ headers }) as unknown as IncomingMessage;
 
-test("voice requires explicit rollout, key, signing, and account access", () => {
-  const env = { OPENAI_API_KEY: "test-key", CORE_SIGNING_SECRET: "test-secret", WEB_UI_VOICE_USERS: "alice" };
+test("voice requires explicit rollout, key, and account access", () => {
+  const env = { OPENAI_API_KEY: "test-key", WEB_UI_VOICE_USERS: "alice" };
   assert.equal(voiceEnabled("alice", env), true);
   assert.equal(voiceEnabled("bob", env), false);
   for (const name of Object.keys(env)) assert.equal(voiceEnabled("alice", { ...env, [name]: " " }), false);

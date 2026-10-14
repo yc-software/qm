@@ -3310,8 +3310,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!user) return unauthorized(res, req);
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
       return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
-        core: CORE,
-        secret: CORE_SIGNING_SECRET,
         org: ORG,
         publicUrl: PUBLIC_URL,
       });

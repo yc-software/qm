@@ -4,26 +4,9 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
-let claimStatus = 200;
-let claimAvailable = true;
-let claims = 0;
-const core = createServer((req, res) => {
-  if (!req.url?.startsWith("/v1/auth/broker/claim")) {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end("{}");
-    return;
-  }
-  let body = "";
-  req.on("data", (chunk) => {
-    body += chunk;
-  });
-  req.on("end", () => {
-    claims++;
-    const input = JSON.parse(body);
-    assert.equal(input.ids.length, 6);
-    res.writeHead(claimStatus, { "content-type": "application/json" });
-    res.end(JSON.stringify({ claimed: claimAvailable ? input.ids[0] : null }));
-  });
+const core = createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end("{}");
 });
 await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
@@ -90,13 +73,12 @@ test("voice route authenticates and gates accounts before spending", async () =>
       403,
     );
   }
-  assert.equal(claims, 0);
   const capability = await fetch(`${base}/api/voice`, { headers: identity() });
   assert.deepEqual(await capability.json(), { enabled: true, model: "gpt-live-1" });
   assert.equal(capability.headers.get("cache-control"), "no-store");
 });
 
-test("voice rejects invalid and oversized offers before claiming a slot", async () => {
+test("voice rejects invalid and oversized offers", async () => {
   for (const body of ["{", "null", "[]", "{}", JSON.stringify({ sdp: "bad" })]) {
     assert.equal((await fetch(`${base}/api/voice/sessions`, { method: "POST", headers, body })).status, 400);
   }
@@ -110,16 +92,6 @@ test("voice rejects invalid and oversized offers before claiming a slot", async 
     ).status,
     413,
   );
-  assert.equal(claims, 0);
-});
-
-test("voice fails closed on rate limits and durable-store outages", async () => {
-  claimAvailable = false;
-  assert.equal((await fetch(`${base}/api/voice/sessions`, { method: "POST", headers, body: offer })).status, 429);
-  claimStatus = 503;
-  assert.equal((await fetch(`${base}/api/voice/sessions`, { method: "POST", headers, body: offer })).status, 503);
-  claimStatus = 200;
-  claimAvailable = true;
 });
 
 test("voice relays only a sanitized SDP result and never a provider key", async (t) => {

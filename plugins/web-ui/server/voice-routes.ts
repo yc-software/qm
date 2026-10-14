@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { json, readBodyBytes, PayloadTooLargeError } from "../../chassis/src/http.ts";
-import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { errChain } from "../../chassis/src/errors.ts";
 import {
@@ -15,7 +14,7 @@ import {
   VoiceProviderError,
 } from "./voice.ts";
 
-const BODY_READ_TIMEOUT_MS = 30_000;
+const BODY_READ_TIMEOUT_MS = 300_000;
 
 function reportVoiceError(error: unknown, code: string, aborted = false): void {
   const detail = { ...(error instanceof VoiceProviderError ? error.detail : {}), aborted };
@@ -28,7 +27,7 @@ export async function handleVoiceRoute(
   res: ServerResponse,
   path: string,
   identity: { user: string; impersonator: string | null; portalVerified: boolean },
-  config: { core: string; secret: string | undefined; org: string; publicUrl: string },
+  config: { org: string; publicUrl: string },
 ): Promise<void> {
   const { user } = identity;
   const enabled = voiceEnabled(user) && !identity.impersonator;
@@ -71,31 +70,11 @@ export async function handleVoiceRoute(
   };
   res.once("close", disconnect);
   try {
-    let allowed: boolean;
-    try {
-      allowed = await withinRateLimit(coreClaimStore(config.core, config.secret, dictation ? "dictation" : "voice"), {
-        secret: config.secret!,
-        kind: dictation ? "dictation" : "voice-session",
-        value: `${config.org}:${user}`,
-        limit: dictation ? 60 : 6,
-        windowS: 3600,
-        nowMs: Date.now(),
-      });
-    } catch (error) {
-      reportVoiceError(error, dictation ? "dictation_rate_limit_store" : "voice_rate_limit_store");
-      res.setHeader("retry-after", "30");
-      return json(res, 503, { error: "rate_limit_unavailable", message: "Voice is temporarily unavailable." });
-    }
-    if (!allowed)
-      return dictation
-        ? json(res, 429, { error: "dictation_rate_limit", message: "Dictation limit reached. Try again next hour." })
-        : json(res, 429, { error: "voice_rate_limit", message: "Voice session limit reached. Try again next hour." });
-
     const caller = {
       user,
       org: config.org,
       apiKey: openaiKey()!,
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(dictation ? 60_000 : 25_000)]),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(dictation ? 300_000 : 25_000)]),
     };
     if (!dictation) return json(res, 201, await createLiveVoice(sdp, caller));
     const readTimer = setTimeout(() => req.destroy(), BODY_READ_TIMEOUT_MS);
@@ -117,6 +96,13 @@ export async function handleVoiceRoute(
   } catch (error) {
     reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider", controller.signal.aborted);
     if (controller.signal.aborted) return;
+    if (error instanceof VoiceProviderError && error.detail.status === 429) {
+      if (typeof error.detail.retryAfter === "string") res.setHeader("retry-after", error.detail.retryAfter);
+      return json(res, 429, {
+        error: "provider_rate_limit",
+        message: "OpenAI is rate limiting requests. Try again shortly.",
+      });
+    }
     return dictation
       ? json(res, 503, {
           error: "dictation_unavailable",

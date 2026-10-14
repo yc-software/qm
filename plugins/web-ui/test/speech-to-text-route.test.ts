@@ -4,26 +4,9 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
-let claimStatus = 200;
-let claimAvailable = true;
-let claims = 0;
-const core = createServer((req, res) => {
-  if (!req.url?.startsWith("/v1/auth/broker/claim")) {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end("{}");
-    return;
-  }
-  let body = "";
-  req.on("data", (chunk) => {
-    body += chunk;
-  });
-  req.on("end", () => {
-    claims++;
-    const input = JSON.parse(body);
-    assert.equal(input.ids.length, 60);
-    res.writeHead(claimStatus, { "content-type": "application/json" });
-    res.end(JSON.stringify({ claimed: claimAvailable ? input.ids[0] : null }));
-  });
+const core = createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end("{}");
 });
 await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
@@ -68,19 +51,21 @@ test("dictation checks identity, origin, allowlist and format before provider ac
       expected,
     );
   }
-  assert.equal(claims, 0);
   const capability = await fetch(`${base}/api/dictation`, { headers: identity() });
   assert.deepEqual(await capability.json(), { enabled: true, provider: "OpenAI" });
   assert.equal(capability.headers.get("cache-control"), "no-store");
 });
 
-test("dictation uses durable limits and fails closed on unavailable rate storage", async () => {
-  claimAvailable = false;
-  assert.equal((await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" })).status, 429);
-  claimAvailable = true;
-  claimStatus = 503;
-  assert.equal((await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" })).status, 503);
-  claimStatus = 200;
+test("dictation passes OpenAI rate limits through with their retry hint", async (t) => {
+  const actualFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(input) !== "https://api.openai.com/v1/audio/transcriptions") return actualFetch(input, init);
+    return new Response("{}", { status: 429, headers: { "retry-after": "12" } });
+  });
+  const result = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
+  assert.equal(result.status, 429);
+  assert.equal(result.headers.get("retry-after"), "12");
+  assert.equal((await result.json()).error, "provider_rate_limit");
 });
 
 test("dictation returns only transcript text and sanitizes provider failures", async (t) => {
@@ -139,7 +124,7 @@ test("chunked recordings cannot exceed the audio limit", async () => {
   let sent = 0;
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
-      if (sent++ > 10) controller.close();
+      if (sent++ > 25) controller.close();
       else controller.enqueue(chunk);
     },
   });
