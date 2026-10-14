@@ -80,6 +80,7 @@ test(
     mock.module("electron", {
       namedExports: {
         app,
+        autoUpdater: {},
         BrowserWindow,
         ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
         Menu: { buildFromTemplate: (template) => template, setApplicationMenu() {} },

@@ -1,8 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, session as electronSession } from "electron";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogin, loginCallback } from "./login.mjs";
+import { startUpdates } from "./updates.mjs";
 import { tabStep } from "./shortcuts.mjs";
 import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "./url.mjs";
 
@@ -253,6 +254,22 @@ async function start() {
     if (error.code !== "ENOENT") dialog.showErrorBox("QM settings could not be read", error.message);
   }
   if (process.env.QM_DESKTOP_URL) target = instanceUrl(process.env.QM_DESKTOP_URL);
+  const saveInstance = async (url) => {
+    await writeFile(`${configPath}.tmp`, JSON.stringify({ url }), { mode: 0o600 });
+    await rename(`${configPath}.tmp`, configPath);
+  };
+  const checkForUpdates = startUpdates(async () => {
+    for (const page of workspaceWindows) {
+      if (page.isDestroyed()) continue;
+      await page.webContents.executeJavaScript('window.dispatchEvent(new Event("pagehide"))');
+      page.webContents.session.flushStorageData();
+      await page.webContents.session.cookies.flushStore();
+    }
+    if (target) {
+      const current = mainWindow?.webContents.getURL();
+      await saveInstance(loginDestination(target, target, current));
+    }
+  });
   const assertSetup = (event) => {
     if (event.sender !== setupWindow?.webContents || event.senderFrame?.url !== setupUrl) {
       throw new Error("Untrusted settings request");
@@ -287,7 +304,7 @@ async function start() {
     assertSetup(event);
     try {
       const url = instanceUrl(value);
-      await writeFile(configPath, JSON.stringify({ url }), { mode: 0o600 });
+      await saveInstance(url);
       target = url;
       void showInstance(url);
       setupWindow.close();
@@ -302,6 +319,7 @@ async function start() {
         label: "QM",
         submenu: [
           { role: "about" },
+          { label: "Check for Updates", enabled: Boolean(checkForUpdates), click: checkForUpdates },
           { label: "Change Instance…", accelerator: "CmdOrCtrl+,", click: showSetup },
           {
             label: "Open in Browser",

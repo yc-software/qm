@@ -15,7 +15,7 @@ QM_DESKTOP_URL=http://localhost:3000 npm start
 npm run package
 ```
 
-Packaging writes a native app for the current platform into `desktop/dist/`, registering the `qm-desktop` URL scheme. Use the packaged app for browser sign-in. The macOS build is an unsigned local prototype, with no automatic updates. It connects to a running server; it does not bundle the QM backend or provide offline agent execution.
+Packaging writes a native app for the current platform into `desktop/dist/`, registering the `qm-desktop` URL scheme. Use the packaged app for browser sign-in. The macOS build is an unsigned local prototype, without automatic updates in development. It connects to a running server; it does not bundle the QM backend or provide offline agent execution.
 
 ## Browser sign-in
 
@@ -37,13 +37,16 @@ Same-instance links opened in a new tab use a separate sandboxed window sharing 
 
 ## Mac release
 
-`npm run package` builds the unsigned local app. For a signed and notarized build, install a Developer ID Application certificate in the Mac keychain and store notarization credentials using Apple's `notarytool`. Then run:
+`npm run package` builds the unsigned local app. For a signed and notarized build, install a Developer ID Application certificate in the Mac keychain and sign in to that team in Xcode Settings → Accounts. Then run:
 
 ```sh
-QM_MAC_SIGN_IDENTITY="Developer ID Application: Your Organization (TEAMID)" \
-QM_MAC_NOTARY_PROFILE="qm-notary" npm run package:release
+QM_MAC_SIGN_IDENTITY="Developer ID Application: Your Organization (TEAMID)" npm run package:release
 ```
 
-The release command requires both values and fails if signing or notarization fails. Neither credentials nor certificates belong in this repository. Builds target the current machine's architecture. Automatic updates are not implemented.
+The release command signs the app, submits an archive using the signed-in Xcode account, waits for notarization, and verifies the stapled ticket and Gatekeeper assessment. It produces the notarized ZIP, SHA256SUMS.txt, and RELEASES.json in desktop/dist. Credentials and certificates stay outside this repository. Builds target the current machine's architecture.
+
+Packaged Apple Silicon builds check the desktop-only feed on startup and every five minutes. Updates download in the background and restart QM automatically without a confirmation dialog. Before restarting, QM flushes saved text drafts and pane layout, saves the current instance page, and flushes its persistent browser session. Server-side agent work continues during restart. QM → Check for Updates triggers an immediate check. Development, Intel, Windows, and Linux builds do not use this Mac feed. Versions 0.1.0 and 0.1.1 require one manual upgrade to receive the updater.
+
+Publish the verified ZIP and checksum as desktop-v<VERSION>, then upload RELEASES.json to the dedicated desktop-updates GitHub release using gh release upload desktop-updates desktop/dist/RELEASES.json --clobber --repo yc-software/qm. Update the feed only after the versioned download is published and verified. The feed uses Squirrel.Mac's static JSON format and points to the immutable versioned ZIP; backend and dependency releases never enter it.
 
 `npm run test:electron` exercises actual Electron preview windows, POST popups, session sharing, sandboxing, and browser handoff against a temporary local server.
