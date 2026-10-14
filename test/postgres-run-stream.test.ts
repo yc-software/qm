@@ -14,7 +14,9 @@ test(
     const channel = `stream_${randomUUID().replaceAll("-", "")}`;
     const worker = createPostgresNotifyBus<RunStreamEvent>(database!, channel, "test-worker");
     const api = createPostgresNotifyBus<RunStreamEvent>(database!, channel, "test-api");
-    const stream = createTurnStream({ onDelta: (runId, text, offset, startOffset) => emitRunText(worker, runId, text, offset, startOffset) });
+    const stream = createTurnStream({
+      onDelta: (runId, text, offset, startOffset) => emitRunText(worker, runId, text, offset, startOffset),
+    });
     const runId = randomUUID();
     stream.begin(runId);
     stream.publish(runId, "preexisting 🌍 ");
