@@ -77,6 +77,7 @@ BEGIN
              WHERE id > COALESCE((SELECT last_session FROM legacy_tape_steps_progress), '')
              ORDER BY id LIMIT batch) next_sessions;
     EXIT WHEN ids IS NULL;
+    PERFORM set_config('enable_nestloop', 'off', true);
     CREATE TEMP TABLE legacy_batch_blocks ON COMMIT DROP AS
       WITH messages AS MATERIALIZED (
         SELECT t.session_id, t.seq, t.created_at, v.valid, m.*
@@ -90,6 +91,7 @@ BEGIN
             OFFSET 0
           ) m
          WHERE t.session_id = ANY(ids) AND t.kind = 'message' AND COALESCE(t.harness, 'pi') = 'pi'
+           AND (NOT v.valid OR m.role = 'assistant')
       )
       SELECT m.session_id, m.seq AS tape_seq, m.created_at, m.valid, m.api, m.provider, m.model,
              m."stopReason" AS stop_reason, b.blk, (b.ord - 1)::int AS idx,
@@ -102,8 +104,7 @@ BEGIN
         FROM messages m
         LEFT JOIN LATERAL json_array_elements(
           CASE WHEN json_typeof(m.content) = 'array' THEN m.content ELSE '[]'::json END
-        ) WITH ORDINALITY AS b(blk, ord) ON true
-       WHERE NOT m.valid OR m.role = 'assistant';
+        ) WITH ORDINALITY AS b(blk, ord) ON true;
     SELECT count(*) FILTER (WHERE NOT valid), count(*) FILTER (WHERE key IS NOT NULL)
       INTO n_invalid, n_keyed FROM legacy_batch_blocks;
     WITH tape_unique AS (
@@ -117,7 +118,7 @@ BEGIN
                   ELSE 'text:' || (p.j ->> 'text') END AS key
         FROM session_entries e
         CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p
-       WHERE e.session_id = ANY(ids) AND e.session_id IN (SELECT DISTINCT session_id FROM tape_unique)
+       WHERE e.session_id = ANY(ids)
          AND e.type IN ('tool_call', 'thinking', 'text', 'assistant') AND e.created_at < frozen_at
          AND jsonb_typeof(p.j) = 'object' AND NOT p.j ? 'step'
     ), entries_unique AS (
@@ -146,6 +147,7 @@ BEGIN
      WHERE e.key NOT LIKE 'text:%' OR abs(e.created_at - t.created_at) <= 600000
     ON CONFLICT (session_id, seq) DO NOTHING;
     GET DIAGNOSTICS n_steps = ROW_COUNT;
+    PERFORM set_config('enable_nestloop', 'on', true);
     INSERT INTO legacy_turn_runs(session_id, seq, run_id, inferred)
     SELECT e.session_id, e.seq, COALESCE(by_seq.id, by_window.id), by_seq.id IS NULL
       FROM session_entries e
