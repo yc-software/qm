@@ -4,6 +4,8 @@ import type { CoreSession, SessionEntry } from "../src/core-bridge.ts";
 import {
   ackKey,
   descendantsOf,
+  lastUpdateLabel,
+  lastUpdates,
   peekLines,
   subagentCounts,
   subagentRows,
@@ -27,7 +29,7 @@ function row(id: string, parentSessionId?: string, extra: Partial<CoreSession> =
 
 const list = [
   row("root"),
-  row("a", "root", { working: true }),
+  row("a", "root", { working: true, workingSince: 50_000 }),
   row("b", "root", { lastTurnFailed: true }),
   row("c", "root", { awaitingInput: true }),
   row("a1", "a", { working: true }),
@@ -77,6 +79,14 @@ test("rows derive working, waiting, done and failed; done folds away, failed sta
     ],
   );
   assert.equal(rows[0]!.endedAt, null);
+  assert.equal(rows[0]!.startedAt, 50_000);
+  assert.equal(rows[3]!.startedAt, 1_000);
+  const updates = lastUpdates([
+    { subagentMail: { sessionId: "a", title: "a", kind: "update" }, timestamp: 40_000 },
+    { subagentMail: { sessionId: "a", title: "a", kind: "update" }, timestamp: 70_000 },
+  ]);
+  assert.equal(lastUpdateLabel(rows[0]!, updates, 190_000), " · last update 2m ago");
+  assert.equal(lastUpdateLabel(rows[3]!, updates, 190_000), " · no updates yet");
   assert.equal(rows[1]!.endedAt, 61_000);
   assert.equal(subagentSummary(rows), "2 subagents running, 1 needs you, 1 failed");
   const failed = rows[1]!;
