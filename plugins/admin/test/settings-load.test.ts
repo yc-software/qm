@@ -103,10 +103,7 @@ test("catalog completion appends options only to the requesting settings view", 
 });
 
 test("branding saves commit the Lit draft and preserve unrelated settings", async () => {
-  const source = extract(
-    'document.querySelectorAll("[data-save]").forEach',
-    '$("view-governance").addEventListener("input"',
-  );
+  const source = extract("async function saveSetting(key, btn) {", '$("view-governance").addEventListener("input"');
   for (const otherDraft of [false, true]) {
     const f = litFixture();
     try {
@@ -349,7 +346,7 @@ test("models view saves runtime rows through the composer picker and real page h
     vm.runInContext(extract('if (requestedView === "models") {', "refreshModelChoices.push"), context);
     vm.runInContext(extract("const SAVE = Object.fromEntries(", "const sectionSnapshots ="), context);
     vm.runInContext(
-      extract('document.querySelectorAll("[data-save]").forEach', '$("view-governance").addEventListener("input"'),
+      extract("async function saveSetting(key, btn) {", '$("view-governance").addEventListener("input"'),
       context,
     );
     const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
@@ -389,11 +386,19 @@ test("models view saves runtime rows through the composer picker and real page h
       fastMode: true,
     });
 
-    assert.equal(row("memory-embedding-model").querySelector(".menu-label")!.textContent, "Off");
-    open("memory-embedding-model");
-    [...row("memory-embedding-model").querySelectorAll<HTMLButtonElement>(".loadout-pick")]
-      .find((button) => button.textContent!.includes("embed"))!
-      .click();
+    const recall = row("memory-embedding-model").querySelector("select")!;
+    const pickRecall = (modelId: string) => {
+      recall.value = modelId;
+      recall.dispatchEvent(new f.window.Event("change"));
+    };
+    assert.deepEqual(
+      [...recall.options].map((option) => [option.value, option.textContent]),
+      [
+        ["", "Off — newest facts (recency)"],
+        ["gateway/embed", "embed · Model gateway"],
+      ],
+    );
+    pickRecall("gateway/embed");
     assert.deepEqual(plain(f.ui.collect("memory-embedding-model")), { modelId: "gateway/embed" });
 
     await save();
@@ -416,8 +421,7 @@ test("models view saves runtime rows through the composer picker and real page h
     assert.equal(f.window.localStorage.length, 0);
     open("cron-runtime");
     row("cron-runtime").querySelector<HTMLButtonElement>(".loadout-foot-btn")!.click();
-    open("memory-embedding-model");
-    row("memory-embedding-model").querySelector<HTMLButtonElement>(".loadout-pick")!.click();
+    pickRecall("");
     await save();
     assert.deepEqual(plain(requests.slice(3).map(([, path, body]) => [path, body])), [
       ["/api/scopes/org%3Atest/cron-runtime", { inherit: true }],

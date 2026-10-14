@@ -1,6 +1,7 @@
 export const PHONE_MAX_WIDTH = 860;
 
-const phoneQuery = () => window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`);
+let query: MediaQueryList | undefined;
+const phoneQuery = () => (query ??= window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`));
 
 export function isPhone(): boolean {
   return phoneQuery().matches;

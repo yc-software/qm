@@ -795,6 +795,15 @@ export function safeModelMetadata(id: string) {
   };
 }
 
+export function modelCatalogFor(ids: Iterable<string>) {
+  return Object.fromEntries(
+    [...new Set(ids)].flatMap((id) => {
+      const metadata = safeModelMetadata(id);
+      return metadata ? [[id, metadata]] : [];
+    }),
+  );
+}
+
 export function embeddingModelFromDefinition(model: EmbeddingModelDefinition): EmbeddingModel {
   return { ...model, baseUrl: providerBaseUrl(model.provider) ?? "https://api.openai.com/v1" };
 }

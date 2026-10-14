@@ -15,6 +15,8 @@ export { configureProviders, openProvider, loadProviders } from "./settings-prov
 import { mountFlags } from "./settings-flags.ts";
 export { configureFlags, loadFlags } from "./settings-flags.ts";
 import { brandingCard } from "./settings-branding.ts";
+import { mountRuntimes } from "./settings-runtimes.ts";
+export { configureRuntimes } from "./settings-runtimes.ts";
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -206,6 +208,7 @@ export function mountCards() {
   mountFlags();
   mountProviders();
   mountCredentials();
+  mountRuntimes();
   for (const [key, s] of states) {
     const id = (
       { soul: "card-soul", branding: "card-branding", "webui-models": "card-webui-models" } as Record<string, string>

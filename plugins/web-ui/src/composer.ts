@@ -1002,14 +1002,16 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     redraw: () => ctx.chat.drawActiveChat(),
     scopeKey,
     state: composerState,
-    entries: seededLoadout,
-    activeEntry: activeLoadoutEntry,
-    saveEntries: (entries) => {
-      loadout = entries;
-      saveLoadout(entries, loadoutKey);
+    presets: {
+      entries: seededLoadout,
+      save: (entries) => {
+        loadout = entries;
+        saveLoadout(entries, loadoutKey);
+      },
+      add: addLoadoutEntry,
     },
+    activeEntry: activeLoadoutEntry,
     apply: applyLoadout,
-    add: addLoadoutEntry,
     selectEffort,
     selectHarness,
     toggleFastMode,

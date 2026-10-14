@@ -9,7 +9,7 @@ import {
   defaultEffortForModel,
   defaultModelValue,
   getModelOptions,
-  getHarnessOptions,
+  harnessOptions,
   harnessSupportsEffort,
   harnessSupportsFastMode,
   type EffortLevel,
@@ -39,16 +39,25 @@ function effortText(level: EffortLevel | string): TemplateResult | string {
   return rank >= EFFORT_PEAK_FLOOR ? html`<span class="effort-peak">${label}</span>` : label;
 }
 
+export interface ModelCatalog {
+  options(): ModelOption[];
+  supportsFast(modelId: string): boolean;
+  overridden(): boolean;
+}
+
 interface ModelPickerBindings<T> {
   host(): HTMLElement | null;
   redraw(): void;
   scopeKey(): string | null;
   state: { openMenu: string | null; menuQuery: string; effortLevel: EffortLevel };
-  entries?(selected: ModelOption): LoadoutEntry[];
+  presets?: {
+    entries(selected: ModelOption): LoadoutEntry[];
+    save(entries: LoadoutEntry[]): void;
+    add(option: ModelOption, target: T): void;
+  };
+  catalog?: ModelCatalog;
   activeEntry(selected: ModelOption): LoadoutEntry;
-  saveEntries?(entries: LoadoutEntry[]): void;
   apply(entry: LoadoutEntry, target: T): void;
-  add?(option: ModelOption, target: T): void;
   selectEffort(effort: EffortLevel, target: T): void;
   selectHarness(harness: string, target: T): void;
   toggleFastMode(target: T): void;
@@ -66,7 +75,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     state: composerState,
     activeEntry: activeLoadoutEntry,
     apply: applyLoadout,
-    add: addLoadoutEntry,
+    presets,
     selectEffort,
     selectHarness,
     toggleFastMode: applyFastMode,
@@ -78,10 +87,15 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
   let loadoutSectionHovered = false;
   let loadoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  const catalog: ModelCatalog = bindings.catalog ?? {
+    options: () => getModelOptions(scopeKey()),
+    supportsFast: (modelId) => modelSupportsFastMode(scopeKey(), modelId),
+    overridden: () => !!getRuntimeConfig(scopeKey())?.scopeOverride,
+  };
 
   function seededLoadout(selected: ModelOption): LoadoutEntry[] {
-    if (bindings.entries) return bindings.entries(selected);
-    return modelLoadoutOptions(getModelOptions(scopeKey()), [], selected.harnessId).map((option) => ({
+    if (presets) return presets.entries(selected);
+    return modelLoadoutOptions(catalog.options(), [], selected.harnessId).map((option) => ({
       value: option.value,
       effort: defaultEffortForModel(option.model),
       fast: false,
@@ -102,7 +116,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const entries = seededLoadout(selected);
     const index = entries.findIndex((entry) => entry.value === value);
     const next = entries.filter((entry) => entry.value !== value);
-    bindings.saveEntries?.(next);
+    presets?.save(next);
     bindings.redraw();
     placeLoadout();
     requestAnimationFrame(() => {
@@ -113,9 +127,11 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
 
   function modelLabel(option: ModelOption): string {
     return option.model.id === ULTRAFAST_MODEL_ID
-      ? (getModelOptions(scopeKey()).find(
-          (candidate) => candidate.harnessId === option.harnessId && candidate.model.id === ULTRAFAST_BASE_MODEL_ID,
-        )?.label ?? "Astra")
+      ? (catalog
+          .options()
+          .find(
+            (candidate) => candidate.harnessId === option.harnessId && candidate.model.id === ULTRAFAST_BASE_MODEL_ID,
+          )?.label ?? "Astra")
       : option.label;
   }
 
@@ -131,7 +147,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
   }
 
   function loadoutRow(entry: LoadoutEntry, selected: ModelOption, agent: T): TemplateResult | typeof nothing {
-    const option = getModelOptions(scopeKey()).find((option) => option.value === entry.value);
+    const option = catalog.options().find((option) => option.value === entry.value);
     if (!option) return nothing;
     const active = entry.value === activeLoadoutEntry(selected).value;
     const settings = active ? activeLoadoutEntry(selected) : entry;
@@ -202,7 +218,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }
       ${isDefault && !canMakeDefault ? html`<span class="loadout-default-star" role="img" aria-label="My default" ${tip("My default")}>${icon(Star, 14)}</span>` : nothing}
       ${
-        !active && bindings.saveEntries
+        !active && presets
           ? html`<button
               class="loadout-remove"
               type="button"
@@ -281,7 +297,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const effort = loadoutSection === "effort";
     const entries = seededLoadout(selected);
     const query = composerState.menuQuery.trim().toLocaleLowerCase();
-    const catalog = modelLoadoutOptions(getModelOptions(scopeKey()), entries, selected.harnessId).filter(
+    const addable = modelLoadoutOptions(catalog.options(), entries, selected.harnessId).filter(
       (option) =>
         !entries.some((entry) => presetModelId(entry.value) === presetModelId(option.value)) &&
         (!query || `${option.harnessLabel} ${modelLabel(option)}`.toLocaleLowerCase().includes(query)),
@@ -326,8 +342,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }
       ${
         loadoutSection === "harness"
-          ? getHarnessOptions(scopeKey()).map((harness) => {
-              const compatible = compatibleHarnessOptions(getModelOptions(scopeKey()), selected.model.id).some(
+          ? harnessOptions(catalog.options()).map((harness) => {
+              const compatible = compatibleHarnessOptions(catalog.options(), selected.model.id).some(
                 (option) => option.harnessId === harness.value,
               );
               const reason = compatible ? "" : `${harness.label} cannot run ${selected.label}.`;
@@ -376,7 +392,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                   }}
                 />
               </label>
-              ${catalog.map(
+              ${addable.map(
                 (option) =>
                   html`<button
                     class="menu-option"
@@ -385,7 +401,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                     aria-label=${`Add ${modelLabel(option)} to presets`}
                     @click=${() => {
                       dismissSelection();
-                      addLoadoutEntry?.(option, agent);
+                      presets?.add(option, agent);
                     }}
                   >
                     ${modelGlyph(option)}<span class="menu-option-copy"
@@ -396,14 +412,14 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                     ><span class="loadout-add-label" aria-hidden="true">Add</span>
                   </button>`,
               )}
-              ${catalog.length ? nothing : html`<div class="loadout-empty">No models found</div>`}`
+              ${addable.length ? nothing : html`<div class="loadout-empty">No models found</div>`}`
           : nothing
       }
     </div>`;
   }
 
   function loadoutHarnessControl(selected: ModelOption): TemplateResult {
-    const options = getHarnessOptions(scopeKey());
+    const options = harnessOptions(catalog.options());
     const value = html`<span class="loadout-harness-option"
       >${modelMark(selected.harnessId, 15) ?? nothing}<span>${selected.harnessLabel}</span></span
     >`;
@@ -443,16 +459,13 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
   }
 
   function render(agent: T, choice: ModelOption | undefined, disabled: boolean): TemplateResult {
-    const selected = choice ?? getModelOptions(scopeKey())[0];
+    const selected = choice ?? catalog.options()[0];
     if (!selected) return html`<span class="context-model-status">No models available</span>`;
     const open = composerState.openMenu === "loadout";
     const entries = seededLoadout(selected);
     const ultrafastOn = selected.model.id === ULTRAFAST_MODEL_ID;
-    const ultrafastTarget = ultrafastChoice(getModelOptions(scopeKey()), selected);
-    const modelSupportsFast = modelSupportsFastMode(
-      scopeKey(),
-      ultrafastOn ? ULTRAFAST_BASE_MODEL_ID : selected.model.id,
-    );
+    const ultrafastTarget = ultrafastChoice(catalog.options(), selected);
+    const modelSupportsFast = catalog.supportsFast(ultrafastOn ? ULTRAFAST_BASE_MODEL_ID : selected.model.id);
     const fastAvailable =
       !!choice &&
       (!ultrafastOn || !!ultrafastTarget) &&
@@ -537,10 +550,10 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
               }}
             >
               <div class="loadout-panel">
-                ${addLoadoutEntry ? html`<div class="loadout-head">Presets</div>` : nothing}
+                ${presets ? html`<div class="loadout-head">Presets</div>` : nothing}
                 <div class="loadout-list">${entries.map((entry) => loadoutRow(entry, selected, agent))}</div>
                 ${
-                  addLoadoutEntry
+                  presets
                     ? html`<div
                         class="loadout-submenu-anchor"
                         ${tip(entries.length >= LOADOUT_CAP ? "Remove a preset to add another." : "")}
@@ -666,7 +679,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                     : nothing
                 }
               </div>
-              ${bindings.showInheritAction !== false && getRuntimeConfig(scopeKey())?.scopeOverride ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>${bindings.inheritLabel ?? "Use org default"}</button></div>` : nothing}
+              ${bindings.showInheritAction !== false && catalog.overridden() ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>${bindings.inheritLabel ?? "Use org default"}</button></div>` : nothing}
               ${loadoutSubmenu(agent, selected)}
             </div>`
           : nothing

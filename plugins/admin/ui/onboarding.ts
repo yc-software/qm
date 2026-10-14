@@ -22,6 +22,12 @@ const flagLabels: Record<string, string> = {
   auxiliary: "Eligible for auxiliary tasks",
 };
 const errorText = (error: unknown) => (error instanceof Error ? error.message : "Request failed.");
+function providerSavedMessage(modelId: string, selected: { ok: boolean; data?: Data }) {
+  if (!modelId) return "Key saved. The base model is unchanged.";
+  if (selected.ok) return "Key and base model saved.";
+  return "Key saved, but the base model could not be changed: " + (selected.data?.message || "the server rejected it.");
+}
+
 export class Onboarding {
   context: Data;
   models: Record<string, Data[]> = {};
@@ -222,6 +228,11 @@ export class Onboarding {
   keepsBaseModel() {
     return Boolean(this.baseModel) && !(this.models[this.provider] || []).some((m) => m.id === this.baseModel);
   }
+  verifiedMessage(builtin: boolean, message: string) {
+    if (this.embedding) return "Embedding model verified. Select it under Models → Recall runtime.";
+    if (builtin) return message;
+    return "Model verified and enabled with organization credentials. Personal-key access may differ.";
+  }
   get embedding() {
     return this.registryKind === "embedding";
   }
@@ -258,15 +269,11 @@ export class Onboarding {
         ? await this.context.api("PUT", "/api/scopes/" + encodeURIComponent(this.context.orgScope()) + "/base-model", {
             modelId,
           })
-        : { ok: true, data: {} };
+        : { ok: true };
       this.apiKey = "";
       await this.load();
       await this.context.loadCustomProviders();
-      this.providerMessage = selected.ok
-        ? "Key and base model saved."
-        : "Key saved, but the base model could not be changed: " +
-          (selected.data?.message || "the server rejected it.");
-      if (!modelId) this.providerMessage = "Key saved. The base model is unchanged.";
+      this.providerMessage = providerSavedMessage(modelId, selected);
       this.providerTone = selected.ok ? "ok" : "err";
     } catch (error) {
       this.providerMessage = errorText(error);
@@ -402,10 +409,7 @@ export class Onboarding {
       );
       if (!response.ok) throw new Error(response.data?.message || "Could not verify model.");
       await this.load();
-      this.registryMessage = builtin
-        ? response.data.message
-        : "Model verified and enabled with organization credentials. Personal-key access may differ.";
-      if (this.embedding) this.registryMessage = "Embedding model verified. Select it under Models → Recall runtime.";
+      this.registryMessage = this.verifiedMessage(builtin, response.data?.message);
       this.registryTone = "ok";
     } catch (error) {
       this.registryMessage = errorText(error);

@@ -3,7 +3,7 @@ import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
   FAST_MODE_MODEL_IDS,
-  safeModelMetadata,
+  modelCatalogFor,
   harnessSupportsFastMode,
   HARNESS_IDS,
   selectableBaseModels,
@@ -423,13 +423,10 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
           purposeRuntimes.some((runtime) => runtime.harnessId === id)),
     ),
     modelsByHarness,
-    modelCatalog: Object.fromEntries(
+    modelCatalog: modelCatalogFor(
       Object.values(modelsByHarness)
         .flat()
-        .flatMap((model) => {
-          const metadata = safeModelMetadata(model.id);
-          return metadata ? [[model.id, metadata]] : [];
-        }),
+        .map((model) => model.id),
     ),
     thinkingLevelsByHarness: Object.fromEntries(
       HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),

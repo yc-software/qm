@@ -148,8 +148,7 @@ export function getModelOptions(scopeKey?: string | null): ModelOption[] {
   return runtimeFor(scopeKey).options;
 }
 
-export function getHarnessOptions(scopeKey?: string | null): Array<{ value: string; label: string }> {
-  const options = runtimeFor(scopeKey).options;
+export function harnessOptions(options: readonly ModelOption[]): Array<{ value: string; label: string }> {
   return [...new Map(options.map((option) => [option.harnessId, option.harnessLabel])).entries()].map(
     ([value, label]) => ({ value, label }),
   );

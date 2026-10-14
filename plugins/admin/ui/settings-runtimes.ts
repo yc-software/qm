@@ -1,20 +1,11 @@
 import { html, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
-import { Check, ChevronDown } from "lucide";
-import { createModelPicker } from "../../web-ui/src/model-picker.ts";
-import { cacheRuntimeConfig } from "../../web-ui/src/runtime-config-cache.ts";
-import { getModelOptions, harnessSupportsFastMode, type EffortLevel } from "../../web-ui/src/model-options.ts";
-import { modelSupportsFastMode } from "../../web-ui/src/pi-models.ts";
+import { ChevronDown } from "lucide";
+import { createModelPicker, type ModelCatalog } from "../../web-ui/src/model-picker.ts";
+import { runtimeModelOptions, type EffortLevel, type ModelOption } from "../../web-ui/src/model-options.ts";
 import { icon } from "../../web-ui/src/icons.ts";
-import {
-  compatibleHarnessOptions,
-  effortLevelsForHarness,
-  ultrafastChoice,
-  ULTRAFAST_MODEL_ID,
-  type LoadoutEntry,
-} from "../../web-ui/src/composer-loadout.ts";
+import { loadoutActions, type LoadoutEntry } from "../../web-ui/src/composer-loadout.ts";
 import { mountTemplate } from "./shared.ts";
-import { saveButton } from "./setting-controls.ts";
 import { states, type SettingsState } from "./settings.ts";
 
 const rows: [key: string, label: string, inherit?: string][] = [
@@ -24,11 +15,31 @@ const rows: [key: string, label: string, inherit?: string][] = [
   ["fallback-runtime", "Fallback runtime", "Built-in fallback"],
 ];
 const RECALL = "memory-embedding-model";
+const keys = [...rows.map(([key]) => key), RECALL];
 type Embedding = { id: string; name: string; provider: string };
 const pickers = new Map<string, ReturnType<typeof picker>>();
-let recallOpen = false;
+const modelOptions = new WeakMap<object, ModelOption[]>();
+let saveSetting: (key: string) => Promise<void> = async () => {};
 
-const scopeKey = (key: string) => `admin:${key}`;
+export function configureRuntimes(actions: { save: (key: string) => Promise<void> }) {
+  saveSetting = actions.save;
+}
+
+function optionsFor(context: Record<string, any>): ModelOption[] {
+  let options = modelOptions.get(context);
+  if (!options) {
+    const ids = Object.fromEntries(
+      Object.entries(context.modelsByHarness ?? {}).map(([harness, models]) => [
+        harness,
+        (models as { id: string }[]).map((model) => model.id),
+      ]),
+    );
+    options = runtimeModelOptions(context.harnessOptions ?? [], ids, context.modelCatalog ?? {});
+    modelOptions.set(context, options);
+  }
+  return options;
+}
+
 const value = (s: SettingsState) => `${s.draft.harnessId}:${s.draft.modelId}`;
 const current = (s: SettingsState): LoadoutEntry => ({
   value: value(s),
@@ -36,70 +47,40 @@ const current = (s: SettingsState): LoadoutEntry => ({
   fast: s.draft.fastMode === true,
 });
 
-function prime(s: SettingsState) {
-  const data = s.context;
-  cacheRuntimeConfig(scopeKey(s.key), {
-    scopeId: scopeKey(s.key),
-    approvedHarnesses: data.harnessOptions ?? [],
-    modelsByHarness: Object.fromEntries(
-      Object.entries(data.modelsByHarness ?? {}).map(([harness, models]) => [
-        harness,
-        (models as { id: string }[]).map((model) => model.id),
-      ]),
-    ),
-    modelCatalog: data.modelCatalog ?? {},
-    orgDefault: { harnessId: "", modelId: "", revision: 0 },
-    scopeOverride: s.draft.inherit ? null : { harnessId: s.draft.harnessId, modelId: s.draft.modelId, orgRevision: 0 },
-    effective: { harnessId: "", modelId: "" },
-    upgradeAvailable: false,
-    fastModeModelIds: data.fastModeModelIds ?? [],
-  });
-}
-
-function apply(s: SettingsState, entry: LoadoutEntry) {
-  const option = getModelOptions(scopeKey(s.key)).find((candidate) => candidate.value === entry.value);
-  if (!option) return;
-  const levels = effortLevelsForHarness(option.harnessId, option.model);
-  Object.assign(s.draft, {
-    ...(s.key === "runtime" ? {} : { inherit: false }),
-    harnessId: option.harnessId,
-    modelId: option.model.id,
-    effortLevel: levels.some((level) => level.value === entry.effort) ? entry.effort : levels[0]!.value,
-    fastMode:
-      entry.fast &&
-      harnessSupportsFastMode(option.harnessId) &&
-      modelSupportsFastMode(scopeKey(s.key), option.model.id),
-  });
-  s.changed();
-}
-
 function picker(s: SettingsState, inheritLabel?: string) {
-  const options = () => getModelOptions(scopeKey(s.key));
   const state = { openMenu: null as string | null, menuQuery: "", effortLevel: "auto" as EffortLevel };
+  const catalog: ModelCatalog = {
+    options: () => optionsFor(s.context),
+    supportsFast: (modelId) => (s.context.fastModeModelIds ?? []).includes(modelId),
+    overridden: () => !s.draft.inherit,
+  };
+  const actions = loadoutActions(
+    catalog.options,
+    () => current(s),
+    (option, entry) => {
+      Object.assign(s.draft, {
+        ...(s.key === "runtime" ? {} : { inherit: false }),
+        harnessId: option.harnessId,
+        modelId: option.model.id,
+        effortLevel: entry.effort,
+        fastMode: entry.fast,
+      });
+      s.changed();
+    },
+    catalog.supportsFast,
+  );
   const control = createModelPicker<void>({
     host: () => document.querySelector<HTMLElement>(`[data-runtime-row="${s.key}"]`),
     redraw: () => s.render(),
-    scopeKey: () => scopeKey(s.key),
+    scopeKey: () => null,
     state,
+    catalog,
     activeEntry: () => current(s),
-    apply: (entry) => apply(s, entry),
-    selectEffort: (effort) => apply(s, { ...current(s), effort }),
-    selectHarness: (harnessId) => {
-      const selected = options().find((option) => option.value === value(s));
-      const target =
-        selected && compatibleHarnessOptions(options(), selected.model.id).find((o) => o.harnessId === harnessId);
-      if (target) apply(s, { ...current(s), value: target.value });
-    },
-    toggleFastMode: () => {
-      const selected = options().find((option) => option.value === value(s));
-      const target = selected?.model.id === ULTRAFAST_MODEL_ID ? ultrafastChoice(options(), selected) : undefined;
-      apply(s, { ...current(s), ...(target ? { value: target.value } : {}), fast: !s.draft.fastMode });
-    },
+    ...actions,
     effectiveFastMode: () => s.draft.fastMode === true,
     changeDefault: async () => {
       state.openMenu = null;
-      s.draft.inherit = true;
-      s.changed();
+      s.change("inherit", true);
     },
     showDefaultAction: false,
     showInheritAction: !!inheritLabel,
@@ -114,12 +95,9 @@ function picker(s: SettingsState, inheritLabel?: string) {
 function runtimeRow(key: string, label: string, inheritLabel?: string) {
   const s = states.get(key)!;
   if (!s.available) return nothing;
-  prime(s);
   const { control, state } = pickers.get(key) ?? pickers.set(key, picker(s, inheritLabel)).get(key)!;
   state.effortLevel = s.draft.effortLevel;
-  const choice = s.draft.inherit
-    ? undefined
-    : getModelOptions(scopeKey(key)).find((option) => option.value === value(s));
+  const choice = s.draft.inherit ? undefined : optionsFor(s.context).find((option) => option.value === value(s));
   return html`<div class="runtime-row" data-runtime-row=${key}>
     <span class="runtime-label">${label}</span>${control.render(undefined, choice, s.saving)}
   </div>`;
@@ -132,57 +110,22 @@ function recallRow() {
   if (!s.available) return nothing;
   const models: Embedding[] = s.context.memoryEmbeddingOptions || [];
   const selected: string = s.draft.modelId || "";
-  const active = models.find((model) => model.id === selected);
-  const choice = (id: string, name: string, detail: string) =>
-    html`<div class=${classMap({ "loadout-row": true, active: id === selected })}>
-      <button
-        class="loadout-pick"
-        type="button"
-        role="menuitemradio"
-        aria-checked=${id === selected ? "true" : "false"}
-        @click=${() => {
-          recallOpen = false;
-          s.change("modelId", id);
-        }}
-      >
-        <span class="loadout-model-copy"
-          ><span class="loadout-name">${name}</span><span class="loadout-details">${detail}</span></span
-        >${id === selected ? icon(Check, 15) : nothing}
-      </button>
-    </div>`;
+  const missing = selected && !models.some((model) => model.id === selected);
   return html`<div class="runtime-row" data-runtime-row=${RECALL}>
-      <span class="runtime-label">Recall runtime</span>
+      <label class="runtime-label" for="recall-runtime">Recall runtime</label>
       <div class="menu-control loadout-control">
-        <button
+        <select
+          id="recall-runtime"
           class="menu-button loadout-button"
-          type="button"
-          aria-haspopup="menu"
-          aria-expanded=${recallOpen ? "true" : "false"}
+          .value=${selected}
           ?disabled=${s.saving}
-          @click=${(e: Event) => {
-            e.stopPropagation();
-            recallOpen = !recallOpen;
-            s.render();
-          }}
+          @change=${(e: Event) => s.change("modelId", (e.target as HTMLSelectElement).value)}
         >
-          <span class="menu-label">${active?.name ?? (selected ? `${selected} (unavailable)` : "Off")}</span
-          >${active ? html`<span class="menu-suffix">${source(active)}</span>` : nothing}${icon(ChevronDown, 13)}
-        </button>
-        ${
-          recallOpen
-            ? html`<div
-                class="menu-popover loadout-popover recall-popover"
-                role="menu"
-                aria-label="Recall runtime"
-                @click=${(e: Event) => e.stopPropagation()}
-              >
-                <div class="loadout-list">
-                  ${choice("", "Off", "Newest facts (recency)")}
-                  ${models.map((model) => choice(model.id, model.name, source(model)))}
-                </div>
-              </div>`
-            : nothing
-        }
+          <option value="" ?selected=${!selected}>Off — newest facts (recency)</option>
+          ${models.map((model) => html`<option value=${model.id} ?selected=${model.id === selected}>${model.name} · ${source(model)}</option>`)}
+          ${missing ? html`<option value=${selected} selected>${selected} (unavailable)</option>` : nothing}
+        </select>
+        ${icon(ChevronDown, 13)}
       </div>
     </div>
     <p class="hint runtime-hint">
@@ -192,7 +135,6 @@ function recallRow() {
 }
 
 function card() {
-  const keys = [...rows.map(([key]) => key), RECALL];
   const shown = keys.map((key) => states.get(key)!).filter((s) => s.available);
   const dirty = shown.filter((s) => s.dirty);
   const status = shown.find((s) => s.tone === "err") ?? shown.find((s) => s.saving) ?? shown.find((s) => s.message);
@@ -204,16 +146,12 @@ function card() {
       ${rows.map(([key, label, inherit]) => runtimeRow(key, label, inherit))}${recallRow()}
     </div>
     <div class="foot">
-      <span hidden>${keys.map((key) => saveButton(states.get(key)!))}</span
-      ><button
+      <button
         type="button"
         id="runtimes-save"
         class=${classMap({ primary: true, dirty: !!dirty.length })}
         ?disabled=${!dirty.length || shown.some((s) => s.saving)}
-        @click=${(e: Event) => {
-          const foot = (e.currentTarget as HTMLElement).parentElement!;
-          for (const s of dirty) foot.querySelector<HTMLButtonElement>(`[data-save="${s.key}"]`)!.click();
-        }}
+        @click=${() => Promise.all(dirty.map((s) => saveSetting(s.key)))}
       >
         Save</button
       ><span class=${classMap({ status: true, [status?.tone || "idle"]: true })}>${status?.message ?? ""}</span>
@@ -223,10 +161,5 @@ function card() {
 
 export function mountRuntimes() {
   const draw = mountTemplate('template[data-settings-card="card-base-model"]', card);
-  for (const key of [...rows.map(([key]) => key), RECALL]) states.get(key)!.render = draw;
-  document.addEventListener("click", () => {
-    if (!recallOpen) return;
-    recallOpen = false;
-    draw();
-  });
+  for (const key of keys) states.get(key)!.render = draw;
 }

@@ -5343,10 +5343,20 @@
         grid-column: 2;
         margin: 0;
       }
-      #view-governance .recall-popover {
+      #view-governance .runtime-row select.loadout-button {
+        appearance: none;
+        min-height: 0;
+        padding-right: 26px;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+      }
+      #view-governance .runtime-row select.loadout-button + svg {
         position: absolute;
-        top: calc(100% + 6px);
-        left: 0;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
       }
       #view-governance .setting-toggle input:checked + .setting-switch {
         border-color: var(--cta);
@@ -8820,97 +8830,99 @@
         );
       };
 
-      document.querySelectorAll("[data-save]").forEach((btn) => {
-        btn.onclick = async () => {
-          const key = btn.dataset.save;
-          const requestedScope = scope;
-          const requestedGeneration = governanceReq;
-          let body;
-          try {
-            body = SAVE[key]();
-          } catch (err) {
-            setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
-            return;
-          }
-          if (
-            !(await governanceSaveReview(key, body)) ||
-            requestedScope !== scope ||
-            requestedGeneration !== governanceReq
-          )
-            return;
-          const saveRequest = String(++governanceSaveSeq);
+      async function saveSetting(key, btn) {
+        const requestedScope = scope;
+        const requestedGeneration = governanceReq;
+        let body;
+        try {
+          body = SAVE[key]();
+        } catch (err) {
+          setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
+          return;
+        }
+        if (
+          !(await governanceSaveReview(key, body)) ||
+          requestedScope !== scope ||
+          requestedGeneration !== governanceReq
+        )
+          return;
+        const saveRequest = String(++governanceSaveSeq);
+        if (btn) {
           btn.dataset.saveRequest = saveRequest;
           btn.disabled = true;
-          setStatus(SAVE_ST[key], "Saving...", "saving", true);
-          const isBranding = key === "branding";
-          const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
-          const r = await api(
-            "PUT",
-            "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + (isBranding ? "branding" : key),
-            brandingBody,
-          );
-          if (requestedGeneration !== governanceReq) return;
-          if (requestedScope !== scope) {
-            if (btn.dataset.saveRequest === saveRequest) {
+        }
+        setStatus(SAVE_ST[key], "Saving...", "saving", true);
+        const isBranding = key === "branding";
+        const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
+        const r = await api(
+          "PUT",
+          "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + (isBranding ? "branding" : key),
+          brandingBody,
+        );
+        if (requestedGeneration !== governanceReq) return;
+        if (requestedScope !== scope) {
+          if (!btn || btn.dataset.saveRequest === saveRequest) {
+            if (btn) {
               delete btn.dataset.saveRequest;
               btn.disabled = !btn.classList.contains("dirty");
-              setStatus(SAVE_ST[key], "", "");
+            }
+            setStatus(SAVE_ST[key], "", "");
+          }
+          return;
+        }
+        if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
+        if (r.ok) {
+          if (governanceUI.owns(key)) {
+            governanceUI.commit(key, body);
+            sectionSnapshots.set(key, JSON.stringify(body));
+            if (isBranding) {
+              savedBranding = brandingBody;
+              if (!hasGovernanceDraft()) location.reload();
+              return;
+            }
+            if (key === "soul") {
+              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
+              if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+              if (fresh.ok) {
+                governanceUI.settings.refreshSoul(fresh.data);
+                sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
+                if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
+              } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
+              return;
+            }
+            if (key === "command-policy") loadedCommandPolicyPresent = true;
+            if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
+              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
+              if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+              if (fresh.ok && !governanceUI.states.get(key).dirty) {
+                governanceUI.load(fresh.data, requestedScope, key);
+                sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
+                governanceUI.status(key, "Saved", "ok");
+              }
             }
             return;
+          } else if (SAVE_RELOADS.has(key)) await loadScope();
+          else {
+            if (key === "command-policy") loadedCommandPolicyPresent = true;
+            captureSection(key);
           }
-          if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
-          if (r.ok) {
-            if (governanceUI.owns(key)) {
-              governanceUI.commit(key, body);
-              sectionSnapshots.set(key, JSON.stringify(body));
-              if (isBranding) {
-                savedBranding = brandingBody;
-                if (!hasGovernanceDraft()) location.reload();
-                return;
-              }
-              if (key === "soul") {
-                const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
-                if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-                if (fresh.ok) {
-                  governanceUI.settings.refreshSoul(fresh.data);
-                  sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
-                  if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
-                } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
-                return;
-              }
-              if (key === "command-policy") loadedCommandPolicyPresent = true;
-              if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
-                const fresh = await api(
-                  "GET",
-                  "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance",
-                );
-                if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-                if (fresh.ok && !governanceUI.states.get(key).dirty) {
-                  governanceUI.load(fresh.data, requestedScope, key);
-                  sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
-                  governanceUI.status(key, "Saved", "ok");
-                }
-              }
-              return;
-            } else if (SAVE_RELOADS.has(key)) await loadScope();
-            else {
-              if (key === "command-policy") loadedCommandPolicyPresent = true;
-              captureSection(key);
-            }
-            setStatus(SAVE_ST[key], "Saved", "ok");
-          } else {
-            if (key === "soul" && r.status === 409) await refreshSoulConflict();
-            updateSectionDirty(key);
-            let message = r.data?.message || "Save failed.";
-            if (key === "soul" && r.status === 409) {
-              message = "SOUL changed; latest revision loaded and your draft was preserved.";
-            } else if (r.status === 403) {
-              message = "Not authorized for this scope.";
-            }
-            setStatus(SAVE_ST[key], message, "err");
+          setStatus(SAVE_ST[key], "Saved", "ok");
+        } else {
+          if (key === "soul" && r.status === 409) await refreshSoulConflict();
+          updateSectionDirty(key);
+          let message = r.data?.message || "Save failed.";
+          if (key === "soul" && r.status === 409) {
+            message = "SOUL changed; latest revision loaded and your draft was preserved.";
+          } else if (r.status === 403) {
+            message = "Not authorized for this scope.";
           }
-        };
+          setStatus(SAVE_ST[key], message, "err");
+        }
+      }
+      document.querySelectorAll("[data-save]").forEach((btn) => {
+        btn.onclick = () => saveSetting(btn.dataset.save, btn);
       });
+      governanceUI.settings.configureRuntimes({ save: (key) => saveSetting(key) });
       $("view-governance").addEventListener("input", (e) => {
         if (!(
           e.target instanceof HTMLInputElement ||
@@ -8946,7 +8958,8 @@
           sel.dataset.ddHost ||
           sel.hasAttribute("hidden") ||
           sel.multiple ||
-          sel.size > 1
+          sel.size > 1 ||
+          sel.closest(".loadout-control")
         )
           return;
         sel.dataset.ddHost = "1";
