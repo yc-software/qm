@@ -30,7 +30,7 @@ BEGIN
   INSERT INTO legacy_tape_writes VALUES ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);
   RETURN NULL;
 END $written$`,
-  `CREATE OR REPLACE PROCEDURE prepare_legacy_tape_steps(batch INT DEFAULT 200)
+  `CREATE OR REPLACE PROCEDURE prepare_legacy_tape_steps(batch INT DEFAULT 50)
 LANGUAGE plpgsql AS $prepare$
 DECLARE
   ids TEXT[];
@@ -62,14 +62,13 @@ BEGIN
     IF to_regclass('runs') IS NOT NULL THEN
       INSERT INTO legacy_prep_runs
         SELECT r.id, s.id, r.turn_user_seq, r.started_at, r.finished_at,
-               max(r.finished_at) OVER (PARTITION BY s.id ORDER BY r.started_at, r.id
-                                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+               max(COALESCE(r.finished_at, 9223372036854775807)) OVER (
+                 PARTITION BY s.id ORDER BY r.started_at, r.id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
           FROM runs r JOIN sessions s ON s.thread_ref = r.session_id
          WHERE r.started_at IS NOT NULL;
     END IF;
     CREATE INDEX legacy_prep_runs_by_seq ON legacy_prep_runs(session_id, turn_user_seq);
-    CREATE INDEX legacy_prep_runs_by_start ON legacy_prep_runs(session_id, started_at DESC, id DESC)
-      WHERE finished_at IS NOT NULL;
+    CREATE INDEX legacy_prep_runs_by_start ON legacy_prep_runs(session_id, started_at DESC, id DESC);
     COMMIT;
   END IF;
   LOOP
@@ -79,23 +78,30 @@ BEGIN
              ORDER BY id LIMIT batch) next_sessions;
     EXIT WHEN ids IS NULL;
     CREATE TEMP TABLE legacy_batch_blocks ON COMMIT DROP AS
-      SELECT t.session_id, t.seq AS tape_seq, v.valid,
-             m.msg ->> 'api' AS api, m.msg ->> 'provider' AS provider, m.msg ->> 'model' AS model,
-             m.msg ->> 'stopReason' AS stop_reason, b.blk, (b.ord - 1)::int AS idx,
+      WITH messages AS MATERIALIZED (
+        SELECT t.session_id, t.seq, t.created_at, v.valid, m.*
+          FROM session_tape t
+          CROSS JOIN LATERAL (SELECT pg_input_is_valid(t.payload, 'jsonb') AS valid OFFSET 0) v
+          CROSS JOIN LATERAL (
+            SELECT r.* FROM json_to_record(CASE WHEN v.valid THEN t.payload::json END)
+              AS r(role TEXT, api TEXT, provider TEXT, model TEXT, "stopReason" TEXT, content JSON)
+            OFFSET 0
+          ) m
+         WHERE t.session_id = ANY(ids) AND t.kind = 'message' AND COALESCE(t.harness, 'pi') = 'pi'
+      )
+      SELECT m.session_id, m.seq AS tape_seq, m.created_at, m.valid, m.api, m.provider, m.model,
+             m."stopReason" AS stop_reason, b.blk, (b.ord - 1)::int AS idx,
              CASE b.blk ->> 'type'
                WHEN 'toolCall' THEN 'call:' || (b.blk ->> 'id')
                WHEN 'thinking' THEN CASE WHEN COALESCE(b.blk ->> 'thinkingSignature', '') <> ''
                                          THEN 'sig:' || (b.blk ->> 'thinkingSignature') END
                WHEN 'text' THEN 'text:' || (b.blk ->> 'text')
              END AS key
-        FROM session_tape t
-        CROSS JOIN LATERAL (SELECT pg_input_is_valid(t.payload, 'jsonb') AS valid) v
-        CROSS JOIN LATERAL (SELECT CASE WHEN v.valid THEN t.payload::json END AS msg) m
+        FROM messages m
         LEFT JOIN LATERAL json_array_elements(
-          CASE WHEN json_typeof(m.msg -> 'content') = 'array' THEN m.msg -> 'content' ELSE '[]'::json END
+          CASE WHEN json_typeof(m.content) = 'array' THEN m.content ELSE '[]'::json END
         ) WITH ORDINALITY AS b(blk, ord) ON true
-       WHERE t.session_id = ANY(ids) AND t.kind = 'message' AND t.harness = 'pi'
-         AND (NOT v.valid OR m.msg ->> 'role' = 'assistant');
+       WHERE NOT m.valid OR m.role = 'assistant';
     SELECT count(*) FILTER (WHERE NOT valid), count(*) FILTER (WHERE key IS NOT NULL)
       INTO n_invalid, n_keyed FROM legacy_batch_blocks;
     WITH tape_unique AS (
@@ -103,13 +109,13 @@ BEGIN
         JOIN (SELECT session_id, key FROM legacy_batch_blocks WHERE key IS NOT NULL
                GROUP BY session_id, key HAVING count(*) = 1) u USING (session_id, key)
     ), entries AS (
-      SELECT e.session_id, e.seq, e.type, p.j,
+      SELECT e.session_id, e.seq, e.type, e.created_at, p.j,
              CASE WHEN e.type = 'tool_call' THEN 'call:' || (p.j ->> 'callId')
                   WHEN e.type = 'thinking' THEN 'sig:' || (p.j ->> 'thinkingSignature')
                   ELSE 'text:' || (p.j ->> 'text') END AS key
         FROM session_entries e
         CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p
-       WHERE e.session_id IN (SELECT DISTINCT session_id FROM tape_unique)
+       WHERE e.session_id = ANY(ids) AND e.session_id IN (SELECT DISTINCT session_id FROM tape_unique)
          AND e.type IN ('tool_call', 'thinking', 'text', 'assistant') AND e.created_at < frozen_at
          AND jsonb_typeof(p.j) = 'object' AND NOT p.j ? 'step'
     ), entries_unique AS (
@@ -135,6 +141,7 @@ BEGIN
              '{}'::jsonb)
       FROM entries_unique e
       JOIN tape_unique t USING (session_id, key)
+     WHERE e.key NOT LIKE 'text:%' OR abs(e.created_at - t.created_at) <= 600000
     ON CONFLICT (session_id, seq) DO NOTHING;
     GET DIAGNOSTICS n_steps = ROW_COUNT;
     INSERT INTO legacy_turn_runs(session_id, seq, run_id, inferred)
@@ -147,11 +154,12 @@ BEGIN
       ) by_seq ON true
       LEFT JOIN LATERAL (
         SELECT latest.id FROM (
-          SELECT r.id, r.finished_at, r.prev_max_finished FROM legacy_prep_runs r
-           WHERE r.session_id = e.session_id AND r.finished_at IS NOT NULL AND r.started_at <= e.created_at
+          SELECT r.id, r.turn_user_seq, r.finished_at, r.prev_max_finished FROM legacy_prep_runs r
+           WHERE r.session_id = e.session_id AND r.started_at <= e.created_at
            ORDER BY r.started_at DESC, r.id DESC LIMIT 1
         ) latest
-         WHERE e.created_at <= latest.finished_at AND COALESCE(latest.prev_max_finished, -1) < e.created_at
+         WHERE latest.turn_user_seq IS NULL AND e.created_at <= latest.finished_at
+           AND COALESCE(latest.prev_max_finished, -1) < e.created_at
       ) by_window ON true
      WHERE e.session_id = ANY(ids) AND e.type = 'user' AND e.created_at < frozen_at AND jsonb_typeof(p.j) = 'object'
        AND NOT p.j @> '{"steered":true}' AND NOT p.j @> '{"overheard":true}'

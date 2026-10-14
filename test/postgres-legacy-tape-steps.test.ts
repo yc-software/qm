@@ -89,6 +89,7 @@ test("pg legacy tape steps keep each step's model and exact block wire, and map 
           { type: "text", text: "Same" },
         ]),
         '{"role":"assistant","content":[{"type":"text","text":"bad \\ud800"}]}',
+        message([{ type: "text", text: "Done." }]),
       ],
       [
         ["thinking", { thinking: "plan", thinkingSignature: "sig-1" }],
@@ -104,6 +105,9 @@ test("pg legacy tape steps keep each step's model and exact block wire, and map 
         ["assistant", { text: "Checking.", step: { id: "s" } }],
         ["user", { text: "during an unfinished run" }],
         ["user", { text: "after the freeze" }, Number.MAX_SAFE_INTEGER],
+        ["assistant", { text: "Done." }, 1300],
+        ["user", { text: "inside a run that already has its turn" }, 600],
+        ["user", { text: "inside a finished run while another is open" }, 1250],
       ],
     );
     await seedSession(raw, "tapeless", [], [["user", { text: "hi" }]]);
@@ -111,8 +115,10 @@ test("pg legacy tape steps keep each step's model and exact block wire, and map 
       ["run-a", "legacy", 5, 450, 650],
       ["run-b", "legacy", null, 650, 900],
       ["run-open", "legacy", null, 1050, null],
-      ["run-late", "legacy", null, 1150, Number.MAX_SAFE_INTEGER],
+      ["run-late", "legacy", null, 1500, Number.MAX_SAFE_INTEGER],
+      ["run-inner", "legacy", null, 1200, 1400],
     ]);
+    await raw.query("UPDATE session_tape SET created_at = 10000000 WHERE session_id = 'legacy' AND seq = 3");
 
     await raw.query("CALL prepare_legacy_tape_steps(1)");
 
@@ -148,7 +154,7 @@ test("pg legacy tape steps keep each step's model and exact block wire, and map 
       last_session: "tapeless",
       done: true,
       invalid_messages: 1,
-      keyed_blocks: 5,
+      keyed_blocks: 6,
       copied_steps: 3,
       copied_turns: 2,
     });
