@@ -49,7 +49,8 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, menuSelect, icon, initials, relTime, sheenLabel, slackMark, workingWave } from "./ui";
+import { brandName, fieldSelect, menuSelect, initials, relTime, sheenLabel, slackMark, workingWave } from "./ui";
+import { icon } from "./icons";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 

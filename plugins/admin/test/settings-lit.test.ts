@@ -25,9 +25,7 @@ const models = {
   harnessDefault: "pi",
   harnessOptions: ["pi", "codex"],
   modelsByHarness: { pi: [{ id: "a", name: "Alpha" }], codex: [{ id: "b", name: "Beta" }] },
-  thinkingLevelsByHarness: { pi: ["auto", "high"], codex: ["low"] },
   runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
-  fastModeHarnessIds: ["pi"],
   fastModeModelIds: ["a"],
   webuiModels: [],
 };

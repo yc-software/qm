@@ -31,7 +31,8 @@ import {
   type QueuedRun,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { browserRenderableImage, fieldSelect, icon } from "./ui";
+import { browserRenderableImage, fieldSelect } from "./ui";
+import { icon } from "./icons";
 import {
   defaultEffortForModel,
   defaultModelValue,

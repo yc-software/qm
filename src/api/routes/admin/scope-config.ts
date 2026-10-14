@@ -4,7 +4,6 @@ import { computeRetention } from "../../../admin/retention.ts";
 import {
   FAST_MODE_MODEL_IDS,
   modelCatalogFor,
-  harnessSupportsFastMode,
   HARNESS_IDS,
   selectableBaseModels,
   embeddingModelCatalog,
@@ -13,7 +12,6 @@ import {
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
-  thinkingLevelsForHarness,
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
@@ -404,12 +402,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
         configured.some((runtime) => runtime.modelId === model.id),
     );
   };
-  const modelsByHarness = Object.fromEntries(
-    HARNESS_IDS.map((id) => [
-      id,
-      modelsFor(id).map((model) => ({ ...model, effortLevels: thinkingLevelsForHarness(id, model.id) })),
-    ]),
-  );
+  const modelsByHarness = Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)]));
   return {
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
     baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault),
@@ -428,11 +421,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
         .flat()
         .map((model) => model.id),
     ),
-    thinkingLevelsByHarness: Object.fromEntries(
-      HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),
-    ),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
-    fastModeHarnessIds: HARNESS_IDS.filter(harnessSupportsFastMode),
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
     memoryEmbeddingOptions: embeddingModelCatalog(),
     browseModelOptions: selectableBaseModels().filter((m) =>

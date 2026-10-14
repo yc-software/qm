@@ -112,10 +112,10 @@ function recallRow() {
   const selected: string = s.draft.modelId || "";
   const missing = selected && !models.some((model) => model.id === selected);
   return html`<div class="runtime-row" data-runtime-row=${RECALL}>
-      <label class="runtime-label" for="recall-runtime">Recall runtime</label>
+      <span class="runtime-label" id="recall-runtime-label">Recall runtime</span>
       <div class="menu-control loadout-control">
         <select
-          id="recall-runtime"
+          aria-labelledby="recall-runtime-label"
           class="menu-button loadout-button"
           .value=${selected}
           ?disabled=${s.saving}
@@ -137,10 +137,14 @@ function recallRow() {
 function card() {
   const shown = keys.map((key) => states.get(key)!).filter((s) => s.available);
   const dirty = shown.filter((s) => s.dirty);
-  const status = shown.find((s) => s.tone === "err") ?? shown.find((s) => s.saving) ?? shown.find((s) => s.message);
+  const labels = Object.fromEntries([...rows, [RECALL, "Recall runtime"]]);
+  const failed = shown.filter((s) => s.tone === "err");
+  const status = failed.length
+    ? { tone: "err", message: failed.map((s) => `${labels[s.key]}: ${s.message}`).join(" · ") }
+    : (shown.find((s) => s.saving) ?? shown.find((s) => s.message));
   return html`<section
     class=${classMap({ card: true, "sv-models": true, hidden: !shown.length, dirty: !!dirty.length })}
-    id="card-base-model"
+    id="card-runtimes"
   >
     <div class="body runtime-rows">
       ${rows.map(([key, label, inherit]) => runtimeRow(key, label, inherit))}${recallRow()}
@@ -160,6 +164,6 @@ function card() {
 }
 
 export function mountRuntimes() {
-  const draw = mountTemplate('template[data-settings-card="card-base-model"]', card);
+  const draw = mountTemplate('template[data-settings-card="card-runtimes"]', card);
   for (const key of keys) states.get(key)!.render = draw;
 }

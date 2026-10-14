@@ -1,6 +1,6 @@
 import { html, type TemplateResult } from "lit";
 import { ArrowUpRight, Check } from "lucide";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { connectorLogo } from "./connector-logo";
 import { CONNECTOR_NAMES, connectorService, type ConnectorLink } from "./connector-link";
 

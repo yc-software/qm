@@ -72,7 +72,8 @@ import {
 } from "./session-list";
 import { tip } from "./tooltip";
 import { errMessage } from "../../chassis/src/errors";
-import { copyText, icon, menuSelect, relTime, workingWave } from "./ui";
+import { copyText, menuSelect, relTime, workingWave } from "./ui";
+import { icon } from "./icons";
 import { listPageTpl } from "./list-page";
 import {
   contextsState,

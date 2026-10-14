@@ -245,8 +245,6 @@ test("default runtime controls save reasoning level and fast mode", () => {
       baseModelOptions: [{ id: "a" }],
       baseModelDefault: "a",
       runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
-      thinkingLevelsByHarness: { pi: ["auto", "high"] },
-      fastModeHarnessIds: ["pi"],
       fastModeModelIds: ["a"],
     },
     "org:test",

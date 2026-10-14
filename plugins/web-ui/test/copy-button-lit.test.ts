@@ -18,7 +18,8 @@ for (const [key, value] of Object.entries(globals))
 
 const { html, render } = await import("lit");
 const { Check, Copy } = await import("lucide");
-const { copyText, icon } = await import("../src/ui.ts");
+const { copyText } = await import("../src/ui.ts");
+const { icon } = await import("../src/icons.ts");
 
 const copy = (event: Event) => void copyText("hello", event.currentTarget as HTMLButtonElement);
 const flush = () => new Promise((resolve) => setImmediate(resolve));

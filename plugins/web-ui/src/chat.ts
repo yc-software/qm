@@ -152,12 +152,12 @@ import {
   chipBadge,
   copyText,
   formatBytes,
-  icon,
   relTime,
   sheenLabel,
   waveLoader,
   workingWave,
 } from "./ui";
+import { icon } from "./icons";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";

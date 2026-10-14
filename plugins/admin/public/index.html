@@ -5322,7 +5322,7 @@
         --radius-sm: 6px;
         --chat-surface-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
       }
-      #view-governance #card-base-model > .runtime-rows,
+      #view-governance #card-runtimes > .runtime-rows,
       #view-governance .runtime-row {
         display: grid;
         grid-column: 1 / -1;
@@ -5345,11 +5345,9 @@
       }
       #view-governance .runtime-row select.loadout-button {
         appearance: none;
-        min-height: 0;
         padding-right: 26px;
-        border: 0;
-        background: transparent;
-        cursor: pointer;
+        border-radius: 8px;
+        font-weight: 500;
       }
       #view-governance .runtime-row select.loadout-button + svg {
         position: absolute;
@@ -6553,7 +6551,7 @@
                   <h2>Models &amp; browsing</h2>
                   <p>The models, browser runtime, and organization context available on future turns.</p>
                 </div>
-                <template data-settings-card="card-base-model"></template>
+                <template data-settings-card="card-runtimes"></template>
                 <template data-settings-card="card-webui-models"></template>
                 <template data-settings-card="card-branding"></template>
                 <template data-settings-card="card-feature-flags"></template>
@@ -6676,7 +6674,7 @@
         $("card-feature-flags").classList.remove("hidden");
 
         [
-          $("card-base-model"),
+          $("card-runtimes"),
           providers,
           $("card-webui-models"),
           $("card-soul"),

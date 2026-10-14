@@ -2,7 +2,7 @@ import { html, nothing, render } from "lit";
 import { Pencil, Search, Trash2 } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { tip } from "./tooltip";

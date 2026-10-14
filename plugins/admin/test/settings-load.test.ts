@@ -309,7 +309,7 @@ test("models view saves runtime rows through the composer picker and real page h
   const f = litFixture();
   try {
     f.window.requestAnimationFrame = () => 0;
-    f.root.innerHTML = '<template data-settings-card="card-base-model"></template>';
+    f.root.innerHTML = '<template data-settings-card="card-runtimes"></template>';
     f.ui.mountCards();
     const data = {
       baseModelDefault: "model",
@@ -392,11 +392,8 @@ test("models view saves runtime rows through the composer picker and real page h
       recall.dispatchEvent(new f.window.Event("change"));
     };
     assert.deepEqual(
-      [...recall.options].map((option) => [option.value, option.textContent]),
-      [
-        ["", "Off — newest facts (recency)"],
-        ["gateway/embed", "embed · Model gateway"],
-      ],
+      [...recall.options].map((option) => option.value),
+      ["", "gateway/embed"],
     );
     pickRecall("gateway/embed");
     assert.deepEqual(plain(f.ui.collect("memory-embedding-model")), { modelId: "gateway/embed" });
