@@ -166,10 +166,15 @@ const PREPARE_TAIL = `    UPDATE legacy_tape_steps_progress
   PERFORM pg_advisory_unlock(hashtext('prepare_legacy_tape_steps'));
 END $prepare$`;
 
+const SYSTEM_ERROR_CLASSES = "'40', '42', '53', '55', '57', '58'";
+
 const SKIPPING_LOOP = `    BEGIN
       SELECT * INTO n_invalid, n_keyed, n_steps, n_turns FROM legacy_tape_steps_batch(ids, frozen_at);
       n_skipped := 0;
     EXCEPTION WHEN OTHERS THEN
+      IF left(SQLSTATE, 2) IN (${SYSTEM_ERROR_CLASSES}) THEN
+        RAISE;
+      END IF;
       n_invalid := 0; n_keyed := 0; n_steps := 0; n_turns := 0; n_skipped := 0;
       FOREACH one IN ARRAY ids LOOP
         BEGIN
@@ -177,11 +182,19 @@ const SKIPPING_LOOP = `    BEGIN
           n_invalid := n_invalid + counts.n_invalid; n_keyed := n_keyed + counts.n_keyed;
           n_steps := n_steps + counts.n_steps; n_turns := n_turns + counts.n_turns;
         EXCEPTION WHEN OTHERS THEN
-          INSERT INTO legacy_tape_skipped VALUES (one, SQLSTATE || ': ' || SQLERRM, (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint)
+          IF left(SQLSTATE, 2) IN (${SYSTEM_ERROR_CLASSES}) THEN
+            RAISE;
+          END IF;
+          last_error := SQLSTATE || ': ' || SQLERRM;
+          INSERT INTO legacy_tape_skipped VALUES (one, last_error, (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint)
             ON CONFLICT (session_id) DO UPDATE SET error = EXCLUDED.error, at = EXCLUDED.at;
           n_skipped := n_skipped + 1;
         END;
       END LOOP;
+      IF array_length(ids, 1) > 1 AND n_skipped = array_length(ids, 1) THEN
+        RAISE EXCEPTION 'every session in the batch after % failed, so the failure is not in the data: %',
+          COALESCE((SELECT last_session FROM legacy_tape_steps_progress), '(start)'), last_error;
+      END IF;
     END;
 `;
 
@@ -193,12 +206,16 @@ function replaceOnce(text: string, from: string, to: string): string {
 const skippingProcedure = () =>
   replaceOnce(
     replaceOnce(
-      PREPARE_HEAD + SKIPPING_LOOP + PREPARE_TAIL,
-      "  n_turns BIGINT;\n",
-      "  n_turns BIGINT;\n  n_skipped BIGINT;\n  one TEXT;\n  counts RECORD;\n",
+      replaceOnce(
+        PREPARE_HEAD + SKIPPING_LOOP + PREPARE_TAIL,
+        "  n_turns BIGINT;\n",
+        "  n_turns BIGINT;\n  n_skipped BIGINT;\n  one TEXT;\n  counts RECORD;\n  last_error TEXT;\n",
+      ),
+      "copied_turns = copied_turns + n_turns;",
+      "copied_turns = copied_turns + n_turns,\n           skipped_sessions = skipped_sessions + n_skipped;",
     ),
-    "copied_turns = copied_turns + n_turns;",
-    "copied_turns = copied_turns + n_turns,\n           skipped_sessions = skipped_sessions + n_skipped;",
+    "legacy_turn_runs and legacy_tape_writes before starting again",
+    "legacy_turn_runs, legacy_tape_writes and legacy_tape_skipped before starting again",
   );
 
 export const LEGACY_TAPE_STEPS_SQL = [
@@ -243,8 +260,10 @@ export const LEGACY_TAPE_STEPS_SIZE_GUARD_SQL = [
   ids TEXT[], frozen_at BIGINT, OUT n_invalid BIGINT, OUT n_keyed BIGINT, OUT n_steps BIGINT, OUT n_turns BIGINT
 ) LANGUAGE plpgsql AS $batch$
 BEGIN
-  DROP TABLE IF EXISTS legacy_batch_blocks;
-${batchSql(true)}  DROP TABLE legacy_batch_blocks;
+  IF to_regclass('pg_temp.legacy_batch_blocks') IS NOT NULL THEN
+    DROP TABLE pg_temp.legacy_batch_blocks;
+  END IF;
+${batchSql(true)}  DROP TABLE pg_temp.legacy_batch_blocks;
 END $batch$`,
   skippingProcedure(),
 ];

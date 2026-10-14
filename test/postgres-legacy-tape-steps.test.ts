@@ -264,3 +264,35 @@ test("pg legacy tape step preparation skips oversized payloads and sessions it c
     );
   });
 });
+
+test(
+  "pg legacy tape step preparation stops instead of skipping when every session in a batch fails",
+  { skip },
+  async () => {
+    await withSchema(async (raw) => {
+      for (const id of ["a", "b"])
+        await seedSession(
+          raw,
+          id,
+          [message([{ type: "toolCall", id: `call-${id}`, name: "execute", arguments: {} }])],
+          [["tool_call", { tool: "execute", callId: `call-${id}` }]],
+        );
+      await raw.query("ALTER TABLE legacy_tape_steps ADD CONSTRAINT refuse_all CHECK (false) NOT VALID");
+
+      await assert.rejects(
+        raw.query("CALL prepare_legacy_tape_steps(50)"),
+        /every session in the batch after \(start\) failed, so the failure is not in the data: 23514/,
+      );
+
+      assert.deepEqual(await progress(raw), {
+        last_session: null,
+        done: false,
+        invalid_messages: 0,
+        keyed_blocks: 0,
+        copied_steps: 0,
+        copied_turns: 0,
+      });
+      assert.equal((await raw.query("SELECT count(*)::int AS n FROM legacy_tape_skipped")).rows[0].n, 0);
+    });
+  },
+);
