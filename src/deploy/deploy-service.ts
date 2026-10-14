@@ -16,7 +16,6 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import {
   currentVersionOf,
   deployCurrentGitRef,
-  publicUrlOf,
   type DeployStore,
   type Deployment,
   type DeployEndpoint,
@@ -28,7 +27,6 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 
-const MAX_WARM_LINKS = 5;
 export interface DeployFile {
   path: string;
   data: string | Uint8Array;
@@ -89,7 +87,6 @@ export interface DeployService {
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
-  warmLinkedApps(text: string): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
@@ -569,28 +566,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         return maintained;
       });
       return result ?? 0;
-    },
-
-    async warmLinkedApps(text) {
-      const linked = new Set<string>();
-      for (const token of text.split(/[\s<>()[\]"'`|]+/)) {
-        if (!URL.canParse(token)) continue;
-        const url = new URL(token);
-        if (url.protocol !== "https:" && url.protocol !== "http:") continue;
-        const path = /^\/d\/([^/]+)\//.exec(url.pathname)?.[1];
-        linked.add(path ?? url.hostname.split(".")[0]!);
-        if (linked.size >= MAX_WARM_LINKS) break;
-      }
-      let warmed = 0;
-      for (const name of linked) {
-        const d = await deps.deployStore.getByName(name.toLowerCase());
-        if (!d || d.status !== "running" || d.endpoint == null) continue;
-        const publicHost = publicUrlOf(d.endpoint) && new URL(publicUrlOf(d.endpoint)!).host;
-        if (!text.includes(`/d/${name}/`) && !(publicHost && text.includes(publicHost))) continue;
-        void liveEndpoint(d).catch((e) => swallow("deploy: warm linked app", e));
-        warmed++;
-      }
-      return warmed;
     },
 
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {

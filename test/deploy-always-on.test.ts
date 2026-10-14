@@ -260,24 +260,6 @@ test("maintainDeployments replaces a due app's machine in the background and par
   assert.deepEqual(parked, [stale.id], "the replacement is suspended so the next visit is a fast resume");
 });
 
-test("warmLinkedApps wakes running apps named by public link or /d/ path, and nothing else", async () => {
-  const ctx = svc({
-    resolve: async () => ({ host: "127.0.0.1", port: 5001 }),
-    apply: async (d) => ({ host: "127.0.0.1", port: 5000, publicUrl: `https://${d.name}.apps.example.com/` }),
-  });
-  const { deploy } = ctx;
-  await deploy.deploy({ ...owner, name: "alpha", entrypoint: "x", files: [] });
-  await deploy.deploy({ ...owner, name: "beta", entrypoint: "x", files: [] });
-  await deploy.deploy({ ...owner, name: "gamma", entrypoint: "x", files: [] });
-  const before = ctx.resolves;
-  const warmed = await deploy.warmLinkedApps(
-    "see https://alpha.apps.example.com/ and https://qm.example.com/d/beta/ but not https://gamma.other.com/ or https://nope.apps.example.com/",
-  );
-  await new Promise((r) => setImmediate(r));
-  assert.equal(warmed, 2);
-  assert.equal(ctx.resolves, before + 2);
-});
-
 test("always-on reaches the provider before persisting and retains the flag on failure", async () => {
   const seen: boolean[] = [];
   let reject = false;
