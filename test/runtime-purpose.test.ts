@@ -16,7 +16,7 @@ const category: RuntimeChoice = { harnessId: "pi", modelId: "gpt-6-astra", effor
 
 function setup() {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "codex", "claude"]);
+  config.setApprovedHarnesses(["pi", "claude"]);
   config.setRuntimeSelection(ORG, { ...fallback, effortLevel: "high", fastMode: true });
   config.setRuntimeSelection(SCOPE, { ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" });
   return config;
@@ -95,7 +95,7 @@ test("configured purpose fails closed for unapproved or incompatible merged choi
   const config = setup();
   await config.setPurposeRuntime("cron", category);
   assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { harnessId: "opencode" }, "cron"),
+    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { harnessId: "mock" }, "cron"),
     /not approved/,
   );
   assert.throws(
@@ -249,4 +249,25 @@ test("personal-account human child inheritance recognizes a configured purpose o
     "subagent",
   );
   assert.equal(denied.ok, false);
+});
+
+test("a retried run restores a legacy codex or opencode runtime handoff on pi", () => {
+  for (const harnessId of ["codex", "opencode", "retired"]) {
+    const entries = [
+      {
+        type: "tool_result",
+        payload: {
+          tool: "runtime",
+          runId: "run",
+          actorId: "alice",
+          runtimeHandoff: { choice: { harnessId, modelId: "gpt-6-astra", effortLevel: "low" }, lifetime: "task" },
+        },
+      },
+    ] as SessionEntry[];
+    assert.deepEqual(recoveredRuntime(entries, "run", "alice"), {
+      harnessId: "pi",
+      modelId: "gpt-6-astra",
+      effortLevel: "low",
+    });
+  }
 });

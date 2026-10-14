@@ -2,6 +2,7 @@ import type { ScopedConfigStore, RuntimePurpose } from "../resolution/config-sto
 import {
   defaultModelForHarness,
   fastModeModelIds,
+  harnessIdOrPi,
   harnessSupportsFastMode,
   isHarnessId,
   modelSupportedByHarness,
@@ -277,14 +278,15 @@ export function createHarnessRouter(
     models: {
       ...utility.models,
       async screenSecurity(input) {
-        const adapter = input.harnessId && isHarnessId(input.harnessId) ? adapters.get(input.harnessId) : utility;
+        const adapter = input.harnessId ? adapters.get(harnessIdOrPi(input.harnessId)) : utility;
         return adapter?.models.screenSecurity?.(input);
       },
     },
     tools: utility.tools,
     turns: {
       async runTurn(input) {
-        const choice = await resolve(input);
+        const resolved = await resolve(input);
+        const choice = { ...resolved, harnessId: harnessIdOrPi(resolved.harnessId) };
         const adapter = adapters.get(choice.harnessId);
         if (!adapter) throw new Error(`harness ${choice.harnessId} is unavailable`);
         const prior = lastHarness.get(input.session.id);

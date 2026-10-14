@@ -137,10 +137,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
 
   function modelGlyph(option: ModelOption): TemplateResult {
     const provider = option.displayProvider ?? String(option.model.provider);
-    const mark =
-      option.harnessId === "codex"
-        ? modelMark("codex", 16)
-        : (modelMark(provider, 16) ?? modelMark(option.harnessId, 16));
+    const mark = modelMark(provider, 16) ?? modelMark(option.harnessId, 16);
     return html`<span class="loadout-icon" data-provider=${provider} aria-hidden="true"
       >${mark ?? icon(Sparkles, 16)}</span
     >`;

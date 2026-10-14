@@ -16,8 +16,6 @@ export interface ModelOption {
 
 const HARNESS_LABELS: Record<string, string> = {
   pi: "Pi",
-  opencode: "OpenCode",
-  codex: "Codex",
   claude: "Claude Code",
   mock: "Mock",
 };

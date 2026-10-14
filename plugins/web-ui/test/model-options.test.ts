@@ -74,10 +74,9 @@ test("OpenRouter and custom provider metadata retains provider grouping", async 
 
 test("harness controls retain their supported surfaces", async () => {
   assert.equal(harnessSupportsEffort("pi"), true);
-  assert.equal(harnessSupportsEffort("opencode"), false);
+  assert.equal(harnessSupportsEffort("mock"), false);
   assert.equal(harnessSupportsFastMode("claude"), true);
-  assert.equal(harnessSupportsFastMode("codex"), true);
-  assert.equal(harnessSupportsFastMode("opencode"), true);
+  assert.equal(harnessSupportsFastMode("mock"), false);
 });
 
 test("deleted selection retains identity and transcript rendering does not borrow a replacement", async () => {

@@ -131,8 +131,7 @@ test("store reload and independent readers observe edits and soft deletion witho
   assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
   assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
   for (const harness of ["pi", "mock"]) assert.equal(modelSupportedByHarness(MODEL_ID, harness), true);
-  for (const harness of ["codex", "claude", "opencode"])
-    assert.equal(modelSupportedByHarness(MODEL_ID, harness), false);
+  assert.equal(modelSupportedByHarness(MODEL_ID, "claude"), false);
   assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);
   await writer.upsert(
     { ...spec, contextWindow: 600_000, cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
@@ -150,7 +149,7 @@ test("store reload and independent readers observe edits and soft deletion witho
   assert.equal(await writer.delete(MODEL_ID, "admin"), true);
   await reader.refresh();
   assert.equal(resolveModel(MODEL_ID), undefined);
-  assert.equal(modelSupportedByHarness(MODEL_ID, "codex"), false);
+  assert.equal(modelSupportedByHarness(MODEL_ID, "pi"), false);
   assert.equal(await writer.delete(MODEL_ID, "admin"), false);
   const row = (await reader.statuses())[0]!;
   assert.equal(row.disabled, true);
@@ -173,12 +172,7 @@ test("template capabilities are inherited and overlay API models cannot silently
   assert.deepEqual(getRequiredModel(MODEL_ID).input, getRequiredModel("claude-opus-4-8").input);
   assert.equal(getRequiredModel(MODEL_ID).reasoning, getRequiredModel("claude-opus-4-8").reasoning);
   assert.equal(
-    resolveIndividualAuthRouting(
-      { provider: "anthropic", kind: "oauth", oauth: {}, updatedAt: 1 },
-      null,
-      MODEL_ID,
-      "pi",
-    ),
+    resolveIndividualAuthRouting({ provider: "anthropic", kind: "oauth", oauth: {}, updatedAt: 1 }, null, MODEL_ID),
     null,
   );
 });
@@ -516,7 +510,7 @@ import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "codex", "claude"]);
+  config.setApprovedHarnesses(["pi", "claude"]);
   const org = "org:default-org" as const;
   const scope = "personal:alice" as const;
   const fallback = { harnessId: "pi" as const, modelId: "gpt-5.6-sol" };
@@ -527,15 +521,15 @@ test("runtime normalization preserves native capabilities and reflects overlay c
   setModelOverlays([{ ...overlay, fastMode: false }]);
   assert.equal(resolveRuntimeChoice(config, org, scope, fallback, requested).fastMode, false);
   assert.throws(
-    () => resolveRuntimeChoice(config, org, scope, fallback, { ...requested, harnessId: "codex" }),
+    () => resolveRuntimeChoice(config, org, scope, fallback, { ...requested, harnessId: "claude" }),
     /not approved/,
   );
   const native = resolveRuntimeChoice(config, org, scope, fallback, {
-    harnessId: "codex",
-    modelId: "gpt-5.6-sol",
-    effortLevel: "xhigh",
+    harnessId: "claude",
+    modelId: "claude-opus-4-8",
+    effortLevel: "max",
     fastMode: true,
   });
   assert.equal(native.fastMode, true);
-  assert.equal(native.effortLevel, "xhigh");
+  assert.equal(native.effortLevel, "max");
 });

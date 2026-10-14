@@ -1,172 +1,119 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { CodexAppServer } from "../harness/codex-app-server.ts";
-import { codexOAuthAuthFromValue } from "../harness/codex-auth-store.ts";
-import { asObject, codexOAuthJwtAccountId, type JsonObject } from "../harness/codex-auth-file.ts";
+import { randomUUID } from "node:crypto";
+import type { AuthEvent, AuthPrompt, OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
+import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
-import { reportFailureAs } from "../util/errors.ts";
-import type { ChatGPTDevicePrompt } from "./subscription-oauth.ts";
+import { chatgptAccountIdFromToken, type ChatGPTDevicePrompt } from "./subscription-oauth.ts";
 
 const LOGIN_TTL_MS = 15 * 60 * 1000;
 const START_TIMEOUT_MS = 30_000;
+const DEVICE_CODE_METHOD = "device_code";
 
 interface PendingLogin {
-  server: CodexAppServer;
-  home: string;
-  loginId: string;
+  abort: AbortController;
   expiresAt: number;
   outcome: Promise<UserOAuthTokens>;
   settled: boolean;
 }
 
-function tokensFromAuthJson(home: string): UserOAuthTokens {
-  const raw = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) as unknown;
-  const auth = codexOAuthAuthFromValue(raw);
-  if (!auth) throw new Error("Codex login completed but wrote no usable ChatGPT auth");
-  const tokens = asObject((auth as JsonObject).tokens)!;
-  const accessToken = tokens.access_token as string;
-  const idToken = typeof tokens.id_token === "string" ? tokens.id_token : undefined;
-  const accountId = codexOAuthJwtAccountId(auth) ?? undefined;
+function tokensFromCredential(credential: OAuthCredential): UserOAuthTokens {
+  const accountId =
+    (typeof credential.accountId === "string" && credential.accountId) || chatgptAccountIdFromToken(credential.access);
+  if (!credential.access || !credential.refresh || !accountId)
+    throw new Error("ChatGPT login completed without a usable subscription token");
   return {
-    accessToken,
-    refreshToken: tokens.refresh_token as string,
-    ...(idToken ? { idToken } : {}),
-    ...(accountId ? { accountId } : {}),
+    accessToken: credential.access,
+    refreshToken: credential.refresh,
+    accountId,
+    ...(typeof credential.expires === "number" ? { expiresAt: credential.expires } : {}),
   };
 }
 
-/**
- * ChatGPT device-code login driven through the vendored Codex binary's own
- * login RPCs (`account/login/start` type `chatgptDeviceCode`) instead of a
- * hand-rolled flow against undocumented endpoints. The app-server runs with a
- * throwaway CODEX_HOME; on completion we harvest the auth.json it wrote and
- * tear everything down — the tokens' durable home is the keychain.
- */
-export function createCodexDeviceLogin(opts: { binaryPath?: string; env?: NodeJS.ProcessEnv } = {}) {
+export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
   const pending = new Map<string, PendingLogin>();
 
-  const cleanup = async (login: PendingLogin): Promise<void> => {
-    pending.delete(login.loginId);
-    await login.server.close().catch(() => undefined);
-    rmSync(login.home, { recursive: true, force: true });
+  const cleanup = (loginId: string, login: PendingLogin): void => {
+    pending.delete(loginId);
+    login.abort.abort();
   };
 
   const sweep = (): void => {
     const now = Date.now();
-    for (const login of pending.values()) {
-      if (now > login.expiresAt)
-        void cleanup(login).catch(reportFailureAs("codex device login: expired login cleanup", undefined));
-    }
+    for (const [loginId, login] of pending) if (now > login.expiresAt) cleanup(loginId, login);
   };
 
   return {
     async start(): Promise<ChatGPTDevicePrompt> {
       sweep();
-      const home = mkdtempSync(join(tmpdir(), "qm-codex-login-"));
-      const binaryPath = opts.binaryPath ?? resolve("node_modules/.bin/codex");
-      let completed!: (tokens: UserOAuthTokens) => void;
-      let failed!: (error: Error) => void;
-      const outcome = new Promise<UserOAuthTokens>((resolvePromise, rejectPromise) => {
-        completed = resolvePromise;
-        failed = rejectPromise;
+      const oauth = opts.oauth ?? openaiCodexProvider().auth.oauth;
+      if (!oauth) throw new Error("ChatGPT subscription login is unavailable");
+      const abort = new AbortController();
+      let shown!: (event: Extract<AuthEvent, { type: "device_code" }>) => void;
+      const devicePrompt = new Promise<Extract<AuthEvent, { type: "device_code" }>>((resolve) => {
+        shown = resolve;
       });
+      const outcome = oauth
+        .login({
+          signal: abort.signal,
+          async prompt(prompt: AuthPrompt) {
+            if (prompt.type === "select" && prompt.options.some((option) => option.id === DEVICE_CODE_METHOD))
+              return DEVICE_CODE_METHOD;
+            throw new Error(`unsupported ChatGPT login prompt ${prompt.type}`);
+          },
+          notify(event: AuthEvent) {
+            if (event.type === "device_code") shown(event);
+          },
+        })
+        .then(tokensFromCredential);
       void outcome.catch(() => undefined);
-      const server = new CodexAppServer({
-        binaryPath,
-        cwd: home,
-        env: {
-          PATH: dirname(process.execPath),
-          ...opts.env,
-          HOME: home,
-          CODEX_HOME: home,
-        },
-        onNotification: async (method, params) => {
-          if (method !== "account/login/completed") return;
-          const p = (params ?? {}) as Record<string, unknown>;
-          if (p.success === true) {
-            try {
-              completed(tokensFromAuthJson(home));
-            } catch (error) {
-              failed(error instanceof Error ? error : new Error(String(error)));
-            }
-          } else {
-            failed(new Error(typeof p.error === "string" && p.error ? p.error : "ChatGPT login failed"));
-          }
-        },
-        onRequest: async (method) => {
-          throw new Error(`unsupported Codex request ${method}`);
-        },
-      });
+      let startTimer: NodeJS.Timeout | undefined;
       try {
-        let startTimer: NodeJS.Timeout | undefined;
-        try {
-          await Promise.race([
-            server.initialize(),
-            new Promise<never>((_, reject) => {
-              startTimer = setTimeout(
-                () => reject(new Error("Codex app-server initialization timed out")),
-                START_TIMEOUT_MS,
-              );
-            }),
-          ]);
-        } finally {
-          if (startTimer) clearTimeout(startTimer);
-        }
-        const raw = await server.request("account/login/start", { type: "chatgptDeviceCode" });
-        const result = (raw ?? {}) as { loginId?: string; verificationUrl?: string; userCode?: string };
-        if (!result.loginId || !result.verificationUrl || !result.userCode)
-          throw new Error("Codex device login response missing fields");
-        const login: PendingLogin = {
-          server,
-          home,
-          loginId: result.loginId,
-          expiresAt: Date.now() + LOGIN_TTL_MS,
-          outcome,
-          settled: false,
-        };
-        // Settle-once bookkeeping and teardown on completion either way.
+        const event = await Promise.race([
+          devicePrompt,
+          outcome.then(() => {
+            throw new Error("ChatGPT login finished before showing a device code");
+          }),
+          new Promise<never>((_, reject) => {
+            startTimer = setTimeout(() => reject(new Error("ChatGPT device login start timed out")), START_TIMEOUT_MS);
+          }),
+        ]);
+        const loginId = randomUUID();
+        const expiresAt = Date.now() + Math.min(LOGIN_TTL_MS, (event.expiresInSeconds ?? Infinity) * 1000);
+        const login: PendingLogin = { abort, expiresAt, outcome, settled: false };
         void outcome
           .catch(() => undefined)
           .finally(() => {
             login.settled = true;
           });
-        pending.set(result.loginId, login);
+        pending.set(loginId, login);
         return {
-          deviceAuthId: result.loginId,
-          userCode: result.userCode,
-          verificationUrl: result.verificationUrl,
-          intervalMs: 5_000,
-          expiresAt: login.expiresAt,
+          deviceAuthId: loginId,
+          userCode: event.userCode,
+          verificationUrl: event.verificationUri,
+          intervalMs: (event.intervalSeconds ?? 5) * 1000,
+          expiresAt,
         };
       } catch (error) {
-        await server.close().catch(() => undefined);
-        rmSync(home, { recursive: true, force: true });
+        abort.abort();
         throw error;
+      } finally {
+        if (startTimer) clearTimeout(startTimer);
       }
     },
 
-    /** Poll a pending login: tokens when done, "pending" while waiting. */
     async poll(loginId: string): Promise<UserOAuthTokens | "pending"> {
       sweep();
       const login = pending.get(loginId);
       if (!login) throw new Error("login expired or unknown — start again");
-      if (!login.settled) {
-        const raced = await Promise.race([login.outcome.catch((e: Error) => e), Promise.resolve("pending" as const)]);
-        if (raced === "pending" && !login.settled) return "pending";
-      }
+      if (!login.settled) return "pending";
       try {
-        const tokens = await login.outcome;
-        await cleanup(login);
-        return tokens;
-      } catch (error) {
-        await cleanup(login);
-        throw error;
+        return await login.outcome;
+      } finally {
+        cleanup(loginId, login);
       }
     },
 
     async close(): Promise<void> {
-      for (const login of pending.values()) await cleanup(login);
+      for (const [loginId, login] of pending) cleanup(loginId, login);
     },
   };
 }

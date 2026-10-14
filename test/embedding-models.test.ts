@@ -74,8 +74,7 @@ test("verified embedding definitions survive registry reload but never become ch
   assert.equal(resolveModel("embed-small"), undefined);
   assert.ok(!selectableBaseModels().some((m) => m.id === "embed-small"));
   assert.ok(!defaultWebuiModelIds().includes("embed-small"));
-  for (const harness of ["pi", "claude", "codex", "opencode", "mock"])
-    assert.equal(modelSupportedByHarness("embed-small", harness), false);
+  for (const harness of ["pi", "claude", "mock"]) assert.equal(modelSupportedByHarness("embed-small", harness), false);
   await writer.delete("embed-small", "admin");
   await writer.refresh();
   assert.equal(resolveEmbeddingModel("embed-small"), undefined);

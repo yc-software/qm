@@ -16,7 +16,7 @@ const claims: CapabilityClaims = {
 };
 async function setup(allowed = true) {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude", "codex", "opencode"]);
+  config.setApprovedHarnesses(["pi", "claude"]);
   await config.flushScope("org:default-org");
   await config.setRuntimeSelectionLatest("org:default-org", active);
   const service = createRuntimeService(
@@ -68,7 +68,7 @@ test("runtime changes reject revoked access, bots, triggers and foreign personal
 
 test("runtime rejects unsupported effort and fast mode instead of silently dropping them", async () => {
   const { service } = await setup();
-  assert.deepEqual(await service(claims, active, { action: "set", harness: "opencode" }), {
+  assert.deepEqual(await service(claims, active, { action: "set", harness: "claude", effort: "ultracode" }), {
     ok: false,
     error: "effort_not_supported",
   });

@@ -60,21 +60,12 @@ test("base-model set rejects a model whose provider key is absent (would fail pr
   }
 });
 
-test("ChatGPT OAuth is serviceable for Codex without advertising OpenAI to Pi", () => {
-  const config = testConfig({ harness: "codex", codexAuthFile: "/tmp/codex-auth.json" });
+test("ChatGPT OAuth stays separate from OpenAI API-key availability on Pi", () => {
+  const config = testConfig({ harness: "pi", codexAuthFile: "/tmp/chatgpt-auth.json" });
   const configured = providerKeysPresent(config);
   assert.equal(configured.openai, false);
-  assert.equal(
-    modelProviderAvailabilityFor("codex", configured).openai,
-    true,
-    "Codex can use its harness OAuth session",
-  );
-  assert.equal(modelProviderAvailabilityFor("opencode", configured).openai, false);
-  assert.equal(
-    modelProviderAvailabilityFor("pi", configured, { anthropic: false, openai: false, openrouter: false }).openai,
-    false,
-    "Pi still requires an API-key credential",
-  );
+  assert.equal(configured.codexOAuth, true);
+  assert.equal(modelProviderAvailabilityFor("pi", configured).openai, false);
 });
 
 test("a deployment that declares a provider runs that provider's base model", async () => {
@@ -119,6 +110,24 @@ test("the declaration outranks a stray key from another vendor", async () => {
   });
   try {
     assert.equal(await effectiveModel(srv.base), "openrouter/auto");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("company ChatGPT-only deployments offer their plain GPT default through managed availability", async () => {
+  const srv = start({ codexAuthCredential: "company-chatgpt" });
+  try {
+    const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      effective: { modelId: string };
+      modelsByHarness: Record<string, string[]>;
+      unavailableReason?: string;
+    };
+    assert.equal(body.effective.modelId, "gpt-5.6-sol");
+    assert.ok(body.modelsByHarness.pi?.includes("gpt-5.6-sol"));
+    assert.equal(body.unavailableReason, undefined);
   } finally {
     await srv.close();
   }

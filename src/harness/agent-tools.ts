@@ -2449,12 +2449,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           [
             Type.Null(),
             Type.Object({
-              harnessId: Type.Union([
-                Type.Literal("pi"),
-                Type.Literal("opencode"),
-                Type.Literal("codex"),
-                Type.Literal("claude"),
-              ]),
+              harnessId: Type.Union([Type.Literal("pi"), Type.Literal("claude")]),
               modelId: Type.String(),
               effortLevel: Type.Optional(
                 Type.Union([

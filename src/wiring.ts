@@ -5,7 +5,6 @@ import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
-import { asObject } from "./harness/codex-auth-file.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -152,6 +151,7 @@ import { createBudgetTracker, estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { LEGACY_HARNESS_MIGRATION } from "./model/legacy-harness-migration.ts";
 import { createMemoryCronFireStore, createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
@@ -313,9 +313,11 @@ import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import type { SessionStore } from "./sessions/session-store.ts";
 import { createMockHarness } from "./harness/mock-harness.ts";
-import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/opencode-harness.ts";
-import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
-import { keychainCodexAuthStore, fileCodexAuthStore, type CodexAuthStore } from "./harness/codex-auth-store.ts";
+import {
+  fileCompanyChatGPTAuth,
+  keychainCompanyChatGPTAuth,
+  type CompanyChatGPTAuth,
+} from "./model/company-chatgpt-auth.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
@@ -393,6 +395,10 @@ import {
 } from "./surface-cache/ack-emoji-pick-store.ts";
 import {
   auxiliaryModelFor,
+  CODEX_SUBSCRIPTION_PROVIDER,
+  codexSubscriptionModelId,
+  isOverlayModel,
+  modelRequestOverrides,
   auxiliaryModelForProvider,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
@@ -645,6 +651,7 @@ export function buildApp(
       const direct = await directModelCredentials.availability();
       return {
         ...direct,
+        ...(directProviderAvailability.codexOAuth ? { codexOAuth: true } : {}),
         modelIds: new Set(Object.keys(gatewayTransport?.models ?? {})),
       };
     },
@@ -1387,20 +1394,30 @@ export function buildApp(
       ...customKeys,
     };
   };
-  let companyCodexAuthStore: CodexAuthStore | undefined;
+  let companyChatGPTAuth: CompanyChatGPTAuth | undefined;
   if (config.codexAuthCredential && keychain)
-    companyCodexAuthStore = keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential });
-  else if (config.codexAuthFile) companyCodexAuthStore = fileCodexAuthStore(config.codexAuthFile);
-  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> => {
-    const keys: ProviderKeys = await resolveModelProviderKeys();
-    if (includeSubscription && harnessCarriedModelAuth(config) === "openai") {
-      const auth = await companyCodexAuthStore?.load();
-      const token = companyCodexAuthStore
-        ? asObject(auth?.tokens)?.access_token
-        : config.codexProcessEnv.CODEX_ACCESS_TOKEN;
-      if (typeof token === "string" && token) keys["openai-codex"] = token;
+    companyChatGPTAuth = keychainCompanyChatGPTAuth({ keychain, credentialId: config.codexAuthCredential });
+  else if (config.codexAuthFile) companyChatGPTAuth = fileCompanyChatGPTAuth(config.codexAuthFile);
+  const resolveCompanySubscriptionKeys = async (): Promise<ProviderKeys> => {
+    if (!companyChatGPTAuth) return {};
+    try {
+      const token = await companyChatGPTAuth.accessToken();
+      return token ? { [CODEX_SUBSCRIPTION_PROVIDER]: token } : {};
+    } catch (e) {
+      console.error(`[model] company ChatGPT auth (${companyChatGPTAuth.description}) unreadable: ${errMessage(e)}`);
+      return {};
     }
-    return keys;
+  };
+  const resolvePiProviderKeys = async (): Promise<ProviderKeys> => ({
+    ...(await resolveModelProviderKeys()),
+    ...(await resolveCompanySubscriptionKeys()),
+  });
+  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
+    includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();
+  const companyModelId = (id: string): string => {
+    if (resolveModel(id)?.provider !== "openai" || isOverlayModel(id) || modelRequestOverrides(id)) return id;
+    const subscription = codexSubscriptionModelId(id);
+    return resolveModel(subscription) ? subscription : id;
   };
   const runtimeOrgScope = scopeId("org", config.orgId);
   const orgBaseModelId = (): string | undefined =>
@@ -1422,45 +1439,8 @@ export function buildApp(
         modelGateway: gatewayTransport,
         resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
         resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-        resolveProviderKeys: resolveModelProviderKeys,
-        signals: runSignals,
-        mcpTools,
-      }),
-    ],
-    [
-      "opencode",
-      createOpenCodeHarness({
-        ...openCodeHarnessConfigOptions(config),
-        signals: runSignals,
-        mcpTools,
-        resolveCustomProviders: async () => {
-          const enabled = await customProviders.enabled();
-          return Promise.all(
-            enabled.map(async (spec) => {
-              try {
-                const apiKey = await customProviders.resolveKey(spec.id);
-                return { spec, ...(apiKey ? { apiKey } : {}) };
-              } catch (e) {
-                // An unreadable key must not prevent the opencode server from
-                // starting; the provider is configured keyless and its models
-                // fail individually instead.
-                console.error(`[model] custom provider ${spec.id}: key unreadable: ${errMessage(e)}`);
-                return { spec };
-              }
-            }),
-          );
-        },
-      }),
-    ],
-    [
-      "codex",
-      createCodexHarness({
-        ...codexHarnessConfigOptions(config),
-        // Keychain custody: the subscription login lives encrypted in its
-        // owner's keychain; core refreshes it centrally and hands the harness
-        // ephemeral derived material. The credential can be (re)registered at
-        // runtime — resolution happens on every load.
-        ...(companyCodexAuthStore ? { authStore: companyCodexAuthStore } : {}),
+        resolveProviderKeys: resolvePiProviderKeys,
+        ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
         signals: runSignals,
         mcpTools,
       }),
@@ -1886,6 +1866,7 @@ export function buildApp(
     },
   };
   pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
     statements: [

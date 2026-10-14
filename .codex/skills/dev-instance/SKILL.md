@@ -140,15 +140,12 @@ supervisor; extra connections on another host must be stopped on that host. `DEV
 
 The dev instance should exercise the real system:
 
-- real LLM: needs a model credential for the harness you run. Core supports several
-  (`HARNESS=pi|opencode|codex|claude`); the launcher picks one from the credentials it
-  finds and honours an explicit `HARNESS`. Set the key your chosen harness expects. For
-  Codex, a ChatGPT OAuth session is also supported: `HARNESS=codex` discovers a valid
-  `$HOME/.codex/auth.json`, or you can set `CODEX_AUTH_FILE` to another auth file. Core
-  refreshes OAuth tokens centrally and hands the Codex child ephemeral material (no
-  refresh token). Pass `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model wiring
-  check. The auth-file path is for local dev instances; deployed production processes
-  use an API key or a keychain credential (`CODEX_AUTH_CREDENTIAL` /
+- real LLM: needs a model credential for the harness you run. Core supports
+  `HARNESS=pi|claude`; the launcher runs Pi when it finds an Anthropic key and honours an
+  explicit `HARNESS=claude`. Pass `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model
+  wiring check. Pi's GPT models can also use a ChatGPT subscription: set `CODEX_AUTH_FILE`
+  to a local Codex CLI `auth.json`. The auth-file path is for local dev instances; deployed
+  production processes use an API key or a keychain credential (`CODEX_AUTH_CREDENTIAL` /
   `CLAUDE_AUTH_CREDENTIAL`), whose secret lives encrypted in its owner's keychain.
 - real durability: uses `DATABASE_URL` when supplied; otherwise starts/reuses a local
   Docker Postgres container and runs core with `SESSION_STORE=postgres` and

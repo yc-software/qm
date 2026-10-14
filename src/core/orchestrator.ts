@@ -163,9 +163,13 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { isHarnessId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
+import {
+  codexSubscriptionModelId,
+  harnessIdOrPi,
+  isHarnessId,
+  CODEX_SUBSCRIPTION_PROVIDER,
+} from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
-import type { CodexTurnAuth } from "../harness/harness.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
@@ -3121,7 +3125,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let userModelOverride: string | undefined;
           let userHarnessOverride: string | undefined;
           let claudeOauthToken: string | undefined;
-          let codexTurnAuth: CodexTurnAuth | undefined;
           const userCredStore = external ? undefined : deps.userModelCredentials;
           const account = external
             ? "company"
@@ -3131,22 +3134,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
               account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
             ]);
-            const orgRuntime = await deps.config?.getRuntimeSelectionDurable(resolution.orgScopeId);
-            const preferredHarness =
-              runtime.harnessId ??
-              input.harness ??
-              purposeDefault?.harnessId ??
-              orgRuntime?.harnessId ??
-              deps.defaultHarness;
             const routing = resolveIndividualAuthRouting(
               anthCred ?? null,
               oaiCred ?? null,
               account === "personal" || input.surface === "web"
                 ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
                 : (runtime.modelId ?? purposeDefault?.modelId),
-              account === "personal" || input.surface === "web"
-                ? preferredHarness
-                : (runtime.harnessId ?? purposeDefault?.harnessId),
             );
             if (routing?.kind === "apikey") {
               userHarnessOverride = "pi";
@@ -3159,27 +3152,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 userHarnessOverride = routing.harness;
                 userModelOverride = routing.model;
               }
-            } else if (
-              routing?.kind === "oauth" &&
-              routing.provider === "openai" &&
-              routing.harness === "pi" &&
-              oaiCred?.oauth
-            ) {
+            } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
               const derived = await userCredStore.derivedOAuth(actor.id, "openai");
               if (derived) {
                 userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
-                userHarnessOverride = routing.harness;
-                userModelOverride = routing.model;
-              }
-            } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-              if (derived?.idToken) {
-                codexTurnAuth = {
-                  accessToken: derived.accessToken,
-                  idToken: derived.idToken,
-                  ...(derived.accountId ? { accountId: derived.accountId } : {}),
-                  ...(derived.expiresAt !== undefined ? { expiresAt: derived.expiresAt } : {}),
-                };
                 userHarnessOverride = routing.harness;
                 userModelOverride = routing.model;
               }
@@ -3190,32 +3166,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               );
             }
           }
-          return { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth };
+          return { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken };
         };
-        let { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth } =
-          await loadRuntimeAuth({});
+        const servesRequestedModel = (requested: string | undefined, routed: string | undefined): boolean =>
+          requested === routed ||
+          (!!requested &&
+            !!routed &&
+            !!userProviderKeys?.[CODEX_SUBSCRIPTION_PROVIDER] &&
+            codexSubscriptionModelId(requested) === routed);
+        const inputHarness = input.harness === undefined ? undefined : harnessIdOrPi(input.harness);
+        let { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken } = await loadRuntimeAuth({});
         if (
           (input.surface === "web" || purposeDefault) &&
           userHarnessOverride &&
           (((input.model ?? purposeDefault?.modelId) &&
-            (input.model ?? purposeDefault?.modelId) !== userModelOverride) ||
-            ((input.harness ?? purposeDefault?.harnessId) &&
-              (input.harness ?? purposeDefault?.harnessId) !== userHarnessOverride))
+            !servesRequestedModel(input.model ?? purposeDefault?.modelId, userModelOverride)) ||
+            ((inputHarness ?? purposeDefault?.harnessId) &&
+              (inputHarness ?? purposeDefault?.harnessId) !== userHarnessOverride))
         )
           throw new NonRetryableTurnError("Your connected AI account cannot serve this model on that harness.");
         const effectiveModel = userModelOverride ?? input.model;
-        const effectiveHarness = userHarnessOverride ?? input.harness;
+        const effectiveHarness = userHarnessOverride ?? inputHarness;
         if (userHarnessOverride) {
           let authLabel = "api-key";
           if (claudeOauthToken) authLabel = "claude-oauth";
-          else if (codexTurnAuth) authLabel = "codex-oauth";
           else if (userProviderKeys?.[CODEX_SUBSCRIPTION_PROVIDER]) authLabel = "codex-oauth-pi";
           console.log(
             `[individual-auth] user=${actor.id} harness=${userHarnessOverride} model=${effectiveModel} auth=${authLabel}`,
           );
         }
-        if (input.harness && !isHarnessId(input.harness))
-          throw new NonRetryableTurnError(`runtime ${input.harness} is not approved`);
         let requestedRuntime: Partial<RuntimeChoice> = {
           ...(effectiveHarness && isHarnessId(effectiveHarness) ? { harnessId: effectiveHarness } : {}),
           ...(effectiveModel ? { modelId: effectiveModel } : {}),
@@ -3238,7 +3217,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const auth = await loadRuntimeAuth(choice);
             if (
               auth.userHarnessOverride &&
-              (auth.userHarnessOverride !== choice.harnessId || auth.userModelOverride !== choice.modelId)
+              (auth.userHarnessOverride !== choice.harnessId ||
+                (auth.userModelOverride !== choice.modelId &&
+                  !(
+                    auth.userProviderKeys?.[CODEX_SUBSCRIPTION_PROVIDER] &&
+                    codexSubscriptionModelId(choice.modelId) === auth.userModelOverride
+                  )))
             )
               return "Your connected AI account cannot serve this model on that harness. Choose a compatible runtime from get.";
             return null;
@@ -3249,16 +3233,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const adoptRuntime = async (choice: RuntimeChoice) => {
           const error = await checkRuntimeAuth(choice);
           if (error) throw new NonRetryableTurnError(error);
-          ({ userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth } =
+          ({ userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken } =
             await loadRuntimeAuth(choice));
-          requestedRuntime = choice;
+          requestedRuntime = userModelOverride ? { ...choice, modelId: userModelOverride } : choice;
         };
         if (restoredRuntime) await adoptRuntime(restoredRuntime);
-        if (automatedTurn && input.model && input.harness && isHarnessId(input.harness)) {
+        if (automatedTurn && input.model && inputHarness) {
           const error = await deps.validateScheduledRuntime?.(
             scopeId,
             {
-              harnessId: input.harness,
+              harnessId: inputHarness,
               modelId: input.model,
               effortLevel: input.thinkingLevel,
               fastMode: input.fastMode,
@@ -3492,7 +3476,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     ),
                 }
               : {}),
-            ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
             ...(continueTurn && !continuation && !snapshot.text && !recall.text ? { continueTurn: true } : {}),

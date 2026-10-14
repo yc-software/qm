@@ -503,7 +503,7 @@ test("the claude harness offers compaction and detection so a utility role canno
 });
 
 test("Claude preserves a committed runtime handoff when SDK interruption returns an error", async () => {
-  const choice = { harnessId: "codex" as const, modelId: "gpt-6-astra" };
+  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra" };
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
     await toolHandlers.get("runtime")!({ action: "set", model: "Astra" });

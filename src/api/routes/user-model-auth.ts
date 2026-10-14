@@ -101,9 +101,6 @@ async function putApiKey(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { ok: true });
 }
 
-// ChatGPT device-code login is delegated to the vendored Codex binary's own
-// login RPCs (supported, version-matched surface) rather than a hand-rolled
-// flow against undocumented endpoints.
 const codexDeviceLogin = createCodexDeviceLogin();
 
 async function chatgptStart(ctx: ApiCtx): Promise<void> {
