@@ -422,18 +422,28 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   const principalCanWriteScope = createCanWriteScope(scopeMembershipDeps);
 
-  async function canContinueOnWeb(
+  async function mayWriteSession(
     principalId: string,
     session: Pick<Session, "threadRef" | "scopeId">,
     sharedAccess = new Map<ScopeId, Promise<boolean>>(),
   ): Promise<boolean> {
-    if (!session.threadRef.startsWith("web:") && !isSubagentThreadRef(session.threadRef)) return false;
     const actor = deps.identity.classify(principalId);
+    if (!deps.identity.isInternal(actor)) return false;
     const { kind, ref } = parseScopeId(session.scopeId);
     if (kind === "personal") return session.scopeId === scopeId("personal", actor.id);
     if (kind !== "channel" && kind !== "group") return false;
+    if (isSubagentThreadRef(session.threadRef)) return principalCanWriteScope(actor.id, session.scopeId);
     if (!sharedAccess.has(session.scopeId)) sharedAccess.set(session.scopeId, mayUseSharedScope(kind, ref, actor));
     return sharedAccess.get(session.scopeId)!;
+  }
+
+  async function canContinueOnWeb(
+    principalId: string,
+    session: Pick<Session, "threadRef" | "scopeId">,
+    sharedAccess?: Map<ScopeId, Promise<boolean>>,
+  ): Promise<boolean> {
+    if (!session.threadRef.startsWith("web:") && !isSubagentThreadRef(session.threadRef)) return false;
+    return mayWriteSession(principalId, session, sharedAccess);
   }
 
   async function principalCanAccessCurrentScope(principalId: string, targetScope: ScopeId): Promise<boolean> {
@@ -767,6 +777,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     principalCanAccessCurrentScope,
     principalCanWriteScope,
     canContinueOnWeb,
+    mayWriteSession,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,

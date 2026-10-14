@@ -415,7 +415,10 @@ export function createSessionMethods(
       const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
       const sharedAccess = new Map<ScopeId, Promise<boolean>>(
         all
-          .filter((s) => parseScopeId(s.scopeId).kind === "group" && projectIdFromGroupRef(parseScopeId(s.scopeId).ref))
+          .filter((s) => {
+            const { kind, ref } = parseScopeId(s.scopeId);
+            return kind === "group" && projectIdFromGroupRef(ref);
+          })
           .map((s) => [s.scopeId, Promise.resolve(true)]),
       );
       const sessions = await Promise.all(
@@ -977,7 +980,8 @@ export function createSessionMethods(
           resource: session.id,
           scopeLabel: scope,
         });
-        return { session: (await deps.sessions.get(session.id)) ?? session };
+        const stored = (await deps.sessions.get(session.id)) ?? session;
+        return { session: { ...stored, canContinue: await canContinueOnWeb(principalId, stored) } };
       };
       if (parsed.kind === "personal") {
         return parsed.ref === principalId ? create() : null;
