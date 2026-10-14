@@ -1,36 +1,14 @@
-export const LEGACY_TAPE_STEPS_SQL = [
-  `CREATE TABLE IF NOT EXISTS legacy_tape_steps(
-    session_id TEXT NOT NULL,
-    seq INT NOT NULL,
-    step JSONB NOT NULL,
-    wire JSONB,
-    PRIMARY KEY (session_id, seq)
-  )`,
-  `CREATE TABLE IF NOT EXISTS legacy_turn_runs(
-    session_id TEXT NOT NULL,
-    seq INT NOT NULL,
-    run_id TEXT NOT NULL,
-    inferred BOOLEAN NOT NULL,
-    PRIMARY KEY (session_id, seq)
-  )`,
-  `CREATE TABLE IF NOT EXISTS legacy_tape_steps_progress(
-    singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
-    started_at BIGINT,
-    last_session TEXT,
-    done BOOLEAN NOT NULL DEFAULT false,
-    invalid_messages BIGINT NOT NULL DEFAULT 0,
-    keyed_blocks BIGINT NOT NULL DEFAULT 0,
-    copied_steps BIGINT NOT NULL DEFAULT 0,
-    copied_turns BIGINT NOT NULL DEFAULT 0
-  )`,
-  `INSERT INTO legacy_tape_steps_progress DEFAULT VALUES ON CONFLICT (singleton) DO NOTHING`,
-  `CREATE TABLE IF NOT EXISTS legacy_tape_writes(at BIGINT NOT NULL)`,
-  `CREATE OR REPLACE FUNCTION legacy_tape_written() RETURNS trigger LANGUAGE plpgsql AS $written$
-BEGIN
-  INSERT INTO legacy_tape_writes VALUES ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);
-  RETURN NULL;
-END $written$`,
-  `CREATE OR REPLACE PROCEDURE prepare_legacy_tape_steps(batch INT DEFAULT 50)
+const MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+
+function prepareProcedure(sizeGuard: boolean): string {
+  const tapeValid = sizeGuard
+    ? `CASE WHEN octet_length(t.payload) > ${MAX_PAYLOAD_BYTES} THEN false
+                        ELSE pg_input_is_valid(t.payload, 'jsonb') AND left(btrim(t.payload), 1) = '{' END`
+    : `pg_input_is_valid(t.payload, 'jsonb') AND left(btrim(t.payload), 1) = '{'`;
+  const entryJson = sizeGuard
+    ? `WHEN octet_length(e.payload) > ${MAX_PAYLOAD_BYTES} THEN NULL WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb`
+    : `WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb`;
+  return `CREATE OR REPLACE PROCEDURE prepare_legacy_tape_steps(batch INT DEFAULT 50)
 LANGUAGE plpgsql AS $prepare$
 DECLARE
   ids TEXT[];
@@ -83,7 +61,7 @@ BEGIN
         SELECT t.session_id, t.seq, t.created_at, v.valid, m.*
           FROM session_tape t
           CROSS JOIN LATERAL (
-            SELECT pg_input_is_valid(t.payload, 'jsonb') AND left(btrim(t.payload), 1) = '{' AS valid OFFSET 0
+            SELECT ${tapeValid} AS valid OFFSET 0
           ) v
           CROSS JOIN LATERAL (
             SELECT r.* FROM json_to_record(CASE WHEN v.valid THEN t.payload::json END)
@@ -117,7 +95,7 @@ BEGIN
                   WHEN e.type = 'thinking' THEN 'sig:' || (p.j ->> 'thinkingSignature')
                   ELSE 'text:' || (p.j ->> 'text') END AS key
         FROM session_entries e
-        CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p
+        CROSS JOIN LATERAL (SELECT CASE ${entryJson} END AS j) p
        WHERE e.session_id = ANY(ids)
          AND e.type IN ('tool_call', 'thinking', 'text', 'assistant') AND e.created_at < frozen_at
          AND jsonb_typeof(p.j) = 'object' AND NOT p.j ? 'step'
@@ -151,7 +129,7 @@ BEGIN
     INSERT INTO legacy_turn_runs(session_id, seq, run_id, inferred)
     SELECT e.session_id, e.seq, COALESCE(by_seq.id, by_window.id), by_seq.id IS NULL
       FROM session_entries e
-      CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p
+      CROSS JOIN LATERAL (SELECT CASE ${entryJson} END AS j) p
       LEFT JOIN LATERAL (
         SELECT CASE WHEN count(*) = 1 THEN min(r.id) END AS id FROM legacy_prep_runs r
          WHERE r.session_id = e.session_id AND r.turn_user_seq = e.seq
@@ -181,5 +159,42 @@ BEGIN
   UPDATE legacy_tape_steps_progress SET done = true;
   COMMIT;
   PERFORM pg_advisory_unlock(hashtext('prepare_legacy_tape_steps'));
-END $prepare$`,
+END $prepare$`;
+}
+
+export const LEGACY_TAPE_STEPS_SQL = [
+  `CREATE TABLE IF NOT EXISTS legacy_tape_steps(
+    session_id TEXT NOT NULL,
+    seq INT NOT NULL,
+    step JSONB NOT NULL,
+    wire JSONB,
+    PRIMARY KEY (session_id, seq)
+  )`,
+  `CREATE TABLE IF NOT EXISTS legacy_turn_runs(
+    session_id TEXT NOT NULL,
+    seq INT NOT NULL,
+    run_id TEXT NOT NULL,
+    inferred BOOLEAN NOT NULL,
+    PRIMARY KEY (session_id, seq)
+  )`,
+  `CREATE TABLE IF NOT EXISTS legacy_tape_steps_progress(
+    singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+    started_at BIGINT,
+    last_session TEXT,
+    done BOOLEAN NOT NULL DEFAULT false,
+    invalid_messages BIGINT NOT NULL DEFAULT 0,
+    keyed_blocks BIGINT NOT NULL DEFAULT 0,
+    copied_steps BIGINT NOT NULL DEFAULT 0,
+    copied_turns BIGINT NOT NULL DEFAULT 0
+  )`,
+  `INSERT INTO legacy_tape_steps_progress DEFAULT VALUES ON CONFLICT (singleton) DO NOTHING`,
+  `CREATE TABLE IF NOT EXISTS legacy_tape_writes(at BIGINT NOT NULL)`,
+  `CREATE OR REPLACE FUNCTION legacy_tape_written() RETURNS trigger LANGUAGE plpgsql AS $written$
+BEGIN
+  INSERT INTO legacy_tape_writes VALUES ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);
+  RETURN NULL;
+END $written$`,
+  prepareProcedure(false),
 ];
+
+export const LEGACY_TAPE_STEPS_SIZE_GUARD_SQL = [prepareProcedure(true)];

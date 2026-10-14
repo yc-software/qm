@@ -203,3 +203,32 @@ test(
     });
   },
 );
+
+test("pg legacy tape step preparation skips payloads too large to parse and counts them", { skip }, async () => {
+  await withSchema(async (raw) => {
+    const huge = message([{ type: "text", text: "x".repeat(64 * 1024 * 1024) }]);
+    await seedSession(
+      raw,
+      "huge",
+      [huge, message([{ type: "toolCall", id: "call-ok", name: "execute", arguments: {} }])],
+      [
+        ["tool_call", { tool: "execute", callId: "call-ok" }],
+        ["user", { text: "y".repeat(64 * 1024 * 1024) }],
+      ],
+    );
+
+    await raw.query("CALL prepare_legacy_tape_steps(1)");
+
+    assert.deepEqual((await raw.query("SELECT session_id, seq FROM legacy_tape_steps ORDER BY seq")).rows, [
+      { session_id: "huge", seq: 0 },
+    ]);
+    assert.deepEqual(await progress(raw), {
+      last_session: "huge",
+      done: true,
+      invalid_messages: 1,
+      keyed_blocks: 1,
+      copied_steps: 1,
+      copied_turns: 0,
+    });
+  });
+});
