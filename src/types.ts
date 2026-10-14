@@ -112,6 +112,7 @@ export interface Session {
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
+  canContinue?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;

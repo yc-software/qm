@@ -18,7 +18,6 @@ import {
 } from "lucide";
 import {
   api,
-  isContinuable,
   sharedContextLabel,
   type CoreContext,
   type CoreProject,
@@ -1382,7 +1381,7 @@ async function loadScopeResources(scopeId: string): Promise<void> {
 
 function contextSessionRow(s: CoreSession): TemplateResult {
   const surface = surfaceOf(s);
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   return html`
     <button class="context-session-row" type="button" @click=${() => void openFromContext(s)}>
       <span class="context-session-title" dir="auto">${groupDmTitle(s)}</span>

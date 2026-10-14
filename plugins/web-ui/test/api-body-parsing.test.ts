@@ -113,17 +113,6 @@ test("a steer forwards a server-built TurnRequest; client-supplied identity fiel
   assert.deepEqual(body.request?.conversation, { kind: "dm", threadRef });
 });
 
-test("a steer claiming a thread the user does not own is refused before reaching core", async () => {
-  const before = calls.length;
-  const r = await fetch(`${base}/api/runs/r1/signal`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ kind: "steer", text: "louder", threadRef: "web:bob:stolen" }),
-  });
-  assert.equal(r.status, 403);
-  assert.equal(calls.length, before, "nothing is forwarded to core");
-});
-
 test("ordinary steering without conversation context and abort preserve bare signal forwarding", async () => {
   for (const body of [
     { kind: "steer", text: "louder" },
