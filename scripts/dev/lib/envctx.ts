@@ -140,7 +140,7 @@ export async function assembleEnv(opts: {
   if (opts.callerEnv.HARNESS === "claude") {
     harness = "claude";
     env.HARNESS = harness;
-  } else if (env.ANTHROPIC_API_KEY) {
+  } else if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
     harness = "pi";
     env.HARNESS = harness;
     if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
@@ -150,7 +150,7 @@ export async function assembleEnv(opts: {
     warnings.push("mock turns explicitly allowed by DEV_INSTANCE_ALLOW_MOCK=1 -- no anthropic key found");
   } else {
     throw new Error(
-      `ANTHROPIC_API_KEY is required: dev instances exercise real LLM calls by default. Export a key, add one to ${liveEnvFile}, or set DEV_INSTANCE_ALLOW_MOCK=1 for a deliberate mock-only wiring check.`,
+      `ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login (CODEX_AUTH_FILE) is required: dev instances exercise real LLM calls by default. Export a key, add one to ${liveEnvFile}, or set DEV_INSTANCE_ALLOW_MOCK=1 for a deliberate mock-only wiring check.`,
     );
   }
 

@@ -414,8 +414,16 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   writeFileSync(join(worktree, ".env"), "");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, allowMock: false, log, probeLoginShell: async () => "" }),
-    /ANTHROPIC_API_KEY is required/,
+    /ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login/,
   );
+  const openaiOnly = await assembleEnv({
+    worktree,
+    callerEnv: { OPENAI_API_KEY: "sk-openai" },
+    allowMock: false,
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(openaiOnly.harness, "pi");
   const mock = await assembleEnv({ worktree, callerEnv: {}, allowMock: true, log, probeLoginShell: async () => "" });
   assert.equal(mock.harness, "mock");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;

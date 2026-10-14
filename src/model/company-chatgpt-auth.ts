@@ -1,8 +1,6 @@
-import { randomBytes } from "node:crypto";
-import { chmodSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { open } from "node:fs/promises";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../credentials/keychain.ts";
 import { swallow } from "../util/errors.ts";
 import { chatgptAccountIdFromToken, refreshChatGPTTokens, tokenExpiry } from "./subscription-oauth.ts";
@@ -26,8 +24,6 @@ interface RefreshDeps {
 }
 
 const REFRESH_SKEW_MS = 5 * 60_000;
-const LOCK_TIMEOUT_MS = 30_000;
-const LOCK_STALE_MS = 60_000;
 const AUTH_FILE_PATHS = [".codex/auth.json", "codex/auth.json"];
 
 function asObject(value: unknown): JsonObject | null {
@@ -78,7 +74,6 @@ function refreshingAuth(
   description: string,
   read: () => Promise<StoredAuth | null>,
   deps: RefreshDeps,
-  exclusive: <T>(fn: () => Promise<T>) => Promise<T> = (fn) => fn(),
 ): CompanyChatGPTAuth {
   const refresh = deps.refresh ?? refreshChatGPTTokens;
   const now = deps.now ?? Date.now;
@@ -93,7 +88,7 @@ function refreshingAuth(
     const current = await read();
     if (!current) return null;
     if (fresh(current.auth)) return current.auth;
-    refreshing ??= exclusive(async () => {
+    refreshing ??= (async () => {
       const locked = await read();
       if (!locked || fresh(locked.auth)) return locked?.auth ?? null;
       const replaced = authTokens(locked.auth)?.refresh;
@@ -103,7 +98,7 @@ function refreshingAuth(
       if (!latest || authTokens(latest.auth)?.refresh !== replaced) return latest?.auth ?? null;
       await latest.write(next);
       return next;
-    }).finally(() => {
+    })().finally(() => {
       refreshing = null;
     });
     try {
@@ -144,52 +139,14 @@ export function readCodexOAuthAuthFile(path: string): JsonObject | null {
   }
 }
 
-function writeAuthFile(path: string, auth: JsonObject): void {
-  const temporary = join(dirname(path), `.qm-chatgpt-auth-${process.pid}-${randomBytes(8).toString("hex")}.tmp`);
-  try {
-    writeFileSync(temporary, JSON.stringify(auth), { mode: 0o600 });
-    chmodSync(temporary, 0o600);
-    renameSync(temporary, path);
-  } finally {
-    rmSync(temporary, { force: true });
-  }
-}
-
-async function withFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
-  const lock = `${path}.lock`;
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      await (await open(lock, "wx", 0o600)).close();
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) rmSync(lock, { force: true });
-      } catch {
-        continue;
-      }
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${lock}`, { cause: error });
-      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    rmSync(lock, { force: true });
-  }
-}
-
-export function fileCompanyChatGPTAuth(path: string, deps: RefreshDeps = {}): CompanyChatGPTAuth {
-  return refreshingAuth(
-    `auth file ${path}`,
-    async () => {
+export function fileCompanyChatGPTAuth(path: string): CompanyChatGPTAuth {
+  return {
+    description: `auth file ${path}`,
+    async accessToken() {
       const auth = readCodexOAuthAuthFile(path);
-      return auth ? { auth, write: async (next) => writeAuthFile(path, next) } : null;
+      return auth ? authTokens(auth)?.access : undefined;
     },
-    deps,
-    (fn) => withFileLock(path, fn),
-  );
+  };
 }
 
 function authFromFiles(files: CredentialFile[]): { path: string; auth: JsonObject } | null {

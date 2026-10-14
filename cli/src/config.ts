@@ -830,7 +830,15 @@ export function effectiveModelProvider(config: QmConfig): ModelProvider | undefi
   return isModelProvider(override) ? override : config.modelProvider;
 }
 
+const HARNESSES = ["mock", "pi", "claude"];
+
 function validateModelProvider(config: QmConfig, path: string): void {
+  const harness = configuredHarness(config);
+  if (!HARNESSES.includes(harness)) {
+    throw new CliError(
+      `${path}: env.core.HARNESS "${harness}" is not recognized — use ${HARNESSES.join(", ")}, or unset it.`,
+    );
+  }
   const override = config.env.core?.MODEL_PROVIDER?.trim();
   if (override === "") delete config.env.core!.MODEL_PROVIDER;
   if (override !== undefined && override !== "" && !isModelProvider(override)) {
@@ -840,7 +848,6 @@ function validateModelProvider(config: QmConfig, path: string): void {
   }
   const provider = effectiveModelProvider(config);
   if (!provider) return;
-  const harness = configuredHarness(config);
   if (!MODEL_PROVIDER_HARNESSES[provider].includes(harness)) {
     throw new CliError(
       `${path}: model provider "${provider}" cannot serve a base model on env.core.HARNESS "${harness}" — that harness runs no ${provider} model, so every agent turn would be refused. Use ${MODEL_PROVIDER_HARNESSES[provider].join(", ")}, or pick a provider that harness can bill.`,

@@ -250,24 +250,3 @@ test("personal-account human child inheritance recognizes a configured purpose o
   );
   assert.equal(denied.ok, false);
 });
-
-test("a retried run restores a legacy codex or opencode runtime handoff on pi", () => {
-  for (const harnessId of ["codex", "opencode", "retired"]) {
-    const entries = [
-      {
-        type: "tool_result",
-        payload: {
-          tool: "runtime",
-          runId: "run",
-          actorId: "alice",
-          runtimeHandoff: { choice: { harnessId, modelId: "gpt-6-astra", effortLevel: "low" }, lifetime: "task" },
-        },
-      },
-    ] as SessionEntry[];
-    assert.deepEqual(recoveredRuntime(entries, "run", "alice"), {
-      harnessId: "pi",
-      modelId: "gpt-6-astra",
-      effortLevel: "low",
-    });
-  }
-});

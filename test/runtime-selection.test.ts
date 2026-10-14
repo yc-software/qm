@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   createMemoryConfigStore,
   type PersistedApprovedHarnesses,
-  type PersistedAutoFlaggerConfig,
   type PersistedBaseModel,
 } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
@@ -239,40 +238,4 @@ test("runtime availability preserves the existing harness normalization of inher
   const resolved = resolveRuntimeChoice(config, ORG, PERSONAL, choice, choice);
   assert.equal(resolved.modelId, choice.modelId);
   assert.equal(resolved.effortLevel, undefined);
-});
-
-test("legacy codex, opencode, and unknown persisted harnesses read back as pi", async () => {
-  const baseModels = createMemoryMap<PersistedBaseModel>();
-  const approvedHarnesses = createMemoryMap<PersistedApprovedHarnesses>();
-  const autoFlaggerConfigs = createMemoryMap<PersistedAutoFlaggerConfig>();
-  await approvedHarnesses.put(ORG, { scopeId: ORG, ids: ["codex", "claude", "opencode", "retired"] });
-  await baseModels.put(ORG, {
-    scopeId: ORG,
-    harnessId: "codex",
-    modelId: "gpt-5.5",
-    revision: 3,
-    orgRevision: 3,
-    cronRuntime: { harnessId: "opencode", modelId: "claude-opus-5" },
-  });
-  await baseModels.put(PERSONAL, {
-    scopeId: PERSONAL,
-    harnessId: "retired",
-    modelId: "claude-sonnet-5",
-    orgRevision: 3,
-  });
-  await autoFlaggerConfigs.put(ORG, { scopeId: ORG, harnessId: "opencode", modelId: "claude-haiku-4-5", rubric: "r" });
-  const config = createMemoryConfigStore("default-org", { baseModels, approvedHarnesses, autoFlaggerConfigs });
-  await config.hydrate?.();
-
-  assert.deepEqual(config.getApprovedHarnesses(), ["pi", "claude"]);
-  assert.deepEqual(await config.getApprovedHarnessesDurable(), ["pi", "claude"]);
-  assert.equal(config.getRuntimeSelection(ORG)?.harnessId, "pi");
-  assert.equal((await config.getRuntimeSelectionDurable(PERSONAL))?.harnessId, "pi");
-  assert.deepEqual(await config.getPurposeRuntimeDurable("cron"), { harnessId: "pi", modelId: "claude-opus-5" });
-  assert.equal(config.getAutoFlaggerConfig()?.harnessId, "pi");
-  const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
-  assert.deepEqual(await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback), {
-    harnessId: "pi",
-    modelId: "claude-sonnet-5",
-  });
 });

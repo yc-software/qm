@@ -167,61 +167,18 @@ test("keychain auth is unavailable when the credential is missing", async () => 
   assert.equal(await auth.accessToken(), undefined);
 });
 
-test("file auth refreshes a stale token and writes the rotation back with owner-only permissions", async (t) => {
+test("file auth serves the local login as-is and never refreshes or rewrites it", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-chatgpt-file-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, "auth.json");
-  writeFileSync(path, JSON.stringify(authJson("acct", STALE_EXP, "refresh-1")));
+  const stored = JSON.stringify(authJson("acct", STALE_EXP, "refresh-1"));
+  writeFileSync(path, stored);
   chmodSync(path, 0o600);
-  const { calls, refresh } = refreshTo("acct");
-  const auth = fileCompanyChatGPTAuth(path, { now: () => NOW, refresh });
-  assert.equal(await auth.accessToken(), accessToken("acct", FRESH_EXP, "refreshed"));
-  assert.deepEqual(calls, ["refresh-1"]);
-  const persisted = JSON.parse(readFileSync(path, "utf8")) as { tokens: Record<string, unknown> };
-  assert.equal(persisted.tokens.refresh_token, "refresh-2");
-  assert.equal(persisted.tokens.account_id, "acct");
-  assert.equal(await auth.accessToken(), accessToken("acct", FRESH_EXP, "refreshed"));
-  assert.equal(calls.length, 1);
-});
-
-test("file auth keeps serving the stored token when refresh fails", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-chatgpt-file-fail-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const path = join(dir, "auth.json");
-  writeFileSync(path, JSON.stringify(authJson("acct", STALE_EXP, "refresh-1")));
-  chmodSync(path, 0o600);
-  const auth = fileCompanyChatGPTAuth(path, {
-    now: () => NOW,
-    refresh: async () => {
-      throw new Error("chatgpt refresh failed (503)");
-    },
-  });
+  const fetches = t.mock.method(globalThis, "fetch", async () => new Response("{}", { status: 500 }));
+  const auth = fileCompanyChatGPTAuth(path);
   assert.equal(await auth.accessToken(), accessToken("acct", STALE_EXP));
-  const persisted = JSON.parse(readFileSync(path, "utf8")) as { tokens: Record<string, unknown> };
-  assert.equal(persisted.tokens.refresh_token, "refresh-1");
-});
-
-test("independent file auth stores serialize refresh through the auth file lock", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-chatgpt-file-lock-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const path = join(dir, "auth.json");
-  writeFileSync(path, JSON.stringify(authJson("acct", STALE_EXP, "refresh-1")));
-  chmodSync(path, 0o600);
-  const calls: string[] = [];
-  const refresh = async (token: string): Promise<UserOAuthTokens> => {
-    calls.push(token);
-    await new Promise((r) => setTimeout(r, 50));
-    return {
-      accessToken: accessToken("acct", FRESH_EXP, "refreshed"),
-      idToken: idToken("acct"),
-      refreshToken: "refresh-2",
-    };
-  };
-  const first = fileCompanyChatGPTAuth(path, { now: () => NOW, refresh });
-  const second = fileCompanyChatGPTAuth(path, { now: () => NOW, refresh });
-  const [a, b] = await Promise.all([first.accessToken(), second.accessToken()]);
-  assert.deepEqual(calls, ["refresh-1"]);
-  assert.equal(a, accessToken("acct", FRESH_EXP, "refreshed"));
-  assert.equal(b, a);
-  assert.throws(() => readFileSync(`${path}.lock`));
+  assert.equal(fetches.mock.callCount(), 0);
+  assert.equal(readFileSync(path, "utf8"), stored);
+  chmodSync(path, 0o644);
+  assert.equal(await auth.accessToken(), undefined, "a group- or world-readable login file is refused");
 });

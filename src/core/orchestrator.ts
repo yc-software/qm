@@ -163,12 +163,7 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import {
-  codexSubscriptionModelId,
-  harnessIdOrPi,
-  isHarnessId,
-  CODEX_SUBSCRIPTION_PROVIDER,
-} from "../model/pi-models.ts";
+import { codexSubscriptionModelId, isHarnessId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
@@ -3168,19 +3163,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           return { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken };
         };
-        const servesRequestedModel = (requested: string | undefined, routed: string | undefined): boolean =>
-          requested === routed ||
-          (!!requested &&
-            !!routed &&
-            !!userProviderKeys?.[CODEX_SUBSCRIPTION_PROVIDER] &&
-            codexSubscriptionModelId(requested) === routed);
-        const inputHarness = input.harness === undefined ? undefined : harnessIdOrPi(input.harness);
+        // A ChatGPT subscription serves an OpenAI model under its `codex/` id; compare in that form.
+        const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
+          (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
+        if (input.harness && !isHarnessId(input.harness))
+          throw new NonRetryableTurnError(`runtime ${input.harness} is not approved`);
+        const inputHarness = input.harness && isHarnessId(input.harness) ? input.harness : undefined;
+        const requestedModel = input.model ?? purposeDefault?.modelId;
         let { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken } = await loadRuntimeAuth({});
         if (
           (input.surface === "web" || purposeDefault) &&
           userHarnessOverride &&
-          (((input.model ?? purposeDefault?.modelId) &&
-            !servesRequestedModel(input.model ?? purposeDefault?.modelId, userModelOverride)) ||
+          ((requestedModel && !servesModel(requestedModel, userModelOverride, userProviderKeys)) ||
             ((inputHarness ?? purposeDefault?.harnessId) &&
               (inputHarness ?? purposeDefault?.harnessId) !== userHarnessOverride))
         )
@@ -3218,11 +3212,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (
               auth.userHarnessOverride &&
               (auth.userHarnessOverride !== choice.harnessId ||
-                (auth.userModelOverride !== choice.modelId &&
-                  !(
-                    auth.userProviderKeys?.[CODEX_SUBSCRIPTION_PROVIDER] &&
-                    codexSubscriptionModelId(choice.modelId) === auth.userModelOverride
-                  )))
+                !servesModel(choice.modelId, auth.userModelOverride, auth.userProviderKeys))
             )
               return "Your connected AI account cannot serve this model on that harness. Choose a compatible runtime from get.";
             return null;

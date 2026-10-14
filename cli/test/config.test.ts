@@ -1350,8 +1350,8 @@ test("modelProvider must name a vendor the configured harness can bill", () => {
     assert.equal(loadConfigAt(path).config.modelProvider, "openai");
   });
   for (const harness of ["codex", "opencode"]) {
-    withConfig({ modelProvider: "openai", env: { core: { HARNESS: harness } } }, ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /cannot serve a base model/);
+    withConfig({ env: { core: { HARNESS: harness } } }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), new RegExp(`env.core.HARNESS "${harness}" is not recognized`));
     });
   }
   withConfig({ modelProvider: "openrouter" }, ({ path }) => {

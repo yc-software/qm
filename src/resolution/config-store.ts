@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { harnessIdOrPi, modelSupportedByHarness } from "../model/pi-models.ts";
+import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
@@ -276,10 +276,6 @@ export interface ScopedConfigStore {
   refreshScope(id: ScopeId): Promise<void>;
   flushScope(id: ScopeId): Promise<void>;
   hydrate?(): Promise<void>;
-}
-
-function knownHarnessIds(ids: readonly string[] | undefined): string[] | null {
-  return ids ? [...new Set(ids.map(harnessIdOrPi))] : null;
 }
 
 export function createMemoryConfigStore(
@@ -564,7 +560,7 @@ export function createMemoryConfigStore(
           for (const r of await externalSlackParticipantsStore.all()) externalSlackParticipants.set(r.scopeId, r.on);
           for (const r of await channelHeaderPinStore.all()) channelHeaderPin.set(r.scopeId, r.on);
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
-          approvedHarnesses = knownHarnessIds((await approvedHarnessStore.get(org))?.ids);
+          approvedHarnesses = (await approvedHarnessStore.get(org))?.ids ?? null;
           internalMemberOverrides = (await internalMemberOverridesStore.get(org))?.members ?? [];
           orgAmbient = (await orgAmbientStore.get(org))?.on ?? true;
           interactiveFastMode = (await interactiveFastModeStore.get(org))?.on ?? false;
@@ -578,7 +574,7 @@ export function createMemoryConfigStore(
           const storedAutoFlagger = await autoFlaggerStore.get(org);
           autoFlaggerConfig = storedAutoFlagger
             ? {
-                harnessId: harnessIdOrPi(storedAutoFlagger.harnessId),
+                harnessId: storedAutoFlagger.harnessId,
                 modelId: storedAutoFlagger.modelId,
                 rubric: storedAutoFlagger.rubric,
               }
@@ -864,11 +860,11 @@ export function createMemoryConfigStore(
     },
     getPurposeRuntime: (purpose) => {
       const selection = baseModels.get(org)?.[`${purpose}Runtime`];
-      return selection ? { ...selection, harnessId: harnessIdOrPi(selection.harnessId) } : undefined;
+      return selection ? { ...selection } : undefined;
     },
     getPurposeRuntimeDurable: async (purpose) => {
       const selection = (await baseModelStore.get(org))?.[`${purpose}Runtime`];
-      return selection ? { ...selection, harnessId: harnessIdOrPi(selection.harnessId) } : undefined;
+      return selection ? { ...selection } : undefined;
     },
     setPurposeRuntime,
     clearPurposeRuntime: (purpose) => setPurposeRuntime(purpose),
@@ -881,7 +877,8 @@ export function createMemoryConfigStore(
         persist(`model:${id}`, "base model", () => updateBaseModelRow(id, (row) => withoutRuntime(id, row)));
       } else {
         const prior = baseModels.get(id);
-        if (prior?.harnessId && !modelSupportedByHarness(modelId, harnessIdOrPi(prior.harnessId))) return;
+        if (prior?.harnessId && isHarnessId(prior.harnessId) && !modelSupportedByHarness(modelId, prior.harnessId))
+          return;
         const row: PersistedBaseModel = { ...prior, scopeId: id, modelId };
         baseModels.set(id, row);
         persist(`model:${id}`, "base model", () =>
@@ -894,7 +891,7 @@ export function createMemoryConfigStore(
       const row = baseModels.get(id);
       if (!row?.harnessId || !row.modelId) return null;
       return {
-        harnessId: harnessIdOrPi(row.harnessId),
+        harnessId: row.harnessId,
         modelId: row.modelId,
         orgRevision: row.orgRevision ?? 0,
         ...(row.revision !== undefined ? { revision: row.revision } : {}),
@@ -967,7 +964,7 @@ export function createMemoryConfigStore(
       const row = await baseModelStore.get(id);
       if (!row?.harnessId || !row.modelId) return null;
       return {
-        harnessId: harnessIdOrPi(row.harnessId),
+        harnessId: row.harnessId,
         modelId: row.modelId,
         orgRevision: row.orgRevision ?? 0,
         ...(row.revision !== undefined ? { revision: row.revision } : {}),
@@ -985,7 +982,7 @@ export function createMemoryConfigStore(
         );
       else persist(`approvedHarnesses:${org}`, "approved harnesses", () => approvedHarnessStore.delete(org));
     },
-    getApprovedHarnessesDurable: async () => knownHarnessIds((await approvedHarnessStore.get(org))?.ids),
+    getApprovedHarnessesDurable: async () => (await approvedHarnessStore.get(org))?.ids ?? null,
     getInternalMemberOverrides: () => [...internalMemberOverrides],
     setInternalMemberOverrides(members) {
       const next = [...new Set(members.map((m) => m.trim().toLowerCase()).filter(Boolean))];
@@ -1290,18 +1287,14 @@ export function createMemoryConfigStore(
       else externalSlackParticipants.delete(id);
       if (baseModel) baseModels.set(id, baseModel);
       else baseModels.delete(id);
-      if (id === org) approvedHarnesses = knownHarnessIds(approved?.ids);
+      if (id === org) approvedHarnesses = approved?.ids ?? null;
       if (id === org) internalMemberOverrides = internalOverridesRow?.members ?? [];
       if (id === org) orgAmbient = orgAmbientRow?.on ?? true;
       if (id === org) interactiveFastMode = interactiveFastModeRow?.on ?? false;
       if (id === org) individualModelAuth = individualModelAuthRow?.on ?? false;
       if (id === org)
         autoFlaggerConfig = autoFlaggerRow
-          ? {
-              harnessId: harnessIdOrPi(autoFlaggerRow.harnessId),
-              modelId: autoFlaggerRow.modelId,
-              rubric: autoFlaggerRow.rubric,
-            }
+          ? { harnessId: autoFlaggerRow.harnessId, modelId: autoFlaggerRow.modelId, rubric: autoFlaggerRow.rubric }
           : null;
       if (brandingRow) branding.set(id, brandingRow.branding);
       else branding.delete(id);

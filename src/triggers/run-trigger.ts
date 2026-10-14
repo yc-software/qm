@@ -7,7 +7,6 @@ import type {
   TurnRequest,
   TurnResult,
 } from "../types.ts";
-import { harnessIdOrPi } from "../model/pi-models.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -329,7 +328,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
         ...(ownerKind === "personal" && spec.unattendedGrants ? { unattendedGrants: spec.unattendedGrants } : {}),
-        ...(spec.runtime ? { model: spec.runtime.modelId, harness: harnessIdOrPi(spec.runtime.harnessId) } : {}),
+        ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
         ...turnModelOptions({
           triggered: true,
           surface: spec.surface,
