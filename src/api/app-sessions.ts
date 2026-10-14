@@ -117,6 +117,7 @@ export function createSessionMethods(
     approvalRecordIsCurrent,
     principalCanAccessCurrentScope,
     principalCanWriteScope,
+    canContinueOnWeb,
     principalGitPermission,
     principalCanManageScope,
     membershipControlsScope,
@@ -259,8 +260,9 @@ export function createSessionMethods(
     },
 
     async getSessionForViewer(sessionId, principalId, window) {
-      const session = await sessionForViewer(sessionId, principalId);
-      if (!session) return null;
+      const found = await sessionForViewer(sessionId, principalId);
+      if (!found) return null;
+      const session = { ...found, canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
@@ -411,9 +413,16 @@ export function createSessionMethods(
       }
       const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
       const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
-      const sessions = all.filter(
-        (s) =>
-          s.hasEntries !== false || Boolean(s.title?.trim()) || workingThreadRefs.has(s.threadRef) || waiting.has(s.id),
+      const sessions = await Promise.all(
+        all
+          .filter(
+            (s) =>
+              s.hasEntries !== false ||
+              Boolean(s.title?.trim()) ||
+              workingThreadRefs.has(s.threadRef) ||
+              waiting.has(s.id),
+          )
+          .map(async (s) => ({ ...s, canContinue: await canContinueOnWeb(principalId, s) })),
       );
       const now = Date.now();
       const jobCounts = new Map<string, number>();
@@ -837,7 +846,8 @@ export function createSessionMethods(
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return null;
       await deps.sessions.updateParticipantView(sessionId, principalId, patch);
-      return sessionForViewer(sessionId, principalId);
+      const updated = await sessionForViewer(sessionId, principalId);
+      return updated && { ...updated, canContinue: await canContinueOnWeb(principalId, updated) };
     },
 
     async detachSession(sessionId, principalId) {

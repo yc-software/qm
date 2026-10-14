@@ -112,6 +112,8 @@ export interface Session {
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
+  /** Whether the viewer may add a web turn here; set on viewer-facing session reads. */
+  canContinue?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;

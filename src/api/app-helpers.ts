@@ -26,7 +26,7 @@ import {
   createManagesArtifactHome,
   createMembershipControlsScope,
 } from "../resolution/scope-membership.ts";
-import { samePerson } from "../directory/person.ts";
+import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 import { swallow } from "../util/errors.ts";
@@ -422,6 +422,17 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   const principalCanWriteScope = createCanWriteScope(scopeMembershipDeps);
 
+  /** The one rule for whether a viewer may add a web turn to an existing session; the turn path and session views both use it. */
+  async function canContinueOnWeb(
+    principalId: string,
+    session: Pick<Session, "threadRef" | "scopeId">,
+  ): Promise<boolean> {
+    if (!session.threadRef.startsWith("web:") && !isSubagentThreadRef(session.threadRef)) return false;
+    if (parseScopeId(session.scopeId).kind === "personal")
+      return session.scopeId === scopeId("personal", canonicalPerson(principalId));
+    return principalCanWriteScope(principalId, session.scopeId);
+  }
+
   async function principalCanAccessCurrentScope(principalId: string, targetScope: ScopeId): Promise<boolean> {
     if (await principalCanWriteScope(principalId, targetScope)) return true;
     const { kind, ref } = parseScopeId(targetScope);
@@ -752,6 +763,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     canUseContext,
     principalCanAccessCurrentScope,
     principalCanWriteScope,
+    canContinueOnWeb,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,

@@ -50,6 +50,7 @@ interface SessionRow {
   id: string;
   threadRef: string;
   scopeId: string;
+  canContinue?: boolean;
 }
 
 async function sessionsOf(user: string): Promise<SessionRow[]> {
@@ -111,7 +112,7 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
     }),
   );
   assert.ok(bobTurn.status < 300, `bob's continuation should be accepted (got ${bobTurn.status})`);
-  await waitForSession("bob", "web:alice:s1");
+  assert.equal((await waitForSession("bob", "web:alice:s1")).canContinue, true);
 
   assert.equal(
     (await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent("web:alice:s1")}`, asUser("bob"))).status,
@@ -127,7 +128,6 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
     asUser("bob", { method: "POST", body: JSON.stringify({ text: "sneak", threadRef: "web:alice:s1" }) }),
   );
   assert.equal(personalClaim.status, 403);
-  assert.equal(((await personalClaim.json()) as { error: string }).error, "forbidden_thread");
 
   const outsider = await fetch(
     `${webBase}/api/turn`,
@@ -137,4 +137,38 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
     }),
   );
   assert.equal(outsider.status, 403);
+});
+
+test("a person's own chats stay writable whichever login started them; Slack threads and other people stay out", async () => {
+  // Account linking leaves old chats in the person's scope with the thread id of the login that started them.
+  const old = await built.sessions.getOrCreateByThread("web:oidc:test:42:p1", "dm", "personal:carol@example.com");
+  await built.sessions.addParticipant(old.id, "carol@example.com", "Started on my other login");
+  const slack = await built.sessions.getOrCreateByThread("dm:D9", "dm", "personal:carol@example.com");
+  await built.sessions.addParticipant(slack.id, "carol@example.com", "Slack DM");
+
+  const mine = await waitForSession("carol@example.com", "web:oidc:test:42:p1");
+  assert.equal(mine.canContinue, true);
+  const continued = await fetch(
+    `${webBase}/api/turn`,
+    asUser("carol@example.com", {
+      method: "POST",
+      body: JSON.stringify({ text: "again", threadRef: mine.threadRef, scopeId: mine.scopeId }),
+    }),
+  );
+  assert.ok(continued.status < 300, `carol should continue her own chat (got ${continued.status})`);
+
+  assert.equal(
+    (await waitForSession("carol@example.com", "dm:D9")).canContinue,
+    false,
+    "Slack threads are read-only here",
+  );
+
+  const other = await fetch(
+    `${webBase}/api/turn`,
+    asUser("dave", {
+      method: "POST",
+      body: JSON.stringify({ text: "sneak", threadRef: mine.threadRef, scopeId: mine.scopeId }),
+    }),
+  );
+  assert.equal(other.status, 403);
 });

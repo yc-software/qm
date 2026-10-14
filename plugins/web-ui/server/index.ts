@@ -327,12 +327,11 @@ type WebConversation = {
 };
 
 function conversationForScope(
-  user: string,
   threadRef: string,
   scope: string | undefined,
   channelName: string | undefined,
 ): WebConversation | null {
-  if (!scope || scope === `personal:${user}`) return { kind: "dm", threadRef };
+  if (!scope || scope.startsWith("personal:")) return { kind: "dm", threadRef };
   const sep = scope.indexOf(":");
   const kind = scope.slice(0, sep);
   const ref = scope.slice(sep + 1);
@@ -346,17 +345,13 @@ async function resolveWebConversation(
   scope: string | undefined,
   channelName: string | undefined,
 ): Promise<{ conversation: WebConversation } | { error: string; message: string }> {
-  if (
-    (/^web:.+:inbox$/.test(threadRef) && threadRef !== `web:${user}:inbox`) ||
-    (!threadRef.startsWith(`web:${user}:`) &&
-      !threadRef.startsWith(SUBAGENT_THREAD_PREFIX) &&
-      !(scope?.startsWith("channel:") || scope?.startsWith("group:")))
-  ) {
+  // Who may continue which session is core's decision (canContinueOnWeb); only the inbox thread is special here.
+  if (/^web:.+:inbox$/.test(threadRef) && threadRef !== `web:${user}:inbox`) {
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   }
   if (threadRef === `web:${user}:inbox` && !isInboxUser(user))
     return { error: "forbidden", message: "inbox access is not enabled for this user" };
-  const conversation = conversationForScope(user, threadRef, scope, channelName);
+  const conversation = conversationForScope(threadRef, scope, channelName);
   if (!conversation || (threadRef === `web:${user}:inbox` && conversation.kind !== "dm")) {
     return {
       error: "forbidden_scope",

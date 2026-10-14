@@ -141,6 +141,8 @@ export interface CoreSession {
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
+  /** Core decides whether this viewer may add a turn; the UI only renders it. */
+  canContinue?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
@@ -590,15 +592,6 @@ export function continuableMessages(
     popped.unshift(kept.pop()!);
   }
   return { messages: kept.length ? kept : [resumeAnchor()], popped };
-}
-
-const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
-
-export function isContinuable(s: Pick<CoreSession, "threadRef" | "scopeId">, user: string): boolean {
-  if (s.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-    return s.scopeId === `personal:${user}` || s.scopeId.startsWith("channel:") || s.scopeId.startsWith("group:");
-  if (!s.threadRef.startsWith("web:")) return false;
-  return s.threadRef.startsWith(`web:${user}:`) || s.scopeId.startsWith("channel:") || s.scopeId.startsWith("group:");
 }
 
 function zeroUsage(): Usage {

@@ -41,7 +41,6 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
-  isContinuable,
   entriesToMessages,
   regenerateTitle,
   sharedContextLabel,
@@ -804,7 +803,7 @@ function isActiveRow(s: CoreSession): boolean {
 }
 
 function chatPageRow(s: CoreSession): TemplateResult {
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
     <div class="list-row chat-row ${color ? "colored" : ""}" style=${color ? `--session-color:${color}` : nothing}>
@@ -890,6 +889,7 @@ export function addPendingSession(
     title: pendingFork ? "Forking…" : null,
     channelName,
     archived: false,
+    canContinue: true,
   };
   if (pendingFork) pendingForkThreads.add(threadRef);
   sessionsState.list = withPendingSession(sessionsState.list, pending);
@@ -980,7 +980,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const untitledProjectChild = projectChild && !s.title?.trim();
   let title = sessionTitle(s);
   if (untitledProjectChild) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
   const working = sessionWorking(s);
@@ -1828,7 +1828,7 @@ export async function openSessionInto(
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
-  const continuable = isContinuable(s, appState.me?.user ?? "");
+  const continuable = s.canContinue === true;
   const [entriesRes, approvalsRes] = await Promise.all([
     entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
     continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),
