@@ -672,6 +672,15 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length ? memberRow(rows[0]!) : null;
     },
 
+    async getBySlackId(slackId) {
+      const rows = await q(
+        `SELECT ${MEMBER_COLS} FROM directory_members
+         WHERE org_id = $1 AND (slack_id = $2 OR (slack_id IS NULL AND principal_id = $2)) LIMIT 1`,
+        [orgId, slackId],
+      );
+      return rows.length ? memberRow(rows[0]!) : null;
+    },
+
     async resolve(query) {
       const bySlackId = await q(
         `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND slack_id = $2 LIMIT 1`,

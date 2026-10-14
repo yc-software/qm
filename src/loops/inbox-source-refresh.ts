@@ -13,7 +13,7 @@ import type { DirectoryStore } from "../directory/directory-store.ts";
 interface RefreshDeps {
   items: LoopItemLedger;
   tokens: ConnectorTokenSource;
-  directory?: Pick<DirectoryStore, "resolve">;
+  directory: Pick<DirectoryStore, "getBySlackId">;
   featureFlags: Pick<FeatureFlagStore, "enabled">;
   errors?: ErrorLog;
   fetchImpl?: typeof fetch;
@@ -117,18 +117,18 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
 
   function messageParticipant(message: Record<string, unknown>): SlackParticipant | undefined {
     const bot = isObj(message.bot_profile) ? message.bot_profile : {};
+    const profile = isObj(message.user_profile) ? message.user_profile : {};
     let id = typeof message.user === "string" ? message.user : undefined;
     if (!id && typeof message.bot_id === "string") id = `bot:${message.bot_id}`;
     if (!id) return;
-    const avatarUrl = isObj(bot.icons) ? imageUrl(bot.icons) : undefined;
+    const avatarUrl = imageUrl(isObj(bot.icons) ? bot.icons : profile);
     return {
       id,
-      name: String(bot.name || message.username || id),
+      name: String(bot.name || profile.display_name || profile.real_name || message.username || id),
       ...(avatarUrl ? { avatarUrl } : {}),
     };
   }
 
-  // Profiles come from the org's bot-synced Slack directory, not the owner's own Slack login.
   async function participants(
     owner: string,
     ids: string[],
@@ -140,9 +140,9 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         const saved = previous.find((person) => person.id === id) ?? { id, name: id };
         if (id.startsWith("bot:")) return saved;
         try {
-          const found = await deps.directory?.resolve(id);
-          const member = found?.kind === "one" ? found.member : undefined;
-          if (!member || (member.slackId ?? member.principalId) !== id) return saved;
+          const member = await deps.directory.getBySlackId(id);
+          if (!member) return saved;
+          if (!member.avatarUrl) complete = false;
           const avatarUrl = member.avatarUrl?.startsWith("https://") ? member.avatarUrl : saved.avatarUrl;
           return { id, name: member.displayName || saved.name, ...(avatarUrl ? { avatarUrl } : {}) };
         } catch (error) {
@@ -162,32 +162,8 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const meta = isObj(payload.slack) ? payload.slack : {};
     if (typeof meta.channelId !== "string" || typeof meta.ts !== "string") return;
     const previous = savedParticipants(payload);
-    let senderId = typeof meta.userId === "string" ? meta.userId : previous[0]?.id;
-    if (senderId?.startsWith("bot:")) senderId = undefined;
-    if (!senderId) {
-      const token = await tokenFor(deps.tokens, "slack.com", owner);
-      if (!token) return;
-      const params = new URLSearchParams({
-        channel: meta.channelId,
-        oldest: meta.ts,
-        latest: meta.ts,
-        inclusive: "true",
-        limit: "1",
-      });
-      const method = typeof meta.threadTs === "string" ? "conversations.replies" : "conversations.history";
-      if (typeof meta.threadTs === "string") params.set("ts", meta.threadTs);
-      const body = await get(owner, "slack", `${method}?${params}`, token);
-      const message = Array.isArray(body.messages)
-        ? body.messages.filter(isObj).find((m) => m.ts === meta.ts)
-        : undefined;
-      const sender = message && messageParticipant(message);
-      if (!sender) return;
-      senderId = sender.id;
-      previous.unshift({
-        ...sender,
-        ...(sender.name === sender.id && typeof payload.from === "string" ? { name: payload.from } : {}),
-      });
-    }
+    const senderId = typeof meta.userId === "string" ? meta.userId : previous[0]?.id;
+    if (!senderId || senderId.startsWith("bot:")) return;
     if (!previous.some((person) => person.id === senderId))
       previous.unshift({ id: senderId, name: typeof payload.from === "string" ? payload.from : senderId });
     const profiles = await participants(owner, [senderId, ...previous.map((person) => person.id)], previous);

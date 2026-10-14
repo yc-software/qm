@@ -98,6 +98,9 @@ test("pg directory: slackId round-trips through replace → get/list/resolve; a 
   assert.equal((await store.get("eve@acme.com"))?.avatarUrl, "https://avatars.slack-edge.com/eve.png");
   assert.equal((await store.get("U5"))?.slackId, undefined);
   assert.equal((await store.list()).find((m) => m.principalId === "eve@acme.com")?.slackId, "U9");
+  assert.equal((await store.getBySlackId("U9"))?.principalId, "eve@acme.com");
+  assert.equal((await store.getBySlackId("U5"))?.principalId, "U5");
+  assert.equal(await store.getBySlackId("Eve"), null);
   const r = await store.resolve("Eve");
   assert.equal(r.kind === "one" && r.member.slackId, "U9");
 

@@ -59,6 +59,7 @@ export interface DirectoryStore {
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
   get(principalId: string): Promise<DirectoryMember | null>;
+  getBySlackId(slackId: string): Promise<DirectoryMember | null>;
   resolve(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
@@ -308,6 +309,9 @@ export function createDirectoryStore(): DirectoryStore {
     },
     async get(principalId) {
       return members.find((m) => samePerson(m.principalId, principalId)) ?? null;
+    },
+    async getBySlackId(slackId) {
+      return members.find((m) => (m.slackId ?? m.principalId) === slackId) ?? null;
     },
     async resolve(query) {
       const bySlackId = members.find((x) => x.slackId && x.slackId === query.trim());
