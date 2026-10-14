@@ -1,7 +1,11 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createHash } from "node:crypto";
+import { readdir } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
@@ -17,8 +21,32 @@ const identity = (user = "alice") => ({
 });
 const headers = { ...identity(), "content-type": "audio/mp4", origin: "https://qm.example.test" };
 
+let openai: (req: IncomingMessage, res: ServerResponse) => void = (_req, res) => res.end("{}");
+const openaiStub = createServer((req, res) => openai(req, res));
+await new Promise<void>((resolve) => openaiStub.listen(0, resolve));
+const spoolDir = join(tmpdir(), "qm-dictation");
+const spooled = async () => new Set(await readdir(spoolDir).catch(() => []));
+
+function routeOpenAIToStub(t: TestContext) {
+  const actualFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+    actualFetch(
+      String(input).replace("https://api.openai.com", `http://localhost:${(openaiStub.address() as AddressInfo).port}`),
+      init,
+    ),
+  );
+}
+
+function reply(status: number, body: unknown, headers: Record<string, string> = {}) {
+  return (_req: IncomingMessage, res: ServerResponse) => {
+    res.writeHead(status, { "content-type": "application/json", ...headers });
+    res.end(JSON.stringify(body));
+  };
+}
+
 test.after(() => {
   surface.close();
+  openaiStub.close();
 });
 
 test("dictation checks identity, origin, allowlist and format before provider access", async () => {
@@ -49,51 +77,113 @@ test("dictation checks identity, origin, allowlist and format before provider ac
   assert.equal(capability.headers.get("cache-control"), "no-store");
 });
 
-test("dictation maps OpenAI's limits to client errors", async (t) => {
-  const actualFetch = globalThis.fetch;
-  let provider = () => new Response("{}");
-  let uploaded: number | undefined;
-  t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    if (String(input) !== "https://api.openai.com/v1/audio/transcriptions") return actualFetch(input, init);
-    uploaded = ((init!.body as FormData).get("file") as File).size;
-    return provider();
+test("dictation uploads the whole recording to OpenAI and removes its spool file", async (t) => {
+  routeOpenAIToStub(t);
+  const before = await spooled();
+  const audio = new Uint8Array(30 * 1024 * 1024).map((_, i) => (i * 31) & 255);
+  let received = "";
+  openai = (req, res) => {
+    const hash = createHash("sha256");
+    let raw = Buffer.alloc(0);
+    req.on("data", (chunk: Buffer) => {
+      raw = Buffer.concat([raw, chunk]);
+    });
+    req.on("end", () => {
+      void new Response(raw, { headers: { "content-type": req.headers["content-type"]! } })
+        .formData()
+        .then(async (form) => {
+          const file = form.get("file") as File;
+          received = hash.update(Buffer.from(await file.arrayBuffer())).digest("hex");
+          assert.equal(form.get("model"), "gpt-transcribe");
+          assert.equal(file.type, "audio/mp4");
+          reply(200, { text: " long recording " })(req, res);
+        });
+    });
+  };
+  const response = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: audio });
+  assert.deepEqual(await response.json(), { text: "long recording" });
+  assert.equal(received, createHash("sha256").update(audio).digest("hex"));
+  assert.deepEqual(await spooled(), before);
+});
+
+test("dictation survives OpenAI answering before reading the upload", async (t) => {
+  routeOpenAIToStub(t);
+  openai = reply(429, { error: { code: "rate_limit_exceeded" } }, { "retry-after": "7" });
+  const response = await fetch(`${base}/api/dictation`, {
+    method: "POST",
+    headers,
+    body: new Uint8Array(5 * 1024 * 1024),
   });
-  const fail =
-    (status: number, code: string, headers: Record<string, string> = {}) =>
-    () =>
-      new Response(JSON.stringify({ error: { code } }), { status, headers });
-  const post = async (body: BodyInit = "audio") => {
-    const response = await fetch(`${base}/api/dictation`, { method: "POST", headers, body });
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "7");
+  assert.equal((await fetch(`${base}/api/dictation`, { headers: identity() })).status, 200);
+});
+
+test("dictation maps OpenAI errors by code", async (t) => {
+  routeOpenAIToStub(t);
+  const post = async () => {
+    const response = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
     return { status: response.status, retryAfter: response.headers.get("retry-after"), ...(await response.json()) };
   };
-  provider = fail(429, "rate_limit_exceeded", { "retry-after": "12" });
-  assert.deepEqual(
-    [(await post()).status, (await post()).retryAfter, (await post()).error],
-    [429, "12", "provider_rate_limit"],
-  );
-  for (const retryAfter of ["", "1e3", "-5", "Wed, 21 Oct 2015 07:28:00 GMT"]) {
-    provider = fail(429, "rate_limit_exceeded", { "retry-after": retryAfter });
-    assert.equal((await post()).retryAfter, null);
+  const cases: [number, string, Record<string, string>, Record<string, unknown>][] = [
+    [
+      429,
+      "rate_limit_exceeded",
+      { "retry-after": "12" },
+      { status: 429, retryAfter: "12", error: "provider_rate_limit" },
+    ],
+    [429, "rate_limit_exceeded", {}, { retryAfter: null, error: "provider_rate_limit" }],
+    [429, "rate_limit_exceeded", { "retry-after": "" }, { retryAfter: null }],
+    [429, "rate_limit_exceeded", { "retry-after": "1e3" }, { retryAfter: null }],
+    [429, "rate_limit_exceeded", { "retry-after": "-5" }, { retryAfter: null }],
+    [429, "rate_limit_exceeded", { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" }, { retryAfter: null }],
+    [429, "rate_limit_exceeded", { "retry-after": "99999" }, { retryAfter: "3600" }],
+    [429, "insufficient_quota", {}, { status: 503, error: "dictation_unavailable" }],
+    [413, "file_too_large", {}, { status: 413, error: "audio_too_large" }],
+    [400, "unsupported_format", {}, { status: 400, error: "invalid_audio" }],
+    [400, "invalid_parameter", {}, { status: 502, error: "dictation_rejected" }],
+    [401, "invalid_api_key", {}, { status: 502, error: "dictation_rejected" }],
+    [500, "server_error", {}, { status: 503, error: "dictation_unavailable" }],
+  ];
+  for (const [status, code, providerHeaders, expected] of cases) {
+    openai = reply(status, { error: { code, message: "x".repeat(1000) } }, providerHeaders);
+    const result = await post();
+    for (const [key, value] of Object.entries(expected))
+      assert.equal(result[key], value, `${status} ${code} ${JSON.stringify(providerHeaders)}: ${key}`);
   }
-  provider = fail(429, "rate_limit_exceeded");
-  assert.equal((await post()).retryAfter, null);
-  provider = fail(429, "rate_limit_exceeded", { "retry-after": "99999" });
-  assert.equal((await post()).retryAfter, "3600");
-  provider = fail(429, "insufficient_quota");
-  assert.equal((await post()).error, "dictation_unavailable");
-  provider = fail(413, "file_too_large");
-  assert.equal((await post()).error, "audio_too_large");
-  provider = fail(400, "unsupported_format");
-  assert.equal((await post()).error, "invalid_audio");
-  provider = fail(400, "invalid_parameter");
-  assert.equal((await post()).error, "dictation_unavailable");
-  uploaded = undefined;
-  assert.equal((await post("")).error, "empty_audio");
-  assert.equal(uploaded, undefined);
-  provider = () => Response.json({ text: "long recording" });
-  const audio = new Uint8Array(30 * 1024 * 1024);
-  assert.equal((await post(audio)).text, "long recording");
-  assert.equal(uploaded, audio.byteLength);
+});
+
+test("empty and interrupted uploads never reach OpenAI or leave spool files", async (t) => {
+  routeOpenAIToStub(t);
+  const before = await spooled();
+  let calls = 0;
+  openai = (req, res) => {
+    calls++;
+    reply(200, { text: "unexpected" })(req, res);
+  };
+  assert.equal(
+    (await (await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "" })).json()).error,
+    "empty_audio",
+  );
+  const controller = new AbortController();
+  const body = new ReadableStream<Uint8Array>({
+    start(stream) {
+      stream.enqueue(new Uint8Array(64 * 1024));
+      setTimeout(() => controller.abort(), 100);
+    },
+  });
+  await assert.rejects(
+    fetch(`${base}/api/dictation`, {
+      method: "POST",
+      headers,
+      body,
+      duplex: "half",
+      signal: controller.signal,
+    } as RequestInit),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(calls, 0);
+  assert.deepEqual(await spooled(), before);
 });
 
 test("dictation returns only transcript text and sanitizes provider failures", async (t) => {
@@ -116,7 +206,7 @@ test("dictation returns only transcript text and sanitizes provider failures", a
   assert.equal(native.status, 200);
   failure = true;
   const rejected = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
-  assert.equal(rejected.status, 503);
+  assert.equal(rejected.status, 502);
   assert.equal((await rejected.text()).includes("secret details"), false);
 });
 

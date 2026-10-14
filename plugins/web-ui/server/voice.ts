@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { sameOriginRequest } from "../../chassis/src/http.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -23,14 +25,14 @@ export class VoiceProviderError extends Error {
     this.name = "VoiceProviderError";
     this.detail = detail;
     this.status = typeof detail.status === "number" ? detail.status : undefined;
-    this.code = providerErrorCode(detail.body);
+    this.code = typeof detail.code === "string" ? detail.code : undefined;
     this.retryAfterS = wholeSeconds(detail.retryAfter);
   }
 }
 
-function providerErrorCode(body: unknown): string | undefined {
+function providerErrorCode(body: string): string | undefined {
   try {
-    const code = (JSON.parse(String(body)) as { error?: { code?: unknown } } | null)?.error?.code;
+    const code = (JSON.parse(body) as { error?: { code?: unknown } } | null)?.error?.code;
     return typeof code === "string" ? code : undefined;
   } catch {
     return undefined;
@@ -68,12 +70,12 @@ interface Caller {
   signal: AbortSignal;
 }
 
-async function openai(path: string, body: FormData | string, headers: Record<string, string>, caller: Caller) {
+async function openai(path: string, body: ReadableStream | string, headers: Record<string, string>, caller: Caller) {
   let response: Response;
   try {
     response = await fetch(`https://api.openai.com/v1/${path}`, {
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: caller.signal,
       headers: {
         ...headers,
@@ -83,7 +85,8 @@ async function openai(path: string, body: FormData | string, headers: Record<str
           .digest("hex"),
       },
       body,
-    });
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
   } catch (error) {
     throw new VoiceProviderError(`OpenAI ${path} request failed`, { path }, error);
   }
@@ -102,6 +105,7 @@ async function openai(path: string, body: FormData | string, headers: Record<str
   if (!response.ok)
     throw new VoiceProviderError(`OpenAI ${path} returned HTTP ${response.status}`, {
       ...detail,
+      code: providerErrorCode(text),
       body: text.slice(0, 500),
     });
   try {
@@ -115,11 +119,32 @@ async function openai(path: string, body: FormData | string, headers: Record<str
   }
 }
 
-export async function transcribe(audio: Blob, mimeType: string, caller: Caller): Promise<string> {
-  const form = new FormData();
-  form.set("model", TRANSCRIBE_MODEL);
-  form.set("file", audio, `dictation.${dictationFormats[mimeType]}`);
-  const data = await openai("audio/transcriptions", form, {}, caller);
+export async function transcribe(file: string, size: number, mimeType: string, caller: Caller): Promise<string> {
+  const boundary = `qm-${randomUUID()}`;
+  const head = Buffer.from(
+    `--${boundary}\r\ncontent-disposition: form-data; name="model"\r\n\r\n${TRANSCRIBE_MODEL}\r\n` +
+      `--${boundary}\r\ncontent-disposition: form-data; name="file"; filename="dictation.${dictationFormats[mimeType]}"\r\n` +
+      `content-type: ${mimeType}\r\n\r\n`,
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+  const body = Readable.toWeb(
+    Readable.from(
+      (async function* () {
+        yield head;
+        yield* createReadStream(file);
+        yield tail;
+      })(),
+    ),
+  ) as ReadableStream;
+  const data = await openai(
+    "audio/transcriptions",
+    body,
+    {
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+      "content-length": String(head.length + size + tail.length),
+    },
+    caller,
+  );
   if (typeof data?.text !== "string")
     throw new VoiceProviderError("Invalid transcription response", { textType: typeof data?.text });
   return data.text.trim();

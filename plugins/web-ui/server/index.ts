@@ -1,5 +1,5 @@
 import "./instrument.ts";
-import { handleVoiceRoute } from "./voice-routes.ts";
+import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { appEditSlug } from "../src/app-edit.ts";
@@ -3428,6 +3428,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         t.unref?.();
         void runStateFeed();
         void runInboxFeed();
+        void sweepDictationSpool();
       });
     })
     .catch(async (err: unknown) => {

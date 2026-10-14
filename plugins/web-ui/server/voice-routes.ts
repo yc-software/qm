@@ -1,5 +1,6 @@
-import { createWriteStream, openAsBlob } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,15 +23,29 @@ const TRANSCRIBE_TIMEOUT_MS = 600_000;
 const LIVE_SESSION_TIMEOUT_MS = 25_000;
 const MAX_RETRY_AFTER_S = 3600;
 
-async function withSpooledAudio<T>(req: IncomingMessage, mimeType: string, use: (audio: Blob) => Promise<T> | T) {
-  const dir = await mkdtemp(join(tmpdir(), "qm-dictation-"));
-  try {
-    const file = join(dir, "audio");
-    await pipeline(req, createWriteStream(file));
-    return await use(await openAsBlob(file, { type: mimeType }));
-  } finally {
-    await rm(dir, { recursive: true, force: true });
+const SPOOL_DIR = join(tmpdir(), "qm-dictation");
+const STALE_SPOOL_MS = 3_600_000;
+
+export async function sweepDictationSpool(nowMs = Date.now()): Promise<void> {
+  const names = await readdir(SPOOL_DIR).catch(() => []);
+  for (const name of names) {
+    const file = join(SPOOL_DIR, name);
+    const info = await stat(file).catch(() => null);
+    if (info && nowMs - info.mtimeMs > STALE_SPOOL_MS) await rm(file, { force: true }).catch(() => undefined);
   }
+}
+
+async function spool(req: IncomingMessage, signal: AbortSignal): Promise<{ file: string; size: number }> {
+  await mkdir(SPOOL_DIR, { recursive: true });
+  const file = join(SPOOL_DIR, randomUUID());
+  const out = createWriteStream(file);
+  try {
+    await pipeline(req, out, { signal });
+  } catch (error) {
+    await rm(file, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return { file, size: out.bytesWritten };
 }
 
 function reportVoiceError(error: unknown, code: string, aborted = false): void {
@@ -87,19 +102,29 @@ export async function handleVoiceRoute(
   };
   res.once("close", disconnect);
   try {
-    const caller = {
+    const caller = (timeoutMs: number) => ({
       user,
       org: config.org,
       apiKey: openaiKey()!,
-      signal: AbortSignal.any([
-        controller.signal,
-        AbortSignal.timeout(dictation ? TRANSCRIBE_TIMEOUT_MS : LIVE_SESSION_TIMEOUT_MS),
-      ]),
-    };
-    if (!dictation) return json(res, 201, await createLiveVoice(sdp, caller));
-    const text = await withSpooledAudio(req, mimeType, (audio) =>
-      audio.size ? transcribe(audio, mimeType, caller) : null,
-    );
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]),
+    });
+    if (!dictation) return json(res, 201, await createLiveVoice(sdp, caller(LIVE_SESSION_TIMEOUT_MS)));
+    let audio: { file: string; size: number };
+    try {
+      audio = await spool(req, controller.signal);
+    } catch (error) {
+      reportVoiceError(error, "dictation_upload", controller.signal.aborted);
+      if (controller.signal.aborted) return;
+      return (error as NodeJS.ErrnoException).code === "ENOSPC"
+        ? json(res, 503, { error: "dictation_unavailable", message: "The server is out of space for recordings." })
+        : json(res, 400, { error: "upload_failed" });
+    }
+    let text: string | null = null;
+    try {
+      if (audio.size) text = await transcribe(audio.file, audio.size, mimeType, caller(TRANSCRIBE_TIMEOUT_MS));
+    } finally {
+      await rm(audio.file, { force: true }).catch((error: unknown) => reportVoiceError(error, "dictation_cleanup"));
+    }
     return text === null ? json(res, 400, { error: "empty_audio" }) : json(res, 200, { text });
   } catch (error) {
     reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider", controller.signal.aborted);
@@ -120,6 +145,8 @@ export async function handleVoiceRoute(
       (provider.code === "unsupported_format" || provider.code === "invalid_value")
     )
       return json(res, 400, { error: "invalid_audio", message: "OpenAI could not read this recording." });
+    if (provider?.status !== undefined && provider.status >= 400 && provider.status < 500 && provider.status !== 429)
+      return json(res, 502, { error: dictation ? "dictation_rejected" : "voice_rejected" });
     return dictation
       ? json(res, 503, {
           error: "dictation_unavailable",

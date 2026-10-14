@@ -1,4 +1,7 @@
 import { test, type TestContext } from "node:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { createLiveVoice, transcribe, voiceEnabled, voiceRequestAllowed, VoiceProviderError } from "../server/voice.ts";
@@ -11,6 +14,11 @@ const caller = {
 };
 const stubFetch = (t: TestContext, impl: (url: string, init?: RequestInit) => Promise<Response>) =>
   t.mock.method(globalThis, "fetch", (url: Parameters<typeof fetch>[0], init?: RequestInit) => impl(String(url), init));
+const audioFile = async (bytes: number[]) => {
+  const file = join(await mkdtemp(join(tmpdir(), "voice-test-")), "audio");
+  await writeFile(file, new Uint8Array(bytes));
+  return file;
+};
 const req = (headers: Record<string, string>) => ({ headers }) as unknown as IncomingMessage;
 
 test("voice requires explicit rollout, key, and account access", () => {
@@ -34,7 +42,7 @@ test("voice requests come from the web origin or a verified native client", () =
 test("session creation keeps credentials and authoritative configuration on server", async (t) => {
   stubFetch(t, async (url, init) => {
     assert.equal(url, "https://api.openai.com/v1/live/sessions");
-    assert.equal(init?.redirect, "error");
+    assert.equal(init?.redirect, "manual");
     const headers = new Headers(init?.headers);
     assert.equal(headers.get("authorization"), "Bearer server-only-key");
     assert.match(headers.get("OpenAI-Safety-Identifier")!, /^[a-f0-9]{64}$/);
@@ -82,7 +90,7 @@ test("transcription sends audio with the server-selected model and returns only 
   stubFetch(t, async (url, init) => {
     if (responses.length) return responses.shift()!;
     assert.equal(url, "https://api.openai.com/v1/audio/transcriptions");
-    const form = init!.body as FormData;
+    const form = await new Response(init!.body, { headers: init!.headers }).formData();
     assert.equal(form.get("model"), "gpt-transcribe");
     const file = form.get("file") as File;
     assert.equal(file.name, "dictation.m4a");
@@ -90,10 +98,7 @@ test("transcription sends audio with the server-selected model and returns only 
     assert.equal(file.size, 3);
     return Response.json({ text: "  Test dictation.  ", internal: "ignored" });
   });
-  assert.equal(
-    await transcribe(new Blob([new Uint8Array([1, 2, 3])], { type: "audio/mp4" }), "audio/mp4", caller),
-    "Test dictation.",
-  );
+  assert.equal(await transcribe(await audioFile([1, 2, 3]), 3, "audio/mp4", caller), "Test dictation.");
   responses.push(Response.json({ text: 42 }));
-  await assert.rejects(transcribe(new Blob([new Uint8Array([1])]), "audio/wav", caller), /Invalid transcription/);
+  await assert.rejects(transcribe(await audioFile([1]), 1, "audio/wav", caller), /Invalid transcription/);
 });
