@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createSemanticMemory } from "../src/memory/semantic-memory.ts";
+import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
+import { createSweeper } from "../src/util/sweeper.ts";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
@@ -13,7 +16,6 @@ import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-se
 
 const recall = async (memory: MemoryService, scope: string, context: MemoryRecallContext = {}) =>
   (await recallAcrossScopes(memory, [scope], context)).map((fact) => fact.text).join("\n");
-import { factHash } from "../src/memory/facts.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 const AT = Date.parse("2026-10-01T12:00:00Z");
@@ -181,10 +183,9 @@ test("query failures fall back without rebuilding facts in recall", async (t) =>
     base,
     async () => embedder,
     {
-      async *search(input) {
+      async search(input) {
         assert.deepEqual(input.vector, [1, 0]);
         assert.ok(input.signal);
-        yield [];
         throw new Error("Database query unavailable");
       },
     },
@@ -201,7 +202,14 @@ test("query failures fall back without rebuilding facts in recall", async (t) =>
 test("without Postgres semantic recall stays readable and never embeds facts", async (t) => {
   const { base, embedder, calls } = await fixture(t);
   await base.capture("personal:a", ["older fact", "newer fact"], AT);
-  const memory = createSemanticMemoryService(base, async () => embedder);
+  const { memory } = createSemanticMemory({
+    notebook: base,
+    databaseUrl: undefined,
+    embeddingModel: async () => "test",
+    resolveEmbedder: async () => embedder,
+    leaderLease: createNoopLeaderLease(),
+    createSweeper,
+  });
   assert.match(await recall(memory, "personal:a", { query: "verify" }), /newer fact[\s\S]*older fact/);
   assert.deepEqual(calls, []);
 });
@@ -219,31 +227,12 @@ test("moving the embedding gateway keeps the same model identity", async () => {
   assert.equal(through("http://signer.one:8080/v1").id, through("http://signer.two:8080/v1").id);
 });
 
-test("a later page error restarts direct and cross-scope recall entirely in recency order", async (t) => {
-  const { base, embedder } = await fixture(t);
-  await base.capture("personal:a", ["old semantic match"], AT);
-  await base.capture("personal:a", ["newest fallback"], AT + 1000);
-  const [old] = await base.facts!("personal:a");
-  const memory = createSemanticMemoryService(base, async () => embedder, {
-    async *search() {
-      yield [{ factId: old!.id, hash: factHash(old!.text), score: 1 }];
-      throw new Error("page unavailable");
-    },
-  });
-  const direct = await memory.recall("personal:a", { query: "verify" });
-  assert.match(direct[0]!.text, /newest fallback/);
-  const across = await recallAcrossScopes(memory, ["personal:a"], { query: "verify" });
-  assert.match(across[0]!.text, /newest fallback/);
-  assert.equal(across.length, 2);
-});
-
 test("fallback reloads current disclosed facts after an edit races the index query", async (t) => {
   const { base, embedder } = await fixture(t);
   await base.capture("personal:a", ["old private fact"], AT);
   const memory = createSemanticMemoryService(base, async () => embedder, {
-    async *search() {
+    async search() {
       await base.edit!("personal:a", [{ id: "1", text: "current fact" }]);
-      yield [];
       throw new Error("old hash no longer exists");
     },
   });
@@ -267,10 +256,10 @@ test("search cancellation uses the caller signal, not the elapsed query embeddin
       },
     }),
     {
-      async *search(input) {
+      async search(input) {
         assert.equal(input.signal, controller.signal);
         assert.notEqual(input.signal, embeddingSignal);
-        yield input.facts.map((fact) => ({ factId: fact.id, hash: fact.hash, score: 1 }));
+        return input.facts.map((fact) => ({ factId: fact.id, hash: fact.hash, score: 1 }));
       },
     },
   );

@@ -8,7 +8,7 @@ import { factHash } from "../src/memory/facts.ts";
 
 const url = process.env.DATABASE_URL;
 
-test("a 4500-fact scope ranks a bounded 3072-dimensional page in under one second", { skip: !url }, async (t) => {
+test("a 4500-fact scope fully drains 3072-dimensional recall in under one second", { skip: !url }, async (t) => {
   const scope = `personal:large-${randomUUID()}`;
   const model = `large-${randomUUID()}`;
   const base = createPostgresMemoryService(url!);
@@ -29,7 +29,7 @@ test("a 4500-fact scope ranks a bounded 3072-dimensional page in under one secon
   const vector = Array.from({ length: 3072 }, (_, i) => Math.sin(i * 123.4567));
   await client.query(
     `INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
-    SELECT scope_id, $2, id::text, encode(sha256(convert_to(text,'UTF8')),'hex'), 3072, $3::vector
+    SELECT scope_id, $2, id, encode(sha256(convert_to(text,'UTF8')),'hex'), 3072, $3::vector
     FROM memory_facts WHERE scope_id = $1 AND created_at <= 4490`,
     [scope, model, JSON.stringify(vector)],
   );
@@ -39,17 +39,15 @@ test("a 4500-fact scope ranks a bounded 3072-dimensional page in under one secon
     hash: factHash(fact.text),
     at: fact.createdAt,
   }));
-  const iterator = index.search({ scope, model, vector, facts, pageSize: 64 })[Symbol.asyncIterator]();
   const start = performance.now();
-  const first = await iterator.next();
+  const matches = await index.search({ scope, model, vector, facts });
   const elapsed = performance.now() - start;
-  await iterator.return?.();
-  assert.equal(first.done, false);
-  assert.equal(first.value!.length, 64);
-  assert.ok(first.value!.every((row) => row.score > 0.99));
-  assert.equal(first.value![0]!.factId, facts[4489]!.id);
-  assert.ok(elapsed < 1000, `4500-fact first page took ${elapsed.toFixed(1)}ms`);
-  t.diagnostic(`4500 facts / 3072 dimensions / 64 results: ${elapsed.toFixed(1)}ms`);
+  assert.equal(matches.length, 4500);
+  assert.ok(matches.slice(0, 4490).every((row) => row.score > 0.99));
+  assert.ok(matches.slice(4490).every((row) => Math.abs(row.score - 0.2) < 1e-9));
+  assert.equal(matches[0]!.factId, facts[4489]!.id);
+  assert.ok(elapsed < 1000, `4500-fact full drain took ${elapsed.toFixed(1)}ms`);
+  t.diagnostic(`4500 facts / 3072 dimensions / full drain: ${elapsed.toFixed(1)}ms`);
 });
 
 test(
@@ -66,9 +64,7 @@ test(
       hash: factHash(fact.text),
       at: fact.createdAt,
     }));
-    const matches = [];
-    for await (const page of index.search({ scope, model: "strict", vector: [1, 0], facts, minSimilarity: 0.9 }))
-      matches.push(...page);
+    const matches = await index.search({ scope, model: "strict", vector: [1, 0], facts, minSimilarity: 0.9 });
     assert.equal(matches.length, 1);
     assert.equal(matches[0]!.factId, facts[0]!.id);
     assert.ok(Math.abs(matches[0]!.score - 0.2) < 1e-9);

@@ -5,10 +5,9 @@ import { factHash } from "../../src/memory/facts.ts";
 export function scoredMemoryIndex(
   base: MemoryService,
   score: (text: string) => number,
-  pageSize = 16,
 ): Pick<MemoryVectorStore, "search"> {
   return {
-    async *search(input) {
+    async search(input) {
       const facts = await base.facts!(input.scope);
       const rows = facts
         .flatMap((fact) => {
@@ -22,7 +21,7 @@ export function scoredMemoryIndex(
           return [{ factId: fact.id, hash, score: similarity, at: fact.createdAt }];
         })
         .sort((a, b) => b.score - a.score || b.at - a.at);
-      for (let i = 0; i < rows.length; i += pageSize) yield rows.slice(i, i + pageSize);
+      return rows;
     },
   };
 }

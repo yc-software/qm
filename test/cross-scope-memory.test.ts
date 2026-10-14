@@ -212,7 +212,7 @@ test("an external block that fills its maxChars is trimmed to the remaining budg
   assert.ok(out.length <= 6000);
 });
 
-test("pagination continues past many oversized and duplicate matches", async (t) => {
+test("recall continues past many oversized matches", async (t) => {
   const { base, memory } = await fixture(t);
   await base.capture(
     "personal:a",
@@ -226,26 +226,4 @@ test("pagination continues past many oversized and duplicate matches", async (t)
   );
   assert.match(out, /final small/);
   assert.doesNotMatch(out, /oversized/);
-});
-
-test("a fully packed prompt closes every iterator without fetching another page", async (t) => {
-  const { base } = await fixture(t);
-  let nextPages = 0;
-  let closed = 0;
-  const memory = {
-    ...base,
-    async *recallPages() {
-      try {
-        yield [{ id: "1", text: "x".repeat(45), score: 1 }];
-        nextPages++;
-        yield [{ id: "2", text: "later", score: 0.9 }];
-      } finally {
-        closed++;
-      }
-    },
-  };
-  const rows = await recallAcrossScopes(memory, ["personal:a"], { maxChars: 60 });
-  assert.equal(rows.length, 1);
-  assert.equal(nextPages, 0);
-  assert.equal(closed, 1);
 });

@@ -5,13 +5,13 @@ import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 
 export function createMemoryVectorIndexer(opts: {
   resolve: () => Promise<
-    | { embedder: MemoryEmbedder; store: Pick<MemoryVectorStore, "migrateLegacy" | "missing" | "put" | "prune"> }
-    | undefined
+    { embedder: MemoryEmbedder; store: Pick<MemoryVectorStore, "missing" | "put" | "prune"> } | undefined
   >;
   leaderLease: LeaderLease;
   onError?: (error: unknown) => void;
   now?: () => number;
 }) {
+  const onError = opts.onError ?? ((error: unknown) => reportFailure("memory vector index", error));
   let pending: Promise<void> | undefined;
   let model: string | undefined;
   let dimensions: number | undefined;
@@ -37,7 +37,6 @@ export function createMemoryVectorIndexer(opts: {
         nextProbeAt = now + 10 * 60_000;
       }
       signal.throwIfAborted();
-      await store.migrateLegacy(embedder.id, dimensions!, 200, signal);
       const facts = await store.missing(embedder.id, 64, dimensions, signal, afterId);
       afterId = facts.at(-1)?.factId;
       try {
@@ -64,14 +63,14 @@ export function createMemoryVectorIndexer(opts: {
           await store.put(rows, signal);
         }
       } finally {
-        if (!signal.aborted) await store.prune(embedder.id, 200, dimensions, signal);
+        if (!signal.aborted) await store.prune(embedder.id, 200, dimensions, signal).catch(onError);
       }
     });
   }
   return {
     tick(): Promise<void> {
       pending ??= run()
-        .catch(opts.onError ?? ((error: unknown) => reportFailure("memory vector index", error)))
+        .catch(onError)
         .finally(() => {
           pending = undefined;
         });

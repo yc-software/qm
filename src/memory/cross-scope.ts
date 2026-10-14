@@ -2,7 +2,6 @@ import type { ScopeId } from "../types.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
 import { factLine } from "./facts.ts";
-import { mergeCandidates, recallCandidates, MemoryRecallRetry } from "./recall-candidates.ts";
 
 export interface RecalledFact {
   scope: ScopeId;
@@ -21,31 +20,24 @@ export async function recallAcrossScopes(
   const budget = Math.max(0, Math.min(RECALL_MAX_CHARS, Math.floor(context.maxChars ?? RECALL_MAX_CHARS)));
   if (!budget) return [];
   const unique = [...new Set(scopes)];
-  const ranked = mergeCandidates(
-    unique.map(async function* (scope) {
-      for await (const row of recallCandidates(memory, scope, context)) yield { ...row, scope };
-    }),
+  const batches = await Promise.all(
+    unique.map(async (scope) => (await memory.recall(scope, context)).map((row) => ({ ...row, scope }))),
   );
+  const ranked = batches.flat().sort((a, b) => b.score - a.score || (b.at ?? 0) - (a.at ?? 0));
   const picked: RecalledFact[] = [];
   const headed = new Set<ScopeId>();
   const seen = new Set<string>();
   let size = 0;
-  try {
-    for await (const { scope, id, text: full } of ranked) {
-      if (!full.trim() || seen.has(full)) continue;
-      const overhead = headed.has(scope) ? 1 : (headed.size ? 2 : 0) + heading(scope, labels).length + 1;
-      const text = id === undefined ? full.slice(0, Math.max(0, budget - size - overhead)) : full;
-      const cost = text.length + overhead;
-      if (!text.trim() || size + cost > budget) continue;
-      size += cost;
-      seen.add(full);
-      headed.add(scope);
-      picked.push({ scope, ...(id !== undefined ? { id } : {}), text });
-      if (size >= budget) break;
-    }
-  } catch (error) {
-    if (!(error instanceof MemoryRecallRetry) || context.recencyOnly) throw error;
-    return recallAcrossScopes(memory, scopes, { ...context, recencyOnly: true }, labels);
+  for (const { scope, id, text: full } of ranked) {
+    if (!full.trim() || seen.has(full)) continue;
+    const overhead = headed.has(scope) ? 1 : (headed.size ? 2 : 0) + heading(scope, labels).length + 1;
+    const text = id === undefined ? full.slice(0, Math.max(0, budget - size - overhead)) : full;
+    const cost = text.length + overhead;
+    if (!text.trim() || size + cost > budget) continue;
+    size += cost;
+    seen.add(full);
+    headed.add(scope);
+    picked.push({ scope, ...(id !== undefined ? { id } : {}), text });
   }
   return picked;
 }

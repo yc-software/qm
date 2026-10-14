@@ -22,7 +22,6 @@ const MEMORY_FACTS_FILE = "memory/facts.json";
 export interface MemoryRecallContext {
   query?: string;
   signal?: AbortSignal;
-  recencyOnly?: boolean;
   actorId?: string;
   sessionId?: string;
   maxChars?: number;
@@ -46,7 +45,6 @@ export interface MemoryEdit {
 export interface MemoryService {
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
-  recallPages?(scopeId: ScopeId, context?: MemoryRecallContext): AsyncIterable<MemoryCandidate[]>;
   capture(
     scopeId: ScopeId,
     facts: string[],

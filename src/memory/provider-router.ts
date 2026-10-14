@@ -1,8 +1,6 @@
 import { disclosedMemory } from "./disclosure.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
-import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
-import type { MemoryCandidate } from "./facts.ts";
-import { mergeCandidates, recallCandidates, MemoryRecallRetry } from "./recall-candidates.ts";
+import type { MemoryService } from "./memory-service.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -42,35 +40,6 @@ export function createRoutedMemoryService(opts: {
     return route ? providerFor(route) : undefined;
   };
 
-  async function* routeCandidates(route: MemoryProviderRoute, scope: ScopeId, context?: MemoryRecallContext) {
-    try {
-      yield* recallCandidates(providerFor(route), scope, context);
-    } catch (error) {
-      if (error instanceof MemoryRecallRetry || !route.failOpen) throw error;
-      opts.onError?.(error, route.provider, "recall");
-    }
-  }
-  async function* recallPages(scope: ScopeId, context?: MemoryRecallContext): AsyncGenerator<MemoryCandidate[]> {
-    const routes = routesFor(scope).filter((route) => route.recall !== false);
-    const iterators = routes.map((route) => routeCandidates(route, scope, context));
-    try {
-      const heads = await Promise.all(iterators.map((iterator) => iterator.next()));
-      const count = heads.filter((head) => !head.done).length;
-      const streams = routes.map(async function* (route, index) {
-        const head = heads[index]!;
-        if (head.done) return;
-        const label = route.label ?? (count > 1 ? route.provider : undefined);
-        const labelRow = (row: MemoryCandidate) =>
-          label && row.id === undefined ? { ...row, text: `### ${label}\n${row.text}` } : row;
-        yield labelRow(head.value);
-        for await (const row of iterators[index]!) yield labelRow(row);
-      });
-      for await (const row of mergeCandidates(streams)) yield [row];
-    } finally {
-      await Promise.all(iterators.map((iterator) => iterator.return()));
-    }
-  }
-
   return {
     withDisclosure(access) {
       return createRoutedMemoryService({
@@ -80,18 +49,24 @@ export function createRoutedMemoryService(opts: {
         ),
       });
     },
-    recallPages,
-    async recall(scope, context) {
-      const result: MemoryCandidate[] = [];
-      try {
-        for await (const page of recallPages(scope, context)) result.push(...page);
-        return result;
-      } catch (error) {
-        if (!(error instanceof MemoryRecallRetry)) throw error;
-        const fallback: MemoryCandidate[] = [];
-        for await (const page of recallPages(scope, { ...context, recencyOnly: true })) fallback.push(...page);
-        return fallback;
-      }
+    async recall(scopeId, context) {
+      const routes = routesFor(scopeId).filter((route) => route.recall !== false);
+      const batches = await Promise.all(
+        routes.map(async (route) => {
+          try {
+            return { route, rows: await providerFor(route).recall(scopeId, context) };
+          } catch (error) {
+            if (!route.failOpen) throw error;
+            opts.onError?.(error, route.provider, "recall");
+            return { route, rows: [] };
+          }
+        }),
+      );
+      const present = batches.filter(({ rows }) => rows.length);
+      return present.flatMap(({ route, rows }) => {
+        const label = route.label ?? (present.length > 1 ? route.provider : undefined);
+        return rows.map((row) => (label && row.id === undefined ? { ...row, text: `### ${label}\n${row.text}` } : row));
+      });
     },
 
     async capture(scopeId, facts, at, author, context) {

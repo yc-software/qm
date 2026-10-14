@@ -14,19 +14,16 @@ Choose the model with the org setting `memory-embedding-model`
 Gateway models with `mode=embedding` are listed automatically; a direct OpenAI-compatible
 model is registered in the model registry with `"kind": "embedding"`. The provider
 receives fact text during background indexing and the query during recall. PostgreSQL
-stores typed vectors in `memory_fact_vectors`; recall ranks only live, disclosed facts
-and reads bounded result pages, not the full vector set. No approximate vector index is used.
+stores typed vectors in `memory_fact_vectors`; recall ranks live, disclosed facts once per
+scope in SQL and returns compact ranked matches. No approximate vector index is used.
 
 Semantic recall requires the PostgreSQL `vector` extension. Its migration is registered
 only after a configured embedding model resolves, not during an unconfigured startup.
 If the application database role cannot install extensions, an administrator must install
 `vector` first. File-backed installations use newest-first recall, even with a model selected.
 
-A single background indexer embeds at most 64 missing facts per tick, copies at most 200
-legacy `memory_vectors` records per tick without deleting them (resume state lives in
-`memory_vector_legacy_progress`), and removes stale vectors
-in bounded batches. `MEMORY_VECTOR_INDEX_INTERVAL_MS` controls the interval (default 30000;
-a positive integer). Indexing also sends a short dimension probe every ten minutes so a provider's
+A single background indexer embeds at most 64 missing facts and removes stale vectors in
+bounded batches every 30 seconds. It also sends a short dimension probe every ten minutes so a provider's
 vector-width change is detected even when its model identifier stays the same.
 
 New or edited facts may wait for a background tick before becoming semantic matches.

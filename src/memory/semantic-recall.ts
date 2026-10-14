@@ -4,7 +4,6 @@ import { factCandidate, factHash, recentCandidates, type MemoryCandidate } from 
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 import { disclosedMemory } from "./disclosure.ts";
-import { compareCandidates, MemoryRecallRetry } from "./recall-candidates.ts";
 
 export function memoryRecallQuery(message: string, visibleEntries: readonly SessionEntry[]): string {
   const recent = visibleEntries
@@ -44,52 +43,32 @@ export function createSemanticMemoryService(
     return pending;
   }
   function view(notebook: MemoryService): MemoryService {
-    async function* recallPages(scope: string, context: MemoryRecallContext = {}): AsyncGenerator<MemoryCandidate[]> {
-      const facts = (await notebook.facts?.(scope)) ?? [];
-      if (!facts.length) return;
-      const emitted = new Set<string>();
-      let fallbackFacts = facts;
-      try {
-        const query = index && !context.recencyOnly && context.query?.trim() ? await queryFor(context) : undefined;
-        if (query && index) {
-          const byId = new Map(facts.map((fact) => [fact.id, fact]));
-          for await (const matches of index.search({
-            scope,
-            ...query,
-            facts: facts.map((fact) => ({ id: fact.id, hash: factHash(fact.text), at: fact.createdAt })),
-            minSimilarity: opts.minSimilarity,
-            signal: context.signal,
-          })) {
-            yield matches.flatMap((match) => {
-              const fact = byId.get(match.factId);
-              if (!fact || factHash(fact.text) !== match.hash || emitted.has(fact.id)) return [];
-              emitted.add(fact.id);
-              return [factCandidate(fact, match.score)];
-            });
-          }
-          return;
-        }
-      } catch (error) {
-        opts.onError?.(error);
-        if (emitted.size) throw new MemoryRecallRetry(error);
-        fallbackFacts = (await notebook.facts?.(scope)) ?? [];
-      }
-      yield recentCandidates(fallbackFacts).sort(compareCandidates);
-    }
     return {
       ...notebook,
       withDisclosure: (access) => view(disclosedMemory(notebook, access)),
-      recallPages,
-      async recall(scope, context) {
-        const result: MemoryCandidate[] = [];
+      async recall(scope: string, context: MemoryRecallContext = {}): Promise<MemoryCandidate[]> {
+        const facts = (await notebook.facts?.(scope)) ?? [];
+        if (!facts.length) return [];
         try {
-          for await (const page of recallPages(scope, context)) result.push(...page);
-          return result;
+          const query = index && context.query?.trim() ? await queryFor(context) : undefined;
+          if (query && index) {
+            const byId = new Map(facts.map((fact) => [fact.id, fact]));
+            const matches = await index.search({
+              scope,
+              ...query,
+              facts: facts.map((fact) => ({ id: fact.id, hash: factHash(fact.text), at: fact.createdAt })),
+              minSimilarity: opts.minSimilarity,
+              signal: context.signal,
+            });
+            return matches.flatMap((match) => {
+              const fact = byId.get(match.factId);
+              return fact ? [factCandidate(fact, match.score)] : [];
+            });
+          }
+          return recentCandidates(facts);
         } catch (error) {
-          if (!(error instanceof MemoryRecallRetry)) throw error;
-          const fallback: MemoryCandidate[] = [];
-          for await (const page of recallPages(scope, { ...context, recencyOnly: true })) fallback.push(...page);
-          return fallback;
+          opts.onError?.(error);
+          return recentCandidates((await notebook.facts?.(scope)) ?? []);
         }
       },
     };

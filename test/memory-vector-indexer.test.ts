@@ -10,9 +10,8 @@ function fixture() {
   const requests: Array<{ model: string; limit: number; dimensions?: number; afterId?: string }> = [];
   const writes: MemoryVector[][] = [];
   const failures: unknown[] = [];
-  const migrations: string[] = [];
   const prunes: string[] = [];
-  const store: Pick<MemoryVectorStore, "missing" | "put" | "migrateLegacy" | "prune"> = {
+  const store: Pick<MemoryVectorStore, "missing" | "put" | "prune"> = {
     async missing(model, limit, dimensions, _signal, afterId) {
       requests.push({ model, limit, dimensions, afterId });
       return [
@@ -26,11 +25,6 @@ function fixture() {
     },
     async put(rows) {
       writes.push([...rows]);
-    },
-    async migrateLegacy(model, _dimensions, limit) {
-      assert.equal(limit, 200);
-      migrations.push(model);
-      return { processed: 0, done: true };
     },
     async prune(model, limit) {
       assert.equal(limit, 200);
@@ -59,7 +53,6 @@ function fixture() {
     requests,
     writes,
     failures,
-    migrations,
     prunes,
     advance: () => {
       now += 600001;
@@ -83,7 +76,6 @@ test("indexer advances the bounded cursor before a failed batch so later facts c
   assert.equal(f.writes.length, 1);
   assert.equal(f.writes[0]![0]!.factId, "128");
   assert.equal(f.prunes.length, 2);
-  assert.equal(f.migrations.length, 2);
 });
 
 test("indexer allows only one batch in flight even if a sweep overlaps", async () => {
@@ -193,3 +185,28 @@ test("fact embeddings stay bounded and dimension probes are cached for ten minut
   await f.indexer.tick();
   assert.equal(calls.filter((texts) => texts[0] === "Memory index dimension probe.").length, 2);
 });
+
+for (const operation of ["embed", "put"] as const) {
+  test(`indexer reports both ${operation} and prune failures without masking either`, async () => {
+    const f = fixture();
+    const primary = new Error(`${operation} failed`);
+    const cleanup = new Error("prune failed");
+    if (operation === "embed") {
+      f.embedder.embed = async (texts) => {
+        if (texts[0] === "bad") throw primary;
+        return texts.map(() => [1, 0]);
+      };
+    } else {
+      f.store.put = async () => {
+        throw primary;
+      };
+    }
+    f.store.prune = async () => {
+      throw cleanup;
+    };
+    await f.indexer.tick();
+    assert.equal(f.failures.length, 2);
+    assert.ok(f.failures.includes(primary));
+    assert.ok(f.failures.includes(cleanup));
+  });
+}
