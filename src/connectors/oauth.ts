@@ -53,6 +53,7 @@ export interface OAuthProviderConfig {
   exchange?: OAuthExchangeAdapter;
   refresh?: OAuthRefreshAdapter | null;
   pkce?: boolean;
+  mcpLabel?: string;
 }
 
 export type FetchLike = (
@@ -455,6 +456,7 @@ export interface PublicOAuthClient {
   scopes: string[];
   clientId: string;
   resource?: string;
+  label: string;
 }
 
 const publicClients = new Map<string, PublicOAuthClient>();
@@ -477,10 +479,15 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
       consentMode: "standard",
       egressRule: [],
       pkce: true,
+      mcpLabel: c.label,
       ...(c.resource ? { authParams: { resource: c.resource } } : {}),
       setupGuide: { console: "Admin → MCP servers", url: "", steps: [] },
     });
   }
+}
+
+export function oauthProviderEntries(): Array<[string, OAuthProviderConfig]> {
+  return [...Object.entries(PROVIDERS), ...publicProviders.entries()];
 }
 
 export function oauthProvider(name: string): OAuthProviderConfig | undefined {

@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
+import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
@@ -237,6 +237,47 @@ test("authorize state stays inside the tightest provider limit and still carries
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("api.x.com", "person@acme-corp.com"), "at-x");
     const replayed = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
     assert.equal(replayed.status, 400, "the state is single-use");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("OAuth status lists a linked per-user MCP sign-in under its display name", async (t) => {
+  t.after(() => setPublicOAuthClients([]));
+  const srv = start(async () => {
+    throw new Error("no token exchange expected");
+  });
+  try {
+    await srv.built.mcpToolService.refresh();
+    setPublicOAuthClients([
+      {
+        name: "orders",
+        host: "api.orders.example",
+        authUrl: "https://id.orders.example/authorize",
+        tokenUrl: "https://id.orders.example/token",
+        scopes: ["orders:write"],
+        clientId: "public-client",
+        label: "Orders",
+      },
+    ]);
+    const statusPath = "/v1/connectors/oauth/status?principalId=U1";
+    const read = async () => {
+      const res = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
+      assert.equal(res.status, 200);
+      return (await res.json()) as {
+        providers: Record<string, { connected?: boolean; mcpLabel?: string; available?: boolean }>;
+      };
+    };
+    assert.equal((await read()).providers.orders, undefined, "unlinked MCP sign-ins stay out of the list");
+
+    await srv.built.connectorTokens.setConnectorToken("api.orders.example", "U1", {
+      accessToken: "orders-token",
+      expiresAt: Date.now() + 3_600_000,
+    });
+    const linked = (await read()).providers.orders;
+    assert.equal(linked?.connected, true);
+    assert.equal(linked?.mcpLabel, "Orders");
+    assert.equal(linked?.available, true);
   } finally {
     await srv.close();
   }

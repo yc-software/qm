@@ -11,6 +11,7 @@ import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keycha
 import { listPageTpl } from "./list-page";
 
 interface ConnectorProvider {
+  mcpLabel?: string;
   connected?: boolean;
   needsReconnect?: boolean;
   refreshError?: string;
@@ -399,7 +400,7 @@ function drawConnectors(): void {
   const loading = accountsLoading || keysLoadingFresh;
   const entries = Object.entries(connectorProviders);
   const connectorCards = entries.map(([id, p]) => {
-    const meta = CONNECTOR_LABELS[id] ?? { name: id, hosts: "" };
+    const meta = CONNECTOR_LABELS[id] ?? { name: p.mcpLabel ?? id, hosts: "" };
     const connected = Boolean(p.connected);
     const needsReconnect = Boolean(p.needsReconnect);
     const available = Boolean(p.available);

@@ -45,28 +45,30 @@ export function renderConnectedAppsBlock(
 ): string {
   const allowed = new Set(availableProviders);
   const entries = Object.entries(record?.providers ?? {})
-    .filter(([name]) => allowed.has(name))
+    .filter(([name, e]) => allowed.has(name) || e.mcpLabel)
     .sort(([a], [b]) => a.localeCompare(b));
-  const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name]) => connectorLabel(name));
+  const label = (name: string, e: (typeof entries)[number][1]) => e.mcpLabel ?? connectorLabel(name);
+  const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name, e]) => label(name, e));
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)
-    .map(([name, e]) => `${connectorLabel(name)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
+    .map(([name, e]) => `${label(name, e)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
   const lines = [
     "## Connected apps",
     "This list covers direct OAuth only; it does not describe app access through separately authorized credentials. Use the matching access skill for those, respecting explicit app restrictions and account permissions.",
   ];
   if (!availableProviders.length) {
     lines.push("No direct OAuth app connections are configured. Do not offer direct OAuth consent links.");
-    return lines.join("\n");
-  }
-  const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));
-  const available = availableProviders.filter((name) => !connectedNames.has(name)).sort();
-  if (available.length) {
-    lines.push(
-      `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,
-    );
+    if (!connected.length && !reconnect.length) return lines.join("\n");
   } else {
-    lines.push("Only offer direct OAuth consent links for the admin-configured list below.");
+    const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));
+    const available = availableProviders.filter((name) => !connectedNames.has(name)).sort();
+    if (available.length) {
+      lines.push(
+        `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,
+      );
+    } else {
+      lines.push("Only offer direct OAuth consent links for the admin-configured list below.");
+    }
   }
   if (connectionsUrl) lines.push(`Connection page: ${connectionsUrl}`);
   if (connected.length) {

@@ -15,8 +15,8 @@ import {
   type AccountType,
   type OAuthState,
 } from "../../connectors/oauth.ts";
-import { bestOAuthTokenStatus, CONNECTOR_STATUS_ACCOUNT_TYPES } from "../../credentials/connector-status.ts";
-import type { DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
+import { CONNECTOR_STATUS_ACCOUNT_TYPES, providerTokenStatuses } from "../../credentials/connector-status.ts";
+import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
@@ -81,8 +81,6 @@ function safeReturnTo(value: string | null): string | undefined {
   return value;
 }
 
-type HostStatus = OAuthTokenStatus & { host: string };
-
 function latestRefreshFailure(
   entries: ReadonlyArray<Pick<OAuthTokenStatus, "refreshFailedAt" | "refreshError">>,
 ): Pick<OAuthTokenStatus, "refreshFailedAt" | "refreshError"> {
@@ -101,29 +99,20 @@ function latestRefreshFailure(
   return latest;
 }
 
-async function connectorProviderStatus(deps: ServerDeps, principalId: string): Promise<Record<string, unknown>> {
+async function connectorProviderStatus(
+  deps: ServerDeps,
+  tokens: ConnectorTokenStore,
+  principalId: string,
+): Promise<Record<string, unknown>> {
   const entries = await Promise.all(
-    Object.entries(PROVIDERS).map(async ([name, provider]) => {
-      const [hosts, configured] = await Promise.all([
-        Promise.all(
-          provider.hosts.map(async (host) => {
-            const probed = await Promise.all(
-              CONNECTOR_STATUS_ACCOUNT_TYPES.map(
-                async (at) =>
-                  (await deps.connectorTokens?.connectorTokenStatus(host, principalId, at)) ?? { connected: false },
-              ),
-            );
-            const best = bestOAuthTokenStatus(probed);
-            return { host, ...best };
-          }),
-        ) as Promise<HostStatus[]>,
-        providerConfigured(deps, name),
-      ]);
+    (await providerTokenStatuses(tokens, principalId)).map(async ({ name, provider, hosts }) => {
+      const configured = await providerConfigured(deps, name);
       const reconnectHosts = hosts.filter((h) => h.needsReconnect);
       const latestFailure = latestRefreshFailure(hosts);
       return [
         name,
         {
+          ...(provider.mcpLabel ? { mcpLabel: provider.mcpLabel } : {}),
           hosts,
           connected: hosts.some((h) => h.connected && !h.needsReconnect),
           ...(reconnectHosts.length ? { needsReconnect: true } : {}),
@@ -421,7 +410,10 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
   const principalId = url.searchParams.get("principalId") ?? "";
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   audit(deps, { principalId, action: "connector.oauth.status", resource: "connectors", scopeLabel: principalId });
-  return sendJson(res, 200, { principalId, providers: await connectorProviderStatus(deps, principalId) });
+  return sendJson(res, 200, {
+    principalId,
+    providers: await connectorProviderStatus(deps, deps.connectorTokens, principalId),
+  });
 }
 
 export async function oauthRevoke(ctx: ApiCtx): Promise<void> {

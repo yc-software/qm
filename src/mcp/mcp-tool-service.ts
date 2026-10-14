@@ -29,6 +29,7 @@ export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[]
             scopes: s.oauthScopes ?? [],
             clientId: s.clientId,
             resource: s.url,
+            label: s.name,
           },
         ]
       : [],

@@ -9,6 +9,7 @@ import {
   type ConnectorStatusRecord,
 } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
+import { setPublicOAuthClients } from "../src/connectors/oauth.ts";
 
 function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenStatus): ConnectorTokenStore {
   return {
@@ -134,4 +135,25 @@ test("labels: known providers get friendly names; unknown is capitalized", () =>
   assert.equal(connectorLabel("google"), "Google");
   assert.equal(connectorLabel("github"), "GitHub");
   assert.equal(connectorLabel("acme"), "Acme");
+});
+
+test("refresh includes linked per-user MCP sign-ins and skips unlinked ones", async (t) => {
+  t.after(() => setPublicOAuthClients([]));
+  const client = (name: string, label: string) => ({
+    name,
+    host: `api.${name}.example`,
+    authUrl: `https://id.${name}.example/authorize`,
+    tokenUrl: `https://id.${name}.example/token`,
+    scopes: [`${name}:write`],
+    clientId: "public-client",
+    label,
+  });
+  setPublicOAuthClients([client("orders", "Orders"), client("other", "Other")]);
+  const rec = await refreshConnectorStatus(
+    fakeTokens((host) => (host === "api.orders.example" ? { connected: true } : { connected: false })),
+    "U1",
+    1,
+  );
+  assert.deepEqual(rec.providers.orders, { connected: true, mcpLabel: "Orders" });
+  assert.equal(rec.providers.other, undefined);
 });
