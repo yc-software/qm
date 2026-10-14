@@ -8,6 +8,7 @@ import {
   concurrentIndexName,
   definePgMigration,
   pgMigrationChecksum,
+  withPgTransaction,
 } from "../src/persistence/pg-pool.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
@@ -103,3 +104,25 @@ test("concurrentIndexName recognizes retryable concurrent index creation", () =>
 function pathToUrl(p: string): string {
   return new URL(`file://${p}`).href;
 }
+
+test("withPgTransaction keeps the original error and discards the client when ROLLBACK fails", async () => {
+  const released: unknown[] = [];
+  const client = {
+    async query(sql: string) {
+      if (sql === "ROLLBACK") throw new Error("connection terminated");
+      return { rows: [] };
+    },
+    release(err?: unknown) {
+      released.push(err);
+    },
+  };
+  const pool = { connect: async () => client } as unknown as Parameters<typeof withPgTransaction>[0];
+  await assert.rejects(
+    withPgTransaction(pool, async () => {
+      throw new Error("insert failed");
+    }),
+    /insert failed/,
+  );
+  assert.equal(released.length, 1);
+  assert.ok(released[0] instanceof Error, "a client whose ROLLBACK failed must not go back to the pool");
+});
