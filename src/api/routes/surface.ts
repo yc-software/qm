@@ -86,6 +86,25 @@ async function detachSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const principalId = (body as { principalId?: unknown }).principalId;
+  if (typeof principalId !== "string" || !principalId) {
+    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  }
+  const out = await app.cancelSessionGoal(ctx.params.id!, principalId);
+  if (!out) return sendJson(res, 404, { error: "not_found" });
+  if (!out.cancelled)
+    return sendJson(res, 409, {
+      error: out.reason,
+      message:
+        out.reason === "busy"
+          ? "The conversation is still finishing a reply. Try again in a moment."
+          : "This conversation has no active or paused goal to cancel.",
+    });
+  return sendJson(res, 200, out);
+}
+
 async function forkSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -1308,6 +1327,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
   { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
   { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
+  { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },
   { method: "GET", path: "/v1/sessions/:id/approvals", auth: "source", handle: listSessionApprovals },
   { method: "GET", path: "/v1/sessions/:id/background", auth: "source", handle: getSessionBackground },
   {

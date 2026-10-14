@@ -280,7 +280,7 @@ export function createTaskListPresenter(deps: {
 
 export interface GoalNoticeView {
   objective: string;
-  status: "active" | "paused" | "complete" | "blocked";
+  status: "active" | "paused" | "complete" | "cancelled";
   floor?: string;
 }
 
@@ -292,7 +292,7 @@ export function renderGoalNotice(goal: GoalNoticeView): string {
   const bounded = oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
   const objective = bounded.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   if (goal.status === "complete") return `✓ Goal complete: ${objective}`;
-  if (goal.status === "blocked") return `✕ Goal blocked: ${objective}`;
+  if (goal.status === "cancelled") return `✕ Goal cancelled: ${objective}`;
   if (goal.status === "paused") return `⏸ Goal paused: ${objective}`;
   return `◐ Pursuing goal: ${objective}${goal.floor ? ` · at least ${goal.floor}` : ""}`;
 }

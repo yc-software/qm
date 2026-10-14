@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../types.ts";
 import { deliveryNote } from "../core/attachments.ts";
+import { goalCancelledNote, type GoalRecord } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
 import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
@@ -317,9 +318,11 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
     } else if (e.type === "system") {
       const revision = messageRevision(e);
-      const p = (e.payload ?? {}) as { kind?: unknown; text?: unknown };
+      const p = (e.payload ?? {}) as { kind?: unknown; text?: unknown; goal?: GoalRecord; cancelledBy?: unknown };
       if (revision) raw.push(userMsg(renderMessageRevision(revision), e.createdAt));
       else if (p.kind === WAKE_KIND && typeof p.text === "string") raw.push(userMsg(p.text, e.createdAt));
+      else if (p.kind === "goal" && p.cancelledBy && p.goal?.status === "cancelled")
+        raw.push(userMsg(goalCancelledNote(p.goal), e.createdAt));
     } else if (e.type === "tool_call") {
       const p = (e.payload ?? {}) as Record<string, unknown>;
       const cid = typeof p.callId === "string" ? p.callId : "";

@@ -7,6 +7,11 @@ import {
   goalObjectiveLabel,
   latestGoal,
 } from "../src/goal-strip.ts";
+import { entriesToMessages, type SessionEntry } from "../src/core-bridge.ts";
+
+const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Parameters<
+  typeof entriesToMessages
+>[1];
 
 function msg(activity: Array<{ type: string; payload: unknown }>): unknown {
   return { role: "assistant", work: { status: "working", activity } };
@@ -69,4 +74,36 @@ test("labels: elapsed, floor, objective trim", () => {
 test("worked time leads the label, the floor follows", () => {
   assert.equal(goalWorkedLabel(720_000, "20m"), "12m worked · 20m floor");
   assert.equal(goalWorkedLabel(45_000), "45s worked");
+});
+
+test("a goal cancelled from the goal bar closes the strip and leaves one note in the transcript", () => {
+  const goal = record("active");
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "work for 20 minutes" }, createdAt: 900 },
+    { type: "tool_call", payload: { tool: "goal", action: "create", callId: "c1" }, createdAt: 1000 },
+    { type: "tool_result", payload: { tool: "goal", action: "create", goal, callId: "c1" }, createdAt: 1001 },
+    { type: "system", payload: { kind: "goal", goal: record("paused") }, createdAt: 1002 },
+    { type: "assistant", payload: { text: "(stopped)", stopped: true }, createdAt: 1003 },
+    { type: "system", payload: { kind: "goal", goal: record("cancelled"), cancelledBy: "U1" }, createdAt: 1004 },
+  ];
+  const messages = entriesToMessages(entries, MODEL);
+  assert.equal(latestGoal(messages), null);
+  const notes = messages.filter((m) => (m as { role?: string }).role === "system-note");
+  assert.deepEqual(
+    notes.map((n) => ({ ...(n as object) })),
+    [{ role: "system-note", note: "goal_cancelled", content: "work for 20 minutes", timestamp: 1004 }],
+  );
+});
+
+test("a goal the agent cancelled at the user's request closes the strip without a note", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "cancel the goal" }, createdAt: 900 },
+    { type: "tool_result", payload: { tool: "goal", action: "create", goal: record("active") }, createdAt: 1000 },
+    { type: "tool_result", payload: { tool: "goal", action: "update", goal: record("cancelled") }, createdAt: 1001 },
+    { type: "system", payload: { kind: "goal", goal: record("cancelled") }, createdAt: 1002 },
+    { type: "assistant", payload: { text: "Cancelled the goal." }, createdAt: 1003 },
+  ];
+  const messages = entriesToMessages(entries, MODEL);
+  assert.equal(latestGoal(messages)?.status, "cancelled");
+  assert.ok(!messages.some((m) => (m as { role?: string }).role === "system-note"));
 });
