@@ -24,6 +24,8 @@ export interface DeployProvider {
   resolveEndpoint?(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint | null>;
   /** True when the app's machine should be replaced ahead of a platform lifetime limit. */
   rotationDue?(d: Deployment): Promise<boolean>;
+  /** Suspend the app's machine until its next visit. */
+  park?(d: Deployment): Promise<void>;
   /** Recent output from the running app (entrypoint stdout+stderr), newest last. */
   logs?(d: Deployment, opts: { tailLines: number }): Promise<string | null>;
 }

@@ -105,7 +105,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const store = opts.store ?? createMemoryMap<StoredDeployBody>();
   const launchQueue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
-  const resolveCache = new Map<string, { endpoint: DeployEndpoint; untilMs: number }>();
+  const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
   const inflightResolves = new Map<string, Promise<DeployEndpoint | null>>();
   const resolveGens = new Map<string, number>();
   const bumpResolveGen = (id: string): void => {
@@ -133,6 +133,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     Date.now() - stored.createdAtMs > rotateDueMs &&
     !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs);
   const maxIdleDurationSeconds = opts.maxIdleDurationSeconds ?? 900;
+  const awakeForMs = Math.max(0, maxIdleDurationSeconds * 1000 - 60_000);
   const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
   const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
@@ -641,27 +642,47 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     reconcile: (d, version, input) => place(d, version, input),
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
-      const cached = resolveCache.get(d.id);
-      if (cached && Date.now() < cached.untilMs) return cached.endpoint;
-      const inflight = inflightResolves.get(d.id);
-      if (inflight) return inflight;
       const gen = resolveGens.get(d.id) ?? 0;
       const genCurrent = (): boolean => (resolveGens.get(d.id) ?? 0) === gen;
-      const resolve = resolveLive(d, version, genCurrent)
-        .then((endpoint) => {
-          if (endpoint && genCurrent()) {
-            if (resolveCache.size > 500) {
-              for (const [k, v] of resolveCache) if (Date.now() >= v.untilMs) resolveCache.delete(k);
+      const revalidate = (): Promise<DeployEndpoint | null> => {
+        const inflight = inflightResolves.get(d.id);
+        if (inflight) return inflight;
+        const resolve = resolveLive(d, version, genCurrent)
+          .then((endpoint) => {
+            if (!genCurrent()) return endpoint;
+            if (!endpoint) {
+              resolveCache.delete(d.id);
+              return endpoint;
             }
-            resolveCache.set(d.id, { endpoint, untilMs: Date.now() + RESOLVE_CACHE_MS });
-          }
-          return endpoint;
-        })
-        .finally(() => {
-          if (inflightResolves.get(d.id) === resolve) inflightResolves.delete(d.id);
-        });
-      inflightResolves.set(d.id, resolve);
-      return resolve;
+            if (resolveCache.size > 500) {
+              for (const [k, v] of resolveCache) if (Date.now() - v.usedMs >= awakeForMs) resolveCache.delete(k);
+            }
+            resolveCache.set(d.id, { endpoint, checkedMs: Date.now(), usedMs: Date.now() });
+            return endpoint;
+          })
+          .finally(() => {
+            if (inflightResolves.get(d.id) === resolve) inflightResolves.delete(d.id);
+          });
+        inflightResolves.set(d.id, resolve);
+        return resolve;
+      };
+      const cached = resolveCache.get(d.id);
+      const samePlacement = !d.endpoint || d.endpoint.host === cached?.endpoint.host;
+      if (cached && samePlacement && Date.now() - cached.usedMs < awakeForMs) {
+        cached.usedMs = Date.now();
+        if (Date.now() - cached.checkedMs >= RESOLVE_CACHE_MS)
+          void revalidate().catch((e) => swallow("aws-deploy: background revalidate", e));
+        return cached.endpoint;
+      }
+      return revalidate();
+    },
+
+    async park(d): Promise<void> {
+      if (d.alwaysOn) return;
+      const stored = await store.get(d.id);
+      if (!stored) return;
+      resolveCache.delete(d.id);
+      await api.suspend(stored.microvmId);
     },
 
     async logs(d, opts): Promise<string | null> {

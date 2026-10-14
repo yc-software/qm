@@ -421,7 +421,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     };
   }
 
-  return {
+  const orchestrator: Orchestrator = {
     async screenSecuritySteer({ payload, actor, conversation, sessionId }) {
       const resolution = await deps.resolution.resolve(conversation, actor);
       const { screening } = resolution.securityPolicy;
@@ -4539,4 +4539,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
     },
   };
+  const handleTurn = orchestrator.handleTurn.bind(orchestrator);
+  const warmLinkedApps = (text: string | undefined): void => {
+    if (text && /https?:\/\/|\/d\//.test(text))
+      void Promise.resolve()
+        .then(() => deps.deploy.warmLinkedApps(text))
+        .catch((e) => swallow("orchestrator: warm linked apps", e));
+  };
+  orchestrator.handleTurn = async (input) => {
+    warmLinkedApps(input.text);
+    const result = await handleTurn(input);
+    warmLinkedApps(result.reply);
+    return result;
+  };
+  return orchestrator;
 }

@@ -16,6 +16,7 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import {
   currentVersionOf,
   deployCurrentGitRef,
+  publicUrlOf,
   type DeployStore,
   type Deployment,
   type DeployEndpoint,
@@ -27,7 +28,7 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 
-const ROTATE_IF_USED_WITHIN_MS = 7 * 24 * 3600_000;
+const MAX_WARM_LINKS = 5;
 export interface DeployFile {
   path: string;
   data: string | Uint8Array;
@@ -88,6 +89,8 @@ export interface DeployService {
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
+  /** Wake every app linked in a message so the click lands on a warm machine. */
+  warmLinkedApps(text: string): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
@@ -255,6 +258,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (!v) return;
       const endpoint = await applyVersion(cur.id, v, cur.appliedVersion ?? cur.currentVersion);
       await markVersionRunning(cur.id, v.version, endpoint);
+      await deps.provider.park?.(cur).catch((e) => swallow("deploy: park rotated app", e));
     });
 
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
@@ -549,7 +553,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         let maintained = 0;
         for (const d of await deps.deployStore.list()) {
           if (d.status !== "running") continue;
-          if (!d.alwaysOn && (d.lastAccessAt ?? 0) < Date.now() - ROTATE_IF_USED_WITHIN_MS) continue;
           try {
             const cur = await deps.deployStore.get(d.id);
             if (!cur || cur.status !== "running") continue;
@@ -567,6 +570,26 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         return maintained;
       });
       return result ?? 0;
+    },
+
+    async warmLinkedApps(text) {
+      const names = new Set<string>();
+      for (const m of text.matchAll(/https?:\/\/([a-z0-9-]+)\.[^\s/)>\]]+|\/d\/([a-z0-9-]+)\//gi)) {
+        const name = (m[1] ?? m[2])!.toLowerCase();
+        if (names.size < MAX_WARM_LINKS) names.add(name);
+      }
+      let warmed = 0;
+      for (const name of names) {
+        const d = await deps.deployStore.getByName(name).catch(() => null);
+        if (!d || d.status !== "running" || d.endpoint == null) continue;
+        const host = publicUrlOf(d.endpoint)
+          ?.replace(/^https?:\/\//, "")
+          .split("/")[0];
+        if (!(host && text.includes(host)) && !text.includes(`/d/${name}/`)) continue;
+        void liveEndpoint(d).catch((e) => swallow("deploy: warm linked app", e));
+        warmed++;
+      }
+      return warmed;
     },
 
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {

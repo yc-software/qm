@@ -411,6 +411,60 @@ test("resolveEndpoint: reaches within the cache window skip the control plane", 
   assert.equal(counts.describe, describesAfterFirst, "a fresh verdict is reused without re-asking the control plane");
 });
 
+test("resolveEndpoint: an app in use is served from cache and re-checked in the background, not on the visit", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { api, counts } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const first = await p.resolveEndpoint!(d, version("/unused"));
+  const describes = counts.describe;
+
+  t.mock.timers.tick(60_000);
+  const hot = await p.resolveEndpoint!(d, version("/unused"));
+  assert.equal(hot!.host, first!.host, "the visit is answered from cache");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(counts.describe, describes + 1, "a background re-check refreshed the verdict");
+
+  const moved = { ...d, endpoint: { host: "elsewhere.on.aws", port: 443 } };
+  await p.resolveEndpoint!(moved, version("/unused"));
+  assert.equal(counts.describe, describes + 2, "a placement changed by another core is re-checked before serving");
+});
+
+test("resolveEndpoint: after the idle window the visit waits for a real check, since the machine may be suspended", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { api, counts, vms } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  await p.resolveEndpoint!(d, version("/unused"));
+  const body = (await store.get(ID))!;
+  vms.get(body.microvmId)!.state = "SUSPENDED";
+
+  t.mock.timers.tick(15 * 60_000);
+  const resumesBefore = counts.resume;
+  assert.ok(await p.resolveEndpoint!(d, version("/unused")));
+  assert.equal(counts.resume, resumesBefore + 1, "the suspended machine is resumed before the visit is served");
+});
+
+test("park: suspends the app's machine unless it is always-on", async () => {
+  const { api, vms } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const body = (await store.get(ID))!;
+  await p.park!({ ...d, alwaysOn: true });
+  assert.equal(vms.get(body.microvmId)!.state, "RUNNING");
+  await p.park!(d);
+  assert.equal(vms.get(body.microvmId)!.state, "SUSPENDED");
+});
+
 test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
