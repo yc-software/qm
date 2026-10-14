@@ -128,7 +128,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
   const rotateAfterMs = (opts.rotateAfterSeconds ?? 27_000) * 1000;
   const maxIdleDurationSeconds = opts.maxIdleDurationSeconds ?? 900;
-  const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? 3600;
+  // Keep an idle app suspended for its whole lifetime rather than letting AWS
+  // terminate it after an hour: resuming takes about a second, while a
+  // terminated body forces a full relaunch, data restore and app start.
+  const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
   const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
   const dataBucket = opts.dataBucket;

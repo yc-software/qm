@@ -25,6 +25,7 @@ interface Vm {
 function fakeApi() {
   const vms = new Map<string, Vm>();
   const counts = { run: 0, resume: 0, terminate: 0, token: 0, describe: 0 };
+  const launches: Array<Parameters<AwsMicrovmApi["runMicrovm"]>[0]> = [];
   let n = 0;
   const api: AwsMicrovmApi = {
     async listImages() {
@@ -39,8 +40,9 @@ function fakeApi() {
     async updateImage() {
       throw new Error("updateImage unused in deploy provider");
     },
-    async runMicrovm() {
+    async runMicrovm(input) {
       counts.run++;
+      launches.push(input);
       const id = `mvm-${++n}`;
       const endpoint = `${id}.lambda-microvm.${REGION}.on.aws`;
       vms.set(id, { state: "RUNNING", endpoint });
@@ -80,7 +82,7 @@ function fakeApi() {
       return { microvmId: id, state: v?.state ?? target, ...(v?.endpoint ? { endpoint: v.endpoint } : {}) };
     },
   };
-  return { api, vms, counts };
+  return { api, vms, counts, launches };
 }
 
 function fakeDaemon(
@@ -335,6 +337,28 @@ test("resolveEndpoint (suspended): resumes the body and serves it warm", async (
   assert.ok(resolved, "suspended body resolves after resume");
   assert.equal(counts.resume, 1, "the suspended body was resumed");
   assert.equal(counts.run, 1, "no relaunch — same body");
+});
+
+test("apply: an idle app stays suspended for its whole lifetime instead of being terminated after an hour", async () => {
+  const { api, launches } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const p = provider(api, fetchImpl);
+  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0]!.idlePolicy?.maxIdleDurationSeconds, 900, "still suspends after 15 idle minutes");
+  assert.equal(
+    launches[0]!.idlePolicy?.suspendedDurationSeconds,
+    launches[0]!.maximumDurationInSeconds,
+    "a suspended body survives until its maximum lifetime",
+  );
+});
+
+test("apply: an explicit suspended-duration setting still wins", async () => {
+  const { api, launches } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), { suspendedDurationSeconds: 600 });
+  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  assert.equal(launches[0]!.idlePolicy?.suspendedDurationSeconds, 600);
 });
 
 test("resolveEndpoint: reaches within the cache window skip the control plane", async () => {
