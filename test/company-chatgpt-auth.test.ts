@@ -3,11 +3,8 @@ import test from "node:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  chatgptAuthFromValue,
-  fileCompanyChatGPTAuth,
-  keychainCompanyChatGPTAuth,
-} from "../src/model/company-chatgpt-auth.ts";
+import { chatgptAuthFromValue } from "../src/model/chatgpt-auth-file.ts";
+import { fileCompanyChatGPTAuth, keychainCompanyChatGPTAuth } from "../src/model/company-chatgpt-auth.ts";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../src/credentials/keychain.ts";
 import type { UserOAuthTokens } from "../src/model/user-model-credential-store.ts";
 

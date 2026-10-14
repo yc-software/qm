@@ -1,4 +1,5 @@
 import { codeChallengeS256, generateCodeVerifier } from "../connectors/oauth.ts";
+import { chatgptAccountIdFromToken, tokenExpiry } from "./chatgpt-auth-file.ts";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
 
 const CHATGPT_ISSUER = "https://auth.openai.com";
@@ -11,33 +12,8 @@ const CLAUDE_TOKEN = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_REDIRECT = "https://platform.claude.com/oauth/code/callback";
 const CLAUDE_SCOPE = "org:create_api_key user:profile user:inference";
 
-function decodeJwtClaims(jwt: string | undefined): Record<string, unknown> | undefined {
-  if (!jwt) return undefined;
-  const part = jwt.split(".")[1];
-  if (!part) return undefined;
-  try {
-    return JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
-  } catch {
-    return undefined;
-  }
-}
-
-export function chatgptAccountIdFromToken(jwt: unknown): string | undefined {
-  if (typeof jwt !== "string" || jwt.split(".").length !== 3) return undefined;
-  const auth = decodeJwtClaims(jwt)?.["https://api.openai.com/auth"];
-  const accountId = auth && typeof auth === "object" ? (auth as Record<string, unknown>).chatgpt_account_id : undefined;
-  return typeof accountId === "string" && accountId ? accountId : undefined;
-}
-
 function chatgptAccountId(tokens: { idToken?: string; accessToken: string }): string | undefined {
   return chatgptAccountIdFromToken(tokens.idToken) ?? chatgptAccountIdFromToken(tokens.accessToken);
-}
-
-export function tokenExpiry(raw: { expires_in?: number; access_token?: string }): number | undefined {
-  if (typeof raw.expires_in === "number") return Date.now() + raw.expires_in * 1000;
-  const claims = decodeJwtClaims(raw.access_token);
-  const exp = claims?.exp;
-  return typeof exp === "number" ? exp * 1000 : undefined;
 }
 
 export interface ChatGPTDevicePrompt {

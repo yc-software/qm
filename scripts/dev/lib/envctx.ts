@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { liveEnvPath } from "./pool.ts";
 import { bestEffort, readEnvFile, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
-import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/model/company-chatgpt-auth.ts";
+import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/model/chatgpt-auth-file.ts";
 
 export interface AssembledEnv {
   env: Record<string, string>;

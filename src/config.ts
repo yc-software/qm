@@ -1,4 +1,4 @@
-import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/company-chatgpt-auth.ts";
+import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/chatgpt-auth-file.ts";
 import { errMessage } from "./util/errors.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";

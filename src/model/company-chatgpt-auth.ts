@@ -1,12 +1,16 @@
-import { readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../credentials/keychain.ts";
 import { swallow } from "../util/errors.ts";
-import { chatgptAccountIdFromToken, refreshChatGPTTokens, tokenExpiry } from "./subscription-oauth.ts";
+import {
+  accessExpiresAt,
+  asObject,
+  authAccountId,
+  authTokens,
+  chatgptAuthFromValue,
+  loadCodexAuthFile,
+  type JsonObject,
+} from "./chatgpt-auth-file.ts";
+import { refreshChatGPTTokens } from "./subscription-oauth.ts";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
-
-type JsonObject = Record<string, unknown>;
 
 export interface CompanyChatGPTAuth {
   readonly description: string;
@@ -25,36 +29,6 @@ interface RefreshDeps {
 
 const REFRESH_SKEW_MS = 5 * 60_000;
 const AUTH_FILE_PATHS = [".codex/auth.json", "codex/auth.json"];
-
-function asObject(value: unknown): JsonObject | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
-}
-
-function authTokens(auth: JsonObject): { access: string; refresh: string; id?: string } | null {
-  const tokens = asObject(auth.tokens);
-  if (!tokens || typeof tokens.access_token !== "string" || !tokens.access_token) return null;
-  if (typeof tokens.refresh_token !== "string" || !tokens.refresh_token) return null;
-  return {
-    access: tokens.access_token,
-    refresh: tokens.refresh_token,
-    ...(typeof tokens.id_token === "string" && tokens.id_token ? { id: tokens.id_token } : {}),
-  };
-}
-
-function authAccountId(auth: JsonObject): string | undefined {
-  const tokens = authTokens(auth);
-  return tokens ? (chatgptAccountIdFromToken(tokens.id) ?? chatgptAccountIdFromToken(tokens.access)) : undefined;
-}
-
-function accessExpiresAt(auth: JsonObject): number | undefined {
-  return tokenExpiry({ access_token: authTokens(auth)?.access });
-}
-
-export function chatgptAuthFromValue(value: unknown): JsonObject | null {
-  const auth = asObject(value);
-  if (!auth || (auth.auth_mode !== "chatgpt" && auth.auth_mode !== "chatgptAuthTokens")) return null;
-  return authTokens(auth) && authAccountId(auth) ? auth : null;
-}
 
 function rotated(auth: JsonObject, next: UserOAuthTokens): JsonObject | null {
   const refreshed: JsonObject = {
@@ -117,32 +91,6 @@ function refreshingAuth(
       return auth ? authTokens(auth)?.access : undefined;
     },
   };
-}
-
-function expandPath(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
-  return resolve(path);
-}
-
-export function codexAuthFileForEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const explicit = env.CODEX_AUTH_FILE?.trim();
-  return explicit ? expandPath(explicit) : undefined;
-}
-
-export function loadCodexAuthFile(path: string): JsonObject {
-  if (statSync(path).mode & 0o077) throw new Error(`${path} must not be readable by group or others (chmod 600 it)`);
-  const auth = chatgptAuthFromValue(JSON.parse(readFileSync(path, "utf8")));
-  if (!auth) throw new Error(`${path} is not a ChatGPT login auth.json`);
-  return auth;
-}
-
-export function readCodexOAuthAuthFile(path: string): JsonObject | null {
-  try {
-    return loadCodexAuthFile(path);
-  } catch {
-    return null;
-  }
 }
 
 export function fileCompanyChatGPTAuth(path: string): CompanyChatGPTAuth {

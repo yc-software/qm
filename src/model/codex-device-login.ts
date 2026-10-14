@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { AuthEvent, AuthPrompt, OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
-import { chatgptAccountIdFromToken, type ChatGPTDevicePrompt } from "./subscription-oauth.ts";
+import { chatgptAccountIdFromToken } from "./chatgpt-auth-file.ts";
+import type { ChatGPTDevicePrompt } from "./subscription-oauth.ts";
 
 const LOGIN_TTL_MS = 15 * 60 * 1000;
 const START_TIMEOUT_MS = 30_000;
