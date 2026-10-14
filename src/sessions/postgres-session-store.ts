@@ -832,6 +832,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
              ON session_entries(session_id, created_at DESC) WHERE type IN ('assistant', 'delivery')`,
         ],
       },
+      {
+        id: "sessions/store/0028-drop-run-tasks",
+        statements: [`DROP TABLE IF EXISTS task_events`, `DROP TABLE IF EXISTS tasks`],
+      },
     ],
     [
       {
