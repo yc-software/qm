@@ -839,7 +839,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ...(input.conversationHeader?.trim()
                 ? [{ source: "conversation-header", content: input.conversationHeader }]
                 : []),
-              ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
               ...attachmentPromptData,
               ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
             ]
@@ -863,26 +862,64 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : null;
         return { overheard, hasUnscreenableAttachment, externalPromptData, screenPayload };
       };
+      // Each carried-forward message is its own screen unit, so a flag taints that message, not its neighbours or the turn (#862).
+      const screenOverheard = (overheard: OverheardEntryPayload[], record?: typeof recordScreenRequest) =>
+        Promise.all(
+          overheard.map((entry) =>
+            classifySecurityData(
+              JSON.stringify([{ source: "overheard", content: renderOverheard(entry) }]),
+              actor.id,
+              scopeId,
+              record,
+              { ...screenTrace, hook: "user_input", surface: input.surface, origin: input.origin.kind },
+            ),
+          ),
+        );
       let screenedOverheard: OverheardEntryPayload[] = [];
+      const taintedOverheardTs = new Set<string>();
       let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
       let inputUnscreened = false;
       if (screenInbound && !enforceScreen) {
         void buildInboundScreen()
-          .then(({ screenPayload }) =>
-            screenPayload && !screenPayload.truncated
-              ? classifySecurityData(screenPayload.content, actor.id, scopeId, undefined, {
-                  ...screenTrace,
-                  hook: "user_input",
-                  surface: input.surface,
-                  origin: input.origin.kind,
-                })
-              : undefined,
+          .then(({ overheard, screenPayload }) =>
+            Promise.all([
+              screenOverheard(overheard),
+              screenPayload && !screenPayload.truncated
+                ? classifySecurityData(screenPayload.content, actor.id, scopeId, undefined, {
+                    ...screenTrace,
+                    hook: "user_input",
+                    surface: input.surface,
+                    origin: input.origin.kind,
+                  })
+                : undefined,
+            ]),
           )
           .catch(swallowAs("orchestrator: observed inbound screen", undefined));
       } else if (screenInbound) {
         const inbound = await buildInboundScreen();
         screenedOverheard = inbound.overheard;
         const { hasUnscreenableAttachment, externalPromptData, screenPayload } = inbound;
+        const overheardVerdicts = await screenOverheard(screenedOverheard, recordScreenRequest);
+        overheardVerdicts.forEach((verdict, i) => {
+          if (verdict?.decision === "strict") taintedOverheardTs.add(screenedOverheard[i]!.ts!);
+          else if (verdict?.unscreened) inputUnscreened = true;
+        });
+        const overheardReason = overheardVerdicts.find((verdict) => verdict?.decision === "strict")?.reason;
+        if (taintedOverheardTs.size)
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId: actor.id,
+            action: "security_posture.flagged",
+            resource: input.surface ?? "unknown",
+            scopeLabel: scopeId,
+            status: "refused",
+            detail: JSON.stringify({
+              cause: "strict-verdict",
+              reason: overheardReason,
+              source: ["overheard"],
+              ts: [...taintedOverheardTs],
+            }),
+          });
         if (screenPayload || hasUnscreenableAttachment) {
           const canScreenText =
             !!screenPayload &&
@@ -982,7 +1019,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               lease,
               screenedOverheard.map((overheard) => ({
                 type: "user",
-                payload: { ...overheard, securityTainted: true },
+                payload: { ...overheard, ...(taintedOverheardTs.has(overheard.ts!) ? { securityTainted: true } : {}) },
                 scopeLabel: scopeId,
               })),
             );
@@ -1006,7 +1043,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     ts: overheard.ts,
                     ...(overheard.name ? { author: overheard.name } : {}),
                     ...(overheard.files?.length ? { attachments: overheard.files } : {}),
-                    securityTainted: true,
+                    ...(taintedOverheardTs.has(overheard.ts!) ? { securityTainted: true } : {}),
                     entryCreatedAt: imported.createdAt,
                   },
                 };
@@ -2918,7 +2955,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             importedEntries = await withManagedRosterVersion(() =>
               deps.sessions.appendMany(
                 lease,
-                toImport.map((p) => ({ type: "user", payload: p, scopeLabel: scopeId })),
+                toImport.map((p) => ({
+                  type: "user",
+                  payload: taintedOverheardTs.has(p.ts!) ? { ...p, securityTainted: true } : p,
+                  scopeLabel: scopeId,
+                })),
               ),
             );
           } catch (e) {
@@ -2950,6 +2991,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       ...(p.changeTime ? { changeTime: p.changeTime } : {}),
                       ...(p.name ? { author: p.name } : {}),
                       ...(p.files?.length ? { attachments: p.files } : {}),
+                      ...(taintedOverheardTs.has(p.ts!) ? { securityTainted: true } : {}),
                       entryCreatedAt: imported.createdAt,
                     },
                   };
