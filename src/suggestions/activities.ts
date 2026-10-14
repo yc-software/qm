@@ -75,7 +75,6 @@ export function createSuggestedActivityService(deps: {
             ownerScopeId: scopeId("personal", principalId),
             title: "Refresh my suggested activities",
             schedule: { cron: nightlyAt(principalId, 2), timezone: profile.timezone },
-            runAs: "owner",
             action: actionFor(seeds),
           },
           (cron) => ({ managedAction: cron.action!, seeds }),

@@ -768,15 +768,6 @@ test("privileged loop config and manual fires use the cron live-owner-admin gate
   );
 });
 
-test("loop mutation and manual fire reject a drifted native binding", async () => {
-  const deps = services();
-  const loop = await privilegedLoop(deps);
-  await deps.crons!.update(loop.cronId!, { runAs: "scope" });
-  assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "revision" })).status, 409);
-  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {})).status, 409);
-  assert.equal((await deps.store.get(loop.id))?.playbook, loop.playbook);
-});
-
 test("a legacy inbox sync cron cannot be re-enabled through an autonomous Loop patch", async () => {
   const deps = services();
   const { loop } = await deps.store.create({

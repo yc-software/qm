@@ -42,7 +42,6 @@ type CapabilityCronBody = {
   action?: unknown;
   message?: unknown;
   destinationKey?: unknown;
-  runAs?: unknown;
   recipient?: unknown;
   channel?: unknown;
   participants?: unknown;
@@ -107,7 +106,6 @@ function isCronPatch(b: unknown): b is {
   enabled?: boolean;
   archived?: boolean;
   unfurlLinks?: boolean;
-  runAs?: "owner" | "scope" | "scopeShared";
   unattendedGrants?: string[];
   session?: boolean;
 } {
@@ -120,7 +118,6 @@ function isCronPatch(b: unknown): b is {
   const hasEnabled = b.enabled !== undefined;
   const hasArchived = b.archived !== undefined;
   const hasUnfurlLinks = b.unfurlLinks !== undefined;
-  const hasRunAs = b.runAs !== undefined;
   const hasUnattendedGrants = b.unattendedGrants !== undefined;
   if (hasTitle && typeof b.title !== "string") return false;
   if (hasAction && typeof b.action !== "string") return false;
@@ -128,7 +125,6 @@ function isCronPatch(b: unknown): b is {
   if (hasEnabled && typeof b.enabled !== "boolean") return false;
   if (hasArchived && typeof b.archived !== "boolean") return false;
   if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
-  if (hasRunAs && b.runAs !== "owner" && b.runAs !== "scope" && b.runAs !== "scopeShared") return false;
   if (
     hasUnattendedGrants &&
     (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
@@ -149,7 +145,6 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.enabled !== undefined ||
     b.archived !== undefined ||
     b.unfurlLinks !== undefined ||
-    b.runAs !== undefined ||
     b.unattendedGrants !== undefined ||
     b.session !== undefined
   );
@@ -165,7 +160,6 @@ const CRON_ERROR_STATUS: Record<string, number> = {
   not_a_member: 403,
   identity_unverified: 403,
   unknown_destination: 400,
-  members_unavailable: 400,
   cron_create_failed: 400,
   not_found: 404,
   forbidden: 403,
@@ -198,8 +192,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
       });
     }
     if (!isCronRuntime(b.runtime)) return sendJson(res, 400, { error: "bad_request", message: "invalid cron runtime" });
-    if (b.runAs !== undefined && b.runAs !== "owner" && b.runAs !== "scope" && b.runAs !== "scopeShared")
-      return sendJson(res, 400, { error: "bad_request", message: "runAs must be owner, scope or scopeShared" });
     const result = await ctx.deps.control.createCron(
       {
         schedule,
@@ -214,7 +206,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
           : {}),
         ...(b.scope === "personal" ? { scope: "personal" as const } : {}),
         ...(typeof b.destinationKey === "string" ? { destinationKey: b.destinationKey } : {}),
-        ...(b.runAs === "owner" || b.runAs === "scope" || b.runAs === "scopeShared" ? { runAs: b.runAs } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
         ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
@@ -241,11 +232,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
     });
   }
   if (!isCreateCron(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a CreateCronInput" });
-  if (body.runAs === "scope" || body.runAs === "scopeShared")
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `${body.runAs} crons must be created through an agent capability from the conversation they run as`,
-    });
   try {
     const cron = await app.createCron(body);
     return sendJson(res, 200, { cron: withoutFireLog(cron) });
@@ -355,7 +341,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), runAs (owner/scope/scopeShared), unattendedGrants (string[]), and/or session (boolean)";
+  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, pathname, method, body, capability } = ctx;
@@ -390,7 +376,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
         ...(body.archived !== undefined ? { archived: body.archived } : {}),
         ...(body.unfurlLinks !== undefined ? { unfurlLinks: body.unfurlLinks } : {}),
-        ...(body.runAs !== undefined ? { runAs: body.runAs } : {}),
         ...(body.unattendedGrants !== undefined ? { unattendedGrants: body.unattendedGrants } : {}),
         ...(body.session !== undefined ? { session: body.session } : {}),
       },
@@ -421,11 +406,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   if (!hasCronPatchFields(body)) {
     return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
   }
-  if (body.runAs !== undefined)
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "changing a cron's mode requires an agent capability token",
-    });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
   const task = body.action ?? body.task;
   if (body.unfurlLinks !== undefined && !cron.destination) {

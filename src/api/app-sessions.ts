@@ -104,6 +104,7 @@ export function createSessionMethods(
   | "promoteSkill"
   | "belongsToScope"
   | "canManageArtifactHome"
+  | "artifactGrantPermission"
   | "getArtifactHome"
   | "moveArtifactHome"
   | "getSoul"
@@ -1121,6 +1122,10 @@ export function createSessionMethods(
 
     canManageArtifactHome(homeScopeId, createdBy, principalId) {
       return principalManagesArtifactHome(homeScopeId, createdBy, principalId);
+    },
+
+    artifactGrantPermission(ownerScopeId, ref, principalId) {
+      return h.artifactGrantPermission(ownerScopeId, ref, principalId);
     },
 
     async getArtifactHome(type, idOrName): Promise<ArtifactHome | null> {

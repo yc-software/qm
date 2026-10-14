@@ -72,9 +72,7 @@ export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingP
   if (await app.membershipControlsScope(loop.ownerScopeId)) {
     return app.managesScope(acting.actorId, loop.ownerScopeId);
   }
-  const team = loop.runAs === "scope" || loop.runAs === "scopeShared";
-  if (!team && (await app.samePerson(loop.owner, acting.actorId))) return true;
-  if (team && acting.scopeId !== undefined && loop.ownerScopeId === acting.scopeId) return true;
+  if (await app.samePerson(loop.owner, acting.actorId)) return true;
   return app.managesScope(acting.actorId, loop.ownerScopeId);
 }
 
@@ -264,14 +262,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     const recipientId = consentRequiredRecipient({ owner: acting.actorId, standing: true, destination });
     if (recipientId) recipientConsent = { recipientId, status: "pending" as const };
   }
-  const runAs = b.runAs === "owner" || b.runAs === "scope" || b.runAs === "scopeShared" ? b.runAs : undefined;
-  if ((runAs === "scope" || runAs === "scopeShared") && (acting.scopeId ?? "personal:").startsWith("personal:"))
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "team loops must be created through an agent capability",
-    });
-  const ownerScopeId: ScopeId =
-    runAs === "scope" || runAs === "scopeShared" ? acting.scopeId! : scopeId("personal", acting.actorId);
+  const ownerScopeId: ScopeId = scopeId("personal", acting.actorId);
   const input: CreateLoopInput = {
     owner: acting.actorId,
     createdBy: acting.actorId,
@@ -287,7 +278,6 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
       : {}),
     ...(caps && Object.keys(caps).length > 0 ? { caps } : {}),
     ...(governor && Object.keys(governor).length > 0 ? { governor } : {}),
-    ...(runAs ? { runAs } : {}),
     ...(schedule ? { schedule } : {}),
     ...(destination ? { destination } : {}),
     ...(recipientConsent ? { recipientConsent } : {}),
@@ -310,7 +300,6 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
         title: `Loop: ${loop.name}`,
         action: `fire loop ${loop.id}`,
         loopId: loop.id,
-        ...(loop.runAs ? { runAs: loop.runAs } : {}),
         ownerConsentedAt: Date.now(),
       });
       cronId = cron.id;

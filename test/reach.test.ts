@@ -350,7 +350,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
     assert.equal(pending[0]!.destination.target, "U-alice");
   });
 
-  it("team cron (scope-run) → an individual's DM including a NON-member of the channel — gate passes, no withhold", async () => {
+  it("conversation-owned cron → an individual's DM including a NON-member of the channel — gate passes, no withhold", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "team digest" }));
     const destination: Destination = {
       type: "principal",
@@ -362,15 +362,14 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
       { id: "U-carol", type: "internal" },
       { id: "U-alice", type: "internal" },
     ];
+    deps.currentScopeMembers = async () => members;
     const out = await runTrigger(deps, {
-      owner: "U-carol",
+      owner: "system:channel:C-secret",
       ownerScopeId: scopeId("channel", "C-secret"),
       input: "digest",
       fireKey: "cron:team1:slot",
       surface: "cron",
       destination,
-      runAs: "scope",
-      members,
     });
     assert.equal(out.authzFailed, false);
     const pending = await deps.deliveries.pending("principal");

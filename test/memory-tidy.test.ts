@@ -72,12 +72,10 @@ test("the first fact in a notebook creates its nightly tidy cron near 3 AM", asy
   assert.match(personal.schedule.cron!, /^\d+ 3 \* \* \*$/);
   assert.equal(personal.schedule.timezone, "Europe/London");
   assert.equal(personal.owner, "alice");
-  assert.equal(personal.runAs, "owner");
   assert.equal((await f.cronOf(scopeId("personal", "bob"))).schedule.timezone, "America/Los_Angeles");
   const shared = await f.cronOf(channel);
   assert.equal(shared.ownerScopeId, channel);
   assert.equal(shared.owner, "system:channel:C1");
-  assert.equal(shared.runAs, "scope");
 });
 
 test("captures that add facts ensure the notebook's tidy cron, including through disclosed views", async () => {

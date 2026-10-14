@@ -31,7 +31,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { scopeId as toScopeId, personalScope } from "../types.ts";
+import { scopeId as toScopeId, personalScope, scopeActor } from "../types.ts";
 import { turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -623,7 +623,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return (
           !!current &&
           version === input.scopeVersion &&
-          current.includes(actor.id) &&
+          (current.includes(actor.id) || actor.id === scopeActor(toScopeId("group", managedGroupRef))) &&
           current.length === expected.size &&
           current.every((id) => expected.has(id))
         );
@@ -1480,18 +1480,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           config: deps.config,
           isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
         }));
-      if (
-        input.origin.kind === "automation" &&
-        input.origin.useOwnerKeychain === true &&
-        (input.origin.ownerResourcesRequireOpen === true ||
-          (conversation.kind === "channel" && conversation.isPrivate !== true)) &&
-        !openAutomationKeychain
-      )
-        return { status: "refused", reason: "owner-authorized automation requires current Open membership" };
-      const isolateOwnerKeychain =
-        !external &&
-        (openSpeakerKeychain ||
-          (conversation.kind !== "dm" && input.origin.kind === "automation" && input.origin.useOwnerKeychain === true));
+      const isolateOwnerKeychain = !external && (openSpeakerKeychain || openAutomationKeychain);
       const ownerAuthAvailable = isolateOwnerKeychain;
       const connectorEnv: Record<string, string> = {};
       const credsStart = Date.now();
@@ -1570,10 +1559,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             credential.id,
           );
         }
-        const ownAllowed =
-          scopeId === personalScope(actor.id) ||
-          isolateOwnerKeychain ||
-          (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
+        const ownAllowed = scopeId === personalScope(actor.id) || isolateOwnerKeychain;
         if (ownAllowed) {
           for (const credential of await keychain.listByOwner(actor.id)) {
             if (credential.kind === "broker" || isBackendCredential(credential)) continue;
@@ -1743,9 +1729,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           aud: CONTROL_PLANE_AUD,
           ...(!external &&
           allInternal &&
-          (scopeId === personalScope(actor.id) ||
-            openSpeakerKeychain ||
-            (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true))
+          (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain)
             ? { ownerConnections: true }
             : {}),
           exp: sandboxTokenExpiry,
@@ -2030,9 +2014,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForTurn,
         egressTokenForPolicy,
         openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
-        openResourceAccess:
-          !external &&
-          (liveAuthorTurn || (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true)),
+        openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         ownerAuthAvailable,
         visibleSkillsForTurn,
         emitGapWork,

@@ -1,7 +1,7 @@
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { scopeActor, type Cron, type Destination, type ScopeId } from "../types.ts";
+import type { Cron, Destination, ScopeId } from "../types.ts";
 import { runTrigger, destinationVisible, type TriggerDeps, type TriggerOutcome } from "./run-trigger.ts";
 import { principalDestination, withWebTranscriptText } from "../reach/reach.ts";
 import { swallow } from "../util/errors.ts";
@@ -45,7 +45,7 @@ export async function fireAskResolution(
       cron.archived ||
       (!cron.enabled && (cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined)) ||
       cron.ownerScopeId !== ask.requesterScopeId ||
-      !samePerson(cron.runAs === "scope" ? scopeActor(cron.ownerScopeId) : cron.owner, ask.requesterId))
+      !samePerson(cron.owner, ask.requesterId))
   ) {
     return {
       ran: false,

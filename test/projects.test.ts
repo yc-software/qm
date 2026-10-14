@@ -1182,18 +1182,12 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal((await turn("chan-pal", "web:chan-pal:linked")).status, "ok");
   await assertRoster("web:chan-pal:linked", ["owner", "chan-pal"]);
 
-  const linkedMembers = [
-    { id: "owner", type: "internal" as const },
-    { id: "chan-pal", type: "internal" as const },
-  ];
   const ownerCron = await built.app.createCron({
     ownerScopeId: project.scopeId,
     owner: "owner",
     createdBy: "owner",
     action: "linked roster work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: linkedMembers,
   });
   const inheritedCron = await built.app.createCron({
     ownerScopeId: project.scopeId,
@@ -1201,8 +1195,6 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
     createdBy: "chan-pal",
     action: "inherited member work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: linkedMembers,
   });
   const cronRoster = async (cronId: string) => {
     const fire = (await built.crons.listFires(cronId)).runs.at(-1);
@@ -1229,7 +1221,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal(revokedOwnerCron.fire.status, "ok");
   assert.deepEqual(revokedOwnerCron.participants, new Set(["owner"]));
   await runNowSettled(built.scheduler, inheritedCron.id);
-  assert.equal((await built.crons.get(inheritedCron.id))?.enabled, false);
+  assert.equal(await built.crons.get(inheritedCron.id), null, "leaving the project deletes the member's cron");
 
   await built.app.upsertChannels(channels, [
     { channelId: "C-ENG", principalId: "owner" },
@@ -1242,11 +1234,6 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
     createdBy: "chan-gone",
     action: "inactive member work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: [
-      { id: "owner", type: "internal" },
-      { id: "chan-gone", type: "internal" },
-    ],
   });
   await built.identity.deactivate("chan-gone");
   assert.equal(await built.projects.membership(groupRef, "chan-gone"), false);

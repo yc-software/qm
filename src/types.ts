@@ -293,9 +293,6 @@ export interface Cron extends TriggerBase {
   message?: string;
   loopId?: string;
   createdAt: number;
-  runAs?: "owner" | "scope" | "scopeShared";
-  ownerResourcesRequireOpen?: boolean;
-  members?: Principal[];
   unattendedGrants?: string[];
   sessionRef?: string;
 
@@ -398,7 +395,6 @@ export interface Loop extends TriggerBase {
   healthReason?: string;
   throttle?: boolean;
   cronId?: string;
-  runAs?: "owner" | "scope" | "scopeShared";
   consecutiveFailedFires?: number;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
@@ -645,7 +641,6 @@ export type TurnOrigin =
       screenData?: string;
       destination?: Destination;
       useOwnerKeychain?: boolean;
-      ownerResourcesRequireOpen?: boolean;
     }
   | { kind: "direct" };
 
@@ -700,7 +695,6 @@ export interface TurnRequest {
   securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;
-  ownerResourcesRequireOpen?: boolean;
   unprompted?: boolean;
   liveActor?: boolean;
   botActor?: boolean;

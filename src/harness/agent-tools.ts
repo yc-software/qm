@@ -2308,16 +2308,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       '— it runs at their own personal scope and DMs them, even from a channel. Don\'t bury "send this to Slack" inside `task`; a cron with no destination ' +
       "runs but has nowhere external to post. Use action=retarget to move an existing cron's delivery to a " +
       "different destinationKey. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
-      "MODE (runAs) — who can edit it and whose access it runs with. A cron always runs with the combined " +
-      "keychain of its owner and its scope:\n" +
-      "  • a cron in your DM is just you — your access, only you can edit it.\n" +
-      '  • a cron in a channel/group defaults to "scopeShared": it runs with YOUR keychain plus what the ' +
-      "scope shares, any member can edit it, and you're notified of every edit you didn't make. This is the " +
-      "default for a shared scope and is usually what you want.\n" +
-      '  • pass runAs="owner" to keep a channel cron editable only by you (still your access).\n' +
-      '  • pass runAs="scope" to run as the conversation itself, with everything granted to it and no ' +
-      "one's personal keychain — for team crons that shouldn't touch your private access.\n" +
-      "The mode is editable later via action=patch (runAs=...), but only by the cron's owner.\n" +
+      "ACCESS — a cron belongs to whoever creates it and runs as them, with what its conversation has been granted " +
+      "plus, where they share Open with it, their own keychain. Everyone in the conversation " +
+      "can see it; only its owner can change it unless they share write access (action=share, permission=write). " +
+      "If the owner leaves the conversation, the cron is deleted.\n" +
       "action=list pages through your crons (and ones visible through shared scopes), 25 per page — enabled first, " +
       "newest first, long task text trimmed; when there's more, a footer line names the offset for the next page. " +
       "action=get inspects one in full; " +
@@ -2405,7 +2399,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       scope: Type.Optional(
         Type.Literal("personal", {
           description:
-            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey or runAs=scope.",
+            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey.",
         }),
       ),
       participants: Type.Optional(
@@ -2427,12 +2421,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Boolean({
           description:
             "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
-        }),
-      ),
-      runAs: Type.Optional(
-        Type.Union([Type.Literal("owner"), Type.Literal("scope"), Type.Literal("scopeShared")], {
-          description:
-            'create or patch: the cron\'s mode. "scopeShared" (default in a channel/group) = your keychain + the scope\'s, any member edits, you\'re notified of others\' edits; "owner" = your access, only you edit (the default in a DM); "scope" = runs as the conversation itself with everything granted to it, any member edits. On patch, only the owner may change the mode.',
         }),
       ),
       note: Type.Optional(
@@ -2523,7 +2511,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.scope !== undefined ? { scope: params.scope } : {}),
             ...(Array.isArray(params.participants) ? { participants: params.participants } : {}),
             ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
-            ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
           });
@@ -2655,7 +2642,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-            ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");

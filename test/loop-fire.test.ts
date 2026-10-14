@@ -579,7 +579,6 @@ async function bindCron(
     schedule: { everyMs: 60_000 },
     action: "fire loop",
     loopId: loop.id,
-    ...(loop.runAs ? { runAs: loop.runAs } : {}),
     ...over,
   });
   await s.loops.update(loop.id, { cronId: cron.id });
@@ -636,27 +635,25 @@ test("bound loop stages reread grants after revocation", async () => {
   assert.deepEqual(s.turns.at(-1)?.unattendedGrants, []);
 });
 
-for (const runAs of ["scopeShared", "scope"] as const) {
-  test(`bound loop preserves ${runAs} exclusions and member snapshot`, async () => {
-    const s = service(HAPPY);
-    const loop = await makeLoop(s.loops, { runAs, ownerScopeId: scopeId("channel", "C1") });
-    await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"], members: [{ id: "josh", type: "internal" }] });
-    const result = await s.fire.fire(loop.id, "shared");
-    assert.equal(result.status, "ok");
-    assert.equal(s.turns.length, 3);
-    for (const turn of s.turns) {
-      assert.equal(turn.unattendedGrants, undefined);
-      assert.equal(turn.ownerKeychainUnion, runAs === "scopeShared" ? true : undefined);
-      assert.equal(turn.conversation.kind, "channel");
-    }
-  });
-}
+test("a channel loop fires as its owner with their keychain and no unattended grants", async () => {
+  const s = service(HAPPY);
+  const loop = await makeLoop(s.loops, { ownerScopeId: scopeId("channel", "C1") });
+  await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
+  const result = await s.fire.fire(loop.id, "shared");
+  assert.equal(result.status, "ok");
+  assert.equal(s.turns.length, 3);
+  for (const turn of s.turns) {
+    assert.equal(turn.unattendedGrants, undefined);
+    assert.equal(turn.ownerKeychainUnion, true);
+    assert.equal(turn.actor.externalId, loop.owner);
+    assert.equal(turn.conversation.kind, "channel");
+  }
+});
 
 test("bound loops reject missing crons, foreign scheduler bindings, and authority drift", async () => {
   for (const over of [
     { owner: "mallory" },
     { ownerScopeId: scopeId("personal", "mallory") },
-    { runAs: "scope" as const },
     { loopId: "another-loop" },
   ]) {
     const s = service(HAPPY);

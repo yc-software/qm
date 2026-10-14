@@ -46,7 +46,6 @@ export function createMemoryTidyService(deps: {
             timezone: (kind === "personal" && (await deps.timezone(ref))) || DEFAULT_CRON_TIMEZONE,
           },
           action: MEMORY_TIDY_TASK,
-          runAs: kind === "personal" ? "owner" : "scope",
         },
       );
     },

@@ -16,7 +16,7 @@ import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
-import type { DirectoryMember } from "../directory/directory-store.ts";
+import type { DirectoryMember, DirectoryStore } from "../directory/directory-store.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { recoverNextFireAt } from "./schedule.ts";
@@ -78,13 +78,13 @@ export interface SchedulerDeps {
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
   currentScopeMembers?: CurrentScopeMembers;
-  isOpenScopeMember?: TriggerDeps["isOpenScopeMember"];
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
   directory?: VisibilityDirectory & {
     get(principalId: string): Promise<{ displayName: string } | null>;
     list(): Promise<DirectoryMember[]>;
+    conversationMembers?: DirectoryStore["conversationMembers"];
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
@@ -155,13 +155,16 @@ async function cronMentionRoster(deps: SchedulerDeps, cron: Cron): Promise<strin
   if (!deps.directory) return undefined;
   const scope = cron.destination?.audienceScopeId;
   if (!scope) return undefined;
-  const kind = parseScopeId(scope).kind;
+  const { kind, ref } = parseScopeId(scope);
   if (kind !== "channel" && kind !== "group") return undefined;
-  const members = cron.members ?? [];
-  if (!members.length || members.length > CRON_MENTION_ROSTER_MAX) return undefined;
+  const ids =
+    (await deps.directory.conversationMembers?.(kind, ref).catch(() => undefined))?.map((m) => m.principalId) ??
+    (await deps.currentScopeMembers?.(scope))?.map((m) => m.id) ??
+    [];
+  if (!ids.length || ids.length > CRON_MENTION_ROSTER_MAX) return undefined;
   const byId = new Map((await deps.directory.list().catch(() => [])).map((m) => [m.principalId, m]));
-  const roster = members
-    .map((m) => byId.get(m.id))
+  const roster = ids
+    .map((id) => byId.get(id))
     .filter((m): m is DirectoryMember => !!m && m.type === "internal")
     .map(mentionable);
   return roster.length ? roster.join(", ") : undefined;
@@ -289,7 +292,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           run: deps.run,
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
-          ...(deps.isOpenScopeMember ? { isOpenScopeMember: deps.isOpenScopeMember } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
         },
         {
@@ -349,10 +351,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
       });
     }
-    if (outcome.authzFailed) {
-      await deps.crons.setEnabled(cron.id, false);
-      return { authzFailed: true };
-    }
+    if (outcome.ownerLeft) await deps.crons.delete(cron.id);
+    else if (outcome.authzFailed) await deps.crons.setEnabled(cron.id, false);
+    if (outcome.authzFailed) return { authzFailed: true };
     if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
     return { authzFailed: false };
   }

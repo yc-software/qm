@@ -510,11 +510,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return published;
   }
 
-  async function effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null> {
-    if (!principalId || deps.identity.deactivationSource?.(principalId) === "manual") return null;
-    if (await principalCanWriteScope(principalId, d.ownerScopeId)) return "write";
-    let best: Permission | null = (await principalCanAccessCurrentScope(principalId, d.ownerScopeId)) ? "read" : null;
-    const grants = (await deps.acl?.grantsFor(d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => [])) ?? [];
+  async function artifactGrantPermission(
+    ownerScopeId: ScopeId,
+    ref: string,
+    principalId: string,
+  ): Promise<Permission | null> {
+    let best: Permission | null = null;
+    const grants = (await deps.acl?.grantsFor(ownerScopeId, ref).catch(() => [])) ?? [];
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
       if (
@@ -530,6 +532,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       best = "read";
     }
     return best;
+  }
+
+  async function effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null> {
+    if (!principalId || deps.identity.deactivationSource?.(principalId) === "manual") return null;
+    if (await principalCanWriteScope(principalId, d.ownerScopeId)) return "write";
+    const granted = await artifactGrantPermission(d.ownerScopeId, encodeRef(deployRef(d.id)), principalId);
+    if (granted) return granted;
+    return (await principalCanAccessCurrentScope(principalId, d.ownerScopeId)) ? "read" : null;
   }
 
   async function principalCanReadDeployment(d: Deployment, principalId: string): Promise<boolean> {
@@ -760,6 +770,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     canManageSkill,
     republishIfShared,
     effectiveDeploymentPermission,
+    artifactGrantPermission,
     principalCanReadDeployment,
     principalGitPermission,
     refreshSurfaceDirectory,

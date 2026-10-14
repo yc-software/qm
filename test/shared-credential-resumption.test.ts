@@ -33,12 +33,9 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   });
   const crons = createCronStore();
   const cron = await crons.create({
-    owner: "U_JOB_OWNER",
-    createdBy: "U_JOB_OWNER",
+    owner: `system:${scope}`,
+    createdBy: `system:${scope}`,
     ownerScopeId: scope,
-    runAs: "scope",
-    members: [{ id: "U_JOB_OWNER", type: "internal" }],
-    unattendedGrants: ["private-owner-grant"],
     schedule: { everyMs: 60_000 },
     action: "read the dummy account",
     destination: {
@@ -64,7 +61,6 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
       return request.surface === "cron" ? { status: "silent" } : { status: "ok", reply: "dummy result" };
     },
   };
-  await deps.identity.deactivate(cron.owner);
   const threadRef = `cron:${cron.id}:fire:first`;
   await runTrigger(deps, {
     ...cron,
@@ -96,7 +92,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
 }
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
-  test(`scope approval resumes another person's credential in ${scope} after the job owner departs`, async () => {
+  test(`scope approval resumes another person's credential for a conversation-owned job in ${scope}`, async () => {
     const f = await fixture(scope);
 
     const outcome = await fireAskResolution(f.deps, f.ask);
@@ -142,24 +138,8 @@ test("a scope approval still needs recipient consent for delivery", async () => 
 
   assert.equal(outcome.status, "refused");
   assert.equal(f.requests.length, 1);
-  const pending = await f.deliveries.pending("principal");
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0]!.destination.target, "U_JOB_OWNER");
-  assert.ok(pending.every((delivery) => !delivery.idempotencyKey?.endsWith(":fallback")));
+  assert.equal((await f.deliveries.pending("principal")).length, 0, "nobody's DM gets a conversation-owned notice");
 });
-
-for (const runAs of ["owner", "scopeShared"] as const) {
-  test(`approval cannot substitute a requester after the cron changes to ${runAs}`, async () => {
-    const f = await fixture();
-    await f.crons.update(f.cron.id, { runAs });
-
-    const outcome = await fireAskResolution(f.deps, f.ask);
-
-    assert.equal(outcome.authzFailed, true);
-    assert.equal(f.requests.length, 0);
-    assert.equal((await f.deliveries.pending("principal")).length, 0);
-  });
-}
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
   test(`shared asks in ${scope} deduplicate by job across actors and keep live requests separate`, async () => {
