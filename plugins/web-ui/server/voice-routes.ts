@@ -119,9 +119,7 @@ export async function handleVoiceRoute(
       const clientGone = controller.signal.aborted;
       reportVoiceError(error, "dictation_upload", clientGone);
       if (clientGone) return;
-      return typeof (error as NodeJS.ErrnoException).syscall === "string"
-        ? json(res, 503, { error: "dictation_unavailable", message: "The server could not store the recording." })
-        : json(res, 400, { error: "upload_failed", message: "The recording did not upload completely." });
+      return json(res, 503, { error: "dictation_unavailable", message: "The server could not store the recording." });
     }
     let text: string | null = null;
     try {
@@ -147,7 +145,7 @@ export async function handleVoiceRoute(
     if (
       dictation &&
       provider?.status === 400 &&
-      (provider.code === "unsupported_format" || provider.code === "invalid_value")
+      (provider.code === "unsupported_format" || (provider.code === "invalid_value" && provider.param === "file"))
     )
       return json(res, 400, { error: "invalid_audio", message: "OpenAI could not read this recording." });
     if (provider?.status !== undefined && REJECTED_STATUSES.has(provider.status))

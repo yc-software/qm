@@ -19,6 +19,7 @@ export class VoiceProviderError extends Error {
   readonly detail: Record<string, unknown>;
   readonly status: number | undefined;
   readonly code: string | undefined;
+  readonly param: string | undefined;
   readonly retryAfterS: number | undefined;
   constructor(message: string, detail: Record<string, unknown>, cause?: unknown) {
     super(message, { cause });
@@ -26,16 +27,20 @@ export class VoiceProviderError extends Error {
     this.detail = detail;
     this.status = typeof detail.status === "number" ? detail.status : undefined;
     this.code = typeof detail.code === "string" ? detail.code : undefined;
+    this.param = typeof detail.param === "string" ? detail.param : undefined;
     this.retryAfterS = wholeSeconds(detail.retryAfter);
   }
 }
 
-function providerErrorCode(body: string): string | undefined {
+function providerError(body: string): { code?: string; param?: string } {
   try {
-    const code = (JSON.parse(body) as { error?: { code?: unknown } } | null)?.error?.code;
-    return typeof code === "string" ? code : undefined;
+    const error = (JSON.parse(body) as { error?: { code?: unknown; param?: unknown } } | null)?.error;
+    return {
+      ...(typeof error?.code === "string" ? { code: error.code } : {}),
+      ...(typeof error?.param === "string" ? { param: error.param } : {}),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -107,7 +112,7 @@ async function openai(path: string, body: ReadableStream | string, headers: Reco
   if (!response.ok)
     throw new VoiceProviderError(`OpenAI ${path} returned HTTP ${response.status}`, {
       ...detail,
-      code: providerErrorCode(text),
+      ...providerError(text),
       body: text.slice(0, 500),
     });
   try {

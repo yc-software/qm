@@ -27,11 +27,7 @@ const identity = (user = "alice") => ({
 const headers = { ...identity(), "content-type": "audio/mp4", origin: "https://qm.example.test" };
 
 let openai: (req: IncomingMessage, res: ServerResponse) => void = (_req, res) => res.end("{}");
-const stubPaths: string[] = [];
-const openaiStub = createServer((req, res) => {
-  stubPaths.push(req.url ?? "");
-  openai(req, res);
-});
+const openaiStub = createServer((req, res) => openai(req, res));
 await new Promise<void>((resolve) => openaiStub.listen(0, resolve));
 const spoolDir = join(tmpdir(), "qm-dictation");
 const spooled = async () => new Set(await readdir(spoolDir).catch(() => []));
@@ -149,10 +145,11 @@ test("dictation maps OpenAI errors by code", async (t) => {
     [429, "insufficient_quota", {}, { status: 503, error: "dictation_unavailable" }],
     [413, "file_too_large", {}, { status: 413, error: "audio_too_large" }],
     [400, "unsupported_format", {}, { status: 400, error: "invalid_audio" }],
+    [400, "invalid_value", {}, { status: 502, error: "dictation_rejected" }],
     [400, "invalid_parameter", {}, { status: 502, error: "dictation_rejected" }],
     [401, "invalid_api_key", {}, { status: 502, error: "dictation_rejected" }],
     [409, "conflict", {}, { status: 503, error: "dictation_unavailable" }],
-    [302, "redirect", { location: "/followed" }, { status: 503, error: "dictation_unavailable" }],
+    [302, "redirect", { location: "https://elsewhere.test/" }, { status: 503, error: "dictation_unavailable" }],
     [500, "server_error", {}, { status: 503, error: "dictation_unavailable" }],
   ];
   for (const [status, code, providerHeaders, expected] of cases) {
@@ -161,7 +158,8 @@ test("dictation maps OpenAI errors by code", async (t) => {
     for (const [key, value] of Object.entries(expected))
       assert.equal(result[key], value, `${status} ${code} ${JSON.stringify(providerHeaders)}: ${key}`);
   }
-  assert.equal(stubPaths.includes("/followed"), false);
+  openai = reply(400, { error: { code: "invalid_value", param: "file" } });
+  assert.equal((await post()).error, "invalid_audio");
 });
 
 test("dictation reports storage failures as unavailable instead of hanging", async (t) => {
@@ -183,6 +181,7 @@ test("dictation reports storage failures as unavailable instead of hanging", asy
   });
   assert.equal(response.status, 503);
   assert.equal((await response.json()).error, "dictation_unavailable");
+  assert.deepEqual(await spooled(), new Set());
 });
 
 test("startup sweep removes only stale spool files", async () => {
