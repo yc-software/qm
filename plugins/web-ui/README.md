@@ -361,10 +361,3 @@ across accounts is refused. Organizations that already require individual accoun
 continue to require them.
 
 The standalone `::link-slack-account{}` directive offers personal Slack account linking in a web reply. It shows the account card or linked status, requires the company bot to be installed first, and does not include the app picker. `::add-to-slack{}` remains the company installation trigger.
-
-### Manual multiview browser check
-
-Install Chromium with `npx playwright install --with-deps chromium`, open at least two
-conversation panes in a local dev instance, and run `npm run test:browser -- http://localhost:8096/`.
-The check exercises default quiet headers, hover without activation or layout movement,
-keyboard access, composer switching, and draft retention against the running UI.
