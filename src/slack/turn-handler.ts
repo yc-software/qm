@@ -220,7 +220,10 @@ export function createTurnHandler(deps: {
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(actor)) return;
     const timezone = classified.timezone;
-    const text = stripMention(inc.rawText, ids.botUserId);
+    const stripped = stripMention(inc.rawText, ids.botUserId);
+    // A bare mention (e.g. "@qm" replied into a thread) is still a request: keep the tag so the agent sees it.
+    const bareMention = !stripped && Boolean(ids.botUserId) && inc.rawText.includes(`<@${ids.botUserId}>`);
+    const text = bareMention ? `@${ids.botHandle || "qm"}` : stripped;
     if (!hasContent(text, inc.files)) return;
 
     let audience: ActorAssertion[] = [actor];

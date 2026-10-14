@@ -189,3 +189,11 @@ test("waitRun signals replying only once the run has passed detection and begun 
   });
   assert.equal(replying, 1);
 });
+
+test("a bare mention in a thread still starts a turn and shows the agent it was tagged", async () => {
+  const h = harness(async () => ({ status: "ok", reply: "On it." }));
+  await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT>" }, h.client);
+  assert.equal(h.turns.length, 1);
+  assert.equal(h.turns[0].text, "@qm");
+  assert.deepEqual(h.posts, ["On it."]);
+});
