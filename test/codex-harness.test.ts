@@ -143,6 +143,8 @@ rl.on("line", (line) => {
     return send({ id: "finish-call", method: "item/tool/call", params: { threadId: "thread-stop", turnId: "turn-stop", callId: "finish-1", tool: "finish_silently", arguments: { reason: "nothing new" } } });
   }
   if (msg.id === "finish-call" && msg.result) {
+    send({ method: "item/agentMessage/delta", params: { threadId: "thread-stop", turnId: "turn-stop", itemId: "leak-1", delta: "LEAK" } });
+    send({ method: "item/completed", params: { threadId: "thread-stop", turnId: "turn-stop", item: { type: "agentMessage", id: "leak-1", text: "LEAK", phase: "commentary" } } });
     lateTool = setTimeout(() => send({ id: "late-call", method: "item/tool/call", params: { threadId: "thread-stop", turnId: "turn-stop", callId: "late-1", tool: "history", arguments: { query: "must not run" } } }), 25);
     return;
   }
@@ -999,9 +1001,13 @@ for (const surfaceTools of [false, true]) {
       rmSync(dir, { recursive: true, force: true });
     });
     const entries: SessionEntry[] = [];
+    const deltas: string[] = [];
     const scope = { kind: "org", id: "test" } as unknown as ScopeId;
     const result = await harness.turns.runTurn({
       session: { id: "terminal-tool" } as Session,
+      onDelta: (delta: string) => {
+        deltas.push(delta);
+      },
       input: "poll",
       systemPrompt: "finish silently",
       history: [],
@@ -1025,6 +1031,8 @@ for (const surfaceTools of [false, true]) {
 
     assert.equal(result.silent, true);
     assert.notEqual(result.reply, "BAD");
+    assert.deepEqual(deltas, []);
+    assert.equal(JSON.stringify(entries).includes("LEAK"), false);
     assert.equal(
       entries.some((entry) => entry.type === "assistant"),
       false,
