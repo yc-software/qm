@@ -39,6 +39,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
+import { LEGACY_TAPE_STEPS_SQL } from "./legacy-tape-steps.ts";
 import {
   cronIdOf,
   legacyOriginPattern,
@@ -802,6 +803,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       {
         id: "sessions/store/0028-drop-run-tasks",
         statements: [`DROP TABLE IF EXISTS task_events`, `DROP TABLE IF EXISTS tasks`],
+      },
+      {
+        id: "sessions/store/0029-legacy-tape-steps",
+        statements: LEGACY_TAPE_STEPS_SQL,
       },
     ],
     [
