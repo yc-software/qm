@@ -517,10 +517,30 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   assert.ok(shared.ok, JSON.stringify(shared));
   const granted = await control.patchCron(made.cron.id, { title: "weekly digest" }, chanClaims("U2"));
   assert.ok(granted.ok, JSON.stringify(granted));
+  const reshared = await control.shareArtifact(
+    { type: "cron", id: made.cron.id, scope: "personal:U9", permission: "write" },
+    chanClaims("U2"),
+  );
+  assert.equal(reshared.ok ? "" : reshared.code, "forbidden", "a grantee can't pass write access on");
   assert.equal(granted.cron.owner, "U1", "a grantee's edit leaves the owner, and the owner's access, unchanged");
 
   const fromDm = await control.setCronEnabled(made.cron.id, false, claims("U1"));
   assert.ok(fromDm.ok, "the owner manages it from their DM");
+
+  const personal = await control.createCron(
+    { title: "inbox", schedule: { everyMs: 60_000 }, action: "triage" },
+    claims("U1"),
+  );
+  assert.ok(personal.ok);
+  const personalShare = await control.shareArtifact(
+    { type: "cron", id: personal.cron.id, scope: "personal:U2", permission: "write" },
+    claims("U1"),
+  );
+  assert.equal(
+    personalShare.ok ? "" : personalShare.code,
+    "bad_request",
+    "a personal cron runs with the whole keychain",
+  );
 });
 
 test("app.turn forwards ownerKeychainUnion onto the persisted run request (else scheduled fires lose the union)", async () => {

@@ -3,7 +3,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
-import { claimManagedCron, nightlyAt } from "../cron/managed.ts";
+import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
 import { scopeId, type Cron } from "../types.ts";
 
 const SUGGESTED_ACTIVITIES_TASK = `Generate three suggested activities for the owner of this personal session's new-chat screen.
@@ -18,8 +18,7 @@ prompt: a natural, collaborative request, at most 1200 characters. Prefer phrasi
 Example prompt: "Let's get the staging playground working again for testing. The latest checkpoint is in the playground conversation and HANDOFF.md. Last time, staging returned a 503 and AWS access was blocked. Either may have changed in the meantime."
 icon: one relevant emoji, or "yc" for YC-specific work only when deployment guidance establishes a YC context. Never use image URLs or markup.`;
 
-export interface SuggestedActivityProfile {
-  cronId?: string;
+export interface SuggestedActivityProfile extends ManagedCronClaim {
   timezone: string;
   lastSeenAt: number;
   lastBootstrapAt?: number;
@@ -64,7 +63,7 @@ export function createSuggestedActivityService(deps: {
       const seen = poll ? {} : { lastSeenAt: now() };
       await deps.store.merge(principalId, { ...seen, seeds });
       profile = { ...profile, ...seen, seeds };
-      if (!profile.cronId) {
+      if (!profile.cronId || profile.arming) {
         profile = await claimManagedCron(
           deps,
           principalId,

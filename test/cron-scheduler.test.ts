@@ -446,7 +446,7 @@ test("a person-owned cron is deleted once its owner has left the conversation", 
     { principalId: "U2", displayName: "Bo", type: "internal" },
   ]);
   await directory.replaceChannels(
-    [{ channelId: "C1", name: "eng", isPrivate: false }],
+    [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
   const { crons, calls, scheduler } = harness("done", directory);

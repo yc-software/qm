@@ -17,7 +17,7 @@ import {
   loadDocumentInputs,
 } from "./document-inputs.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
-import { createCanWriteScope, withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalViewFromEntry } from "../runs/turn-stream.ts";
 import type {
   CommandApprovalGrant,
@@ -31,7 +31,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { scopeId as toScopeId, personalScope, scopeActor } from "../types.ts";
+import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -623,7 +623,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return (
           !!current &&
           version === input.scopeVersion &&
-          (current.includes(actor.id) || actor.id === scopeActor(toScopeId("group", managedGroupRef))) &&
+          rosterAdmits(current, actor.id, toScopeId("group", managedGroupRef)) &&
           current.length === expected.size &&
           current.every((id) => expected.has(id))
         );

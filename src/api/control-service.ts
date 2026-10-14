@@ -27,7 +27,7 @@ import {
   type ShareArtifactRequest,
   type ShareArtifactResult,
 } from "./artifact-share.ts";
-import { isSharedScope, parseScopeId, scopeActor, type Permission, type ScopeId } from "../types.ts";
+import { actsAsScope, isSharedScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 
@@ -182,6 +182,17 @@ export interface ControlService {
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
 
+async function ownsCron(
+  app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
+  cron: Cron,
+  actorId: string,
+  isActor?: (id: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (actsAsScope(cron.owner, cron.ownerScopeId)) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
+  if (!(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return false;
+  return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
+}
+
 export async function canAdministerCron(
   app: Pick<
     App,
@@ -191,9 +202,7 @@ export async function canAdministerCron(
   actorId: string,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
-  if (cron.owner === scopeActor(cron.ownerScopeId)) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
-  if (await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))
-    return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
+  if (await ownsCron(app, cron, actorId, isActor)) return true;
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actorId)) === "write";
 }
 
@@ -841,17 +850,23 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const orgSkillCede = isOrg && req.type === "skill";
 
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
+      if (cron && permission === "write" && cron.ownerScopeId.startsWith("personal:"))
+        return {
+          ok: false,
+          code: "bad_request",
+          message: "a personal cron runs with your whole keychain, so it can't be shared for editing",
+        };
       if (
         !orgSkillCede &&
         !(cron
-          ? await canAdministerCron(app, cron, capability.actorId)
+          ? await ownsCron(app, cron, capability.actorId)
           : await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))
       ) {
         return {
           ok: false,
           code: "forbidden",
           message: cron
-            ? "only the cron's owner, or someone it's shared with for editing, can share it"
+            ? "only the cron's owner can share it"
             : `only the ${req.type}'s owner (or a member of its shared home) can share or move it`,
         };
       }

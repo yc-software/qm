@@ -78,6 +78,27 @@ test("the first fact in a notebook creates its nightly tidy cron near 3 AM", asy
   assert.equal(shared.owner, "system:channel:C1");
 });
 
+test("a claim interrupted before its cron was switched on is finished on the next capture", async () => {
+  const f = fixture();
+  const cron = await f.crons.create({
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: alice,
+    schedule: { cron: "7 3 * * *", timezone: "UTC" },
+    action: "tidy",
+    enabled: false,
+  });
+  await f.store.put(alice, { cronId: cron.id, arming: true });
+  await f.service.ensure(alice);
+  assert.equal((await f.crons.get(cron.id))?.enabled, true);
+  assert.deepEqual(await f.store.get(alice), { cronId: cron.id });
+  assert.equal((await f.crons.list()).length, 1);
+
+  await f.crons.setEnabled(cron.id, false);
+  await f.service.ensure(alice);
+  assert.equal((await f.crons.get(cron.id))?.enabled, false, "a cron someone switched off stays off");
+});
+
 test("captures that add facts ensure the notebook's tidy cron, including through disclosed views", async () => {
   const ensured: ScopeId[] = [];
   let added = 1;

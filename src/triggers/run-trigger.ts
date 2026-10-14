@@ -7,7 +7,7 @@ import type {
   TurnRequest,
   TurnResult,
 } from "../types.ts";
-import { parseScopeId, scopeActor } from "../types.ts";
+import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
@@ -20,6 +20,7 @@ import type { DirectoryStore } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
 const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
 const UNKNOWN_HOME_SKIP_NOTE =
@@ -176,6 +177,8 @@ export async function destinationVisible(
   return true;
 }
 
+const SCHEDULED_SURFACES = new Set(["cron", "loop", "keychain-ask"]);
+
 async function ownerLeftHome(
   deps: TriggerDeps,
   owner: string,
@@ -183,24 +186,26 @@ async function ownerLeftHome(
   currentMembers: Principal[] | undefined,
 ): Promise<boolean> {
   const { kind, ref } = parseScopeId(scope);
+  if (kind === "channel" && (await deps.directory?.channelPrivacy?.(ref)) !== true) return false;
   if (kind !== "channel" && kind !== "group") return false;
   const roster =
-    (await deps.directory?.conversationMembers?.(kind, ref).catch(() => undefined))?.map((m) => [
-      m.principalId,
-      m.slackId,
-    ]) ?? (kind === "group" && isProjectGroupRef(ref) ? currentMembers?.map((m) => [m.id]) : undefined);
+    (
+      await deps.directory?.conversationMembers?.(kind, ref).catch(reportFailureAs("cron owner roster", undefined))
+    )?.map((m) => [m.principalId, m.slackId]) ??
+    (kind === "group" && isProjectGroupRef(ref) ? currentMembers?.map((m) => [m.id]) : undefined);
   return !!roster?.length && !roster.some((ids) => ids.some((id) => samePerson(id, owner)));
 }
 
 export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
   await deps.identity.refresh();
-  const runsAsScope = spec.owner === scopeActor(spec.ownerScopeId);
+  const runsAsScope = actsAsScope(spec.owner, spec.ownerScopeId);
+  const scheduled = SCHEDULED_SURFACES.has(spec.surface);
   const currentMembers = await deps.currentScopeMembers?.(spec.ownerScopeId);
   const actorId = spec.owner;
   if (!runsAsScope && deps.identity.classify(spec.owner).type !== "internal") {
     return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
   }
-  if (!runsAsScope && (await ownerLeftHome(deps, spec.owner, spec.ownerScopeId, currentMembers))) {
+  if (scheduled && !runsAsScope && (await ownerLeftHome(deps, spec.owner, spec.ownerScopeId, currentMembers))) {
     return { authzFailed: true, ownerLeft: true, ran: false, note: "the owner left this conversation" };
   }
   const audience =
@@ -330,7 +335,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
-        ...(!runsAsScope && conversation.kind !== "dm" ? { ownerKeychainUnion: true } : {}),
+        ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { ownerKeychainUnion: true } : {}),
         idempotencyKey: spec.fireKey,
       });
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();

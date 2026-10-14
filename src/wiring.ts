@@ -138,7 +138,7 @@ import type {
   SurfaceContextRequest,
   Webhook,
 } from "./types.ts";
-import { personalScope, scopeActor, scopeId } from "./types.ts";
+import { personalScope, scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
@@ -147,7 +147,7 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { createBudgetTracker, estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, type CronStore } from "./cron/cron-store.ts";
+import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { createMemoryCronFireStore, createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
@@ -195,6 +195,7 @@ import {
   createCurrentScopeMembers,
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
+  rosterAdmits,
   type CanReadScope,
   type CanManageScope,
   type ManagesArtifactHome,
@@ -1868,17 +1869,7 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
-  pgArtifactMap?.pool.registerMigration({
-    id: "durable-map/crons/0001-drop-run-as",
-    statements: [
-      ...["crons", "loops"].map(
-        (table) => `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-      ),
-      `UPDATE crons SET json = jsonb_set(json, '{owner}', to_jsonb('system:' || (json ->> 'ownerScopeId'))) WHERE json ->> 'runAs' = 'scopeFloor' AND json ->> 'loopId' IS NULL AND json ->> 'ownerScopeId' NOT LIKE 'personal:%'`,
-      "UPDATE crons SET json = json - 'runAs' - 'ownerResourcesRequireOpen' - 'members' WHERE json ?| array['runAs', 'ownerResourcesRequireOpen', 'members']",
-      "UPDATE loops SET json = json - 'runAs' WHERE json ? 'runAs'",
-    ],
-  });
+  pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
     statements: [
@@ -1932,7 +1923,11 @@ export function buildApp(
     if (
       !version ||
       !audience ||
-      (request.actor.id !== scopeActor(scope) && !audience.some((p) => p.id === request.actor.id))
+      !rosterAdmits(
+        audience.map((p) => p.id),
+        request.actor.id,
+        scope,
+      )
     )
       throw new Error("session owner is no longer a member of this project");
     return {
@@ -2526,6 +2521,7 @@ export function buildApp(
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
+    deleteCron: (id) => app.deleteCron(id),
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     lock: advisoryLock,
     crons,

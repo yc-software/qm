@@ -1,4 +1,4 @@
-import { scopeActor, type Cron, type CronSchedule, type Destination } from "../types.ts";
+import { actsAsScope, type Cron, type CronSchedule, type Destination } from "../types.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { personKeys } from "../directory/person.ts";
 import { errMessage } from "../util/errors.ts";
@@ -87,7 +87,7 @@ export async function notifyOwnerOfCronEdit(
   onError?: (message: string) => void,
 ): Promise<void> {
   const { cron } = args;
-  if (cron.owner === scopeActor(cron.ownerScopeId)) return;
+  if (actsAsScope(cron.owner, cron.ownerScopeId)) return;
   try {
     const [editor, owner] = await Promise.all([
       sink.directoryMember(args.editorId).catch(() => null),

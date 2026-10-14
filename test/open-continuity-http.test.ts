@@ -251,7 +251,11 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   await b.roster(["bob"]);
   const result = await b.scheduler.runNow(id);
   if (result.started) await result.settled;
-  assert.equal(await b.crons.get(id), null, "the owner leaving the channel deletes their cron");
+  assert.equal(
+    (await b.deliveries.pending("slack")).filter((d) => d.text.includes("owner-credential-present")).length,
+    1,
+    "once the owner leaves, the public-channel cron no longer gets their keychain",
+  );
 });
 
 for (const isPrivate of [false, true]) {
@@ -298,3 +302,34 @@ for (const isPrivate of [false, true]) {
     });
   }
 }
+
+test("HTTP private channel cron runs without its owner's keychain once the conversation isn't Open", async (t) => {
+  const b = await fixture(t);
+  assert.ok(b.keychain);
+  await b.directory.replaceChannels(
+    [{ channelId: "public-room", name: "private-room", isPrivate: true }],
+    ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
+  );
+  await b.config.setSharingPosture("org:default-org", "isolated");
+  const credential = await b.keychain.save({
+    ownerId: "alice",
+    service: "continuity-isolated",
+    envKey: "CONTINUITY_ISOLATED_TOKEN",
+    secret: "synthetic-isolated-sentinel",
+  });
+  const cron = await b.crons.create({
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "channel:public-room",
+    schedule: { everyMs: 3600000 },
+    action: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_ISOLATED_TOKEN" = "synthetic-isolated-sentinel" && printf isolated-credential-present' })}`,
+    destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
+  });
+  const fired = await b.scheduler.runNow(cron.id);
+  assert.equal(fired.started, true);
+  if (fired.started) await fired.settled;
+  const { runs } = await b.crons.listFires(cron.id);
+  assert.notEqual(runs.at(-1)?.status, "refused", "the fire still runs");
+  assert.ok(!(await b.deliveries.pending("slack")).some((d) => d.text.includes("isolated-credential-present")));
+  assert.equal((await b.crons.get(cron.id))?.enabled, true);
+});

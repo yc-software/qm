@@ -29,7 +29,7 @@ import {
 import { samePerson } from "../directory/person.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
-import { swallow } from "../util/errors.ts";
+import { reportFailureAs, swallow } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import {
   openGroupViaSurface,
@@ -516,7 +516,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     principalId: string,
   ): Promise<Permission | null> {
     let best: Permission | null = null;
-    const grants = (await deps.acl?.grantsFor(ownerScopeId, ref).catch(() => [])) ?? [];
+    const grants = (await deps.acl?.grantsFor(ownerScopeId, ref).catch(reportFailureAs("artifact grants", []))) ?? [];
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
       if (

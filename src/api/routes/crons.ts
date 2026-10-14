@@ -8,6 +8,7 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { decideRecipientConsent } from "../../triggers/trigger-store.ts";
+import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -344,7 +345,7 @@ const CRON_PATCH_BAD_REQUEST =
   "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
-  const { res, app, pathname, method, body, capability } = ctx;
+  const { res, app, url, pathname, method, body, capability } = ctx;
   const id = decodeURIComponent(pathname.slice("/v1/crons/".length));
   if (capability) {
     if (method === "GET") {
@@ -427,6 +428,21 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   };
   try {
     const updated = await app.updateCron(id, patch);
+    const editor = url.searchParams.get("principalId");
+    if (updated && editor)
+      await notifyOwnerOfCronEdit(app, {
+        cron: updated,
+        editorId: editor,
+        changeSummary: [
+          ...(body.runtime !== undefined ? ["runtime"] : []),
+          ...(body.title !== undefined ? ["title"] : []),
+          ...(task !== undefined ? ["task"] : []),
+          ...(schedule !== undefined ? ["schedule"] : []),
+          ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
+          ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),
+        ],
+        ...(schedule !== undefined ? { detail: { schedule } } : {}),
+      });
     return sendJson(res, 200, { cron: updated ? withoutFireLog(updated) : null });
   } catch (e) {
     return sendJson(res, 400, { error: "cron_update_failed", message: errMessage(e) });

@@ -51,6 +51,19 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
     assert.equal((await deps.deliveries.pending("slack")).length, 1);
   });
 
+  it("a webhook in a channel runs as its owner without their keychain", async () => {
+    const { deps, seen } = captureDeps();
+    await runTrigger(deps, {
+      owner: "U-carol",
+      ownerScopeId: scopeId("channel", "C-eng"),
+      input: "event",
+      fireKey: "w1",
+      surface: "webhook",
+    });
+    assert.equal(seen[0]!.actor.externalId, "U-carol");
+    assert.equal(seen[0]!.ownerKeychainUnion, undefined);
+  });
+
   it("a personal cron does not need the union flag", async () => {
     const { deps, seen } = captureDeps();
     await runTrigger(deps, {
@@ -78,12 +91,13 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
     assert.equal(seen.length, 0);
   });
 
-  it("reports the owner as gone from a channel only when the channel's roster is known", async () => {
+  it("reports the owner as gone from a private channel only when its roster is known; never from a public one", async () => {
     let roster: { principalId: string; slackId?: string }[] | undefined = [{ principalId: "U2" }];
+    let isPrivate = true;
     const { deps, seen } = captureDeps();
     deps.directory = {
       get: async () => ({ displayName: "Owner" }),
-      channelPrivacy: async () => false,
+      channelPrivacy: async () => isPrivate,
       channelMember: async () => true,
       groupMember: async () => false,
       conversationMembers: async () => roster as never,
@@ -96,13 +110,16 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
       surface: "cron",
     };
     assert.equal((await runTrigger(deps, spec)).ownerLeft, true);
+    isPrivate = false;
+    assert.equal((await runTrigger(deps, { ...spec, fireKey: "public" })).ownerLeft, undefined);
+    isPrivate = true;
     roster = undefined;
     const unknown = await runTrigger(deps, { ...spec, fireKey: "unknown-roster" });
     assert.equal(unknown.ownerLeft, undefined);
     assert.equal(unknown.ran, true);
     roster = [{ principalId: "carol@example.com", slackId: "U-carol" }];
     assert.equal((await runTrigger(deps, { ...spec, fireKey: "by-slack-id" })).ran, true);
-    assert.equal(seen.length, 2);
+    assert.equal(seen.length, 3);
   });
 
   it("channel privacy comes from the current directory", async () => {

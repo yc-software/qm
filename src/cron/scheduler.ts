@@ -24,6 +24,7 @@ import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
+import { isProjectGroupRef } from "../projects/project-store.ts";
 import { sleep } from "../util/async.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
@@ -91,6 +92,7 @@ export interface SchedulerDeps {
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
+  deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
     loopId: string,
     fireKey: string,
@@ -158,8 +160,10 @@ async function cronMentionRoster(deps: SchedulerDeps, cron: Cron): Promise<strin
   const { kind, ref } = parseScopeId(scope);
   if (kind !== "channel" && kind !== "group") return undefined;
   const ids =
-    (await deps.directory.conversationMembers?.(kind, ref).catch(() => undefined))?.map((m) => m.principalId) ??
-    (await deps.currentScopeMembers?.(scope))?.map((m) => m.id) ??
+    (
+      await deps.directory.conversationMembers?.(kind, ref).catch(reportFailureAs("cron mention roster", undefined))
+    )?.map((m) => m.principalId) ??
+    (kind === "group" && isProjectGroupRef(ref) ? (await deps.currentScopeMembers?.(scope))?.map((m) => m.id) : []) ??
     [];
   if (!ids.length || ids.length > CRON_MENTION_ROSTER_MAX) return undefined;
   const byId = new Map((await deps.directory.list().catch(() => [])).map((m) => [m.principalId, m]));
@@ -351,7 +355,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
       });
     }
-    if (outcome.ownerLeft) await deps.crons.delete(cron.id);
+    if (outcome.ownerLeft) await (deps.deleteCron ? deps.deleteCron(cron.id) : deps.crons.delete(cron.id));
     else if (outcome.authzFailed) await deps.crons.setEnabled(cron.id, false);
     if (outcome.authzFailed) return { authzFailed: true };
     if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);

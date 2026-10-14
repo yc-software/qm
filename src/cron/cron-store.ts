@@ -293,3 +293,15 @@ export function createCronStore(
     },
   };
 }
+
+export const DROP_RUN_AS_MIGRATION = {
+  id: "durable-map/crons/0001-drop-run-as",
+  statements: [
+    ...["crons", "loops"].map(
+      (table) => `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+    ),
+    `UPDATE crons SET json = jsonb_set(json, '{owner}', to_jsonb('system:' || (json ->> 'ownerScopeId'))) WHERE json ->> 'runAs' = 'scopeFloor' AND json ->> 'loopId' IS NULL AND json ->> 'ownerScopeId' NOT LIKE 'personal:%'`,
+    "UPDATE crons SET json = json - 'runAs' - 'ownerResourcesRequireOpen' - 'members' WHERE json ?| array['runAs', 'ownerResourcesRequireOpen', 'members']",
+    "UPDATE loops SET json = json - 'runAs' WHERE json ? 'runAs'",
+  ],
+};

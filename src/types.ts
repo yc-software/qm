@@ -37,6 +37,10 @@ export function scopeActor(scope: ScopeId): string {
   return `system:${scope}`;
 }
 
+export function actsAsScope(principalId: string, scope: ScopeId): boolean {
+  return principalId === scopeActor(scope);
+}
+
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };

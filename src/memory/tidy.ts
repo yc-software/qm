@@ -1,6 +1,6 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { CronStore } from "../cron/cron-store.ts";
-import { claimManagedCron, nightlyAt } from "../cron/managed.ts";
+import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -15,9 +15,7 @@ const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read it with
 - Add no new information and leave every other notebook alone.
 Batch your edits and deletes into list calls; each call changes everything or nothing. If nothing needs changing, change nothing. Do not message anyone; end with finish_silently.`;
 
-export interface MemoryTidyProfile {
-  cronId?: string;
-}
+export type MemoryTidyProfile = ManagedCronClaim;
 
 export function createMemoryTidyService(deps: {
   store: DurableMap<MemoryTidyProfile>;
@@ -30,7 +28,8 @@ export function createMemoryTidyService(deps: {
     async ensure(scope: ScopeId): Promise<void> {
       const { kind, ref } = parseScopeId(scope);
       if (kind !== "personal" && kind !== "channel" && kind !== "group") return;
-      if ((await deps.store.get(scope))?.cronId) return;
+      const claimed = await deps.store.get(scope);
+      if (claimed?.cronId && !claimed.arming) return;
       const owner = kind === "personal" ? ref : scopeActor(scope);
       await claimManagedCron(
         deps,

@@ -1,5 +1,5 @@
 import type { Principal, ScopeId } from "../types.ts";
-import { parseScopeId, scopeActor, scopeId } from "../types.ts";
+import { actsAsScope, parseScopeId, scopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 
@@ -49,7 +49,7 @@ async function currentSharedScopeMember(
   ref: string,
   principalId: string,
 ): Promise<boolean> {
-  if (principalId === scopeActor(scopeId(kind, ref))) return true;
+  if (actsAsScope(principalId, scopeId(kind, ref))) return true;
   if (!activePrincipal(deps, principalId)) return false;
   const member = await deps.directory?.get?.(principalId).catch(swallowAs("scope membership: directory lookup", null));
   const ids = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
@@ -78,7 +78,7 @@ async function sharedScopeMembership(
   ref: string,
   principalId: string,
 ): Promise<boolean | undefined> {
-  if (principalId === scopeActor(scopeId(kind, ref))) return true;
+  if (actsAsScope(principalId, scopeId(kind, ref))) return true;
   if (!activePrincipal(deps, principalId)) return false;
   if (kind === "group" && deps.managedGroups?.recognizes(ref)) {
     return (
@@ -277,4 +277,8 @@ export function createManagesArtifactHome(
       );
     return false;
   };
+}
+
+export function rosterAdmits(roster: readonly string[], principalId: string, scope: ScopeId): boolean {
+  return actsAsScope(principalId, scope) || roster.includes(principalId);
 }
