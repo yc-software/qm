@@ -210,12 +210,12 @@ function startupCancellationCodexBinary(dir: string): string {
     path,
     `#!${process.execPath}
 const fs = require("node:fs");
-fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(join(dir, "closed.tmp"))}, "closed");
   fs.renameSync(${JSON.stringify(join(dir, "closed.tmp"))}, ${JSON.stringify(join(dir, "closed"))});
   process.exit(0);
 });
+fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
 process.stdin.resume();
 `,
   );
@@ -1178,7 +1178,7 @@ test("cancelling an OAuth startup after spawn closes the provider", async (t) =>
   assert.equal(existsSync(join(dir, "starts")), true);
   cancel.abort();
   assert.deepEqual(await turn, { reply: "", stopped: true });
-  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
+  for (let attempt = 0; attempt < 500 && !existsSync(join(dir, "closed")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
 });
