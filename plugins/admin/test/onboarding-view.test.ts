@@ -292,7 +292,7 @@ test("embedding models register through the model registry without a chat lookup
     "/api/model-registry/text-embedding-3-small",
     { kind: "embedding", name: "Small", provider: "openai", verify: true },
   ]);
-  assert.match($("st-model-registry").textContent!, /Memory recall/);
+  assert.match($("st-model-registry").textContent!, /Recall runtime/);
   await controller.loadRegistry();
   assert.match($("model-registry-rows").textContent!, /Small \(text-embedding-3-small\)[\s\S]*Embedding/);
   dom.window.close();
@@ -329,6 +329,24 @@ test("saving another provider's key can keep the current base model", async () =
   assert.ok(calls.includes("PUT /api/model-providers/openai"));
   assert.ok(!calls.some((call) => call.endsWith("/base-model")));
   assert.match(controller.providerMessage, /base model is unchanged/);
+  dom.window.close();
+});
+
+test("a rejected base model change shows the server's reason", async () => {
+  const { dom, controller } = fixture();
+  controller.context.api = async (method: string, path: string) => {
+    if (method === "PUT" && path.endsWith("/base-model"))
+      return { ok: false, data: { message: "model_not_supported" } };
+    if (path.startsWith("/api/model-providers"))
+      return { ok: true, data: { providers: UNCONFIGURED_PROVIDERS, models: ANTHROPIC_MODELS } };
+    return { ok: true, data: {} };
+  };
+  await controller.load();
+  controller.apiKey = "sk-test";
+  controller.model = ANTHROPIC_MODELS[0]!.id;
+  await controller.connect();
+  assert.equal(controller.providerMessage, "Key saved, but the base model could not be changed: model_not_supported");
+  assert.equal(controller.providerTone, "err");
   dom.window.close();
 });
 
