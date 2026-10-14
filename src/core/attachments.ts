@@ -24,7 +24,6 @@ import { downscaleVisionImage } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
 
 export const INBOX_DIR = "inbox";
-export const SHARED_DIR = "shared";
 export const TURN_FILES_DIR = ".agent-turn";
 
 export function turnFileId(runId?: string, attempt = 1, now = Date.now()): string {

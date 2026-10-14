@@ -154,8 +154,14 @@ async function showInstance(url) {
   mainWindow = window;
   const origin = new URL(url).origin;
   const session = window.webContents.session;
-  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.setPermissionCheckHandler(() => false);
+  const canWriteClipboard = (permission, requestingUrl) =>
+    permission === "clipboard-sanitized-write" && requestingUrl !== "about:blank" && internalUrl(requestingUrl, origin);
+  session.setPermissionRequestHandler((_contents, permission, callback, details) =>
+    callback(canWriteClipboard(permission, details.requestingUrl)),
+  );
+  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+    canWriteClipboard(permission, requestingOrigin),
+  );
   let handedOff = false;
   const children = new Set();
   const configureNavigation = (page) => {

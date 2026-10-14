@@ -1,5 +1,4 @@
-import { getRuntimeConfig } from "./runtime-config-store.ts";
-import type { RuntimeConfig } from "./core-bridge.ts";
+import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config-cache.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBaseModel, type ModelMetadata } from "./pi-models.ts";
 
@@ -149,8 +148,7 @@ export function getModelOptions(scopeKey?: string | null): ModelOption[] {
   return runtimeFor(scopeKey).options;
 }
 
-export function getHarnessOptions(scopeKey?: string | null): Array<{ value: string; label: string }> {
-  const options = runtimeFor(scopeKey).options;
+export function harnessOptions(options: readonly ModelOption[]): Array<{ value: string; label: string }> {
   return [...new Map(options.map((option) => [option.harnessId, option.harnessLabel])).entries()].map(
     ([value, label]) => ({ value, label }),
   );

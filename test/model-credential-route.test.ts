@@ -422,7 +422,6 @@ test("admin scope keeps the selected runtime model visible when its provider is 
         id: "claude-opus-5",
         name: "Claude Opus 5",
         provider: "anthropic",
-        effortLevels: ["auto", "default", "adaptive", "low", "medium", "high", "xhigh", "max", "ultracode"],
       },
     ]);
   } finally {

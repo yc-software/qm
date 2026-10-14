@@ -1,7 +1,6 @@
-import { type ScopeId, parseScopeId, scopeId as makeScopeId } from "../types.ts";
+import type { ScopeId } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { RECALL_MAX_CHARS, capTail } from "./notebook.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
   MemoryFactsMissing,
@@ -9,7 +8,9 @@ import {
   factLine,
   mergeProvenance,
   parseFactId,
+  recentCandidates,
   renderFacts,
+  type MemoryCandidate,
   type MemoryCaptureMetadata,
   type MemoryFact,
   type MemoryProvenance,
@@ -22,7 +23,6 @@ export interface MemoryRecallContext {
   query?: string;
   actorId?: string;
   sessionId?: string;
-  conversationScopeId?: ScopeId;
   maxChars?: number;
   autonomous?: boolean;
 }
@@ -43,7 +43,7 @@ export interface MemoryEdit {
 
 export interface MemoryService {
   withDisclosure?(access: MemoryDisclosure): MemoryService;
-  recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<string>;
+  recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(
     scopeId: ScopeId,
     facts: string[],
@@ -59,11 +59,6 @@ export interface MemoryService {
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
-export function recallBody(body: string): string {
-  const trimmed = body.trim();
-  return trimmed ? capTail(trimmed, RECALL_MAX_CHARS) : "";
-}
-
 export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): string[] {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
@@ -75,16 +70,14 @@ export function queryFacts(facts: readonly MemoryFact[], q: string, limit: numbe
 
 const normalize = (text: string) => text.trim().toLowerCase();
 
-function cleanCapturedFacts(facts: string[], trustedProvenance = false): string[] {
+function cleanCapturedFacts(facts: string[]): string[] {
   return facts.flatMap((f) => {
-    let text = f
+    const text = f
       .replace(/\s+/g, " ")
       .trim()
-      .replace(/^[-*]\s+/, "");
-    if (!trustedProvenance)
-      text = text
-        .replace(/^\((\d{4}-\d\d-\d\d)\)\s*/, "on $1: ")
-        .replace(/\s+\(said in ([^)]+)\)\s*$/i, " [claimed source: $1]");
+      .replace(/^[-*]\s+/, "")
+      .replace(/^\((\d{4}-\d\d-\d\d)\)\s*/, "on $1: ")
+      .replace(/\s+\(said in ([^)]+)\)\s*$/i, " [claimed source: $1]");
     return text ? [text] : [];
   });
 }
@@ -130,11 +123,11 @@ export interface FactStore {
 export function createNotebookMemory(store: FactStore): MemoryService {
   return {
     async recall(scopeId) {
-      return recallBody(renderFacts(await store.list(scopeId)));
+      return recentCandidates(await store.list(scopeId));
     },
 
     async capture(scopeId, facts, at, author, context) {
-      const lines = cleanCapturedFacts(facts, author?.startsWith("cc:") === true);
+      const lines = cleanCapturedFacts(facts);
       if (!lines.length) return 0;
       const provenance = captureProvenance(scopeId, context);
       return store.transact(scopeId, async (tx) => {
@@ -241,38 +234,4 @@ export function createMemoryService(workspace: WorkspaceStore): MemoryService {
 
 export function isSystemActor(actorId: string | undefined): boolean {
   return !!actorId?.startsWith("system:");
-}
-
-function ccTargetFor(origin: ScopeId, actorId: string | undefined): ScopeId | null {
-  if (!actorId || isSystemActor(actorId)) return null;
-  const { kind } = parseScopeId(origin);
-  if (kind !== "channel" && kind !== "group") return null;
-  const target = makeScopeId("personal", actorId);
-  return target === origin ? null : target;
-}
-
-export async function ccCaptureToPersonal(
-  memory: MemoryService,
-  origin: ScopeId,
-  actorId: string | undefined,
-  facts: string[],
-  at: number,
-  sourceLabel?: string,
-  context?: MemoryCaptureContext,
-): Promise<number> {
-  const target = ccTargetFor(origin, actorId);
-  if (!target || !facts.length || !memory.facts) return 0;
-  const { kind } = parseScopeId(origin);
-  const clean = sourceLabel
-    ?.replace(/[()\r\n]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 60);
-  const source = clean || (kind === "channel" ? "a channel" : "a group conversation");
-  const tagged = facts.map((f) => `${f} (said in ${source})`);
-  return memory.capture(target, tagged, at, `cc:${origin}`, {
-    ...context,
-    mode: context?.mode ?? "automatic",
-    conversationScopeId: origin,
-  });
 }

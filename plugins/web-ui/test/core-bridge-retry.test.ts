@@ -27,7 +27,7 @@ function blankAssistant(): AssistantMessage {
 }
 
 function freshAcc(t0: number): Acc {
-  return { acc: "", lastProgressAt: t0 };
+  return { acc: "", startOffset: 0, lastProgressAt: t0 };
 }
 
 function drain(stream: ReturnType<typeof createAssistantMessageEventStream>): Promise<AssistantMessage> {

@@ -399,7 +399,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/conversations",
         summary:
-          "list the asking person's own conversations (id, title, status, archived, pinned, lastActivityAt) — the same list their web sidebar shows",
+          "list the asking person's own conversations (id, title, archived, pinned, unread, lastActivityAt) — the same list their web sidebar shows",
       },
       {
         method: "GET",
@@ -411,23 +411,11 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: () => false,
-    when: (v) => v.claims.surface === "slack",
     routes: [
       {
         method: "POST",
         path: "/v1/conversations/:id",
         summary: `${CONVERSATION_UPDATE} 404 for a conversation not on their list`,
-      },
-    ],
-  },
-  {
-    match: () => false,
-    when: (v) => v.claims.surface !== "slack",
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/conversations/:id",
-        summary: `${CONVERSATION_UPDATE} Body status sets the web UI sidebar status shared by everyone in the session: {emoji: one Unicode emoji, text: 1–200 characters}, or null to clear. Use it for verified milestones, e.g. ✅ PR merged or 🚀 Live in production, and replace it as work progresses. 404 for a conversation not on their list`,
       },
     ],
   },
@@ -586,7 +574,11 @@ const FAMILIES: AgentApiFamily[] = [
     when: (v) => !!v.claims.memory,
     guidance: "Memory bodies and curation rules are documented in the memory skill.",
     routes: [
-      { method: "POST", path: "/v1/memory/search", summary: "search every notebook this conversation may read" },
+      {
+        method: "POST",
+        path: "/v1/memory/search",
+        summary: "search authorized notebooks; optional scope selects one notebook",
+      },
       { method: "POST", path: "/v1/memory/facts", summary: "append durable facts to this conversation's notebook now" },
       { method: "GET", path: "/v1/memory/self", summary: "list this conversation's notebook facts with their ids" },
       {

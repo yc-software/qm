@@ -39,7 +39,9 @@ const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..
     "<style data-admin-components></style>",
     () =>
       "<style data-admin-components>" +
-      readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/admin-components.css"), "utf8") +
+      ["../../web-ui/src/model-picker.css", "../../web-ui/src/tooltip.css", "../public/admin-components.css"]
+        .map((path) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), path), "utf8"))
+        .join("\n") +
       "</style>",
   );
 const BRAND_MARK = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/brand-mark.svg"));

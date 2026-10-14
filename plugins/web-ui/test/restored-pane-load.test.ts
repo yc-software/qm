@@ -3,7 +3,7 @@ import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 import type { CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
-const session: CoreSession = { ...SESSION, threadRef: "dm:sample", type: "dm", createdAt: 1 };
+const session: CoreSession = { ...SESSION, threadRef: "dm:sample", type: "dm", createdAt: 1, canContinue: false };
 const entries = [{ seq: 1, type: "assistant", createdAt: 1, payload: { text: "Stored response" } }];
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let i = 0; i < 200 && !predicate(); i++) await new Promise((resolve) => setTimeout(resolve, 10));

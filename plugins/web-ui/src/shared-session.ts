@@ -1,3 +1,5 @@
+import "./model-picker.css";
+import "./tooltip.css";
 import "./shell.css";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { html, render } from "lit";
@@ -7,7 +9,8 @@ import { decorateTextCodeBlocks } from "./text-code";
 import { markdown } from "./message-markdown";
 import { sharedImagePolicy } from "./shared-image-policy";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
-import { brandName, brandMark, attachmentGallery, chipBadge, icon, copyText } from "./ui";
+import { brandName, brandMark, attachmentGallery, chipBadge, copyText } from "./ui";
+import { icon } from "./icons";
 
 interface SharedTranscript {
   createdAt: number;

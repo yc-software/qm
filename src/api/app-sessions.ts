@@ -3,16 +3,10 @@ import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
-import {
-  sessionTreeRoot,
-  sessionTreeRunCount,
-  SUBAGENT_TREE_RUN_CAP,
-  workingSessionThreadRefs,
-} from "../sessions/session-syscalls.ts";
-import { isSessionStatus } from "../sessions/session-status.ts";
+import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../harness/tape-projection.ts";
@@ -94,7 +88,6 @@ export function createSessionMethods(
   | "authorizesCapabilityScope"
   | "updateSession"
   | "detachSession"
-  | "adoptSession"
   | "regenerateTitle"
   | "spawnSession"
   | "discardSession"
@@ -125,6 +118,7 @@ export function createSessionMethods(
     approvalRecordIsCurrent,
     principalCanAccessCurrentScope,
     principalCanWriteScope,
+    canContinueOnWeb,
     principalGitPermission,
     principalCanManageScope,
     membershipControlsScope,
@@ -267,8 +261,9 @@ export function createSessionMethods(
     },
 
     async getSessionForViewer(sessionId, principalId, window) {
-      const session = await sessionForViewer(sessionId, principalId);
-      if (!session) return null;
+      const found = await sessionForViewer(sessionId, principalId);
+      if (!found) return null;
+      const session = { ...found, canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
@@ -419,9 +414,24 @@ export function createSessionMethods(
       }
       const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
       const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
-      const sessions = all.filter(
-        (s) =>
-          s.hasEntries !== false || Boolean(s.title?.trim()) || workingThreadRefs.has(s.threadRef) || waiting.has(s.id),
+      const sharedAccess = new Map<ScopeId, Promise<boolean>>(
+        all
+          .filter((s) => {
+            const { kind, ref } = parseScopeId(s.scopeId);
+            return kind === "group" && projectIdFromGroupRef(ref);
+          })
+          .map((s) => [s.scopeId, Promise.resolve(true)]),
+      );
+      const sessions = await Promise.all(
+        all
+          .filter(
+            (s) =>
+              s.hasEntries !== false ||
+              Boolean(s.title?.trim()) ||
+              workingThreadRefs.has(s.threadRef) ||
+              waiting.has(s.id),
+          )
+          .map(async (s) => ({ ...s, canContinue: await canContinueOnWeb(principalId, s, sharedAccess) })),
       );
       const now = Date.now();
       const jobCounts = new Map<string, number>();
@@ -844,24 +854,9 @@ export function createSessionMethods(
     async updateSession(sessionId, principalId, patch) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return null;
-      const { status, ...view } = patch;
-      if (status !== undefined) {
-        const participants = await deps.sessions.participantWindowsOf(sessionId);
-        if (!participants.some((p) => p.principalId === principalId && p.validTo === null)) return null;
-        if (!isSessionStatus(status)) throw new Error("invalid session status");
-        await deps.sessions.updateStatus(sessionId, status ? { emoji: status.emoji, text: status.text.trim() } : null);
-      }
-      await deps.sessions.updateParticipantView(sessionId, principalId, view);
-      if (status !== undefined) {
-        deps.sessionStateBus?.emit({
-          threadRef: session.threadRef,
-          sessionId,
-          participants: await deps.sessions.participantsOf(sessionId),
-          state: "metadata",
-          at: Date.now(),
-        });
-      }
-      return sessionForViewer(sessionId, principalId);
+      await deps.sessions.updateParticipantView(sessionId, principalId, patch);
+      const updated = await sessionForViewer(sessionId, principalId);
+      return updated && { ...updated, canContinue: await canContinueOnWeb(principalId, updated) };
     },
 
     async detachSession(sessionId, principalId) {
@@ -876,42 +871,6 @@ export function createSessionMethods(
             deps.advisoryLock!.withLock("session-run-admission", detach),
           )
         : detach();
-    },
-
-    async adoptSession(sessionId, parentSessionId, principalId) {
-      const adopt = async () => {
-        const child = await sessionForViewer(sessionId, principalId);
-        const parent = await sessionForViewer(parentSessionId, principalId);
-        if (!child?.spawnMeta || !parent || child.scopeId !== parent.scopeId || child.id === parent.id) return null;
-        if (parent.threadRef.startsWith("swarm:")) return null;
-        if (!(await principalCanWriteScope(principalId, child.scopeId))) return null;
-        const seen = new Set([child.id]);
-        let ancestor = parent;
-        while (true) {
-          if (seen.has(ancestor.id)) return null;
-          seen.add(ancestor.id);
-          if (!ancestor.parentSessionId) break;
-          const next = await deps.sessions.get(ancestor.parentSessionId);
-          if (!next) return null;
-          ancestor = next;
-        }
-        const root = await sessionTreeRoot(deps.sessions, parent);
-        const childRoot = await sessionTreeRoot(deps.sessions, child);
-        if (
-          root.id !== childRoot.id &&
-          (await sessionTreeRunCount(deps.sessions, deps.runs, root)) +
-            (await sessionTreeRunCount(deps.sessions, deps.runs, child)) >
-            SUBAGENT_TREE_RUN_CAP
-        )
-          return null;
-        await deps.sessions.setParentSession(child.id, parent.id);
-        return { adopted: true as const };
-      };
-      return deps.advisoryLock
-        ? deps.advisoryLock.withLock("session-tree-admission", () =>
-            deps.advisoryLock!.withLock("session-run-admission", adopt),
-          )
-        : adopt();
     },
 
     async regenerateTitle(sessionId, principalId) {
@@ -986,7 +945,8 @@ export function createSessionMethods(
           resource: sessionId,
           scopeLabel: source.scopeId,
         });
-        const session = (await deps.sessions.get(forked.id)) ?? forked;
+        const stored = (await deps.sessions.get(forked.id)) ?? forked;
+        const session = { ...stored, canContinue: await canContinueOnWeb(principalId, stored) };
         return { session, entries: transcriptEntries((await transcripts.forRender(forked.id)).entries) };
       };
       const projectId = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
@@ -1021,7 +981,8 @@ export function createSessionMethods(
           resource: session.id,
           scopeLabel: scope,
         });
-        return { session: (await deps.sessions.get(session.id)) ?? session };
+        const stored = (await deps.sessions.get(session.id)) ?? session;
+        return { session: { ...stored, canContinue: await canContinueOnWeb(principalId, stored) } };
       };
       if (parsed.kind === "personal") {
         return parsed.ref === principalId ? create() : null;

@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { Users, ChevronRight } from "lucide";
 import { api } from "./core-bridge.ts";
-import { icon } from "./ui.ts";
+import { icon } from "./icons.ts";
 
 interface SwarmPeer {
   id: string;

@@ -1,4 +1,6 @@
 import "dockview-core/dist/styles/dockview.css";
+import "./model-picker.css";
+import "./tooltip.css";
 import "./shell.css";
 import { bootSafely, closeUserMenu } from "./shell";
 import { registerChatSearchHotkey } from "./search";

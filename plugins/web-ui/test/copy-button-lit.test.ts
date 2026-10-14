@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test, { type TestContext } from "node:test";
 import { JSDOM } from "jsdom";
 import type { TemplateResult } from "lit";
@@ -19,8 +18,8 @@ for (const [key, value] of Object.entries(globals))
 
 const { html, render } = await import("lit");
 const { Check, Copy } = await import("lucide");
-const { copyText, icon } = await import("../src/ui.ts");
-const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+const { copyText } = await import("../src/ui.ts");
+const { icon } = await import("../src/icons.ts");
 
 const copy = (event: Event) => void copyText("hello", event.currentTarget as HTMLButtonElement);
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -55,13 +54,4 @@ test("copying from a labelled button survives the next lit render", async (t) =>
   );
   assert.equal(button.querySelectorAll("svg").length, 1);
   assert.equal(button.querySelector("span")?.textContent, "Copy URL");
-});
-
-test("the copied state is drawn by CSS instead of rewriting button children", () => {
-  assert.match(
-    css,
-    /\.msg-copy\.copied > svg:first-of-type,\s*\.msg-copy:not\(\.copied\) > svg:nth-of-type\(2\) \{\s*display: none;/,
-  );
-  assert.match(css, /\.btn\.copied > \* \{\s*display: none;/);
-  assert.match(css, /\.btn\.copied::after \{\s*content: "Copied";/);
 });

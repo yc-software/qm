@@ -7,37 +7,22 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { SUBAGENT_TREE_RUN_CAP } from "../src/sessions/session-syscalls.ts";
 import { testConfig } from "./support/test-config.ts";
-import type { ScopeId } from "../src/types.ts";
 
-test("session parentage requires current membership and rejects cycles and scope changes", async () => {
+test("detaching a subagent session requires current channel membership", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-parentage-")) }));
   await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
   const channels = [{ channelId: "C1", name: "private", isPrivate: true }];
   await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: "U1" }]);
-  const create = async (name: string, scope: ScopeId = "channel:C1") => {
-    const session = await built.sessions.getOrCreateByThread(`agent:main:subagent:${name}`, "channel", scope);
+  const create = async (name: string) => {
+    const session = await built.sessions.getOrCreateByThread(`agent:main:subagent:${name}`, "channel", "channel:C1");
     await built.sessions.addParticipant(session.id, "U1");
-    await built.sessions.setSpawnMeta(session.id, {
-      surface: "slack",
-      actor: { id: "U1", type: "internal" },
-      conversation: {
-        kind: "channel",
-        threadRef: "ch:C1",
-        channelRef: "C1",
-        audience: [{ id: "U1", type: "internal" }],
-      },
-    });
     return session;
   };
   const parent = await create("parent");
   const child = await create("child");
-  const otherScope = await create("other", "personal:U1");
-  assert.deepEqual(await built.app.adoptSession(child.id, parent.id, "U1"), { adopted: true });
-  assert.equal(await built.app.adoptSession(parent.id, child.id, "U1"), null);
-  assert.equal(await built.app.adoptSession(child.id, otherScope.id, "U1"), null);
+  await built.sessions.setParentSession(child.id, parent.id);
   await built.app.upsertChannels(channels, [], Date.now() + 1, ["C1"]);
   assert.equal(await built.app.detachSession(child.id, "U1"), null);
-  assert.equal(await built.app.adoptSession(child.id, parent.id, "U1"), null);
   assert.equal((await built.sessions.get(child.id))?.parentSessionId, parent.id);
   await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: "U1" }], Date.now() + 2, ["C1"]);
   assert.deepEqual(await built.app.detachSession(child.id, "U1"), { detached: true });

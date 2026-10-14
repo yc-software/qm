@@ -23,6 +23,25 @@ export function createPostgresNotifyBus<T>(
   let stopListening: (() => Promise<void>) | null = null;
   let closed = false;
   let cleanup = Promise.resolve();
+  let publishing: Promise<void> | null = null;
+  let pending: string[] = [];
+
+  const flush = async (): Promise<void> => {
+    try {
+      while (pending.length) {
+        const batch = pending;
+        pending = [];
+        await pg
+          .query(
+            `SELECT pg_notify('${channel}', payload) FROM unnest($1::text[]) WITH ORDINALITY AS events(payload, ordinal) ORDER BY ordinal`,
+            [batch],
+          )
+          .catch(swallowAs(`${label}: notify`, undefined));
+      }
+    } finally {
+      publishing = null;
+    }
+  };
 
   function dropListenClient() {
     const stop = stopListening;
@@ -42,9 +61,11 @@ export function createPostgresNotifyBus<T>(
 
   return {
     emit(event) {
+      if (closed) return;
       const payload = encode(event);
       if (payload === null) return;
-      void pg.query(`SELECT pg_notify('${channel}', $1)`, [payload]).catch(swallowAs(`${label}: notify`, undefined));
+      pending.push(payload);
+      publishing ??= Promise.resolve().then(flush);
     },
 
     subscribe(cb, opts) {
@@ -59,7 +80,7 @@ export function createPostgresNotifyBus<T>(
     async close() {
       closed = true;
       dropListenClient();
-      await cleanup;
+      await Promise.all([cleanup, publishing]);
       await pg.close();
     },
   };

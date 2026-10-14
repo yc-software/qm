@@ -8,6 +8,7 @@ import { isBackendCredential } from "../credentials/keychain.ts";
 import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
+import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
 import {
   MAX_DOCUMENT_BYTES,
@@ -190,7 +191,6 @@ import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
   approvalGrantId,
   completedSurfaceEnqueues,
-  conversationLabelFor,
   deliveryCandidatesFor,
   egressClaimAllowingControlPlane,
   filterConnectorSkills,
@@ -222,12 +222,7 @@ import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-t
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
 
-export {
-  egressClaimAllowingControlPlane,
-  conversationLabelFor,
-  filterConnectorSkills,
-  loadTapeImage,
-} from "./orchestrator/turn-helpers.ts";
+export { egressClaimAllowingControlPlane, filterConnectorSkills, loadTapeImage } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
 
 class ProjectRosterChanged extends Error {}
@@ -1117,13 +1112,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         files: deps.files,
         skills: deps.skills,
         auditLog: deps.auditLog,
+        directory: deps.directory,
+        projects: deps.projects,
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
-      const recallStart = Date.now();
       let memoryView = await context.memorySnapshot(false);
-      let recalled = memoryView.recalled;
-      const recallMs = Date.now() - recallStart;
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
@@ -2068,7 +2062,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const memoryWindow = await deps.sessions.getContextWindow(session.id);
 
         memoryView = await context.memorySnapshot();
-        recalled = memoryView.recalled;
         const latestMemoryContext = memoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
         const nextContext = nextMemoryContext(
           memoryWindow.entries,
@@ -2974,6 +2967,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.harness.turns.resetSession?.(session.id);
         }
         const visibleHistory = filterHistory(forModelContext(rawEntries, { includeSecurityTainted: false }));
+        const recallStart = Date.now();
+        const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
+        const recallMs = Date.now() - recallStart;
         const rehydrateTape = (messages: readonly unknown[]) => {
           return rehydrateFoldImages(
             messages,
@@ -3461,7 +3457,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             tape?: { rows: Awaited<ReturnType<SessionStore["getTape"]>>; mode: "shadow" | "serve"; fold?: unknown[] };
           },
         ) => {
-          const recall = memoryRecallDelta(recalled, continuation?.history ?? history);
+          const recall = memoryRecallDelta(
+            recalled,
+            continuation?.history ?? history,
+            memoryView.held,
+            context.memoryLabels,
+          );
           const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
           const turnEnvironment = environmentNote(
             [turnEnvironmentContents, snapshot.text, recall.text ? `${memoryHeading}${recall.text}` : ""]
@@ -3899,14 +3900,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onTextBlockStart: async (phase) => {
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
-              if (phase && !input.surfaceTools) {
+              if (!input.surfaceTools) {
                 const streamOffset =
-                  input.runId && deps.turnStream ? (deps.turnStream.snapshot(input.runId) ?? "").length : undefined;
-                await emit({
+                  input.runId && deps.turnStream
+                    ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
+                    : undefined;
+                const started = emit({
                   type: "text_start",
-                  payload: { phase, ...(streamOffset !== undefined ? { streamOffset } : {}) },
+                  payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
                   scopeLabel: scopeId,
                 });
+                await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
               }
             },
             onGapWork: (cb) => {
@@ -4238,7 +4242,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
             const captureStart = Date.now();
             try {
-              const conversationLabel = await conversationLabelFor(deps.directory, scopeId, conversation.channelName);
               await onTurnEnd({
                 scopeId: memoryScopeId,
                 conversationScopeId: scopeId,
@@ -4247,7 +4250,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 reply,
                 actorId: actor.id,
                 ...(automatedTurn ? { autonomous: true } : {}),
-                ...(conversationLabel ? { conversationLabel } : {}),
                 sessionId: session.id,
                 idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
               });

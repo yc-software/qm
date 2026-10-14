@@ -245,6 +245,8 @@ export function createTurnMethods(
           if (existing.scopeId !== claimed) {
             return { status: "refused", reason: "that conversation lives in a different context" };
           }
+          if (!(await h.mayWriteSession(actor.id, existing)))
+            return { status: "refused", reason: "you can't continue that conversation from the web" };
         } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
           return { status: "refused", reason: "you can only start a new conversation on your own thread" };
         }
@@ -754,7 +756,7 @@ export function createTurnMethods(
           : {}),
         startedAt: run.startedAt,
         finishedAt: run.finishedAt,
-        ...(partial ? { partial } : {}),
+        ...(partial ? { partial, partialStartOffset: deps.turnStream!.startOffset(runId) } : {}),
         ...(firstBlock
           ? { firstBlock: firstBlock.text, ...(firstBlock.closed ? { firstBlockClosed: true } : {}) }
           : {}),

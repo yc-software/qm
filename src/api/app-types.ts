@@ -299,6 +299,7 @@ export interface App {
       attachments?: Array<{ name: string; mimetype: string; sizeBytes: number }>;
     };
     partial?: string;
+    partialStartOffset?: number;
     alive?: boolean;
     stale?: boolean;
     replying?: boolean;
@@ -390,12 +391,11 @@ export interface App {
       archived?: boolean;
       pinned?: boolean;
       color?: string | null;
-      status?: Session["status"];
+      readAt?: number;
     },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
   detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
-  adoptSession(sessionId: string, parentSessionId: string, principalId: string): Promise<{ adopted: true } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
   forkSession(

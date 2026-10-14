@@ -1,3 +1,5 @@
+import type { MemoryEmbedder } from "./model/embeddings.ts";
+import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
@@ -39,6 +41,8 @@ import {
   stoppableAncestors,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
+import { createMemoryEmbedder } from "./model/embeddings.ts";
+import { createSemanticMemoryService, type MemoryVector } from "./memory/semantic-recall.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
@@ -421,7 +425,7 @@ import {
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
 import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
-import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
@@ -827,9 +831,20 @@ export function buildApp(
           files,
         })
       : undefined;
-  const defaultMemory: MemoryService = config.databaseUrl
+  const notebookMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
+  const defaultMemory = createSemanticMemoryService(
+    notebookMemory,
+    async () => {
+      const id = await configStore.getEmbeddingModelDurable();
+      return id ? resolveMemoryEmbedder(id) : undefined;
+    },
+    artifactMap<MemoryVector>("memory_vectors", ["scope"]),
+    {
+      onError: (error) => reportFailure("memory semantic recall; using recent facts", error),
+    },
+  );
   // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = withMemoryTidy(
@@ -1329,6 +1344,7 @@ export function buildApp(
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
     modelGateway: gatewayTransport,
     probe: overrides.modelVerificationProbe,
+    fetchImpl: overrides.modelCredentialFetch,
   });
   const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
   const refreshCustomProviders = async () => {
@@ -1338,6 +1354,12 @@ export function buildApp(
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
     await modelRegistry.refresh();
+  };
+  const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
+    const model = resolveEmbeddingModel(id);
+    if (!model) throw new Error(`Embedding model unavailable: ${id}`);
+    const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
+    return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
@@ -1626,13 +1648,15 @@ export function buildApp(
     : createMemoryEventBus<RunStreamEvent>("run-stream");
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
-    onDelta: (runId, text, offset) => emitRunText(runStreamEvents, runId, text, offset),
+    onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
     onChange: refreshRunStream,
   });
   const stopStreamSync = runStreamEvents.subscribe((event) => {
     if (event.kind !== "sync") return;
     const text = turnStream.snapshot(event.runId);
-    if (text) emitRunText(runStreamEvents, event.runId, text.slice(event.offset), event.offset);
+    const startOffset = turnStream.startOffset(event.runId);
+    const offset = Math.max(event.offset, startOffset);
+    if (text) emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset);
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = config.databaseUrl
@@ -2057,6 +2081,7 @@ export function buildApp(
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
+    projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),

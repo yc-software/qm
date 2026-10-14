@@ -2,7 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { DirectiveResult } from "lit/directive.js";
 import { Send } from "lucide";
 import { markdown } from "./message-markdown";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { tip } from "./tooltip";
 
 type Content = TemplateResult | DirectiveResult | typeof nothing;

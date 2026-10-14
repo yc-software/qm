@@ -6,6 +6,7 @@ import { disclosedMemory, MemoryDisclosureDenied, type MemoryDisclosure } from "
 import { MemoryFactsMissing, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
+import { recallText } from "./support/recall-text.ts";
 
 const actor = { id: "alice", type: "internal" as const };
 const bob = { id: "bob", type: "internal" as const };
@@ -50,7 +51,7 @@ function fixture() {
     facts: async (scope) => notebooks.get(scope) ?? [],
     read: async (scope) => renderFacts(notebooks.get(scope) ?? []),
     query: async () => ["OPAQUE_SENTINEL"],
-    recall: async () => "OPAQUE_SENTINEL",
+    recall: async () => [{ text: "OPAQUE_SENTINEL", score: 0.2 }],
     capture: async () => 0,
     edit: async (_scope, changes) => void edits.push(...changes.map((change) => change.id)),
     delete: async (_scope, ids) => void edits.push(...ids),
@@ -117,7 +118,7 @@ test("opaque providers stay within their original audience, including routed que
   });
   const shared = disclosedMemory(routed, f.access);
   assert.equal(await shared.read("personal:alice"), "");
-  assert.equal(await shared.recall("personal:alice"), "");
+  assert.deepEqual(await shared.recall("personal:alice"), []);
   assert.deepEqual(await shared.query("personal:alice", "SENTINEL"), []);
   const own = disclosedMemory(routed, {
     ...f.access,
@@ -213,10 +214,10 @@ test("a structured provider's opaque query cannot resurrect denied source record
   const f = fixture();
   f.put("group:room", "PRIVATE_SENTINEL", "sensitive", "group:source");
   f.raw.query = async () => ["PRIVATE_SENTINEL"];
-  f.raw.recall = async () => "PRIVATE_SENTINEL";
+  f.raw.recall = async () => [{ text: "PRIVATE_SENTINEL", score: 0.2 }];
   const view = disclosedMemory(f.raw, f.access);
   assert.deepEqual(await view.query("group:room", "SENTINEL"), []);
-  assert.equal(await view.recall("group:room"), "");
+  assert.deepEqual(await view.recall("group:room"), []);
 });
 
 test("each routed provider is filtered independently and a failure does not invoke a raw fallback", async () => {
@@ -248,7 +249,7 @@ test("each routed provider is filtered independently and a failure does not invo
     "#2 (2026-01-02) FIRST_ORDINARY_SENTINEL",
     "#2 (2026-01-02) SECOND_ORDINARY_SENTINEL",
   ]);
-  assert.doesNotMatch(await view.recall("personal:alice"), /PRIVATE_SENTINEL/);
+  assert.doesNotMatch(recallText(await view.recall("personal:alice")), /PRIVATE_SENTINEL/);
   await view.capture("personal:alice", ["new fact"], 1);
   assert.equal(captures, 1);
 });
@@ -292,4 +293,24 @@ test("complete memory audience rejects external or unresolved members rather tha
     [{ channelId: "room", principalId: "alice" }],
   );
   assert.equal(await members("channel:room"), undefined);
+});
+
+test("a recall-only routed provider still reaches prompt recall through disclosure", async () => {
+  const f = fixture();
+  const brain: MemoryService = {
+    recall: async () => [{ text: "BRAIN_FACT", score: 0.2 }],
+    capture: async () => 0,
+    query: async () => [],
+    read: async () => "",
+  };
+  const routed = createRoutedMemoryService({
+    providers: { notebook: f.raw, brain },
+    routes: [
+      { provider: "notebook", scopes: ["group:room"] },
+      { provider: "brain", scopes: ["group:room"], manage: false },
+    ],
+  });
+  const recalled = recallText(await disclosedMemory(routed, f.access).recall("group:room"));
+  assert.match(recalled, /BRAIN_FACT/);
+  assert.doesNotMatch(recalled, /OPAQUE_SENTINEL/);
 });

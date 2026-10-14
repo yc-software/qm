@@ -585,7 +585,7 @@ test("apply: the readiness gate fails when the launched process dies instead of 
   );
   assert.match(
     execs.find(readinessProbe)!,
-    /kill -0 -"\$pid"/,
+    /alive "\$pid"/,
     "readiness tracks the process this deploy launched, not just the port",
   );
 });

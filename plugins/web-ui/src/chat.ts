@@ -121,7 +121,7 @@ import {
   buildTimeline,
   messageWorkTimeline,
   workTimelineSegments,
-  streamingTextTail,
+  streamedAnswer,
   currentTextPhase,
   postSpeechText,
   toolCategory,
@@ -152,12 +152,12 @@ import {
   chipBadge,
   copyText,
   formatBytes,
-  icon,
   relTime,
   sheenLabel,
   waveLoader,
   workingWave,
 } from "./ui";
+import { icon } from "./icons";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -255,7 +255,7 @@ const connectedConnectors = new Set<string>();
 const redrawHooks = new Set<() => void>();
 let proactiveOpenerStarted = false;
 
-export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export function markConnectorConnected(provider: string): void {
   if (!provider) return;
@@ -1619,7 +1619,6 @@ export function createChatSurface(
         ? chatState.forkSession.forkedFrom
         : undefined;
     return sessionTopbarTpl({
-      status: session?.status,
       sessionId: chatState.sessionId ?? session?.id,
       crumb,
       title,
@@ -1888,10 +1887,11 @@ export function createChatSurface(
       let workView: TemplateResult | typeof nothing =
         work && steeringOnly.length ? html`${steeringOnly.map((item) => renderTimelineItem(item, work))}` : nothing;
       if (showWork) {
+        const workText = isStreaming ? messageText(msg) : text;
         workView = workBlock(
           work,
           isStreaming,
-          msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : text,
+          msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : workText,
           (msg as AssistantWork).streamingBaseline ?? "",
         );
       }
@@ -2117,7 +2117,7 @@ export function createChatSurface(
         const streamingFinal = isStreaming && phase?.phase === "final_answer";
         const workActive =
           hasWork && isStreaming && !streamingFinal && (work?.status === "working" || work?.status === "thinking");
-        const text = streamingFinal ? chunk.text.slice(phase.streamOffset) : chunk.text;
+        const text = isStreaming && work ? streamedAnswer(chunk.text, work) : chunk.text;
         for (const [partIndex, part] of setupContent(
           assistantDisplayText(workActive ? "" : text, message.stopReason),
         ).entries()) {
@@ -2144,7 +2144,7 @@ export function createChatSurface(
           if (body.trim())
             parts.push(
               html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
-                ${markdown(body, animating, streamingFinal ? ((message as AssistantWork).streamingBaseline ?? "").slice(phase.streamOffset) : ((message as AssistantWork).streamingBaseline ?? ""))}
+                ${markdown(body, animating, isStreaming && work ? streamedAnswer((message as AssistantWork).streamingBaseline ?? "", work) : ((message as AssistantWork).streamingBaseline ?? ""))}
               </div>`,
             );
           for (const link of links) parts.push(connectorWidget(link));
@@ -2817,7 +2817,7 @@ export function createChatSurface(
         replies.push(speech);
         return false;
       });
-      const tail = active && last ? streamingTextTail(text, work.activity) : "";
+      const tail = active && last ? streamedAnswer(text, work) : "";
       const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
       const animating = active && last && !stopping;
       let label = last ? workLabel(work) : "Worked";
@@ -2878,7 +2878,7 @@ export function createChatSurface(
                       },
                     ),
                 )}
-                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamingTextTail(baseline, work.activity))}</div>` : nothing}
+                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamedAnswer(baseline, work))}</div>` : nothing}
               </div>
             </details>`
           : nothing;

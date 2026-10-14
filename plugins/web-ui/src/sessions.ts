@@ -1,4 +1,3 @@
-import { sessionStatusMark } from "./session-status.ts";
 import { openSessionShare } from "./session-share";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
@@ -21,6 +20,8 @@ import {
   Hash,
   Link,
   Lock,
+  Mail,
+  MailOpen,
   Palette,
   Pencil,
   Pin,
@@ -40,7 +41,6 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
-  isContinuable,
   entriesToMessages,
   regenerateTitle,
   sharedContextLabel,
@@ -71,7 +71,8 @@ import {
 } from "./session-list";
 import { tip } from "./tooltip";
 import { errMessage } from "../../chassis/src/errors";
-import { copyText, icon, menuSelect, relTime, workingWave } from "./ui";
+import { copyText, menuSelect, relTime, workingWave } from "./ui";
+import { icon } from "./icons";
 import { listPageTpl } from "./list-page";
 import {
   contextsState,
@@ -115,7 +116,14 @@ export const sessionsState = {
 };
 
 let selection: SessionSelection = emptySelection();
-type SessionPatch = { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null };
+type SessionPatch = {
+  title?: string | null;
+  archived?: boolean;
+  pinned?: boolean;
+  color?: string | null;
+  unread?: boolean;
+};
+let keptUnreadId: string | null = null;
 const sessionPatchTails = new Map<string, Promise<void>>();
 const sessionPatchVersions = new Map<string, number>();
 let sessionPatchGeneration = 0;
@@ -326,6 +334,7 @@ function visibleSessions(): CoreSession[] {
 }
 
 export function renderList(): void {
+  markOpenSessionsRead();
   syncDocumentTitle();
   if (chatsPageShowing()) drawChatsPage();
   if (!appState.listEl) return;
@@ -795,7 +804,7 @@ function isActiveRow(s: CoreSession): boolean {
 }
 
 function chatPageRow(s: CoreSession): TemplateResult {
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
     <div class="list-row chat-row ${color ? "colored" : ""}" style=${color ? `--session-color:${color}` : nothing}>
@@ -810,7 +819,7 @@ function chatPageRow(s: CoreSession): TemplateResult {
       >
         <span class="list-row-title">${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span></span>
         <span class="list-row-meta">
-          ${sessionStatusMark(s.status)} ${scopeChip(s.scopeId, s.channelName ?? null)}
+          ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
           ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : nothing}
           ${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}
           <span class="list-row-date">${listWhen(activityOf(s))}</span>
@@ -881,6 +890,7 @@ export function addPendingSession(
     title: pendingFork ? "Forking…" : null,
     channelName,
     archived: false,
+    canContinue: true,
   };
   if (pendingFork) pendingForkThreads.add(threadRef);
   sessionsState.list = withPendingSession(sessionsState.list, pending);
@@ -971,7 +981,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const untitledProjectChild = projectChild && !s.title?.trim();
   let title = sessionTitle(s);
   if (untitledProjectChild) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
   const working = sessionWorking(s);
@@ -989,6 +999,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
     working ? "agent is working" : null,
     s.awaitingInput ? "waiting for your reply" : null,
     readOnly ? "read-only" : null,
+    showsUnread(s) ? "unread" : null,
     s.pinned ? "pinned" : null,
     selection.ids.has(s.id) ? "selected" : null,
     relTime(activityOf(s)),
@@ -998,7 +1009,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   return html`
     <div
       data-session-id=${saved ? s.id : nothing}
-      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${projectChild ? "project-child" : ""} ${color ? "colored" : ""}"
+      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${showsUnread(s) ? "unread" : ""} ${projectChild ? "project-child" : ""} ${color ? "colored" : ""}"
       style=${color ? `--session-color:${color}` : nothing}
     >
       <a
@@ -1046,13 +1057,20 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
           e.preventDefault();
           startRename(s);
         }}
+        @contextmenu=${(e: MouseEvent) => {
+          if (!saved) return;
+          e.preventDefault();
+          e.stopPropagation();
+          sessionsState.openMenuId = s.id;
+          renderList();
+        }}
       >
         <div class="title" aria-live="polite">
           ${statusMarks(s)}${surfaceGlyph(s)}${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}<span
             class="tl"
             dir="auto"
             >${titleContent}</span
-          >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}
+          >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
       </a>
       ${
@@ -1094,7 +1112,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
               >
                 ${icon(EllipsisVertical, 15)}
               </button>
-              ${sessionStatusMark(s.status)} ${menuOpen ? sessionMenuPopover(s) : nothing}
+              ${menuOpen ? sessionMenuPopover(s) : nothing}
             </div>`
           : nothing
       }
@@ -1184,6 +1202,9 @@ function sessionMenuPopover(s: CoreSession): TemplateResult {
     <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
       <button class="session-menu-option" type="button" role="menuitem" @click=${() => void copySessionLink(s)}>
         ${icon(Link, 15)}<span>Copy link</span>
+      </button>
+      <button class="session-menu-option" type="button" role="menuitem" @click=${() => setUnread(s, !s.unread)}>
+        ${s.unread ? icon(MailOpen, 15) : icon(Mail, 15)}<span>${s.unread ? "Mark as read" : "Mark as unread"}</span>
       </button>
       <button class="session-menu-option" type="button" role="menuitem" @click=${() => setPinned(s, !pinned)}>
         ${pinned ? icon(PinOff, 15) : icon(Pin, 15)}<span>${pinned ? "Unpin" : "Pin"}</span>
@@ -1523,6 +1544,27 @@ function setArchived(s: CoreSession, archived: boolean): void {
   void persistSessionPatch(s.id, { archived });
 }
 
+function setUnread(s: CoreSession, unread: boolean): void {
+  sessionsState.openMenuId = null;
+  keptUnreadId = unread && openConversationIds().includes(s.id) ? s.id : null;
+  void persistSessionPatch(s.id, { unread });
+}
+
+function showsUnread(s: CoreSession): boolean {
+  return Boolean(s.id && s.unread && (keptUnreadId === s.id || !openConversationIds().includes(s.id)));
+}
+
+function unreadDot(s: CoreSession): TemplateResult | typeof nothing {
+  return showsUnread(s) ? html`<span class="unread-dot" role="img" aria-label="Unread"></span>` : nothing;
+}
+
+function markOpenSessionsRead(): void {
+  const open = new Set(openConversationIds());
+  for (const s of sessionsState.list) {
+    if (s.unread && open.has(s.id) && s.id !== keptUnreadId) void persistSessionPatch(s.id, { unread: false });
+  }
+}
+
 function setPinned(s: CoreSession, pinned: boolean): void {
   sessionsState.openMenuId = null;
   void persistSessionPatch(s.id, { pinned });
@@ -1547,6 +1589,7 @@ function applyResolvedSession(updated: CoreSession): void {
           archived: Boolean(updated.archived),
           pinned: Boolean(updated.pinned),
           color: updated.color ?? null,
+          unread: Boolean(updated.unread),
         }
       : s,
   );
@@ -1740,6 +1783,7 @@ export async function openSession(
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (pendingForkThreads.has(s.threadRef)) return;
+  if (keptUnreadId !== s.id) keptUnreadId = null;
   if (appState.currentView !== "chats") {
     appState.currentView = "chats";
     appState.viewRenderSeq++;
@@ -1763,6 +1807,7 @@ export async function openSessionInto(
   tracked = conv === mainConversation(),
 ): Promise<void> {
   if (pendingForkThreads.has(s.threadRef)) return;
+  if (keptUnreadId !== s.id) keptUnreadId = null;
   if (!s.id) {
     if (conv.state.threadRef !== s.threadRef) {
       conv.mountContinuable(s.threadRef, null, s.scopeId || null, [], s.channelName ?? null);
@@ -1784,7 +1829,7 @@ export async function openSessionInto(
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
-  const continuable = isContinuable(s, appState.me?.user ?? "");
+  const continuable = s.canContinue === true;
   const [entriesRes, approvalsRes] = await Promise.all([
     entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
     continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),

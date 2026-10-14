@@ -88,6 +88,11 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   times the wall clock for the same signal. Judge "affected" by callers rather than by diff
   size, for the same reason as above; run everything locally when you can't tell what a
   change reaches.
+- **Test what a user or caller sees, never the source.** Run the code and assert on its
+  output; don't assert on source text, CSS, or prompt wording. A bug fix's test must fail
+  on the old code through the real path and assert the correct behavior, not the inverse
+  of the specific fix. Don't write checks that can't fail — a fixture compared against
+  itself, a job that always reports success. When a feature is removed, delete its tests.
 - **Verify non-trivial behavior changes in a live dev instance before opening a PR.**
   When a change is substantial enough that unit tests alone won't prove it works
   end-to-end — new or changed agent behavior, or anything touching the Slack/web

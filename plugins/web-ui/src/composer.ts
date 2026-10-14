@@ -1,12 +1,7 @@
 import { emojiCompletion } from "./emoji-completion";
 import { appEditSlug } from "./app-edit";
-import {
-  runtimeConfigKey,
-  getRuntimeConfig,
-  loadRuntimeConfig,
-  saveRuntimeConfig,
-  subscribeRuntimeConfig,
-} from "./runtime-config-store";
+import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
+import { getRuntimeConfig } from "./runtime-config-cache.ts";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -36,7 +31,8 @@ import {
   type QueuedRun,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { browserRenderableImage, fieldSelect, icon } from "./ui";
+import { browserRenderableImage, fieldSelect } from "./ui";
+import { icon } from "./icons";
 import {
   defaultEffortForModel,
   defaultModelValue,
@@ -121,7 +117,7 @@ function forgetThreadPick(threadRef: string): void {
   persistPreference(THREAD_PICKS_STORAGE_KEY, JSON.stringify([...threadModelPicks]));
 }
 
-export function carryModelPick(fromThreadRef: string | null, toThreadRef: string): void {
+function carryModelPick(fromThreadRef: string | null, toThreadRef: string): void {
   const pick = fromThreadRef ? threadModelPicks.get(fromThreadRef) : undefined;
   if (pick) rememberThreadPick(toThreadRef, pick);
 }
@@ -170,7 +166,7 @@ export function clearSkillsCache(): void {
 
 const SLASH_TOKEN = /(^|\s)\/([a-zA-Z0-9_-]*)$/;
 
-export function slashQuery(draft: string): string | null {
+function slashQuery(draft: string): string | null {
   const m = SLASH_TOKEN.exec(draft);
   return m ? (m[2] ?? "") : null;
 }
@@ -1007,14 +1003,16 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     redraw: () => ctx.chat.drawActiveChat(),
     scopeKey,
     state: composerState,
-    entries: seededLoadout,
-    activeEntry: activeLoadoutEntry,
-    saveEntries: (entries) => {
-      loadout = entries;
-      saveLoadout(entries, loadoutKey);
+    presets: {
+      entries: seededLoadout,
+      save: (entries) => {
+        loadout = entries;
+        saveLoadout(entries, loadoutKey);
+      },
+      add: addLoadoutEntry,
     },
+    activeEntry: activeLoadoutEntry,
     apply: applyLoadout,
-    add: addLoadoutEntry,
     selectEffort,
     selectHarness,
     toggleFastMode,

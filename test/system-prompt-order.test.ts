@@ -1192,7 +1192,7 @@ for (const surfaceTools of [false, true]) {
     await orchestrator.handleTurn({ ...input, text: "third" });
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
-    assert.match(seen[2]!.environment!, /personal:U1: 1 earlier fact was consolidated or removed/);
+    assert.match(seen[2]!.environment!, /\nU1: 1 earlier fact was consolidated or removed/);
     const entries = await sessions.getEntries(first.sessionId!);
     const users = entries.filter((entry) => entry.type === "user");
     assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);

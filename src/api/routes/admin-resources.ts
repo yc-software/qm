@@ -15,6 +15,8 @@ import {
   modelServiceable,
   modelProviderAvailabilityFor,
   resolveModel,
+  resolveEmbeddingModel,
+  embeddingModelCatalog,
   thinkingLevelsForHarness,
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
@@ -506,6 +508,30 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       },
       (deps, _scope, on) => deps.config!.setIndividualModelAuth(on),
     ),
+  },
+  {
+    id: "memory-embedding-model",
+    kind: "enum",
+    target: "org",
+    clearable: true,
+    readKey: "memoryEmbeddingModel",
+    get enumValues() {
+      return embeddingModelCatalog();
+    },
+    get: (deps) => deps.config!.getEmbeddingModelDurable(),
+    apply: async (ctx, _actor, scope) => {
+      const bad = orgOnly(scope, "the memory embedding model is org-wide");
+      if (bad) return bad;
+      const { modelId } = ctx.body as { modelId?: unknown };
+      if (modelId !== null && (typeof modelId !== "string" || !modelId.trim()))
+        return { error: "Provide an embedding modelId, or null to disable semantic recall" };
+      if (modelId !== null) {
+        await ctx.deps.refreshModels?.();
+        if (!resolveEmbeddingModel(modelId as string)) return { error: "Unknown or unverified embedding model" };
+      }
+      await ctx.deps.config!.setEmbeddingModel(modelId as string | null);
+      return { ok: true };
+    },
   },
   {
     id: "base-model",

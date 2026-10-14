@@ -123,10 +123,9 @@ test(
       assert.equal(coldConfig.effective.modelId, "overlay-pg-model");
       assert.equal(coldConfig.modelCatalog["overlay-pg-model"]?.contextWindow, 600_000);
       const reloaded = createModelOverlayStore(factory.map("model_registry"));
-      assert.equal(
-        (await reloaded.statuses()).find((m) => m.spec.id === "overlay-pg-model")?.spec.contextWindow,
-        600_000,
-      );
+      const reloadedSpec = (await reloaded.statuses()).find((m) => m.spec.id === "overlay-pg-model")!.spec;
+      assert.ok("contextWindow" in reloadedSpec);
+      assert.equal(reloadedSpec.contextWindow, 600_000);
       assert.equal((await fetch(path, { method: "DELETE", headers })).status, 200);
       for (const instance of [second, cold]) {
         const deleted = await read(instance.base);

@@ -1,231 +1,155 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import test from "node:test";
-import { runInNewContext } from "node:vm";
-import ts from "typescript";
-import { deepLinkPath, parseDeepLink } from "../src/deep-link.ts";
+import test, { after, beforeEach } from "node:test";
+import { browserEnv } from "./browser-env.ts";
 
-import { messageLinkSeq } from "../src/message-link.ts";
+type Session = { id: string; threadRef: string; scopeId: string; title: string; parentSessionId?: string };
+const session = (id: string, extra: Partial<Session> = {}): Session => ({
+  id,
+  threadRef: `web:tester:${id}`,
+  scopeId: "personal:tester",
+  title: `Title ${id}`,
+  ...extra,
+});
+let known: Session[] = [];
+const env = await browserEnv({
+  fetch: async (input) => {
+    const path = String(input);
+    if (path.startsWith("/api/runtime-config"))
+      return Response.json({
+        scopeId: "personal:tester",
+        approvedHarnesses: [],
+        modelsByHarness: {},
+        modelCatalog: {},
+        effective: { harnessId: "pi", modelId: "m" },
+      });
+    if (path.endsWith("/approvals")) return Response.json({ approvals: [] });
+    if (path === "/api/sessions") return Response.json({ sessions: known });
+    const id = path.match(/^\/api\/sessions\/([^/?]+)/)?.[1];
+    if (id) return Response.json({ session: known.find((s) => s.id === id), entries: [] });
+    return Response.json({ contexts: [], items: [], crons: [] });
+  },
+});
+after(env.close);
 
-const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
-const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
-const functionSource = (source: string, name: string): string => {
-  const match = source.match(new RegExp(`(?:export )?function ${name}\\([^]*?\\n\\}`));
-  assert.ok(match);
-  return match[0].replace("export ", "");
-};
-const compile = (source: string): string =>
-  ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
-  }).outputText;
+let shell: Record<string, any>;
+let sessions: Record<string, any>;
+let split: Record<string, any>;
 
-test("pane header updates scan session metadata linearly and retain parent-title invalidation", () => {
-  let reads = 0;
-  const list = Array.from({ length: 128 }, (_, index) => ({
-    get id() {
-      reads++;
-      return `session-${index}`;
-    },
-    title: `Title ${index}`,
-    parentSessionId: index === 126 ? "session-0" : undefined,
-  }));
-  const panels = [126, 127].map((index) => ({ id: `pane-${index}`, params: { sessionId: `session-${index}` } }));
-  const signature = runInNewContext(
-    compile(
-      `${functionSource(split, "paneSession")}\n${functionSource(split, "computeHeaderSignature")}\ncomputeHeaderSignature;`,
-    ),
-    {
-      sessionsState: { list },
-      dockApi: { panels },
-      panelParams: (panel: { params: object }) => panel.params,
-      paneCrumb: () => null,
-      paneTitle: () => "Conversation",
-      paneIsWorking: () => false,
-      paneAwaitsInput: () => false,
-      paneBackground: () => null,
-      paneKindBadge: () => 0,
-    },
-  ) as () => string;
-  const before = signature();
-  assert.match(before, /session-0\|Title 0/);
-  assert.ok(reads <= list.length * panels.length * 8, `Header update visited ${reads} session IDs`);
-  list[0]!.title = "Renamed parent";
-  assert.notEqual(signature(), before);
-  assert.match(signature(), /session-0\|Renamed parent/);
+beforeEach(async () => {
+  document.body.innerHTML = '<div id="app"></div><main></main>';
+  env.dom.window.history.replaceState(null, "", "/");
+  env.vite.moduleGraph.invalidateAll();
+  shell = await env.vite.ssrLoadModule("/src/shell.ts");
+  sessions = await env.vite.ssrLoadModule("/src/sessions.ts");
+  split = await env.vite.ssrLoadModule("/src/split.ts");
+  shell.appState.me = { user: "tester", org: "test" };
+  shell.appState.currentView = "chats";
+  shell.appState.mainEl = document.querySelector("main");
 });
 
-test("single-pane navigation follows the pane identity without depending on the session list", () => {
-  const dockApi = { panels: [] as { params: { sessionId?: string; appId?: string } }[] };
-  const splitState = { active: true };
-  const appState = { currentView: "chats" };
-  let url = "/";
-  const sync = runInNewContext(
-    compile(
-      `${functionSource(split, "singlePaneSessionId")}\n${functionSource(shell, "syncUrlFromState")}\nsyncUrlFromState;`,
-    ),
-    {
-      dockApi,
-      splitState,
-      appState,
-      mainConversation: () => ({ state: { sessionId: "stale-main-session" } }),
-      panelParams: (panel: { params: object }) => panel.params,
-      paneKindEntry: (params: { appId?: string }) => params.appId,
-      contextsState: { selected: null },
-      UI_BASE: "",
-      deepLinkPath,
-      parseDeepLink,
-      messageLinkSeq,
-      location: {
-        get pathname() {
-          return new URL(url, "https://qm.example").pathname;
-        },
-        get search() {
-          return new URL(url, "https://qm.example").search;
-        },
-      },
-      history: {
-        replaceState: (_state: unknown, _title: string, next: string) => {
-          url = next;
-        },
-      },
-    },
-  ) as (override?: string | null) => void;
-  dockApi.panels = [{ params: { sessionId: "first" } }];
-  sync();
-  assert.equal(url, "/s/first");
-  url = "/s/first?seq=120";
-  sync();
-  assert.equal(url, "/s/first?seq=120");
-  dockApi.panels = [{ params: { sessionId: "second" } }];
-  sync("stale-override");
-  assert.equal(url, "/s/second");
-  dockApi.panels.push({ params: { sessionId: "third" } });
-  sync();
-  assert.equal(url, "/");
-  dockApi.panels.shift();
-  sync();
-  assert.equal(url, "/s/third");
-  dockApi.panels = [{ params: {} }];
-  sync();
-  assert.equal(url, "/");
-  dockApi.panels[0]!.params.sessionId = "created";
-  sync();
-  assert.equal(url, "/s/created");
-  dockApi.panels = [{ params: { appId: "app", sessionId: "unrelated" } }];
-  sync();
-  assert.equal(url, "/");
-  appState.currentView = "files";
-  sync();
-  assert.equal(url, "/files");
-  appState.currentView = "chats";
-  splitState.active = false;
-  sync("phone-session");
-  assert.equal(url, "/s/phone-session");
-});
-
-test("background canvas updates preserve non-chat detail routes", () => {
-  const layout = split.match(/api\.onDidLayoutChange\(\(\) => \{([^]*?)\n {2}\}\);/)?.[1];
-  assert.ok(layout);
-  for (const source of [functionSource(split, "refreshHeaders"), `function refreshHeaders() {${layout}\n}`]) {
-    const appState = { currentView: "crons" };
-    let syncs = 0;
-    const refresh = runInNewContext(compile(`${source}\nrefreshHeaders;`), {
-      appState,
-      syncUrlFromState: () => {
-        syncs++;
-      },
-      headerSignature: "",
-      computeHeaderSignature: () => "",
-      syncDocumentTitle: () => {},
-      paneTabs: [],
-      groupActions: [],
-      paneContents: new Map(),
-      host: { classList: { contains: () => true, toggle: () => {} } },
-      api: { panels: [{}], groups: [] },
-      paneDrag: null,
-      persistSoon: () => {},
-    }) as () => void;
-    for (const view of ["crons", "webhooks", "inbox", "skills", "contexts"]) {
-      appState.currentView = view;
-      refresh();
-      assert.equal(syncs, 0, `${view} detail URL must stay intact`);
-    }
-    appState.currentView = "chats";
-    refresh();
-    assert.equal(syncs, 1);
+const url = () => `${location.pathname}${location.search}`;
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+async function canvas(...open: Session[]): Promise<void> {
+  known = [...known, ...open.filter((s) => !known.includes(s))];
+  sessions.sessionsState.list = known;
+  split.mountRestoredCanvas();
+  await sessions.openSession(open[0]);
+  for (const next of open.slice(1)) {
+    split.beginSessionDrag(next);
+    document.querySelector(".zone-right")!.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+    await settle();
   }
-});
+}
 
-test("single and multiview headers render mutually exclusive tools and pane controls", () => {
-  const source = split.slice(split.indexOf("class GroupActions"), split.indexOf("function notePaneSession"));
-  let output = "";
-  const dockApi = { panels: [{}], groups: [{ id: "group", activePanel: null, panels: [] }] };
-  const flatten = (value: unknown): string => {
-    if (Array.isArray(value)) return value.map(flatten).join("");
-    if (typeof value === "function") return "";
-    return String(value ?? "");
-  };
-  const html = (strings: TemplateStringsArray, ...values: unknown[]): string =>
-    strings.reduce((result, part, i) => result + part + flatten(values[i]), "");
-  const actions = runInNewContext(compile(`${source}\nnew GroupActions();`), {
-    document: { createElement: () => ({}), addEventListener: () => {} },
-    groupActions: new Set(),
-    tabMenu: null,
-    dockApi,
-    html,
-    nothing: "",
-    render: (value: string) => {
-      output = value;
-    },
-    paneScopeId: () => null,
-    paneKindEntry: () => null,
-    PANE_TOOLS: ["Crons", "Apps", "Files", "Skills", "Memory", "Your keychain"].map((label) => ({
-      label,
-      tool: label,
-      glyph: label,
-    })),
-    icon: () => "",
-    tip: () => "",
-    ref: () => "",
-    Plus: "",
-    Maximize2: "",
-    X: "",
-    MoreHorizontal: "",
-    Shrink: "",
-    Expand: "",
-  }) as { init: (props: unknown) => void; draw: () => void; menuOpen: boolean };
-  let activePanelChanged: (() => void) | undefined;
-  actions.init({
-    group: {
-      id: "group",
-      api: {
-        onDidActivePanelChange: (listener: () => void) => {
-          activePanelChanged = listener;
-          return { dispose() {} };
-        },
+const labels = () =>
+  [...document.querySelectorAll(".split-pane-actions [aria-label]")].map((el) => el.getAttribute("aria-label"));
+const closePane = async (index: number) => {
+  document.querySelectorAll<HTMLButtonElement>('.split-pane-actions [aria-label="Close pane"]')[index]!.click();
+  await settle();
+};
+
+test("pane header updates scan session metadata linearly and retain parent-title invalidation", async () => {
+  let reads = 0;
+  known = Array.from({ length: 128 }, (_, index) => {
+    const row = session(`session-${index}`, index === 126 ? { parentSessionId: "session-0" } : {});
+    let id = row.id;
+    return Object.defineProperty(row, "id", {
+      enumerable: true,
+      get() {
+        reads++;
+        return id;
       },
-    },
-    api: { isMaximized: () => false },
+      set(value: string) {
+        id = value;
+      },
+    });
   });
-  assert.equal((output.match(/class="session-tool"/g) ?? []).length, 6);
-  assert.doesNotMatch(output, /split-tools-btn|Split this pane|Open full screen|Close pane/);
-  dockApi.panels.push({});
-  assert.ok(activePanelChanged);
-  activePanelChanged();
-  assert.doesNotMatch(output, /class="session-tool"/);
-  for (const label of ["Tools", "Split this pane with a new session", "Open full screen", "Close pane"])
-    assert.ok(output.includes(`aria-label="${label}"`) || output.includes(`aria-label=${label}`));
-  actions.menuOpen = true;
-  dockApi.panels.pop();
-  actions.draw();
-  assert.equal(actions.menuOpen, false);
-  assert.doesNotMatch(output, /split-tools-btn|role="menu"|Close pane/);
+  await canvas(known[126]!, known[127]!);
+  assert.equal(document.querySelector(".split-pane-parent")?.textContent?.trim(), "Title session-0");
+  reads = 0;
+  sessions.sessionsState.list.find((row: Session) => row.id === "session-0").title = "Renamed parent";
+  split.notifyPanesChanged();
+  assert.ok(reads <= known.length * 2 * 8, `Header update visited ${reads} session IDs`);
+  assert.equal(document.querySelector(".split-pane-parent")?.textContent?.trim(), "Renamed parent");
 });
 
-test("single-pane toolbar and split menu put Crons and Apps first", () => {
-  const tools = split.slice(split.indexOf("const PANE_TOOLS:"), split.indexOf("function openPaneTool"));
+test("single-pane navigation follows the pane identity without depending on the session list", async () => {
+  known = [];
+  await canvas(session("first"));
+  assert.equal(url(), "/s/first");
+  history.replaceState(null, "", "/s/first?seq=120");
+  shell.syncUrlFromState();
+  assert.equal(url(), "/s/first?seq=120");
+  shell.syncUrlFromState("stale-override");
+  assert.equal(url(), "/s/first?seq=120");
+  await canvas(session("first"), session("second"));
+  assert.equal(url(), "/");
+  await closePane(0);
+  assert.equal(url(), "/s/second");
+  shell.appState.currentView = "files";
+  shell.syncUrlFromState();
+  assert.equal(url(), "/files");
+  shell.appState.currentView = "chats";
+  split.exitSplitIfActive();
+  shell.syncUrlFromState("phone-session");
+  assert.equal(url(), "/s/phone-session");
+});
+
+test("background canvas updates preserve non-chat detail routes", async () => {
+  known = [];
+  await canvas(session("first"));
+  for (const view of ["crons", "webhooks", "inbox", "skills", "contexts"]) {
+    shell.appState.currentView = view;
+    history.replaceState(null, "", `/${view}/detail`);
+    sessions.sessionsState.list[0].title = `Renamed for ${view}`;
+    split.notifyPanesChanged();
+    split.openBackgroundInCanvas(session(`background-${view}`));
+    await settle();
+    assert.equal(url(), `/${view}/detail`, `${view} detail URL must stay intact`);
+  }
+  shell.appState.currentView = "chats";
+  sessions.sessionsState.list[0].title = "Back in chats";
+  split.notifyPanesChanged();
+  const single = split.singlePaneSessionId();
+  assert.equal(url(), single ? `/s/${single}` : "/");
+});
+
+test("single and multiview headers render mutually exclusive tools and pane controls", async () => {
+  known = [];
+  await canvas(session("first"));
+  assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 6);
   assert.deepEqual(
-    [...tools.matchAll(/tool: "([^"]+)"/g)].map((match) => match[1]),
-    ["crons", "apps", "files", "skills", "memory", "keychain"],
+    labels().filter((label) => /Tools|Split this pane|Open full screen|Close pane/.test(label!)),
+    [],
   );
+  await canvas(session("first"), session("second"));
+  assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 0);
+  for (const label of ["Tools", "Split this pane with a new session", "Open full screen", "Close pane"])
+    assert.ok(labels().includes(label), label);
+  document.querySelector<HTMLButtonElement>(".split-tools-btn")!.click();
+  assert.ok(document.querySelector('.split-pane-actions [role="menu"]'));
+  await closePane(1);
+  assert.equal(document.querySelector('.split-pane-actions [role="menu"]'), null);
+  assert.equal(document.querySelector(".split-tools-btn"), null);
+  assert.equal(document.querySelectorAll('.split-pane-actions [aria-label="Close pane"]').length, 0);
 });

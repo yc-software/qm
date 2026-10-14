@@ -2,6 +2,24 @@
 
 QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a scope-aware provider router. Routes independently select where each scope recalls from, accepts explicit writes, and receives automatic post-turn capture.
 
+## Prompt memory
+
+Each turn carries at most 6,000 characters of memory, selected across every notebook
+the conversation may read, one heading per notebook. With an embedding model, facts
+are ranked by similarity to the current message and recent dialogue; otherwise the
+newest facts come first. Later turns add only newly selected facts.
+
+Choose the model with the org setting `memory-embedding-model`
+(`{ "modelId": "gateway/<model>" }`, or `null` to turn ranking off).
+Gateway models with `mode=embedding` are listed automatically; a direct OpenAI-compatible
+model is registered in the model registry with `"kind": "embedding"`. The provider
+receives fact text and the query. Vectors are cached per notebook in the
+`memory_vectors` map; if the provider fails or its vector width changes, recall falls
+back to newest-first. Text search (`memory` search, `POST /v1/memory/search`) does not
+use embeddings.
+
+## External routing
+
 ```json
 {
   "providers": [

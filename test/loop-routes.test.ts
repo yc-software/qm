@@ -187,6 +187,7 @@ test("create validates the essentials", async () => {
 test("create and patch reject invalid operational numbers and accept their boundaries", async () => {
   const invalid = [
     ["caps", "maxItemsPerFire", 1.5],
+    ["caps", "maxConcurrentItems", 0],
     ["caps", "maxOpenOutputs", 0],
     ["caps", "maxItemAttempts", Number.POSITIVE_INFINITY],
     ["governor", "maxConsecutiveFailedFires", 0],
@@ -207,7 +208,7 @@ test("create and patch reject invalid operational numbers and accept their bound
   const deps = services();
   const created = await call(deps, "POST", "/v1/loops", {
     ...CREATE,
-    caps: { maxItemsPerFire: 1, maxOpenOutputs: 1, maxItemAttempts: 1 },
+    caps: { maxItemsPerFire: 1, maxConcurrentItems: 1, maxOpenOutputs: 1, maxItemAttempts: 1 },
     governor: {
       maxConsecutiveFailedFires: 1,
       returnRateMinDecisions: 1,
@@ -219,6 +220,12 @@ test("create and patch reject invalid operational numbers and accept their bound
   });
   assert.equal(created.status, 200);
   const id = (created.body as { loop: { id: string } }).loop.id;
+  assert.equal((created.body as { loop: Loop }).loop.caps?.maxConcurrentItems, 1);
+  const patchedCap = await call(deps, "PATCH", `/v1/loops/${id}`, {
+    caps: { maxItemsPerFire: 1, maxConcurrentItems: 2 },
+  });
+  assert.equal(patchedCap.status, 200);
+  assert.equal((patchedCap.body as { loop: Loop }).loop.caps?.maxConcurrentItems, 2);
   const patched = await call(deps, "PATCH", `/v1/loops/${id}`, {
     caps: { maxItemsPerFire: 1 },
     governor: { maxReturnRate: Number.NEGATIVE_INFINITY },

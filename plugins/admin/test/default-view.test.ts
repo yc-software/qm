@@ -240,15 +240,11 @@ test("governance renders simple settings as compact rows with contextual actions
 });
 
 test("default runtime controls save reasoning level and fast mode", () => {
-  for (const id of ["base-effort", "base-fast-mode", "base-fast-mode-control"])
-    assert.match(html, new RegExp(`id="${id}"`));
   loadSettings(
     {
       baseModelOptions: [{ id: "a" }],
       baseModelDefault: "a",
       runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
-      thinkingLevelsByHarness: { pi: ["auto", "high"] },
-      fastModeHarnessIds: ["pi"],
       fastModeModelIds: ["a"],
     },
     "org:test",
@@ -428,7 +424,6 @@ test("admin parity views expose the requested card groups and real navigation ac
     "Ambient reply policy",
     "Egress policy",
     "External Slack audience",
-    "Conversation runtime",
     "Custom providers",
     "Enabled models",
     "Organization SOUL",

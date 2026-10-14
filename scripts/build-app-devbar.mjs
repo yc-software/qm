@@ -32,7 +32,7 @@ await build({
       setup(builder) {
         builder.onLoad({ filter: /devbar\.sh\/dist\/index\.js$/ }, async () => {
           let source = await readFile(entry, "utf8");
-          source = `import { readTextSelection, resolveTextSelection } from ${JSON.stringify(resolve(root, "plugins/web-ui/src/app-text-selection.ts"))};\n${source}`;
+          source = `import { flushSync as qmFlushSync } from "react-dom";\nimport { readTextSelection, resolveTextSelection } from ${JSON.stringify(resolve(root, "plugins/web-ui/src/app-text-selection.ts"))};\n${source}`;
           const selectStart = source.indexOf("function SelectOverlay(");
           const selectEnd = source.indexOf("function DrawOverlay(", selectStart);
           let select = source.slice(selectStart, selectEnd);
@@ -316,9 +316,11 @@ await build({
         useEffect11(() => {
           const hide = (event) => {
             if (event.source === window.parent && event.origin === location.origin && event.data?.type === "qm:devbar-toggle" ) {
-              setQmChatOpen(Boolean(event.data.chatOpen));
-              if (event.data.on && !qmAnnotatingRef.current) startTool("select");
-              else if (!event.data.on && qmAnnotatingRef.current) { state.deactivateTool(); setPanelOpen(false); }
+              qmFlushSync(() => {
+                setQmChatOpen(Boolean(event.data.chatOpen));
+                if (event.data.on && !qmAnnotatingRef.current) startTool("select");
+                else if (!event.data.on && qmAnnotatingRef.current) { state.deactivateTool(); setPanelOpen(false); }
+              });
               qmAnnotatingRef.current = Boolean(event.data.on);
             }
           };

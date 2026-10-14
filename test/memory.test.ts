@@ -13,6 +13,7 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { testConfig } from "./support/test-config.ts";
+import { recallText } from "./support/recall-text.ts";
 
 function freshApp(overrides: Partial<Config> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-mem-"));
@@ -130,7 +131,7 @@ test("capture dedupes, dates, and recall returns the stored memory", async () =>
   assert.equal(await mem.capture(sid, ["Prefers terse replies"], at), 0);
   assert.equal(await mem.capture(sid, ["Owns the billing service"], at), 1);
 
-  const recalled = await mem.recall(sid);
+  const recalled = recallText(await mem.recall(sid));
   assert.match(recalled, /Prefers terse replies/);
   assert.match(recalled, /billing service/);
   assert.match(recalled, /\(2026-05-31\)/);

@@ -13,7 +13,7 @@ import {
   serviceableModelIds,
   ALL_PROVIDERS_AVAILABLE,
   fastModeModelIds,
-  safeModelMetadata,
+  modelCatalogFor,
   modelOfferedInWebui,
   modelUnavailableReason,
   thinkingLevelsForHarness,
@@ -194,12 +194,7 @@ export async function runtimeConfigBody(
     }
   }
   const advertisedModelIds = new Set(Object.values(modelsByHarness).flat());
-  const modelCatalog = Object.fromEntries(
-    [...advertisedModelIds].flatMap((id) => {
-      const metadata = safeModelMetadata(id);
-      return metadata ? [[id, metadata]] : [];
-    }),
-  );
+  const modelCatalog = modelCatalogFor(advertisedModelIds);
   return {
     scopeId: scope,
     ...(purpose ? { executionPurpose: purpose } : {}),

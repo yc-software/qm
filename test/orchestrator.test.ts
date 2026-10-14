@@ -4365,9 +4365,10 @@ test("narration reaches the live activity feed before its tool call", async () =
   const view = await app.getRun(run.id);
   assert.deepEqual(
     view?.activity?.map((entry) => entry.type),
-    ["text", "tool_call", "tool_result"],
+    ["text", "tool_call", "tool_result", "text_start"],
   );
   assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item." });
+  assert.deepEqual(view?.activity?.at(-1)?.payload, { streamOffset: "I'll check the first item.\n\n".length });
 });
 
 test("public text phases persist with exact stream offsets in session history and run activity", async () => {

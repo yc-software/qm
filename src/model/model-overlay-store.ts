@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { ModelVerificationError, verificationFailure, type ModelVerifier } from "./model-verification.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { parseModelOverlay, type ModelOverlay } from "./model-overlay.ts";
+import { isEmbeddingModel, parseRegisteredModel, type RegisteredModel } from "./model-overlay.ts";
 import { modelUnavailableReason, setModelOverlays, validateModelOverlay } from "./pi-models.ts";
 
 export interface StoredModelOverlay {
-  spec: ModelOverlay;
+  spec: RegisteredModel;
   disabled: boolean;
   updatedAt: number;
   updatedBy: string;
@@ -21,7 +21,7 @@ export function createModelOverlayStore(
     if (!row?.verification || !verifier)
       return "Model has not been verified; an administrator must verify and enable it.";
     try {
-      const context = await verifier(parseModelOverlay({ ...row.spec, id }));
+      const context = await verifier(parseRegisteredModel({ ...row.spec, id }));
       if (context.fingerprint === row.verification.fingerprint) return undefined;
       return "Model settings or serving credentials changed; verify and enable this model again.";
     } catch {
@@ -32,9 +32,9 @@ export function createModelOverlayStore(
     async statuses() {
       return Promise.all(
         (await backing.entries()).map(async ([id, row]) => {
-          let spec: Partial<ModelOverlay> & { id: string };
+          let spec: Partial<RegisteredModel> & { id: string };
           try {
-            spec = parseModelOverlay({ ...row?.spec, id });
+            spec = parseRegisteredModel({ ...row?.spec, id });
           } catch {
             spec = { id, name: id };
           }
@@ -78,6 +78,8 @@ export function createModelOverlayStore(
         const existing = await backing.get(spec.id);
         if (existing?.spec?.provider && existing.spec.provider !== spec.provider)
           throw new Error("provider cannot change for an existing model id");
+        if (existing?.spec && isEmbeddingModel(existing.spec) !== isEmbeddingModel(spec))
+          throw new Error("kind cannot change for an existing model id");
         return JSON.stringify(existing);
       });
       try {
@@ -121,7 +123,7 @@ export function createModelOverlayStore(
           const current = await backing.get(spec.id);
           let sameSpec: boolean;
           try {
-            sameSpec = JSON.stringify(parseModelOverlay(current?.spec)) === JSON.stringify(spec);
+            sameSpec = JSON.stringify(parseRegisteredModel(current?.spec)) === JSON.stringify(spec);
           } catch {
             sameSpec = false;
           }

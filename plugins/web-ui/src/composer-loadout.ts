@@ -1,6 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelMetadata } from "./pi-models.ts";
-import { EFFORT_LEVELS, type EffortLevel, type ModelOption } from "./model-options.ts";
+import { EFFORT_LEVELS, harnessSupportsFastMode, type EffortLevel, type ModelOption } from "./model-options.ts";
 
 export interface LoadoutEntry {
   value: string;
@@ -151,4 +151,37 @@ export function saveLoadout(entries: LoadoutEntry[], key = LOADOUT_STORAGE_KEY):
   } catch {
     return;
   }
+}
+
+export function loadoutActions(
+  options: () => readonly ModelOption[],
+  current: () => LoadoutEntry,
+  choose: (option: ModelOption, entry: LoadoutEntry) => void,
+  supportsFast: (modelId: string) => boolean,
+) {
+  const apply = (entry: LoadoutEntry) => {
+    const option = options().find((candidate) => candidate.value === entry.value);
+    if (!option) return;
+    const levels = effortLevelsForHarness(option.harnessId, option.model);
+    choose(option, {
+      value: option.value,
+      effort: levels.some((level) => level.value === entry.effort) ? entry.effort : levels[0]!.value,
+      fast: entry.fast && harnessSupportsFastMode(option.harnessId) && supportsFast(option.model.id),
+    });
+  };
+  const selected = () => options().find((option) => option.value === current().value);
+  return {
+    apply,
+    selectEffort: (effort: EffortLevel) => apply({ ...current(), effort }),
+    selectHarness: (harnessId: string) => {
+      const model = selected()?.model.id;
+      const target = model && compatibleHarnessOptions(options(), model).find((o) => o.harnessId === harnessId);
+      if (target) apply({ ...current(), value: target.value });
+    },
+    toggleFastMode: () => {
+      const option = selected();
+      const target = option?.model.id === ULTRAFAST_MODEL_ID ? ultrafastChoice(options(), option) : undefined;
+      apply({ ...current(), ...(target ? { value: target.value } : {}), fast: !current().fast });
+    },
+  };
 }
