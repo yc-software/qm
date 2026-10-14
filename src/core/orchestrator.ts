@@ -421,7 +421,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     };
   }
 
-  const orchestrator: Orchestrator = {
+  const warmLinkedApps = (text: string | undefined): void => {
+    if (text?.includes("://"))
+      void Promise.resolve()
+        .then(() => deps.deploy.warmLinkedApps(text))
+        .catch((e) => swallow("orchestrator: warm linked apps", e));
+  };
+
+  return {
     async screenSecuritySteer({ payload, actor, conversation, sessionId }) {
       const resolution = await deps.resolution.resolve(conversation, actor);
       const { screening } = resolution.securityPolicy;
@@ -550,6 +557,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       await deps.refreshModels?.();
       input = await scopeTeamsToTurn(input, deps, external);
       const { actor, conversation } = input;
+      warmLinkedApps(input.text);
       const automatedTurn = input.origin.kind === "automation";
       const ambientTurn = input.origin.kind === "ambient";
       const humanTurn = input.origin.kind === "human";
@@ -4165,6 +4173,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return fb?.closed && text ? text : undefined;
         })();
         const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
+        warmLinkedApps(reply);
         const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
 
         await latchCoverage();
@@ -4539,18 +4548,4 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
     },
   };
-  const handleTurn = orchestrator.handleTurn.bind(orchestrator);
-  const warmLinkedApps = (text: string | undefined): void => {
-    if (text && /https?:\/\/|\/d\//.test(text))
-      void Promise.resolve()
-        .then(() => deps.deploy.warmLinkedApps(text))
-        .catch((e) => swallow("orchestrator: warm linked apps", e));
-  };
-  orchestrator.handleTurn = async (input) => {
-    warmLinkedApps(input.text);
-    const result = await handleTurn(input);
-    warmLinkedApps(result.reply);
-    return result;
-  };
-  return orchestrator;
 }

@@ -89,7 +89,6 @@ export interface DeployService {
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
-  /** Wake every app linked in a message so the click lands on a warm machine. */
   warmLinkedApps(text: string): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
@@ -573,19 +572,21 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     async warmLinkedApps(text) {
-      const names = new Set<string>();
-      for (const m of text.matchAll(/https?:\/\/([a-z0-9-]+)\.[^\s/)>\]]+|\/d\/([a-z0-9-]+)\//gi)) {
-        const name = (m[1] ?? m[2])!.toLowerCase();
-        if (names.size < MAX_WARM_LINKS) names.add(name);
+      const linked = new Set<string>();
+      for (const token of text.split(/[\s<>()[\]"'`|]+/)) {
+        if (!URL.canParse(token)) continue;
+        const url = new URL(token);
+        if (url.protocol !== "https:" && url.protocol !== "http:") continue;
+        const path = /^\/d\/([^/]+)\//.exec(url.pathname)?.[1];
+        linked.add(path ?? url.hostname.split(".")[0]!);
+        if (linked.size >= MAX_WARM_LINKS) break;
       }
       let warmed = 0;
-      for (const name of names) {
-        const d = await deps.deployStore.getByName(name).catch(() => null);
+      for (const name of linked) {
+        const d = await deps.deployStore.getByName(name.toLowerCase());
         if (!d || d.status !== "running" || d.endpoint == null) continue;
-        const host = publicUrlOf(d.endpoint)
-          ?.replace(/^https?:\/\//, "")
-          .split("/")[0];
-        if (!(host && text.includes(host)) && !text.includes(`/d/${name}/`)) continue;
+        const publicHost = publicUrlOf(d.endpoint) && new URL(publicUrlOf(d.endpoint)!).host;
+        if (!text.includes(`/d/${name}/`) && !(publicHost && text.includes(publicHost))) continue;
         void liveEndpoint(d).catch((e) => swallow("deploy: warm linked app", e));
         warmed++;
       }
