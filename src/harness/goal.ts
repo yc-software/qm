@@ -351,6 +351,10 @@ export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
   };
 }
 
+export function goalIsOpen(goal: GoalRecord | null | undefined): goal is GoalRecord {
+  return goal?.status === "active" || goal?.status === "paused";
+}
+
 /**
  * Recover the session's open goal from persisted history, newest snapshot
  * first. Only an open (active/paused) goal survives turns: a terminal
@@ -358,10 +362,6 @@ export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
  * would re-emit an end-of-turn snapshot — and a fresh "goal complete"
  * notice — on every later turn.
  */
-export function goalIsOpen(goal: GoalRecord | null | undefined): goal is GoalRecord {
-  return goal?.status === "active" || goal?.status === "paused";
-}
-
 export function rehydrateOpenGoal(history: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
   const goal = latestGoalRecord(history);
   return goalIsOpen(goal) ? goal : null;

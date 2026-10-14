@@ -94,7 +94,14 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
   }
   const out = await app.cancelSessionGoal(ctx.params.id!, principalId);
   if (!out) return sendJson(res, 404, { error: "not_found" });
-  if (!out.cancelled) return sendJson(res, 409, { error: out.reason });
+  if (!out.cancelled)
+    return sendJson(res, 409, {
+      error: out.reason,
+      message:
+        out.reason === "busy"
+          ? "The conversation is still finishing a reply. Try again in a moment."
+          : "This conversation has no active or paused goal to cancel.",
+    });
   return sendJson(res, 200, out);
 }
 

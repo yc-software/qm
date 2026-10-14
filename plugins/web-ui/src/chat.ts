@@ -278,7 +278,7 @@ export function createChatSurface(
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
 
-  const goalCancels = new Map<string, { createdAt: number; done: boolean }>();
+  const goalCancels = new Map<string, "pending" | "done">();
   const chatState = {
     agent: null as Agent | null,
     host: null as HTMLElement | null,
@@ -2671,15 +2671,16 @@ export function createChatSurface(
 
   async function cancelGoal(agent: Agent, goal: GoalStripState): Promise<void> {
     const sessionId = chatState.sessionId;
-    if (!sessionId || goalCancels.has(sessionId)) return;
-    goalCancels.set(sessionId, { createdAt: goal.createdAt, done: false });
+    const key = `${sessionId}:${goal.createdAt}`;
+    if (!sessionId || goalCancels.has(key)) return;
+    goalCancels.set(key, "pending");
     drawActiveChat(agent);
     try {
-      if (agent.state.isStreaming) await stopLiveRun();
       await cancelSessionGoal(sessionId);
-      goalCancels.set(sessionId, { createdAt: goal.createdAt, done: true });
+      goalCancels.set(key, "done");
+      if (agent === chatState.agent) await refreshTranscriptFromEntries(agent);
     } catch (err) {
-      goalCancels.delete(sessionId);
+      goalCancels.delete(key);
       ctx.composer.state.error = errMessage(err, "Could not cancel the goal.");
     } finally {
       if (agent === chatState.agent) drawActiveChat(agent);
@@ -2690,8 +2691,8 @@ export function createChatSurface(
     const messages = visibleMessages(agent);
     const goal = latestGoal(messages);
     if (!goal) return nothing;
-    const cancel = chatState.sessionId ? goalCancels.get(chatState.sessionId) : undefined;
-    if (cancel?.done && cancel.createdAt === goal.createdAt) return nothing;
+    const cancel = goalCancels.get(`${chatState.sessionId}:${goal.createdAt}`);
+    if (cancel === "done") return nothing;
     const { workedMs, paused: stopped } = goalWorked(messages, goal);
     const paused = goal.status === "paused" || (goal.status === "active" && stopped);
     if (goal.status !== "active" && !paused) return nothing;
@@ -2709,7 +2710,7 @@ export function createChatSurface(
           class="chip-x"
           aria-label="Cancel goal"
           ${tip("Cancel goal")}
-          ?disabled=${cancel !== undefined && cancel.createdAt === goal.createdAt}
+          ?disabled=${cancel === "pending"}
           @click=${() => void cancelGoal(agent, goal)}
         >
           ${icon(X, 13)}

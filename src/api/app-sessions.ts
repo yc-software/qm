@@ -3,7 +3,7 @@ import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
-import { stopSessionTree, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
@@ -64,8 +64,7 @@ function coversTailWindow(entries: readonly { type: string }[], tailTurns: numbe
 }
 
 const GOAL_LOOKBACK_ENTRIES = 2000;
-const GOAL_CANCEL_ATTEMPTS = 3;
-const GOAL_CANCEL_LEASE_WAIT_MS = 10_000;
+const GOAL_CANCEL_LEASE_WAIT_MS = 30_000;
 
 export function createSessionMethods(
   deps: AppDeps,
@@ -892,37 +891,38 @@ export function createSessionMethods(
     async cancelSessionGoal(sessionId, principalId) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session || !(await mayWriteSession(principalId, session))) return null;
-      const stop = async () => {
-        if (!deps.signals) return;
-        const signals = deps.signals;
-        const run = () => stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session);
-        await (deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", run) : run());
-      };
-      for (let attempt = 0; attempt < GOAL_CANCEL_ATTEMPTS; attempt++) {
-        await stop();
-        const { lease } = await acquireLeaseWithin(deps.sessions, session.id, "backfill", GOAL_CANCEL_LEASE_WAIT_MS);
-        if (!lease) continue;
-        try {
-          const recent = (await deps.sessions.getRecentEntries([session.id], GOAL_LOOKBACK_ENTRIES)).get(session.id);
-          const goal = rehydrateOpenGoal(recent ?? []);
-          if (!goal) return { cancelled: false as const, reason: "no_open_goal" as const };
-          cancelGoal(goal, "Cancelled from the goal bar.");
-          await appendEntryOutsideTurn(
-            deps.sessions,
-            lease,
-            {
-              type: "system",
-              payload: { ...goalSnapshotPayload(goal), cancelledBy: principalId },
-              scopeLabel: session.scopeId,
-            },
-            () => goalCancelledNote(goal),
-          );
-          return { cancelled: true as const };
-        } finally {
-          await deps.sessions.releaseLease(lease);
-        }
+      const openGoal = async () =>
+        rehydrateOpenGoal(
+          (await deps.sessions.getRecentEntries([session.id], GOAL_LOOKBACK_ENTRIES)).get(session.id) ?? [],
+        );
+      const before = await openGoal();
+      if (!before) return { cancelled: false as const, reason: "no_open_goal" as const };
+      let { lease } = await deps.sessions.acquireLease(session.id, "backfill");
+      if (!lease) {
+        if (before.status === "active")
+          for (const run of await deps.runs.inFlightForThread(session.threadRef))
+            if (run.status === "running") await deps.signals?.send(run.id, { kind: "abort" });
+        ({ lease } = await acquireLeaseWithin(deps.sessions, session.id, "backfill", GOAL_CANCEL_LEASE_WAIT_MS));
       }
-      return { cancelled: false as const, reason: "busy" as const };
+      if (!lease) return { cancelled: false as const, reason: "busy" as const };
+      try {
+        const goal = await openGoal();
+        if (!goal) return { cancelled: false as const, reason: "no_open_goal" as const };
+        cancelGoal(goal, "Cancelled from the goal bar.");
+        await appendEntryOutsideTurn(
+          deps.sessions,
+          lease,
+          {
+            type: "system",
+            payload: { ...goalSnapshotPayload(goal), cancelledBy: principalId },
+            scopeLabel: session.scopeId,
+          },
+          () => goalCancelledNote(goal),
+        );
+        return { cancelled: true as const };
+      } finally {
+        await deps.sessions.releaseLease(lease);
+      }
     },
 
     async regenerateTitle(sessionId, principalId) {

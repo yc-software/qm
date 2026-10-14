@@ -111,6 +111,7 @@ export interface ToolContextRef {
   silentRequested?: boolean;
 
   goal?: GoalRecord | null;
+  goalOpenedThisTurn?: boolean;
 
   goalRound?: number;
 
@@ -3935,6 +3936,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       ref.goal = record;
+      ref.goalOpenedThisTurn = true;
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "create", goal: record },
@@ -3974,7 +3976,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
       "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap. " +
       'Cancel (status "cancel") ends an active or paused goal without completing it, only when the person in this turn ' +
-      "explicitly asks to cancel, drop or replace it; never to escape unfinished work. A new goal can then be registered.",
+      "explicitly asks to cancel, drop or replace it; never to escape unfinished work.",
     parameters: Type.Object({
       status: Type.Union([Type.Literal("complete"), Type.Literal("resume"), Type.Literal("cancel")]),
       note: Type.String({
@@ -4013,12 +4015,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
         }
-        if (ref.current?.humanTurn !== true) {
+        if (ref.current?.humanTurn !== true || (ref.goalRound ?? 0) > 0 || ref.goalOpenedThisTurn) {
           return recordCoreAuthoredResult(
             callId,
             { tool: "goal", action: "update", error: "human_required" },
             text(
-              "Only the user can cancel a goal, by asking in their own message; this run was not started by one. The goal is unchanged.",
+              "Only the user's own message can cancel a goal, and the message you are answering is not one that came after this goal started (it is a keep-going prompt, an automated run, or the goal was started or resumed this turn). The goal is unchanged. If the user asked to cancel, tell them to use the cancel button on the goal bar, or to stop this reply and ask again.",
             ),
             true,
           );
@@ -4055,6 +4057,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         goal.status = "active";
         goal.updatedAt = goal.activeSince = Date.now();
+        ref.goalOpenedThisTurn = true;
         delete goal.pauseReason;
         delete goal.governor;
         return recordCoreAuthoredResult(
