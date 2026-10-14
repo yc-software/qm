@@ -142,7 +142,6 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         try {
           const member = await deps.directory.getBySlackId(id);
           if (!member) return saved;
-          if (!member.avatarUrl) complete = false;
           const avatarUrl = member.avatarUrl?.startsWith("https://") ? member.avatarUrl : saved.avatarUrl;
           return { id, name: member.displayName || saved.name, ...(avatarUrl ? { avatarUrl } : {}) };
         } catch (error) {

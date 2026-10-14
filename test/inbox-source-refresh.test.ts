@@ -424,42 +424,38 @@ test("thread profile limits prioritize the waiting sender and latest visible aut
 });
 
 test("bot and external-user messages use profiles already returned by Slack", async () => {
-  for (const mode of [undefined] as const) {
-    const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
-    await createInboxSourceRefresh({
-      featureFlags,
-      items,
-      tokens,
-      directory,
-      fetchImpl: async (url) => {
-        const path = new URL(String(url)).pathname;
-        assert.ok(!path.endsWith("users.info") && !path.endsWith("bots.info"));
-        if (path.endsWith("conversations.info")) return json({ ok: true, channel: {} });
-        if (path.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
-        return json({
-          ok: true,
-          messages: [
-            {
-              ts: "1.0",
-              bot_id: "B1",
-              bot_profile: { name: "Build bot", icons: { image_48: "https://avatars.slack-edge.com/build.png" } },
-              text: "Build finished",
-            },
-          ],
-        });
-      },
-    })("owner", [item], mode);
-    const after = (await items.get(item.id))!;
-    assert.deepEqual(after.sourcePayload!.participants, [
-      { id: "bot:B1", name: "Build bot", avatarUrl: "https://avatars.slack-edge.com/build.png" },
-    ]);
-    if (mode === undefined) {
-      const message = (after.sourcePayload!.context as Array<Record<string, unknown>>)[0]!;
-      assert.equal(message.author, "Build bot");
-      assert.equal(message.authorId, "bot:B1");
-      assert.equal(message.avatarUrl, "https://avatars.slack-edge.com/build.png");
-    }
-  }
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
+  await createInboxSourceRefresh({
+    featureFlags,
+    items,
+    tokens,
+    directory,
+    fetchImpl: async (url) => {
+      const path = new URL(String(url)).pathname;
+      assert.ok(!path.endsWith("users.info") && !path.endsWith("bots.info"));
+      if (path.endsWith("conversations.info")) return json({ ok: true, channel: {} });
+      if (path.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
+      return json({
+        ok: true,
+        messages: [
+          {
+            ts: "1.0",
+            bot_id: "B1",
+            bot_profile: { name: "Build bot", icons: { image_48: "https://avatars.slack-edge.com/build.png" } },
+            text: "Build finished",
+          },
+        ],
+      });
+    },
+  })("owner", [item]);
+  const after = (await items.get(item.id))!;
+  assert.deepEqual(after.sourcePayload!.participants, [
+    { id: "bot:B1", name: "Build bot", avatarUrl: "https://avatars.slack-edge.com/build.png" },
+  ]);
+  const message = (after.sourcePayload!.context as Array<Record<string, unknown>>)[0]!;
+  assert.equal(message.author, "Build bot");
+  assert.equal(message.authorId, "bot:B1");
+  assert.equal(message.avatarUrl, "https://avatars.slack-edge.com/build.png");
 });
 
 test("a partial source page cannot replace the waiting sender with an unrelated author", async () => {
