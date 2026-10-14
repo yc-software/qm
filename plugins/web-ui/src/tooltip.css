@@ -35,17 +35,6 @@
   align-self: anchor-center;
   position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
 }
-.qm-tooltip.sidebar-status {
-  position-area: right span-all;
-  left: anchor(--qm-sidebar right);
-  justify-self: normal;
-  align-self: anchor-center;
-  margin: 8px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  line-height: 1.5;
-  position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
-}
 @position-try --qm-tooltip-above {
   left: auto;
   position-area: top span-all;

@@ -1,5 +1,6 @@
-import { JSDOM, type ConstructorOptions } from "jsdom";
-import { createServer, type PluginOption } from "vite";
+import type { ConstructorOptions } from "jsdom";
+import type { PluginOption } from "vite";
+import { browserEnv } from "./browser-env.ts";
 import { metadata } from "./model-metadata.ts";
 export const inboxRuntime = {
   scopeId: "personal:taylor@example.com",
@@ -24,73 +25,15 @@ export async function until(check: () => boolean): Promise<void> {
 }
 
 export async function createInboxFixture(options: { dom?: ConstructorOptions; plugins?: PluginOption[] } = {}) {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
-    url: "http://localhost/",
-    ...options.dom,
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  const originals = new Map<string, PropertyDescriptor | undefined>();
-  const setGlobal = (key: string, value: unknown) => {
-    originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  };
-  let vite: Awaited<ReturnType<typeof createServer>> | undefined;
+  const env = await browserEnv({ dom: { pretendToBeVisual: false, ...options.dom }, plugins: options.plugins });
+  const host = env.dom.window.document.getElementById("main")!;
   const close = async () => {
     try {
-      if (vite) {
-        try {
-          const { render } = await vite.ssrLoadModule("lit");
-          render(null, dom.window.document.getElementById("main")!);
-        } finally {
-          await vite.close();
-        }
-      }
+      const { render } = await env.vite.ssrLoadModule("lit");
+      render(null, host);
     } finally {
-      dom.window.close();
-      for (const [key, descriptor] of originals) {
-        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-        else Reflect.deleteProperty(globalThis, key);
-      }
+      await env.close();
     }
   };
-  try {
-    for (const key of [
-      "window",
-      "document",
-      "location",
-      "history",
-      "localStorage",
-      "navigator",
-      "Element",
-      "HTMLElement",
-      "Node",
-      "CustomEvent",
-      "Event",
-      "customElements",
-    ])
-      setGlobal(key, key === "window" ? dom.window : dom.window[key as keyof typeof dom.window]);
-    setGlobal("getComputedStyle", dom.window.getComputedStyle.bind(dom.window));
-    setGlobal(
-      "requestAnimationFrame",
-      options.dom?.pretendToBeVisual
-        ? dom.window.requestAnimationFrame.bind(dom.window)
-        : (fn: FrameRequestCallback) => setTimeout(() => fn(Date.now()), 0),
-    );
-    setGlobal(
-      "cancelAnimationFrame",
-      options.dom?.pretendToBeVisual ? dom.window.cancelAnimationFrame.bind(dom.window) : clearTimeout,
-    );
-    setGlobal("fetch", globalThis.fetch);
-    vite = await createServer({
-      server: { middlewareMode: true, hmr: false },
-      appType: "custom",
-      plugins: options.plugins,
-    });
-    return { dom, vite, host: dom.window.document.getElementById("main")!, close };
-  } catch (error) {
-    await close();
-    throw error;
-  }
+  return { dom: env.dom, vite: env.vite, host, close };
 }
