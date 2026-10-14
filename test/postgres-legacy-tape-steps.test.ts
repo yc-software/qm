@@ -224,6 +224,17 @@ test(
       await assert.rejects(applyPgMigrations(raw, migrations), /run CALL prepare_legacy_tape_steps\(\) to completion/);
 
       await raw.query("CALL prepare_legacy_tape_steps()");
+      await raw.query("UPDATE legacy_tape_steps_progress SET skipped_sessions = 101");
+      await assert.rejects(
+        applyPgMigrations(raw, migrations),
+        /101 sessions were skipped during the preparation, more than 100/,
+      );
+      await raw.query("UPDATE legacy_tape_steps_progress SET skipped_sessions = 0, last_session = 'a'");
+      await assert.rejects(
+        applyPgMigrations(raw, migrations),
+        /marked done but its cursor a is before the last tape session legacy/,
+      );
+      await raw.query("UPDATE legacy_tape_steps_progress SET last_session = 'legacy'");
       await raw.query("UPDATE session_tape SET harness = 'pi'");
       await assert.rejects(
         applyPgMigrations(raw, migrations),

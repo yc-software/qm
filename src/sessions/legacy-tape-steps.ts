@@ -279,6 +279,9 @@ export const DROP_SESSION_TAPE_SQL = [
 DECLARE
   started BIGINT;
   finished BOOLEAN;
+  cursor_at TEXT;
+  skipped BIGINT;
+  last_tape_session TEXT;
   writes BIGINT;
   first_write BIGINT;
   reset TEXT := 'reset with DROP TRIGGER legacy_tape_frozen ON session_tape; TRUNCATE legacy_tape_steps, legacy_turn_runs, legacy_tape_writes, legacy_tape_skipped; '
@@ -290,7 +293,8 @@ BEGIN
   END IF;
   LOCK TABLE session_tape IN ACCESS EXCLUSIVE MODE;
   IF to_regclass('legacy_tape_steps_progress') IS NOT NULL THEN
-    SELECT started_at, done INTO started, finished FROM legacy_tape_steps_progress;
+    SELECT started_at, done, last_session, skipped_sessions INTO started, finished, cursor_at, skipped
+      FROM legacy_tape_steps_progress;
   END IF;
   IF started IS NULL OR NOT COALESCE(finished, false) THEN
     IF NOT EXISTS (SELECT 1 FROM session_tape WHERE kind = 'message') THEN
@@ -298,6 +302,16 @@ BEGIN
     END IF;
     RAISE EXCEPTION 'session_tape still holds model messages: run CALL prepare_legacy_tape_steps() to completion before this migration, or if legacy_tape_frozen already exists, %',
       reset;
+  END IF;
+  skipped := GREATEST(skipped, (SELECT count(*) FROM legacy_tape_skipped));
+  IF skipped > ${MAX_SKIPPED_SESSIONS} THEN
+    RAISE EXCEPTION '% sessions were skipped during the preparation, more than ${MAX_SKIPPED_SESSIONS}: review legacy_tape_skipped, then %',
+      skipped, reset;
+  END IF;
+  SELECT max(session_id) INTO last_tape_session FROM session_tape WHERE kind = 'message';
+  IF cursor_at IS NULL OR cursor_at < last_tape_session THEN
+    RAISE EXCEPTION 'the preparation is marked done but its cursor % is before the last tape session %, so not every session was copied: %',
+      COALESCE(cursor_at, '(none)'), last_tape_session, reset;
   END IF;
   SELECT count(*), min(at) INTO writes, first_write FROM legacy_tape_writes;
   IF writes > 0 THEN
